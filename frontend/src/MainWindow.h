@@ -7,6 +7,9 @@
 #include <QStatusBar>
 #include <QNetworkAccessManager>
 #include <QPushButton>
+#include <QTableWidget>
+#include <QLabel>
+#include <QTextEdit>
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -18,14 +21,26 @@ private slots:
     void onModuleChanged(int row);
     void onCheckBackend();
     void onBackendReply(QNetworkReply *reply);
+    void onFetchDbData();
+    void onDbDataReply(QNetworkReply *reply);
+    void onContainerTest();
+    void onContainerTestReply(QNetworkReply *reply);
 
 private:
     void setupUI();
+    void setupVerificationPage(QWidget *page);
 
     QListWidget *m_navList;
     QStackedWidget *m_stackWidget;
     QPushButton *m_checkBackendBtn;
     QNetworkAccessManager *m_networkMgr;
+
+    // Verification page widgets
+    QLabel *m_backendStatusLabel;
+    QTableWidget *m_dbTable;
+    QPushButton *m_fetchDbBtn;
+    QPushButton *m_containerTestBtn;
+    QTextEdit *m_containerOutput;
 
     const QStringList m_modules = {
         QStringLiteral("渗透测试资源部署配置"),
