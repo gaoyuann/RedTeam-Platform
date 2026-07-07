@@ -1,0 +1,14 @@
+build/
+cmake-build-*/
+*.autosave
+*.user
+*.o
+*.so
+*.a
+moc_*
+ui_*
+qrc_*
+node_modules/
+*.tar
+*.tar.gz
+data/*.db
