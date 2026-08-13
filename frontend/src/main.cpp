@@ -10,6 +10,8 @@
 #include <QSettings>
 #include <QScreen>
 #include <QNetworkProxyFactory>
+#include <QNetworkProxy>
+#include <QDebug>
 #include <functional>
 
 static const char *GLOBAL_STYLE = R"css(
@@ -151,9 +153,12 @@ int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
 
-    // Disable system proxy — frontend connects directly to backend on LAN,
-    // going through a proxy causes "Host requires authentication" errors.
+    // Disable ALL proxy — frontend connects directly to backend on LAN.
+    // Going through a proxy causes "Host requires authentication" errors.
+    // setUseSystemConfiguration(false) alone is not enough if http_proxy
+    // env vars or system transparent proxy exist.
     QNetworkProxyFactory::setUseSystemConfiguration(false);
+    QNetworkProxy::setApplicationProxy(QNetworkProxy::NoProxy);
 
     // Global font & stylesheet (fonts loaded in splash below)
     QFont baseFont = app.font();
@@ -206,6 +211,7 @@ int main(int argc, char *argv[])
     }
 
     ApiClient api(serverUrl);
+    qDebug() << "[main] Server URL:" << serverUrl;
     QEventLoop healthLoop;
     QTimer healthTimer;
     bool backendOk = false;

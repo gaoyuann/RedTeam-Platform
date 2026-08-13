@@ -1,5 +1,6 @@
 #include "ApiClient.h"
 #include <QSettings>
+#include <QDebug>
 
 ApiClient::ApiClient(const QString &baseUrl, QObject *parent)
     : QObject(parent), m_baseUrl(baseUrl) {
@@ -65,6 +66,9 @@ void ApiClient::handleReply(
   if (!reply)
     return;
 
+  // Debug: log the request URL
+  qDebug() << "[ApiClient]" << reply->url().toString();
+
   connect(reply, &QNetworkReply::finished, this, [this, reply, path, callback]() {
     QJsonObject result;
     if (reply->error() == QNetworkReply::NoError) {
@@ -83,16 +87,26 @@ void ApiClient::handleReply(
         emit apiError(path, "Invalid JSON response");
       }
     } else {
-      // Check for 401 with TOKEN_EXPIRED — attempt auto-refresh
       int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-      if (statusCode == 401) {
-        QByteArray body = reply->readAll();
-        QJsonDocument errDoc = QJsonDocument::fromJson(body, nullptr);
-        QString code = errDoc.object().value("error").toObject().value("code").toString();
-        if (code == "TOKEN_EXPIRED" && !m_refreshToken.isEmpty()) {
+      QByteArray body = reply->readAll();
+
+      // Try to extract the real error message from JSON body first.
+      // Qt maps HTTP 401 to AuthenticationRequiredError with generic
+      // "Host requires authentication" text — we want the server's
+      // actual error message instead (e.g. "用户名或密码错误").
+      QJsonParseError parseErr;
+      QJsonDocument errDoc = QJsonDocument::fromJson(body, &parseErr);
+      QString errMsg;
+      QString errCode;
+
+      if (parseErr.error == QJsonParseError::NoError && errDoc.isObject()) {
+        auto errObj = errDoc.object().value("error").toObject();
+        errMsg = errObj.value("message").toString();
+        errCode = errObj.value("code").toString();
+
+        // Handle token-expired auto-refresh
+        if (statusCode == 401 && errCode == "TOKEN_EXPIRED" && !m_refreshToken.isEmpty()) {
           reply->deleteLater();
-          // Will be handled by attemptTokenRefresh — but we don't have
-          // enough context here. Just report auth expired.
           result["status"] = "error";
           result["error"] = QJsonObject{{"message", "令牌已过期"}, {"code", "TOKEN_EXPIRED"}};
           emit authExpired();
@@ -101,11 +115,19 @@ void ApiClient::handleReply(
         }
       }
 
-      QString errMsg = reply->errorString();
+      // Fallback to Qt's error string if JSON didn't have a message
+      if (errMsg.isEmpty()) {
+        errMsg = reply->errorString();
+      }
+
+      qDebug() << "[ApiClient ERROR]" << path << "httpStatus:" << statusCode
+               << "errMsg:" << errMsg << "errCode:" << errCode
+               << "url:" << reply->url().toString();
+
       result["status"] = "error";
       result["error"] = QJsonObject{
           {"message", errMsg},
-          {"code", QString::number(reply->error())}};
+          {"code", errCode.isEmpty() ? QString::number(reply->error()) : errCode}};
       emit apiError(path, errMsg);
     }
     reply->deleteLater();
