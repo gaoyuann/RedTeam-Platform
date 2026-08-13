@@ -1,5 +1,9 @@
 FROM alpine:3.19
 
+# Accept proxy as build arg (for GitHub downloads behind authenticated proxy)
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+
 # ── Alpine packages ──────────────────────────────────────────────────────
 RUN apk add --no-cache nmap nmap-scripts curl
 
