@@ -16,8 +16,6 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QPointer>
-#include <QDebug>
-#include <QTimer>
 
 PlaybookPage::PlaybookPage(ApiClient *api, const QString &role, const QString &username, QWidget *parent)
     : QWidget(parent), m_api(api) {
@@ -114,21 +112,7 @@ void PlaybookPage::setupUI() {
   execBox->addWidget(m_goExecBtn);
   execBox->addStretch();
   mainLayout->addLayout(execBox);
-  connect(m_goExecBtn, &QPushButton::clicked, this, [this]() {
-    qDebug() << "[PlaybookPage] m_goExecBtn clicked!";
-    onGoExecute();
-  });
-
-  // Debug: install event filter on the button to verify it receives mouse events
-  m_goExecBtn->installEventFilter(this);
-
-  // Debug: also connect pressed signal to verify button receives mouse events
-  connect(m_goExecBtn, &QPushButton::pressed, this, [this]() {
-    qDebug() << "[PlaybookPage] m_goExecBtn PRESSED signal received!";
-  });
-  connect(m_goExecBtn, &QPushButton::released, this, [this]() {
-    qDebug() << "[PlaybookPage] m_goExecBtn RELEASED signal received!";
-  });
+  connect(m_goExecBtn, &QPushButton::clicked, this, &PlaybookPage::onGoExecute);
 
   // Signals
   connect(m_listTable, &QTableWidget::cellClicked, this, &PlaybookPage::onPlaybookClicked);
@@ -301,36 +285,18 @@ void PlaybookPage::onDeletePlaybook() {
   });
 }
 
-// ── Event filter for debug ────────────────────────────────────────────
-bool PlaybookPage::eventFilter(QObject *watched, QEvent *event) {
-  if (watched == m_goExecBtn) {
-    if (event->type() == QEvent::MouseButtonPress) {
-      qDebug() << "[PlaybookPage] BUTTON MOUSE PRESS EVENT received!";
-    } else if (event->type() == QEvent::MouseButtonRelease) {
-      qDebug() << "[PlaybookPage] BUTTON MOUSE RELEASE EVENT received!";
-    }
-  }
-  return QWidget::eventFilter(watched, event);
-}
-
 // ── Go to Execute ─────────────────────────────────────────────────────
 void PlaybookPage::onGoExecute() {
-  qDebug() << "[PlaybookPage] onGoExecute called, m_selectedId:" << m_selectedId;
-  // Visual debug: change button text momentarily
-  m_goExecBtn->setText("跳转中...");
-
   if (m_selectedId.isEmpty()) {
-    m_goExecBtn->setText("▶ 前往执行此预案");
     QMessageBox::warning(this, QStringLiteral("提示"), QStringLiteral("请先在左侧列表中选择一个预案，再点击此按钮！"));
     return;
   }
-  qDebug() << "[PlaybookPage] emitting executeRequested(" << m_selectedId << ")";
+  // Use direct callback for navigation (more reliable than signal across widgets)
+  if (m_goExecuteCb) {
+    m_goExecuteCb(m_selectedId);
+  }
+  // Also emit signal for any other listeners
   emit executeRequested(m_selectedId);
-  qDebug() << "[PlaybookPage] executeRequested emitted";
-  // Restore button text after a short delay (the navigation should happen immediately)
-  QTimer::singleShot(2000, this, [this]() {
-    m_goExecBtn->setText("▶ 前往执行此预案");
-  });
 }
 
 // ── New Playbook ─────────────────────────────────────────────────────

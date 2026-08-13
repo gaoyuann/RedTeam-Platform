@@ -25,7 +25,6 @@
 #include <QJsonDocument>
 #include <QTextEdit>
 #include <QUuid>
-#include <QDebug>
 
 // ── Formatting helpers ────────────────────────────────────────────────
 
@@ -112,27 +111,21 @@ void SimpleMainWindow::setupUI()
   });
 
   // Cross-page navigation: PlaybookPage → ExecutionPage (go execute)
-  connect(m_playbookPage, &PlaybookPage::executeRequested, this, [this](const QString &playbookId) {
-    qDebug() << "[SimpleMainWindow] executeRequested received, playbookId:" << playbookId;
-    qDebug() << "[SimpleMainWindow] m_executionPage:" << m_executionPage << "m_navList:" << m_navList;
-    qDebug() << "[SimpleMainWindow] stack count:" << m_stackWidget->count() << "current index:" << m_stackWidget->currentIndex();
+  // Primary: direct callback (most reliable)
+  m_playbookPage->setGoExecuteCallback([this](const QString &playbookId) {
     m_executionPage->selectPlaybook(playbookId, QString());
     m_navList->setCurrentRow(4);  // switch to "攻击执行" page
-    qDebug() << "[SimpleMainWindow] setCurrentRow(4) called, currentRow:" << m_navList->currentRow() << "stackIndex:" << m_stackWidget->currentIndex();
     statusBar()->showMessage(QString("已跳转到攻击执行，预填 Playbook: %1").arg(playbookId), 3000);
+  });
+  // Secondary: Qt signal (for any other listeners)
+  connect(m_playbookPage, &PlaybookPage::executeRequested, this, [this](const QString &playbookId) {
+    // Navigation already handled by callback above; this is for extensibility
+    Q_UNUSED(playbookId);
   });
 
   mainLayout->addWidget(m_navList);
   mainLayout->addWidget(m_stackWidget, 1);
   setCentralWidget(centralWidget);
-
-  // Debug: verify page setup
-  qDebug() << "[SimpleMainWindow] Stack widget pages:" << m_stackWidget->count()
-           << "Nav items:" << m_navList->count()
-           << "PlaybookPage:" << m_playbookPage
-           << "ExecutionPage:" << m_executionPage;
-  qDebug() << "[SimpleMainWindow] PlaybookPage is page" << m_stackWidget->indexOf(m_playbookPage);
-  qDebug() << "[SimpleMainWindow] ExecutionPage is page" << m_stackWidget->indexOf(m_executionPage);
 
   // ── Status bar ─────────────────────────────────────────────────────
   auto *checkBtn = new QPushButton(QStringLiteral("检测连接"), this);
