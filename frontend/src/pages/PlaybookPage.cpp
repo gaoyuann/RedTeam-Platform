@@ -364,7 +364,7 @@ void PlaybookPage::onNewPlaybook() {
   QString targetType = targetEdit->text().trimmed();
   if (!targetType.isEmpty()) {
     QJsonArray arr;
-    for (const auto &t : targetType.split(',', Qt::SkipEmptyParts)) {
+    for (const auto &t : targetType.split(',', QString::SkipEmptyParts)) {
       arr.append(t.trimmed());
     }
     body["target_type"] = arr;
