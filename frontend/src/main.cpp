@@ -9,6 +9,7 @@
 #include <QTimer>
 #include <QSettings>
 #include <QScreen>
+#include <QNetworkProxyFactory>
 #include <functional>
 
 static const char *GLOBAL_STYLE = R"css(
@@ -150,6 +151,10 @@ int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
 
+    // Disable system proxy — frontend connects directly to backend on LAN,
+    // going through a proxy causes "Host requires authentication" errors.
+    QNetworkProxyFactory::setUseSystemConfiguration(false);
+
     // Global font & stylesheet (fonts loaded in splash below)
     QFont baseFont = app.font();
     baseFont.setPointSize(11);
@@ -236,15 +241,6 @@ int main(int argc, char *argv[])
 
         QString role = login.role();
         QString username = login.username();
-
-        // Update ApiClient server URL if user changed it in login dialog
-        QString loginServer = login.serverUrl();
-        if (!loginServer.isEmpty()) {
-            QString fullUrl = loginServer.startsWith("http") ? loginServer : ("http://" + loginServer);
-            if (api.baseUrl() != fullUrl) {
-                api.setBaseUrl(fullUrl);
-            }
-        }
 
         // Create the appropriate window type for this role
         QMainWindow *window = nullptr;

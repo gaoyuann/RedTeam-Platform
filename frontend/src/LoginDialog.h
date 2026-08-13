@@ -13,14 +13,12 @@ public:
 
   QString username() const;
   QString role() const;
-  QString serverUrl() const;
 
 private slots:
   void onLogin(bool remember);
 
 private:
   ApiClient *m_api;
-  QLineEdit *m_serverEdit;
   QLineEdit *m_usernameEdit;
   QLineEdit *m_passwordEdit;
   QLabel *m_errorLabel;
@@ -28,5 +26,4 @@ private:
 
   QString m_username;
   QString m_role;
-  QString m_serverUrl;
 };

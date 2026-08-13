@@ -23,4 +23,16 @@ export default function up(db) {
     CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token  ON refresh_tokens(token);
     CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires ON refresh_tokens(expires_at);
   `);
+
+  // Seed default users if the users table is empty
+  const userCount = db.prepare('SELECT COUNT(*) AS n FROM users').get().n;
+  if (userCount === 0) {
+    const insertUser = db.prepare(
+      'INSERT OR IGNORE INTO users (username, password, role, display_name) VALUES (?, ?, ?, ?)'
+    );
+    insertUser.run('admin', 'admin', 'admin', '系统管理员');
+    insertUser.run('teacher', '123', 'teacher', '教师');
+    insertUser.run('student', '123456', 'student', '学生');
+    console.log('[Migration 007] Seeded default users: admin/admin, teacher/123, student/123456');
+  }
 }

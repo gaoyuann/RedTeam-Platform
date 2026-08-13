@@ -169,20 +169,6 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
     labelStyle = "color: #4a5568; font-size: 14px;";
   }
 
-  // Server address (new — above username)
-  QSettings savedSettings("RedTeam", "RedTeam-Platform");
-  QString savedServer = savedSettings.value("server/url").toString();
-  // Strip http:// prefix if present for display
-  if (savedServer.startsWith("http://")) savedServer = savedServer.mid(7);
-  if (savedServer.startsWith("https://")) savedServer = savedServer.mid(8);
-
-  m_serverEdit = new QLineEdit;
-  m_serverEdit->setPlaceholderText("如: 192.168.1.100:3002");
-  m_serverEdit->setText(savedServer.isEmpty() ? "127.0.0.1:3002" : savedServer);
-  m_serverEdit->setFixedHeight(44);
-  m_serverEdit->setStyleSheet(inputStyle + inputFocusStyle);
-  formLayout->addRow("服务器:", m_serverEdit);
-
   // Username
   m_usernameEdit = new QLineEdit;
   m_usernameEdit->setPlaceholderText("请输入用户名");
@@ -232,6 +218,7 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
   cardLayout->addWidget(rememberCheck);
 
   // Load saved credentials
+  QSettings savedSettings("RedTeam", "RedTeam-Platform");
   QString savedUser = savedSettings.value("login/username").toString();
   QString savedPass = savedSettings.value("login/password").toString();
   if (!savedUser.isEmpty()) {
@@ -311,28 +298,15 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
 
 QString LoginDialog::username() const { return m_username; }
 QString LoginDialog::role() const { return m_role; }
-QString LoginDialog::serverUrl() const { return m_serverUrl; }
 
 void LoginDialog::onLogin(bool remember) {
-  QString server = m_serverEdit->text().trimmed();
   QString user = m_usernameEdit->text().trimmed();
   QString pass = m_passwordEdit->text().trimmed();
 
-  if (server.isEmpty()) {
-    m_errorLabel->setText("请输入服务器地址");
-    m_errorLabel->show();
-    return;
-  }
   if (user.isEmpty() || pass.isEmpty()) {
     m_errorLabel->setText("请输入用户名和密码");
     m_errorLabel->show();
     return;
-  }
-
-  // Update ApiClient server URL if changed
-  QString fullServerUrl = server.startsWith("http") ? server : ("http://" + server);
-  if (m_api->baseUrl() != fullServerUrl) {
-    m_api->setBaseUrl(fullServerUrl);
   }
 
   m_loginBtn->setEnabled(false);
@@ -343,7 +317,7 @@ void LoginDialog::onLogin(bool remember) {
   body["username"] = user;
   body["password"] = pass;
 
-  m_api->post("/api/users/login", body, 10000, [this, user, pass, remember, server](const QJsonObject &res) {
+  m_api->post("/api/users/login", body, 10000, [this, user, pass, remember](const QJsonObject &res) {
     m_loginBtn->setEnabled(true);
     m_loginBtn->setText("登  录");
 
@@ -351,7 +325,6 @@ void LoginDialog::onLogin(bool remember) {
       auto data = res["data"].toObject();
       m_username = data["username"].toString();
       m_role = data["role"].toString();
-      m_serverUrl = server;
 
       // Save JWT tokens to ApiClient
       QString accessToken = data["access_token"].toString();
@@ -359,9 +332,8 @@ void LoginDialog::onLogin(bool remember) {
       m_api->setToken(accessToken);
       m_api->setRefreshToken(refreshToken);
 
-      // Save credentials and server to QSettings
+      // Save credentials to QSettings
       QSettings settings("RedTeam", "RedTeam-Platform");
-      settings.setValue("server/url", server);
       settings.setValue("auth/username", user);
       settings.setValue("auth/refresh_token", refreshToken);
       if (remember) {
