@@ -57,7 +57,7 @@ void ExecutionPage::setupUI() {
   catH->addWidget(m_catDeviceCtrl);
   catH->addStretch();
   layout->addLayout(catH);
-  connect(m_catGroup, QOverload<int>::of(&QButtonGroup::idClicked),
+  connect(m_catGroup, QOverload<int>::of(&QButtonGroup::buttonClicked),
           this, &ExecutionPage::onAttackCategoryChanged);
 
   // ── Top: select playbook + target + execute ────────────────────────
