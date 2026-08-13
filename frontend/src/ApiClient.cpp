@@ -46,7 +46,9 @@ QNetworkRequest ApiClient::makeRequest(const QString &path,
   QUrl url(m_baseUrl + path);
   QNetworkRequest req(url);
   req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
   req.setTransferTimeout(timeoutMs);
+#endif
   // Attach JWT token if available
   if (!m_token.isEmpty()) {
     req.setRawHeader("Authorization",
