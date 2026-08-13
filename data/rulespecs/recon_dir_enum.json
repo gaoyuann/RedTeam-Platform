@@ -1,0 +1,27 @@
+{
+  "id": "recon_dir_enum",
+  "name": "目录枚举发现路径",
+  "description": "当 gobuster/dirb 输出出现 Status: 200/301/403 时，命中 T1083 文件与目录发现",
+  "when": {
+    "toolId": "gobuster",
+    "stdoutRegex": "(Status:\\s*(200|301|403)|\\(CODE:(200|301|403)\\))"
+  },
+  "then": {
+    "mitre": [
+      {"id": "T1083", "name": "File and Directory Discovery"},
+      {"id": "T1595.001", "name": "Scanning IP Blocks"}
+    ],
+    "recommendations": [
+      {
+        "title": "对发现的敏感目录做深度枚举",
+        "suggestedTool": "gobuster",
+        "suggestedArgs": ["-u", "http://<target>/<path>", "-w", "config/wordlists/common_dirs.txt", "-m", "dir"]
+      },
+      {
+        "title": "检查 /admin /config /backup 等高危目录",
+        "suggestedTool": "curl",
+        "suggestedArgs": ["-s", "http://<target>/admin"]
+      }
+    ]
+  }
+}

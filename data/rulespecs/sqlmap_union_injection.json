@@ -1,0 +1,21 @@
+{
+  "id": "sqlmap_union_injection",
+  "name": "SQLmap 发现 UNION 查询注入",
+  "when": {
+    "toolId": "sqlmap",
+    "stdoutRegex": "UNION query.*injectable|Type: UNION query"
+  },
+  "then": {
+    "mitre": [
+      {"id": "T1190", "name": "Exploit Public-Facing Application"},
+      {"id": "T1213", "name": "Data from Information Repositories"}
+    ],
+    "recommendations": [
+      {
+        "title": "提取数据库表结构",
+        "suggestedTool": "sqlmap",
+        "suggestedArgs": ["-u", "<target>", "--batch", "-D", "dvwa", "--tables"]
+      }
+    ]
+  }
+}

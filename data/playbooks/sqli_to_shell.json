@@ -1,0 +1,51 @@
+{
+  "id": "sqli_to_shell",
+  "name": "SQL注入→Webshell载荷投递→命令执行",
+  "description": "演示从漏洞发现到载荷投递的攻击链：sqlmap 利用 SQL 注入获取数据库访问 → 通过文件写入上传 webshell 载荷 → webshell 执行命令。完整演示'载荷经过加工变成利用攻击程序'。",
+  "category": "exploitation",
+  "difficulty": "medium",
+  "estimatedMinutes": 15,
+  "baseline_group": "web-vuln-scan",
+  "targetType": ["web_url", "dvwa"],
+  "steps": [
+    {
+      "id": "step1_sqli_detect",
+      "name": "SQL 注入检测 — sqlmap 探测注入点",
+      "toolId": "sqlmap",
+      "payload_id": "sqli-mysql-basic",
+      "argsTemplate": ["-u", "{{sqli_url}}", "--cookie={{dvwa_cookie}}", "--batch", "--level=1"],
+      "description": "使用 sqlmap 检测目标是否存在 SQL 注入漏洞，识别可注入参数",
+      "score": 15,
+      "expectedMitre": ["T1190"]
+    },
+    {
+      "id": "step2_sqli_exploit",
+      "name": "SQL 注入利用 — 提取数据",
+      "toolId": "sqlmap",
+      "payload_id": "sqli-error-based",
+      "argsTemplate": ["-u", "{{sqli_url}}", "--cookie={{dvwa_cookie}}", "--dbs", "--batch"],
+      "description": "利用 SQL 注入提取数据库列表，获取敏感信息",
+      "score": 20,
+      "expectedMitre": ["T1190"]
+    },
+    {
+      "id": "step3_upload_shell",
+      "name": "载荷投递 — 上传 Webshell",
+      "toolId": "upload_shell",
+      "payload_id": "rce-php",
+      "argsTemplate": [],
+      "description": "通过 DVWA 文件上传漏洞投递 PHP webshell 载荷。这是'载荷投递'的核心步骤——将预制的 webshell 载荷上传到目标服务器。",
+      "score": 25,
+      "expectedMitre": ["T1505.003"]
+    },
+    {
+      "id": "step4_shell_exec",
+      "name": "载荷执行 — Webshell 命令执行",
+      "toolId": "webshell",
+      "argsTemplate": [],
+      "description": "通过 webshell 载荷执行系统命令，验证载荷已成功投递并可操作。完成'载荷→攻击程序'的完整链路。",
+      "score": 20,
+      "expectedMitre": ["T1059"]
+    }
+  ]
+}

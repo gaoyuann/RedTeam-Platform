@@ -1,0 +1,21 @@
+{
+  "id": "sqlmap_db_enum",
+  "name": "SQLmap 成功枚举数据库",
+  "when": {
+    "toolId": "sqlmap",
+    "stdoutRegex": "available databases|fetching database names|information_schema"
+  },
+  "then": {
+    "mitre": [
+      {"id": "T1213", "name": "Data from Information Repositories"},
+      {"id": "T1005", "name": "Data from Local System"}
+    ],
+    "recommendations": [
+      {
+        "title": "提取 dvwa 数据库的用户表数据",
+        "suggestedTool": "sqlmap",
+        "suggestedArgs": ["-u", "<target>", "--batch", "-D", "dvwa", "-T", "users", "--dump"]
+      }
+    ]
+  }
+}

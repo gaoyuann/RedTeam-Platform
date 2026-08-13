@@ -1,0 +1,4184 @@
+{
+  "T1055.011": {
+    "zh_name": "额外窗口内存注入",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1053.005": {
+    "zh_name": "Windows计划任务",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1205.002": {
+    "zh_name": "套接字过滤器",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1560.001": {
+    "zh_name": "通过工具归档",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1021.005": {
+    "zh_name": "VNC远程控制",
+    "zh_desc": "",
+    "tactic_id": "TA0008",
+    "zh_tactic": "横向移动"
+  },
+  "T1047": {
+    "zh_name": "Windows管理规范(WMI)",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1687": {
+    "zh_name": "利用漏洞削弱防御",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1113": {
+    "zh_name": "屏幕截图",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1027.011": {
+    "zh_name": "无文件存储",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1037": {
+    "zh_name": "启动或登录初始化脚本",
+    "zh_desc": "攻击者通过修改系统启动脚本或登录初始化脚本，在系统启动或用户登录时自动执行恶意代码，维持长期访问。",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1557": {
+    "zh_name": "中间人攻击",
+    "zh_desc": "攻击者通过中间人攻击方式拦截网络通信，窃取传输中的凭证信息或中转恶意流量。包括LLMNR/NBT-NS毒化、ARP欺骗、DHCP欺骗等。",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1033": {
+    "zh_name": "系统所有者/用户发现",
+    "zh_desc": "攻击者查询当前登录用户信息，确定已攻陷系统的用户身份和权限级别。whoami、id是常用命令。",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1583": {
+    "zh_name": "获取基础设施",
+    "zh_desc": "攻击者通过购买、租赁等合法手段获取攻击所需的基础设施资源，包括域名、服务器、VPS、僵尸网络等。利用这些设施托管恶意软件、建立C2通信。",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1218.011": {
+    "zh_name": "Rundll32代理执行",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1613": {
+    "zh_name": "容器和资源发现",
+    "zh_desc": "攻击者发现和枚举容器环境中的资源信息，包括运行的容器、镜像、网络配置等。",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1583.007": {
+    "zh_name": "获取Serverless服务",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1132.001": {
+    "zh_name": "标准编码",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1027.009": {
+    "zh_name": "嵌入式Payload",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1556.003": {
+    "zh_name": "可插拔认证模块(PAM)",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1578.004": {
+    "zh_name": "恢复云实例",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1592": {
+    "zh_name": "收集目标主机信息",
+    "zh_desc": "攻击者收集目标主机的软件、硬件配置信息，了解目标环境以便选择合适的攻击方式和工具。",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1596.003": {
+    "zh_name": "数字证书搜索",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1056.001": {
+    "zh_name": "键盘记录",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1564.012": {
+    "zh_name": "文件/路径排除",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1222.002": {
+    "zh_name": "Linux和Mac权限修改",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1110.001": {
+    "zh_name": "密码猜测",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1216.001": {
+    "zh_name": "PubPrn脚本代理",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1597.002": {
+    "zh_name": "购买技术数据",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1003": {
+    "zh_name": "操作系统凭证转储",
+    "zh_desc": "攻击者从操作系统中转储存储的凭证哈希和密码（LSASS内存、SAM数据库、NTDS.dit等），然后通过离线破解获取明文密码。",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1129": {
+    "zh_name": "共享模块",
+    "zh_desc": "攻击者利用操作系统或应用程序的共享模块（DLL、SO等）加载恶意代码，实现代码执行和权限维持。",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1602": {
+    "zh_name": "从配置存储库获取数据",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1561.002": {
+    "zh_name": "磁盘结构擦除",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1498.001": {
+    "zh_name": "直接网络泛洪",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1574.007": {
+    "zh_name": "PATH环境变量路径拦截",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1213.002": {
+    "zh_name": "SharePoint",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1006": {
+    "zh_name": "直接卷访问",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1588.007": {
+    "zh_name": "获取人工智能能力",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1666": {
+    "zh_name": "修改云资源层次结构",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1564.008": {
+    "zh_name": "邮件隐藏规则",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1491.002": {
+    "zh_name": "外部页面篡改",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1027.013": {
+    "zh_name": "加密/编码文件",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1590.005": {
+    "zh_name": "IP地址",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1499.001": {
+    "zh_name": "操作系统耗尽泛洪",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1014": {
+    "zh_name": "Rootkit",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1546.013": {
+    "zh_name": "PowerShell配置文件",
+    "zh_desc": "",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1059.007": {
+    "zh_name": "JavaScript/JScript",
+    "zh_desc": "攻击者使用JavaScript/JScript在浏览器或Windows Script Host环境中执行恶意代码。",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1685.003": {
+    "zh_name": "修改或欺骗工具UI",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1590.002": {
+    "zh_name": "DNS信息",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1485.001": {
+    "zh_name": "生命周期触发删除",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1123": {
+    "zh_name": "音频捕获",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1543": {
+    "zh_name": "创建或修改系统进程",
+    "zh_desc": "攻击者通过创建或修改系统进程和服务来维持持久化，使恶意代码以系统服务的形式长期运行。",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1133": {
+    "zh_name": "外部远程服务",
+    "zh_desc": "攻击者通过面向互联网的远程服务（如SSH、RDP、VPN）获取初始访问权限。通常结合有效账号或漏洞利用。",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1546.006": {
+    "zh_name": "LC_LOAD_DYLIB注入",
+    "zh_desc": "",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1539": {
+    "zh_name": "窃取Web会话Cookie",
+    "zh_desc": "攻击者窃取用户的Web会话Cookie，利用这些Cookie模拟已认证的会话，绕过登录验证直接访问Web应用。",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1053.007": {
+    "zh_name": "容器编排作业",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1568.002": {
+    "zh_name": "域名生成算法(DGA)",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1036.007": {
+    "zh_name": "双重文件扩展名",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1548.002": {
+    "zh_name": "绕过UAC",
+    "zh_desc": "",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1496.003": {
+    "zh_name": "短信轰炸(SMS Pumping)",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1016.001": {
+    "zh_name": "互联网连接发现",
+    "zh_desc": "",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1548.003": {
+    "zh_name": "Sudo和Sudo缓存",
+    "zh_desc": "",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1685.001": {
+    "zh_name": "禁用或修改Windows事件日志",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1682": {
+    "zh_name": "查询公共AI服务",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1560.003": {
+    "zh_name": "通过自定义方法归档",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1578": {
+    "zh_name": "修改云计算基础设施",
+    "zh_desc": "攻击者通过修改目标云环境的计算基础设施配置（创建快照、实例、修改配置等）来维持对云环境的持久化访问。",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1584.008": {
+    "zh_name": "攻陷网络设备",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1583.008": {
+    "zh_name": "恶意广告(Malvertising)",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1069": {
+    "zh_name": "权限组发现",
+    "zh_desc": "攻击者枚举目标系统中的用户组和权限分配情况，了解哪些账号具有管理权限，为提权做准备。",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1114": {
+    "zh_name": "电子邮件收集",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1003.002": {
+    "zh_name": "SAM数据库转储",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1596.002": {
+    "zh_name": "WHOIS搜索",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1542.001": {
+    "zh_name": "系统固件",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1594": {
+    "zh_name": "搜索受害者拥有的网站",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1069.003": {
+    "zh_name": "云组发现",
+    "zh_desc": "",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1574.011": {
+    "zh_name": "服务注册表权限弱点",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1596.001": {
+    "zh_name": "DNS/Passive DNS搜索",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1499.003": {
+    "zh_name": "应用耗尽泛洪",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1195.001": {
+    "zh_name": "攻陷软件依赖项和开发工具",
+    "zh_desc": "",
+    "tactic_id": "TA0001",
+    "zh_tactic": "初始访问"
+  },
+  "T1588.004": {
+    "zh_name": "获取数字证书",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1583.002": {
+    "zh_name": "获取DNS服务器",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1561": {
+    "zh_name": "磁盘擦除",
+    "zh_desc": "攻击者通过彻底擦除磁盘数据和结构（而非简单删除文件），使目标系统完全无法恢复。",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1071.004": {
+    "zh_name": "DNS协议",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1552.005": {
+    "zh_name": "云实例元数据API",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1555.002": {
+    "zh_name": "Securityd内存",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1615": {
+    "zh_name": "组策略发现",
+    "zh_desc": "攻击者在目标系统中枚举活动目录组策略对象（GPO），了解系统安全策略和配置限制。",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1542.003": {
+    "zh_name": "Bootkit",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1025": {
+    "zh_name": "从可移动介质获取数据",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1218.013": {
+    "zh_name": "Mavinject代理执行",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1074.001": {
+    "zh_name": "本地数据暂存",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1036.005": {
+    "zh_name": "匹配合法资源名称或位置",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1587.003": {
+    "zh_name": "获取数字证书",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1565.001": {
+    "zh_name": "存储数据操纵",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1110.002": {
+    "zh_name": "密码破解",
+    "zh_desc": "攻击者对获取的密码哈希进行离线破解，恢复明文密码。常用工具有hashcat（GPU加速密码恢复）、john（John the Ripper密码破解工具）等。",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1114.001": {
+    "zh_name": "本地邮件收集",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1555.001": {
+    "zh_name": "Keychain(macOS)",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1547": {
+    "zh_name": "启动或登录自动启动执行",
+    "zh_desc": "攻击者通过修改系统自动启动配置项（注册表Run键、启动文件夹、登录项等），在系统启动或用户登录时自动执行恶意程序。",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1003.004": {
+    "zh_name": "LSA机密转储",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1600": {
+    "zh_name": "弱化加密",
+    "zh_desc": "攻击者通过降低系统使用的加密强度或直接禁用加密硬件，使加密保护失效，便于后续的窃听和破解。",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1606.002": {
+    "zh_name": "伪造SAML令牌",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1036.008": {
+    "zh_name": "伪装文件类型",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1489": {
+    "zh_name": "服务停止",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1587.001": {
+    "zh_name": "开发恶意软件",
+    "zh_desc": "攻击者开发或定制恶意软件以用于攻击行动。",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1652": {
+    "zh_name": "设备驱动发现",
+    "zh_desc": "",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1087.002": {
+    "zh_name": "域账号发现",
+    "zh_desc": "",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1547.014": {
+    "zh_name": "Active Setup",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1564": {
+    "zh_name": "隐藏痕迹",
+    "zh_desc": "攻击者通过各种手段隐藏文件和活动痕迹（隐藏文件/用户/窗口、NTFS ADS数据流、隐藏文件系统等），避免被安全管理员发现。",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1559.002": {
+    "zh_name": "动态数据交换(DDE)",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1204.002": {
+    "zh_name": "恶意文件",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1591.003": {
+    "zh_name": "确定业务节奏",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1685.004": {
+    "zh_name": "禁用或修改Linux审计系统日志",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1071.005": {
+    "zh_name": "发布/订阅协议",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1592.001": {
+    "zh_name": "硬件信息",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1080": {
+    "zh_name": "污染共享内容",
+    "zh_desc": "攻击者在网络共享目录或文件中植入恶意代码，当其他用户访问这些共享内容时触发感染，实现横向扩展。",
+    "tactic_id": "TA0008",
+    "zh_tactic": "横向移动"
+  },
+  "T1484.002": {
+    "zh_name": "信任关系修改",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1213.006": {
+    "zh_name": "数据库",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1573.001": {
+    "zh_name": "对称加密信道",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1087.001": {
+    "zh_name": "本地账号发现",
+    "zh_desc": "",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1586.001": {
+    "zh_name": "攻陷社交媒体账号",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1176.001": {
+    "zh_name": "浏览器扩展",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1542.005": {
+    "zh_name": "TFTP启动",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1686.003": {
+    "zh_name": "Windows主机防火墙",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1543.003": {
+    "zh_name": "Windows服务",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1568.001": {
+    "zh_name": "快速Flux DNS",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1497.001": {
+    "zh_name": "系统环境检查",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1053.003": {
+    "zh_name": "Cron计划任务",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1069.002": {
+    "zh_name": "域组发现",
+    "zh_desc": "",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1588.006": {
+    "zh_name": "获取漏洞信息",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1566.002": {
+    "zh_name": "鱼叉式钓鱼链接",
+    "zh_desc": "",
+    "tactic_id": "TA0001",
+    "zh_tactic": "初始访问"
+  },
+  "T1499.004": {
+    "zh_name": "应用或系统利用攻击",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1137": {
+    "zh_name": "Office应用程序启动",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1218.004": {
+    "zh_name": "InstallUtil代理执行",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1598.003": {
+    "zh_name": "鱼叉式钓鱼链接",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1021.004": {
+    "zh_name": "SSH远程登录",
+    "zh_desc": "",
+    "tactic_id": "TA0008",
+    "zh_tactic": "横向移动"
+  },
+  "T1098.003": {
+    "zh_name": "额外云角色",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1547.012": {
+    "zh_name": "打印处理器(Print Processors)",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1566.001": {
+    "zh_name": "鱼叉式钓鱼附件",
+    "zh_desc": "",
+    "tactic_id": "TA0001",
+    "zh_tactic": "初始访问"
+  },
+  "T1027.008": {
+    "zh_name": "剥离Payload",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1559.001": {
+    "zh_name": "组件对象模型(COM)",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1574.001": {
+    "zh_name": "DLL劫持",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1119": {
+    "zh_name": "自动收集",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1689": {
+    "zh_name": "降级攻击",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1115": {
+    "zh_name": "剪贴板数据",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1003.007": {
+    "zh_name": "Proc文件系统凭证",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1583.005": {
+    "zh_name": "获取僵尸网络",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1555.005": {
+    "zh_name": "密码管理器",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1553.001": {
+    "zh_name": "绕过Gatekeeper",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1675": {
+    "zh_name": "ESXi管理命令",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1608.004": {
+    "zh_name": "路过式攻击目标",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1007": {
+    "zh_name": "系统服务发现",
+    "zh_desc": "攻击者枚举目标系统上正在运行的服务，了解系统配置和潜在的攻击面。systemctl、sc query是常用的服务发现命令。",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1040": {
+    "zh_name": "网络嗅探",
+    "zh_desc": "攻击者通过网络嗅探捕获在网络上传输的明文凭证或认证令牌。在非加密网络或ARP欺骗场景下尤为有效。",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1553.002": {
+    "zh_name": "代码签名伪造",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1530": {
+    "zh_name": "从云存储获取数据",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1565.003": {
+    "zh_name": "运行时数据操纵",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1552.002": {
+    "zh_name": "注册表中的凭证",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1135": {
+    "zh_name": "网络共享发现",
+    "zh_desc": "攻击者枚举目标网络中的共享资源（文件共享、打印机共享等），寻找可读取或写入的敏感文件。",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1120": {
+    "zh_name": "外设设备发现",
+    "zh_desc": "攻击者枚举连接到目标系统的外设设备（USB设备、打印机、外接硬盘等），评估获取物理数据的可能性。",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1036.009": {
+    "zh_name": "断开进程树",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1590.004": {
+    "zh_name": "网络拓扑",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1587.002": {
+    "zh_name": "获取代码签名证书",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1222.001": {
+    "zh_name": "Windows权限修改",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1137.006": {
+    "zh_name": "Office插件",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1685.002": {
+    "zh_name": "禁用或修改云日志",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1505.002": {
+    "zh_name": "传输代理(Transport Agent)",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1082": {
+    "zh_name": "系统信息发现",
+    "zh_desc": "攻击者收集目标系统的详细信息（操作系统版本、补丁级别、硬件配置等），评估系统环境。",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1071": {
+    "zh_name": "应用层协议",
+    "zh_desc": "攻击者使用标准的应用层协议（HTTP/HTTPS、DNS、FTP、SMTP等）进行C2通信，使恶意流量隐藏在大量正常流量中。",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1574.014": {
+    "zh_name": "AppDomainManager劫持",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1074.002": {
+    "zh_name": "远程数据暂存",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1098.006": {
+    "zh_name": "额外容器集群角色",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1053": {
+    "zh_name": "计划任务/作业",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1218.007": {
+    "zh_name": "Msiexec代理执行",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1590.003": {
+    "zh_name": "网络信任依赖关系",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1498.002": {
+    "zh_name": "反射放大攻击",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1556.002": {
+    "zh_name": "密码过滤器DLL",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1505.005": {
+    "zh_name": "终端服务DLL",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1059.002": {
+    "zh_name": "AppleScript",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1176": {
+    "zh_name": "软件扩展",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1499.002": {
+    "zh_name": "服务耗尽泛洪",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1195.003": {
+    "zh_name": "攻陷硬件供应链",
+    "zh_desc": "",
+    "tactic_id": "TA0001",
+    "zh_tactic": "初始访问"
+  },
+  "T1106": {
+    "zh_name": "原生API",
+    "zh_desc": "攻击者通过直接调用操作系统的原生API函数来执行恶意代码，绕过安全软件的监控和拦截。",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1558.005": {
+    "zh_name": "Ccache文件",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1070.007": {
+    "zh_name": "清除网络连接历史与配置",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1558.004": {
+    "zh_name": "AS-REP Roasting",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1584.003": {
+    "zh_name": "攻陷虚拟专用服务器",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1059.010": {
+    "zh_name": "AutoHotKey/AutoIT",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1600.001": {
+    "zh_name": "降低密钥空间",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1070.003": {
+    "zh_name": "清除命令历史记录",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1202": {
+    "zh_name": "间接命令执行",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1091": {
+    "zh_name": "通过可移动介质复制",
+    "zh_desc": "攻击者通过USB闪存盘、移动硬盘等可移动介质传播恶意软件，在目标系统插入介质时自动执行恶意代码。在红队教学中常用于模拟物理边界突破。",
+    "tactic_id": "TA0008",
+    "zh_tactic": "横向移动"
+  },
+  "T1005": {
+    "zh_name": "本地系统数据",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1140": {
+    "zh_name": "去混淆/解码文件或信息",
+    "zh_desc": "攻击者在投递过程中对恶意文件进行解码或去混淆，恢复其原始恶意功能后执行。",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1137.005": {
+    "zh_name": "Outlook规则",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1586.003": {
+    "zh_name": "攻陷云账号",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1586.002": {
+    "zh_name": "攻陷电子邮件账号",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1098.007": {
+    "zh_name": "额外本地或域组",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1608.001": {
+    "zh_name": "上传恶意软件",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1195": {
+    "zh_name": "供应链攻陷",
+    "zh_desc": "攻击者在软件或硬件产品的供应链环节中植入后门或恶意代码，使得合法产品在分发到目标组织时已包含攻击能力。",
+    "tactic_id": "TA0001",
+    "zh_tactic": "初始访问"
+  },
+  "T1190": {
+    "zh_name": "利用面向公众的应用程序",
+    "zh_desc": "攻击者通过利用面向公众的应用程序（如Web服务器、数据库、应用服务器）中的漏洞来获取初始访问权限。在红队教学中，这包括使用nuclei扫描已知漏洞、使用sqlmap检测SQL注入等。",
+    "tactic_id": "TA0001",
+    "zh_tactic": "初始访问"
+  },
+  "T1558": {
+    "zh_name": "窃取或伪造Kerberos票据",
+    "zh_desc": "攻击者通过窃取或伪造Kerberos认证票据来获取域环境中的访问权限。金票据可伪造TGT，银票据可伪造TGS。",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1555": {
+    "zh_name": "从密码存储获取凭证",
+    "zh_desc": "攻击者从系统和应用的密码存储位置（Keychain、浏览器密码管理器、Windows凭据管理器等）提取保存的凭证信息。",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1567": {
+    "zh_name": "通过Web服务渗出",
+    "zh_desc": "攻击者将窃取的数据上传到外部Web服务（代码仓库、云存储、文本存储站点等），利用合法服务流量掩护数据渗出。",
+    "tactic_id": "TA0010",
+    "zh_tactic": "数据渗出"
+  },
+  "T1219": {
+    "zh_name": "远程访问工具",
+    "zh_desc": "攻击者利用合法的远程访问软件（TeamViewer、AnyDesk、VNC等）进行远程控制，利用合法工具流量规避检测。",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1583.001": {
+    "zh_name": "获取域名",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1560.002": {
+    "zh_name": "通过库归档",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1055.003": {
+    "zh_name": "线程执行劫持",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1684": {
+    "zh_name": "社会工程学",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1036": {
+    "zh_name": "伪装",
+    "zh_desc": "攻击者通过伪装恶意文件、进程或服务使其看起来像合法系统组件，包括修改文件名、伪造数字签名、使用合法名称等。",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1546.011": {
+    "zh_name": "应用程序兼容性Shim",
+    "zh_desc": "",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1552": {
+    "zh_name": "未保护的凭证",
+    "zh_desc": "攻击者搜索系统中未受保护的凭证信息（配置文件、脚本、Shell历史、私钥、环境变量等），获取可用于后续攻击的认证凭据。",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1547.010": {
+    "zh_name": "端口监视器(Port Monitors)",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1070.008": {
+    "zh_name": "清除邮箱数据",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1037.002": {
+    "zh_name": "登录钩子(Login Hook)",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1659": {
+    "zh_name": "内容注入",
+    "zh_desc": "",
+    "tactic_id": "TA0001",
+    "zh_tactic": "初始访问"
+  },
+  "T1055": {
+    "zh_name": "进程注入",
+    "zh_desc": "攻击者通过将恶意代码注入到合法进程中运行来隐藏恶意行为，避免被终端安全软件检测。该技术同时用于权限提升和隐蔽。",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1567.004": {
+    "zh_name": "通过Webhook渗出",
+    "zh_desc": "",
+    "tactic_id": "TA0010",
+    "zh_tactic": "数据渗出"
+  },
+  "T1205": {
+    "zh_name": "流量信号",
+    "zh_desc": "攻击者使用非传统的流量信号机制（端口敲击、套接字过滤器等）来控制恶意软件的激活和操作。",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1021.008": {
+    "zh_name": "直接云VM连接",
+    "zh_desc": "",
+    "tactic_id": "TA0008",
+    "zh_tactic": "横向移动"
+  },
+  "T1218": {
+    "zh_name": "系统二进制代理执行",
+    "zh_desc": "攻击者利用合法的系统二进制文件（如Rundll32、Regsvr32、Mshta等）作为代理来执行恶意代码，绕过应用白名单和代码执行限制。",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1070.006": {
+    "zh_name": "时间戳修改(Timestomp)",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1557.004": {
+    "zh_name": "恶意双胞胎(Evil Twin)",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1620": {
+    "zh_name": "反射式代码加载",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1016.002": {
+    "zh_name": "Wi-Fi发现",
+    "zh_desc": "",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1480.002": {
+    "zh_name": "互斥锁(Mutex)",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1564.011": {
+    "zh_name": "忽略进程中断",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1611": {
+    "zh_name": "逃逸到宿主机",
+    "zh_desc": "攻击者从容器环境中逃逸到宿主机操作系统，获取宿主机的控制权限。在红队教学中用于演示容器安全风险。",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1518.002": {
+    "zh_name": "备份软件发现",
+    "zh_desc": "",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1547.009": {
+    "zh_name": "快捷方式修改",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1010": {
+    "zh_name": "应用程序窗口发现",
+    "zh_desc": "攻击者枚举目标系统上当前运行的应用程序窗口，收集进程信息和用户活动状态，为后续攻击提供情报。",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1569.003": {
+    "zh_name": "Systemctl服务",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1087.003": {
+    "zh_name": "电子邮件账号发现",
+    "zh_desc": "",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1497.003": {
+    "zh_name": "时间检查",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1218.003": {
+    "zh_name": "CMSTP代理执行",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1563.001": {
+    "zh_name": "SSH会话劫持",
+    "zh_desc": "",
+    "tactic_id": "TA0008",
+    "zh_tactic": "横向移动"
+  },
+  "T1029": {
+    "zh_name": "定时传输",
+    "zh_desc": "",
+    "tactic_id": "TA0010",
+    "zh_tactic": "数据渗出"
+  },
+  "T1021.002": {
+    "zh_name": "SMB/Windows管理共享",
+    "zh_desc": "攻击者利用SMB协议和Windows管理共享（如C$、ADMIN$）在远程系统上执行命令和传输文件。常用工具有netexec、smbmap等。",
+    "tactic_id": "TA0008",
+    "zh_tactic": "横向移动"
+  },
+  "T1525": {
+    "zh_name": "植入内部镜像",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1572": {
+    "zh_name": "协议隧道",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1218.002": {
+    "zh_name": "控制面板(Control Panel)",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1599.001": {
+    "zh_name": "NAT穿透",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1608.002": {
+    "zh_name": "上传工具",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1547.005": {
+    "zh_name": "安全支持提供者(SSP)",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1036.011": {
+    "zh_name": "覆盖进程参数",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1550": {
+    "zh_name": "使用替代认证材料",
+    "zh_desc": "攻击者使用已获取的认证材料（访问令牌、NTLM哈希、Kerberos票据等）代表合法用户访问远程系统。",
+    "tactic_id": "TA0008",
+    "zh_tactic": "横向移动"
+  },
+  "T1597.001": {
+    "zh_name": "威胁情报供应商",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1011": {
+    "zh_name": "通过其他网络介质渗出",
+    "zh_desc": "攻击者通过蓝牙等非传统网络介质从目标网络渗出数据，绕过网络安全监控和DLP系统的检测。",
+    "tactic_id": "TA0010",
+    "zh_tactic": "数据渗出"
+  },
+  "T1602.002": {
+    "zh_name": "网络设备配置转储",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1589": {
+    "zh_name": "收集目标身份信息",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1560": {
+    "zh_name": "归档收集数据",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1553.003": {
+    "zh_name": "SIP和信任提供者劫持",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1185": {
+    "zh_name": "浏览器会话劫持",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1021": {
+    "zh_name": "远程服务",
+    "zh_desc": "攻击者通过远程服务协议在网络中横向移动。SMB/Windows管理共享（T1021.002）是常用的横向移动方式，常用工具有netexec、smbmap等。",
+    "tactic_id": "TA0008",
+    "zh_tactic": "横向移动"
+  },
+  "T1071.003": {
+    "zh_name": "邮件协议(SMTP/IMAP)",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1556.007": {
+    "zh_name": "混合身份",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1595.002": {
+    "zh_name": "漏洞扫描",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1059.009": {
+    "zh_name": "Cloud API",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1596": {
+    "zh_name": "搜索公开技术数据库",
+    "zh_desc": "攻击者通过搜索公开技术数据库（如Shodan、Censys、DNS数据库）来获取目标信息。",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1218.015": {
+    "zh_name": "Electron应用代理执行",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1207": {
+    "zh_name": "恶意域控制器(DCShadow)",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1553.006": {
+    "zh_name": "代码签名策略修改",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1610": {
+    "zh_name": "部署容器",
+    "zh_desc": "攻击者在目标环境中部署恶意容器，利用容器进行持久化或横向移动。",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1112": {
+    "zh_name": "修改注册表",
+    "zh_desc": "攻击者通过修改Windows注册表来禁用安全功能、隐藏恶意软件、建立持久化或规避检测。",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1543.004": {
+    "zh_name": "Launch Daemon",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1580": {
+    "zh_name": "云基础设施发现",
+    "zh_desc": "攻击者发现和枚举云环境中的基础设施资源。pacu是常用的AWS安全测试工具，scout_suite是云安全评估工具。",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1555.003": {
+    "zh_name": "Web浏览器凭证",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1574.008": {
+    "zh_name": "搜索顺序劫持路径拦截",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1491": {
+    "zh_name": "篡改",
+    "zh_desc": "攻击者篡改目标组织的网站或系统界面内容，传播攻击者信息或对目标组织造成声誉损害。",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1535": {
+    "zh_name": "未使用/不支持的云区域",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1557.003": {
+    "zh_name": "DHCP欺骗",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1563": {
+    "zh_name": "远程服务会话劫持",
+    "zh_desc": "攻击者劫持现有的远程服务会话（SSH会话、RDP会话），无需凭证即可接管已认证的连接。",
+    "tactic_id": "TA0008",
+    "zh_tactic": "横向移动"
+  },
+  "T1564.013": {
+    "zh_name": "绑定挂载(Bind Mounts)",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1027.001": {
+    "zh_name": "二进制填充",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1505.003": {
+    "zh_name": "Web Shell",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1484.001": {
+    "zh_name": "组策略修改",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1685.006": {
+    "zh_name": "清除Linux/Mac系统日志",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1217": {
+    "zh_name": "浏览器信息发现",
+    "zh_desc": "攻击者从浏览器中提取浏览历史、收藏夹、保存的密码和Cookie等信息，获取用户行为和凭证数据。",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1552.004": {
+    "zh_name": "私钥",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1583.004": {
+    "zh_name": "获取服务器",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1021.006": {
+    "zh_name": "Windows远程管理(WinRM)",
+    "zh_desc": "",
+    "tactic_id": "TA0008",
+    "zh_tactic": "横向移动"
+  },
+  "T1011.001": {
+    "zh_name": "通过蓝牙渗出",
+    "zh_desc": "",
+    "tactic_id": "TA0010",
+    "zh_tactic": "数据渗出"
+  },
+  "T1078.001": {
+    "zh_name": "默认账号",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1547.003": {
+    "zh_name": "时间提供者(Time Provider)",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1546.005": {
+    "zh_name": "Trap信号",
+    "zh_desc": "",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1574.006": {
+    "zh_name": "动态链接器劫持(LD_PRELOAD)",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1136.001": {
+    "zh_name": "创建本地账号",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1681": {
+    "zh_name": "搜索威胁供应商数据",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1674": {
+    "zh_name": "输入注入",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1092": {
+    "zh_name": "通过可移动介质通信",
+    "zh_desc": "攻击者通过可移动介质（如USB驱动器）与隔离网络中的受控主机交换命令和数据，突破物理隔离限制。",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1585.002": {
+    "zh_name": "建立电子邮件账号",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1557.001": {
+    "zh_name": "LLMNR/NBT-NS毒化和SMB中继",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1222": {
+    "zh_name": "文件和目录权限修改",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1003.001": {
+    "zh_name": "LSASS内存转储",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1176.002": {
+    "zh_name": "IDE扩展",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1595": {
+    "zh_name": "主动扫描",
+    "zh_desc": "攻击者通过主动向目标网络发送探测包来收集信息。包括扫描IP地址块（T1595.001）和使用字典扫描Web目录（T1595.003）。这是最直接的侦察手段，但容易被检测到。",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1027.016": {
+    "zh_name": "垃圾代码插入",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1548": {
+    "zh_name": "滥用权限提升控制机制",
+    "zh_desc": "攻击者通过滥用系统内置的权限提升控制机制（如Windows UAC、Linux sudo、Setuid等）来获取更高的执行权限。",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1134.002": {
+    "zh_name": "使用令牌创建进程",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1548.001": {
+    "zh_name": "Setuid和Setgid",
+    "zh_desc": "",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1547.004": {
+    "zh_name": "Winlogon Helper DLL",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1021.003": {
+    "zh_name": "分布式组件对象模型(DCOM)",
+    "zh_desc": "",
+    "tactic_id": "TA0008",
+    "zh_tactic": "横向移动"
+  },
+  "T1110.003": {
+    "zh_name": "密码喷洒",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1090.002": {
+    "zh_name": "外部代理",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1056.003": {
+    "zh_name": "Web门户捕获",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1589.002": {
+    "zh_name": "收集电子邮件地址",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1598.004": {
+    "zh_name": "鱼叉式语音钓鱼",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1683.001": {
+    "zh_name": "生成文本内容",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1003.005": {
+    "zh_name": "缓存域凭证提取",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1098.004": {
+    "zh_name": "SSH授权密钥",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1673": {
+    "zh_name": "虚拟机发现",
+    "zh_desc": "",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1590.006": {
+    "zh_name": "网络安全设备",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1546.012": {
+    "zh_name": "映像文件执行选项(IFEO)注入",
+    "zh_desc": "",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1218.008": {
+    "zh_name": "Odbcconf代理执行",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1593.002": {
+    "zh_name": "搜索引擎搜索",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1591.002": {
+    "zh_name": "确定业务关系",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1548.005": {
+    "zh_name": "临时提升云访问权限",
+    "zh_desc": "",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1125": {
+    "zh_name": "视频捕获",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1055.013": {
+    "zh_name": "进程分身(Doppelganging)",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1016": {
+    "zh_name": "系统网络配置发现",
+    "zh_desc": "攻击者收集目标系统的网络配置信息，包括IP地址、MAC地址、DNS配置、路由表等，了解网络环境以便横向移动。",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1578.003": {
+    "zh_name": "删除云实例",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1593.003": {
+    "zh_name": "代码仓库搜索",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1574.005": {
+    "zh_name": "安装程序文件权限弱点",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1546.008": {
+    "zh_name": "辅助功能(Accessibility Features)",
+    "zh_desc": "",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1496.002": {
+    "zh_name": "带宽劫持",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1087": {
+    "zh_name": "账号发现",
+    "zh_desc": "攻击者枚举系统或域中的有效账号，了解用户和权限情况。常用工具有enum4linux、rpcclient等。",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1090": {
+    "zh_name": "代理",
+    "zh_desc": "攻击者通过代理服务器中转C2流量，隐藏真实的C2服务器地址，增加溯源难度。包括内部代理、外部代理和多跳代理。",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1059": {
+    "zh_name": "命令和脚本解释器",
+    "zh_desc": "攻击者利用操作系统中可用的命令行解释器和脚本语言（PowerShell、Bash、Python等）执行恶意命令和代码。这是最常见的执行技术之一。",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1204.005": {
+    "zh_name": "恶意库文件",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1685.005": {
+    "zh_name": "清除Windows事件日志",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1136.002": {
+    "zh_name": "创建域账号",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1564.014": {
+    "zh_name": "扩展属性",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1589.003": {
+    "zh_name": "收集员工姓名",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1677": {
+    "zh_name": "中毒管道执行",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1482": {
+    "zh_name": "域信任发现",
+    "zh_desc": "攻击者枚举Active Directory域之间的信任关系，了解域架构和潜在的横向移动路径。",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1558.001": {
+    "zh_name": "金票据(Golden Ticket)",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1020": {
+    "zh_name": "自动渗出",
+    "zh_desc": "攻击者通过自动化机制持续地将收集到的数据渗出目标网络，减少人工操作和被发现的风险。",
+    "tactic_id": "TA0010",
+    "zh_tactic": "数据渗出"
+  },
+  "T1592.004": {
+    "zh_name": "客户端配置",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1219.001": {
+    "zh_name": "IDE隧道",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1036.002": {
+    "zh_name": "从右到左覆盖(RTLO)",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1588.001": {
+    "zh_name": "获取恶意软件",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1027.017": {
+    "zh_name": "SVG走私",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1542.002": {
+    "zh_name": "组件固件",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1070": {
+    "zh_name": "清除痕迹",
+    "zh_desc": "攻击者在完成攻击后清除各种痕迹（系统日志、文件、命令历史、网络连接记录等），以逃避取证分析和事件响应。",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1048.001": {
+    "zh_name": "通过对称加密非C2协议渗出",
+    "zh_desc": "",
+    "tactic_id": "TA0010",
+    "zh_tactic": "数据渗出"
+  },
+  "T1137.001": {
+    "zh_name": "Office模板宏",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1583.003": {
+    "zh_name": "获取虚拟专用服务器(VPS)",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1213.001": {
+    "zh_name": "Confluence",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1550.003": {
+    "zh_name": "传递票据(Pass the Ticket)",
+    "zh_desc": "",
+    "tactic_id": "TA0008",
+    "zh_tactic": "横向移动"
+  },
+  "T1609": {
+    "zh_name": "容器管理命令",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1083": {
+    "zh_name": "文件和目录发现",
+    "zh_desc": "攻击者浏览和搜索目标系统上的文件和目录结构，寻找包含敏感信息的文档、配置文件和凭证。",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1568": {
+    "zh_name": "动态解析",
+    "zh_desc": "攻击者使用动态域名解析技术（Fast Flux DNS、DGA等）频繁更换C2服务器的IP地址，增加封堵难度。",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1036.004": {
+    "zh_name": "伪装任务或服务",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1055.004": {
+    "zh_name": "异步过程调用(APC)注入",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1020.001": {
+    "zh_name": "流量复制",
+    "zh_desc": "",
+    "tactic_id": "TA0010",
+    "zh_tactic": "数据渗出"
+  },
+  "T1647": {
+    "zh_name": "Plist文件修改",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1127.003": {
+    "zh_name": "JamPlus",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1546.009": {
+    "zh_name": "AppCert DLLs",
+    "zh_desc": "",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1114.003": {
+    "zh_name": "邮件转发规则",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1074": {
+    "zh_name": "数据暂存",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1649": {
+    "zh_name": "窃取或伪造认证证书",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1098.005": {
+    "zh_name": "设备注册",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1049": {
+    "zh_name": "系统网络连接发现",
+    "zh_desc": "攻击者检查系统当前的网络连接状态（netstat、ss等），了解已建立的连接和监听端口。",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1584": {
+    "zh_name": "攻陷基础设施",
+    "zh_desc": "攻击者通过攻陷他人的基础设施来获取资源。与获取基础设施（T1583）不同，该技术不经过合法途径，而是通过入侵已有的服务器、域名等来建立攻击平台。",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1553.005": {
+    "zh_name": "绕过Web标记(MOTW)",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1600.002": {
+    "zh_name": "禁用加密硬件",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1542": {
+    "zh_name": "预OS启动",
+    "zh_desc": "攻击者在操作系统启动之前的阶段（BIOS/UEFI固件）植入恶意代码，使其在每次系统引导时自动执行，极难被检测和清除。",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1612": {
+    "zh_name": "在宿主机上构建镜像",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1055.002": {
+    "zh_name": "PE注入",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1218.012": {
+    "zh_name": "Verclsid代理执行",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1586": {
+    "zh_name": "攻陷账号",
+    "zh_desc": "攻击者通过各种手段获取受害者的账号访问权限，包括社交媒体账号和电子邮件账号，以便进一步扩大攻击面。",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1569.001": {
+    "zh_name": "Launchctl",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1584.005": {
+    "zh_name": "攻陷僵尸网络",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1059.008": {
+    "zh_name": "网络设备CLI",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1552.003": {
+    "zh_name": "Shell历史命令",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1559.003": {
+    "zh_name": "XPC服务",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1497": {
+    "zh_name": "虚拟化/沙箱逃逸",
+    "zh_desc": "攻击者在恶意软件中加入虚拟化环境和沙箱检测代码，当发现运行在分析环境中时，停止恶意行为以规避检测。",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1102": {
+    "zh_name": "Web服务",
+    "zh_desc": "攻击者利用合法的Web服务（社交媒体、云存储、评论区等）作为C2通信的中转站。",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1552.001": {
+    "zh_name": "文件中的凭证",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1568.003": {
+    "zh_name": "DNS计算",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1218.005": {
+    "zh_name": "Mshta代理执行",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1547.015": {
+    "zh_name": "登录项(Login Items)",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1608": {
+    "zh_name": "部署能力",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1608.005": {
+    "zh_name": "链接目标",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1104": {
+    "zh_name": "多级信道",
+    "zh_desc": "攻击者通过层级化的C2结构来混淆恶意流量的来源和目的地。",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1657": {
+    "zh_name": "金融盗窃",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1480": {
+    "zh_name": "执行守卫",
+    "zh_desc": "攻击者在恶意代码中设置执行条件（如特定环境密钥、互斥锁等），确保恶意代码只在满足特定条件时才激活。",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1619": {
+    "zh_name": "云存储对象发现",
+    "zh_desc": "",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1606.001": {
+    "zh_name": "伪造Web Cookie",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1654": {
+    "zh_name": "日志枚举",
+    "zh_desc": "",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1134.001": {
+    "zh_name": "令牌模拟/窃取",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1567.001": {
+    "zh_name": "渗出到代码仓库",
+    "zh_desc": "",
+    "tactic_id": "TA0010",
+    "zh_tactic": "数据渗出"
+  },
+  "T1021.007": {
+    "zh_name": "云服务连接",
+    "zh_desc": "",
+    "tactic_id": "TA0008",
+    "zh_tactic": "横向移动"
+  },
+  "T1205.001": {
+    "zh_name": "端口敲击(Port Knocking)",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1027.012": {
+    "zh_name": "LNK图标走私",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1583.006": {
+    "zh_name": "获取Web服务",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1528": {
+    "zh_name": "窃取应用程序访问令牌",
+    "zh_desc": "攻击者窃取应用程序访问令牌（如OAuth令牌），利用这些令牌绕过认证直接访问受保护的资源和服务。",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1598.002": {
+    "zh_name": "鱼叉式钓鱼附件",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1098.001": {
+    "zh_name": "额外云凭证/角色",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1204": {
+    "zh_name": "用户执行",
+    "zh_desc": "攻击者依赖用户执行特定操作（点击链接、打开文件、复制粘贴等）来触发恶意代码的执行。社会工程学是该技术的关键前置条件。",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1491.001": {
+    "zh_name": "内部页面篡改",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1564.002": {
+    "zh_name": "隐藏用户",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1134.003": {
+    "zh_name": "制作和模拟令牌",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1552.006": {
+    "zh_name": "组策略偏好(GPP)",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1048.002": {
+    "zh_name": "通过非对称加密非C2协议渗出",
+    "zh_desc": "",
+    "tactic_id": "TA0010",
+    "zh_tactic": "数据渗出"
+  },
+  "T1087.004": {
+    "zh_name": "云账号发现",
+    "zh_desc": "",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1683.002": {
+    "zh_name": "生成音视频内容",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1057": {
+    "zh_name": "进程发现",
+    "zh_desc": "攻击者枚举目标系统上正在运行的进程，了解已安装的安全软件、运行的应用程序和潜在的攻击目标。",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1556.008": {
+    "zh_name": "网络提供者DLL",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1546.003": {
+    "zh_name": "WMI事件订阅",
+    "zh_desc": "",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1596.004": {
+    "zh_name": "CDN搜索",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1497.002": {
+    "zh_name": "用户活动检查",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1496.004": {
+    "zh_name": "云服务劫持",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1585.003": {
+    "zh_name": "建立云账号",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1072": {
+    "zh_name": "软件部署工具",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1041": {
+    "zh_name": "通过C2信道渗出",
+    "zh_desc": "攻击者通过已建立的命令与控制（C2）信道渗出数据，将数据流量隐藏在正常的C2通信中。",
+    "tactic_id": "TA0010",
+    "zh_tactic": "数据渗出"
+  },
+  "T1134.004": {
+    "zh_name": "父PID欺骗",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1591": {
+    "zh_name": "收集目标组织信息",
+    "zh_desc": "攻击者收集目标组织的相关信息，包括物理位置、业务角色、组织结构等。",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1606": {
+    "zh_name": "伪造Web凭证",
+    "zh_desc": "攻击者伪造Web应用的认证凭证（Cookie、SAML令牌等），绕过Web应用的身份验证机制。",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1621": {
+    "zh_name": "多因素认证请求生成",
+    "zh_desc": "攻击者通过自动化工具向受害者发送大量MFA推送请求，利用MFA疲劳攻击使用户最终确认认证请求。",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1554": {
+    "zh_name": "攻陷宿主机软件二进制",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1552.008": {
+    "zh_name": "聊天消息凭证",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1059.001": {
+    "zh_name": "PowerShell",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1546.001": {
+    "zh_name": "修改默认文件关联",
+    "zh_desc": "",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1055.014": {
+    "zh_name": "VDSO劫持",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1071.002": {
+    "zh_name": "文件传输协议(FTP/SFTP)",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1679": {
+    "zh_name": "选择性排除",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1212": {
+    "zh_name": "利用漏洞获取凭证",
+    "zh_desc": "攻击者利用系统或应用中的漏洞获取存储的凭证信息，无需猜测或暴力破解。",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1546.014": {
+    "zh_name": "Emond",
+    "zh_desc": "",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1102.003": {
+    "zh_name": "单向通信",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1590": {
+    "zh_name": "收集目标网络信息",
+    "zh_desc": "攻击者收集目标网络的各项信息，包括IP地址段、网络拓扑结构、信任关系等，为后续攻击做情报准备。",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1210": {
+    "zh_name": "利用远程服务漏洞",
+    "zh_desc": "攻击者利用目标系统上运行的远程服务中的已知漏洞，通过网络直接攻击获取对远程系统的控制。",
+    "tactic_id": "TA0008",
+    "zh_tactic": "横向移动"
+  },
+  "T1534": {
+    "zh_name": "内部鱼叉式钓鱼",
+    "zh_desc": "",
+    "tactic_id": "TA0008",
+    "zh_tactic": "横向移动"
+  },
+  "T1574.010": {
+    "zh_name": "服务文件权限弱点",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1547.001": {
+    "zh_name": "注册表Run Keys / 启动文件夹",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1199": {
+    "zh_name": "信任关系",
+    "zh_desc": "攻击者利用组织间已建立的信任关系（如VPN、域信任）获取对目标网络的访问权限。",
+    "tactic_id": "TA0001",
+    "zh_tactic": "初始访问"
+  },
+  "T1136.003": {
+    "zh_name": "创建云账号",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1069.001": {
+    "zh_name": "本地组发现",
+    "zh_desc": "",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1593": {
+    "zh_name": "搜索公开网站/域名",
+    "zh_desc": "攻击者通过搜索公开网站、社交媒体、代码仓库等获取目标相关信息。",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1098": {
+    "zh_name": "账号操纵",
+    "zh_desc": "攻击者通过操纵目标系统的账号配置（添加云角色、修改邮箱委托权限、添加SSH密钥等）来维持持久化访问。",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1048": {
+    "zh_name": "通过替代协议渗出",
+    "zh_desc": "攻击者使用非标准的网络协议（如DNS隧道、ICMP隧道）渗出数据，绕过只监控HTTP/HTTPS等标准协议的安全设备。",
+    "tactic_id": "TA0010",
+    "zh_tactic": "数据渗出"
+  },
+  "T1547.006": {
+    "zh_name": "内核模块和扩展",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1678": {
+    "zh_name": "延迟执行",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1056.002": {
+    "zh_name": "GUI输入捕获",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1686.002": {
+    "zh_name": "网络设备防火墙",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1588.002": {
+    "zh_name": "获取工具",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1052.001": {
+    "zh_name": "通过USB渗出",
+    "zh_desc": "",
+    "tactic_id": "TA0010",
+    "zh_tactic": "数据渗出"
+  },
+  "T1574.013": {
+    "zh_name": "KernelCallbackTable劫持",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1597": {
+    "zh_name": "搜索封闭源",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1053.006": {
+    "zh_name": "Systemd Timer",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1566": {
+    "zh_name": "钓鱼",
+    "zh_desc": "攻击者通过发送伪装成合法的电子邮件，诱导受害者点击恶意链接、下载恶意附件或提交凭证信息。是当前最常用的初始访问手段之一。",
+    "tactic_id": "TA0001",
+    "zh_tactic": "初始访问"
+  },
+  "T1542.004": {
+    "zh_name": "ROMMONkit",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1218.001": {
+    "zh_name": "编译HTML文件(CHM)",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1496.001": {
+    "zh_name": "算力劫持(挖矿)",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1070.005": {
+    "zh_name": "清除网络共享连接",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1090.003": {
+    "zh_name": "多跳代理",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1110": {
+    "zh_name": "暴力破解",
+    "zh_desc": "攻击者通过反复尝试不同的用户名和密码组合来获取有效凭证。包括密码猜测（T1110.001）、密码破解（T1110.002）、密码喷洒（T1110.003）和凭证填充（T1110.004）。常用工具有hydra、hashcat、john等。",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1059.004": {
+    "zh_name": "Unix Shell",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1137.003": {
+    "zh_name": "Outlook表单",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1219.003": {
+    "zh_name": "远程访问硬件",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1565": {
+    "zh_name": "数据操纵",
+    "zh_desc": "攻击者通过操纵存储、传输或运行时数据，破坏数据的完整性并影响依赖该数据的业务流程。",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1559": {
+    "zh_name": "进程间通信",
+    "zh_desc": "攻击者利用进程间通信（IPC）机制在进程之间传递数据和命令，实现代码执行。包括COM组件、DDE数据交换、XPC服务等。",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1001": {
+    "zh_name": "数据混淆",
+    "zh_desc": "攻击者通过各种方式混淆和隐藏恶意流量，使其看起来像正常通信。包括在正常协议中嵌入垃圾数据、隐写术、协议伪装等。",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1039": {
+    "zh_name": "从网络共享驱动获取数据",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1584.006": {
+    "zh_name": "攻陷Web服务",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1601": {
+    "zh_name": "修改系统镜像",
+    "zh_desc": "攻击者通过修改、降级或替换目标系统的镜像文件来破坏其完整性，为后续攻击打开后门。",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1574": {
+    "zh_name": "劫持执行流",
+    "zh_desc": "攻击者通过劫持系统或应用程序的执行流程（DLL劫持、路径拦截、服务权限弱点利用等），在目标程序启动时代替合法组件加载。",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1036.012": {
+    "zh_name": "浏览器指纹伪装",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1059.011": {
+    "zh_name": "Lua脚本",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1027.005": {
+    "zh_name": "工具痕迹清除",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1204.003": {
+    "zh_name": "恶意图像",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1543.005": {
+    "zh_name": "容器服务",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1078": {
+    "zh_name": "有效账号",
+    "zh_desc": "攻击者使用有效的合法账号凭证登录目标系统，包括默认账号、域账号、本地账号和云账号。由于使用的是合法凭证，此类攻击很难被检测。",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1571": {
+    "zh_name": "非标准端口",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1585.001": {
+    "zh_name": "建立社交媒体账号",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1055.012": {
+    "zh_name": "进程挖空(Process Hollowing)",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1068": {
+    "zh_name": "利用漏洞提权",
+    "zh_desc": "攻击者利用操作系统或应用程序中的已知漏洞来提升权限。通过exploit获取SYSTEM/root级别的最高权限。",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1564.009": {
+    "zh_name": "资源分支(Resource Fork)",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1531": {
+    "zh_name": "账号访问移除",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1110.004": {
+    "zh_name": "凭证填充",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1027": {
+    "zh_name": "混淆文件或信息",
+    "zh_desc": "攻击者通过对恶意文件和代码进行混淆、加壳、编码、压缩等处理来逃避安全软件的检测和逆向分析。",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1556.006": {
+    "zh_name": "多因素认证",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1114.002": {
+    "zh_name": "远程邮件收集",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1505.004": {
+    "zh_name": "IIS组件",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1036.001": {
+    "zh_name": "无效代码签名",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1683": {
+    "zh_name": "生成内容",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1564.006": {
+    "zh_name": "运行虚拟实例",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1027.014": {
+    "zh_name": "多态代码",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1201": {
+    "zh_name": "密码策略发现",
+    "zh_desc": "攻击者发现目标系统的密码策略，了解密码复杂度要求、锁定阈值等信息，为暴力破解做准备。",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1546": {
+    "zh_name": "事件触发执行",
+    "zh_desc": "攻击者通过修改系统事件触发器（文件关联、屏幕保护、WMI事件等），在特定事件发生时自动执行恶意代码。",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1546.004": {
+    "zh_name": "Unix Shell配置修改",
+    "zh_desc": "",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1187": {
+    "zh_name": "强制认证",
+    "zh_desc": "攻击者通过构造恶意请求，强制目标服务器向攻击者控制的资源发起NTLM认证，从而捕获Net-NTLM哈希。responder是常用的强制认证捕获工具。",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1134.005": {
+    "zh_name": "SID历史注入",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1599": {
+    "zh_name": "网络边界桥接",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1486": {
+    "zh_name": "数据加密勒索",
+    "zh_desc": "攻击者对目标系统的文件进行加密，要求支付赎金以恢复数据。勒索软件攻击是近年最常见的破坏性攻击之一。",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1690": {
+    "zh_name": "阻止命令历史记录",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1553": {
+    "zh_name": "颠覆信任控制",
+    "zh_desc": "攻击者通过破坏系统的信任验证机制（绕过macOS Gatekeeper、安装恶意根证书、盗用代码签名证书等）来绕过安全控制。",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1548.004": {
+    "zh_name": "提示提升权限执行",
+    "zh_desc": "",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1592.003": {
+    "zh_name": "固件信息",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1573": {
+    "zh_name": "加密信道",
+    "zh_desc": "攻击者对C2通信信道进行加密，防止安全设备和网络监控系统检查和分析C2流量内容。",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1547.002": {
+    "zh_name": "认证包(Authentication Package)",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1218.010": {
+    "zh_name": "Regsvr32代理执行",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1567.003": {
+    "zh_name": "渗出到文本存储站点",
+    "zh_desc": "",
+    "tactic_id": "TA0010",
+    "zh_tactic": "数据渗出"
+  },
+  "T1592.002": {
+    "zh_name": "软件信息",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1056": {
+    "zh_name": "输入捕获",
+    "zh_desc": "攻击者通过键盘记录、GUI输入捕获、Web门户表单截取等方式直接获取用户输入的凭证信息。",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1566.004": {
+    "zh_name": "语音钓鱼",
+    "zh_desc": "",
+    "tactic_id": "TA0001",
+    "zh_tactic": "初始访问"
+  },
+  "T1587.004": {
+    "zh_name": "开发漏洞利用",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1685": {
+    "zh_name": "禁用或修改工具",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1593.001": {
+    "zh_name": "社交媒体搜索",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1213.004": {
+    "zh_name": "CRM系统",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1546.015": {
+    "zh_name": "COM对象劫持",
+    "zh_desc": "",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1589.001": {
+    "zh_name": "收集凭证信息",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1195.002": {
+    "zh_name": "攻陷软件供应链",
+    "zh_desc": "",
+    "tactic_id": "TA0001",
+    "zh_tactic": "初始访问"
+  },
+  "T1036.003": {
+    "zh_name": "重命名合法工具",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1102.002": {
+    "zh_name": "双向通信",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1203": {
+    "zh_name": "利用客户端执行",
+    "zh_desc": "攻击者通过构造恶意内容，利用客户端应用（浏览器、Office、PDF阅读器）中的漏洞实现代码执行。用户只需打开恶意文件即可触发。",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1595.003": {
+    "zh_name": "字典扫描",
+    "zh_desc": "攻击者使用字典文件对Web服务器进行目录和文件爆破扫描，发现隐藏的路径和资源。常用工具有gobuster、dirb、dirsearch、feroxbuster、ffuf等。",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1667": {
+    "zh_name": "邮件轰炸",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1137.004": {
+    "zh_name": "Outlook主页",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1573.002": {
+    "zh_name": "非对称加密信道",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1567.002": {
+    "zh_name": "渗出到云存储",
+    "zh_desc": "",
+    "tactic_id": "TA0010",
+    "zh_tactic": "数据渗出"
+  },
+  "T1570": {
+    "zh_name": "横向工具转移",
+    "zh_desc": "攻击者在已攻陷系统之间传输攻击工具和恶意文件，支持进一步的横向移动和攻击操作。",
+    "tactic_id": "TA0008",
+    "zh_tactic": "横向移动"
+  },
+  "T1574.009": {
+    "zh_name": "未引用路径拦截",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1608.003": {
+    "zh_name": "安装数字证书",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1037.005": {
+    "zh_name": "启动项",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1614.001": {
+    "zh_name": "系统语言发现",
+    "zh_desc": "",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1095": {
+    "zh_name": "非应用层协议",
+    "zh_desc": "攻击者使用非应用层协议（TCP、UDP、ICMP等）直接建立C2信道，绕过应用层安全检测。",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1059.013": {
+    "zh_name": "容器CLI/API",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1027.003": {
+    "zh_name": "隐写术混淆",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1584.002": {
+    "zh_name": "攻陷DNS服务器",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1671": {
+    "zh_name": "云应用程序集成",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1001.003": {
+    "zh_name": "协议或服务伪装",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1012": {
+    "zh_name": "查询注册表",
+    "zh_desc": "",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1030": {
+    "zh_name": "数据传输大小限制",
+    "zh_desc": "攻击者将待渗出的数据分割成小块传输，使数据传输看起来像正常的网络流量，避免触发体积阈值告警。",
+    "tactic_id": "TA0010",
+    "zh_tactic": "数据渗出"
+  },
+  "T1550.004": {
+    "zh_name": "Web会话Cookie",
+    "zh_desc": "",
+    "tactic_id": "TA0008",
+    "zh_tactic": "横向移动"
+  },
+  "T1078.002": {
+    "zh_name": "域账号",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1218.009": {
+    "zh_name": "Regsvcs/Regasm代理执行",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1546.018": {
+    "zh_name": "Python启动钩子",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1553.004": {
+    "zh_name": "安装根证书",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1037.003": {
+    "zh_name": "网络登录脚本",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1499": {
+    "zh_name": "端点拒绝服务",
+    "zh_desc": "攻击者通过资源耗尽攻击使目标系统的特定端点或服务不可用，影响业务连续性。",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1027.004": {
+    "zh_name": "投递后编译",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1688": {
+    "zh_name": "安全模式启动",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1614": {
+    "zh_name": "系统位置发现",
+    "zh_desc": "",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1564.007": {
+    "zh_name": "VBA Stomping",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1197": {
+    "zh_name": "BITS作业",
+    "zh_desc": "攻击者利用Windows后台智能传输服务（BITS）来下载、上传或传输文件，实现隐蔽的数据传输和恶意软件分发。",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1127.001": {
+    "zh_name": "MSBuild",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1578.005": {
+    "zh_name": "修改云计算配置",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1090.004": {
+    "zh_name": "域前置(Domain Fronting)",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1557.002": {
+    "zh_name": "ARP缓存毒化",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1518.001": {
+    "zh_name": "安全软件发现",
+    "zh_desc": "",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1564.003": {
+    "zh_name": "隐藏窗口",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1127.002": {
+    "zh_name": "ClickOnce",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1059.006": {
+    "zh_name": "Python",
+    "zh_desc": "攻击者使用Python解释器执行恶意脚本和命令。Python因其跨平台特性和丰富的安全工具生态而频繁被攻击者利用。",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1070.010": {
+    "zh_name": "重定位恶意软件",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1591.004": {
+    "zh_name": "确定人员角色",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1132": {
+    "zh_name": "数据编码",
+    "zh_desc": "攻击者对C2通信数据进行编码（Base64、URL编码、自定义编码等），使流量看起来像正常数据，绕过协议检测。",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1546.010": {
+    "zh_name": "AppInit DLLs",
+    "zh_desc": "",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1598": {
+    "zh_name": "信息钓鱼",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1496": {
+    "zh_name": "资源劫持",
+    "zh_desc": "攻击者劫持目标系统的计算资源和网络带宽（如挖矿、DDoS攻击），为攻击者牟利或攻击其他目标。",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1684.001": {
+    "zh_name": "冒充",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1585": {
+    "zh_name": "建立账号",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1588": {
+    "zh_name": "获取能力",
+    "zh_desc": "攻击者通过购买、下载、交换等方式获取现成的攻击工具和能力，包括恶意软件、漏洞利用、代码签名证书等。",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1546.002": {
+    "zh_name": "屏幕保护程序",
+    "zh_desc": "",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1556.009": {
+    "zh_name": "条件访问策略",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1578.002": {
+    "zh_name": "创建云实例",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1555.006": {
+    "zh_name": "云密钥管理服务",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1213.003": {
+    "zh_name": "代码仓库",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1565.002": {
+    "zh_name": "传输数据操纵",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1003.008": {
+    "zh_name": "/etc/passwd和/etc/shadow",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1543.001": {
+    "zh_name": "Launch Agent",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1569": {
+    "zh_name": "系统服务",
+    "zh_desc": "攻击者通过创建或启动系统服务来执行恶意代码，服务通常以高权限运行且随系统启动自动加载。",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1059.003": {
+    "zh_name": "Windows命令Shell",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1055.009": {
+    "zh_name": "Proc内存注入",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1650": {
+    "zh_name": "获取访问权限",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1601.001": {
+    "zh_name": "Patch系统镜像",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1558.002": {
+    "zh_name": "银票据(Silver Ticket)",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1213": {
+    "zh_name": "从信息存储库获取数据",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1070.009": {
+    "zh_name": "清除持久化机制",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1059.012": {
+    "zh_name": "Hypervisor CLI",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1555.004": {
+    "zh_name": "Windows凭据管理器",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1036.010": {
+    "zh_name": "伪装账号名",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1200": {
+    "zh_name": "硬件添加",
+    "zh_desc": "",
+    "tactic_id": "TA0001",
+    "zh_tactic": "初始访问"
+  },
+  "T1219.002": {
+    "zh_name": "远程桌面软件",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1505": {
+    "zh_name": "服务器软件组件",
+    "zh_desc": "攻击者通过在服务器软件组件（Web服务器、数据库、邮件服务器）中植入恶意代码（如Web Shell）来维持对服务器的远程控制。",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1485": {
+    "zh_name": "数据销毁",
+    "zh_desc": "攻击者删除或破坏目标系统中的数据，造成数据永久丢失。用于掩盖入侵痕迹或对目标组织造成破坏。",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1132.002": {
+    "zh_name": "非标准编码",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1556.001": {
+    "zh_name": "域控制器认证",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1537": {
+    "zh_name": "传输数据到云账号",
+    "zh_desc": "",
+    "tactic_id": "TA0010",
+    "zh_tactic": "数据渗出"
+  },
+  "T1027.006": {
+    "zh_name": "HTML走私",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1556.005": {
+    "zh_name": "可逆加密",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1027.010": {
+    "zh_name": "命令混淆",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1070.004": {
+    "zh_name": "删除文件",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1189": {
+    "zh_name": "路过式攻陷",
+    "zh_desc": "攻击者通过在合法网站上植入恶意代码，当受害者访问该网站时自动利用浏览器或插件漏洞获取系统访问权限。",
+    "tactic_id": "TA0001",
+    "zh_tactic": "初始访问"
+  },
+  "T1498": {
+    "zh_name": "网络拒绝服务",
+    "zh_desc": "攻击者通过网络泛洪（SYN Flood、UDP Flood、DNS反射放大等）使目标系统的网络服务不可用。",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1651": {
+    "zh_name": "云管理命令",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1546.016": {
+    "zh_name": "安装程序包",
+    "zh_desc": "",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1595.001": {
+    "zh_name": "扫描IP地址块",
+    "zh_desc": "攻击者对目标IP地址范围进行端口扫描和服务探测，识别活动主机和开放端口。常用工具有nmap、masscan、rustscan等。",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1221": {
+    "zh_name": "模板注入",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1037.004": {
+    "zh_name": "RC脚本",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1134": {
+    "zh_name": "访问令牌操纵",
+    "zh_desc": "攻击者通过窃取和操纵访问令牌（Token）来提升权限，包括令牌模拟、令牌盗窃、创建具有高权限令牌的进程等。",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1111": {
+    "zh_name": "多因素认证拦截",
+    "zh_desc": "攻击者通过拦截或操纵多因素认证（MFA）流程来绕过额外的安全验证，包括钓鱼拦截、SIM卡交换等。",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1027.002": {
+    "zh_name": "软件加壳",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1584.007": {
+    "zh_name": "攻陷Serverless服务",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1071.001": {
+    "zh_name": "Web协议(HTTP/HTTPS)",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1059.005": {
+    "zh_name": "Visual Basic",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1564.005": {
+    "zh_name": "隐藏文件系统",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1543.002": {
+    "zh_name": "Systemd服务",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1668": {
+    "zh_name": "独占控制",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1563.002": {
+    "zh_name": "RDP会话劫持",
+    "zh_desc": "",
+    "tactic_id": "TA0008",
+    "zh_tactic": "横向移动"
+  },
+  "T1136": {
+    "zh_name": "创建账号",
+    "zh_desc": "攻击者在目标系统上创建新的本地账号、域账号或云账号，以确保持续的访问能力。新创建的账号可以伪装成合法用户。",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1547.013": {
+    "zh_name": "XDG自动启动条目",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1584.004": {
+    "zh_name": "攻陷服务器",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1526": {
+    "zh_name": "云服务发现",
+    "zh_desc": "攻击者发现和枚举目标使用的云服务和资源，包括云存储、虚拟机、Serverless函数等。",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1204.004": {
+    "zh_name": "恶意复制粘贴",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1018": {
+    "zh_name": "远程系统发现",
+    "zh_desc": "攻击者发现网络中可访问的其他系统，识别潜在的横向移动目标。常用net view、nmap等工具扫描内网。",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1046": {
+    "zh_name": "网络服务发现",
+    "zh_desc": "攻击者通过扫描目标IP地址段来获取活动主机及其开放端口信息。nmap是最常用的网络服务发现工具。",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1590.001": {
+    "zh_name": "域名属性",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1518": {
+    "zh_name": "软件发现",
+    "zh_desc": "攻击者枚举目标系统上安装的软件和运行的版本信息，寻找已知漏洞的攻击面。同时发现已安装的安全软件以便规避。",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1538": {
+    "zh_name": "云服务仪表板",
+    "zh_desc": "",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1055.005": {
+    "zh_name": "线程本地存储(TLS)注入",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1622": {
+    "zh_name": "调试器逃避",
+    "zh_desc": "攻击者检测调试器的存在并采取反制措施，当发现被调试时改变执行路径，阻碍安全研究人员的分析。",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1036.006": {
+    "zh_name": "文件名后加空格",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1547.007": {
+    "zh_name": "重新打开的应用",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1608.006": {
+    "zh_name": "SEO投毒",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1550.002": {
+    "zh_name": "传递哈希(Pass the Hash)",
+    "zh_desc": "",
+    "tactic_id": "TA0008",
+    "zh_tactic": "横向移动"
+  },
+  "T1052": {
+    "zh_name": "通过物理介质渗出",
+    "zh_desc": "攻击者通过USB闪存盘等物理介质从隔离网络（气隙网络）中物理转移数据。",
+    "tactic_id": "TA0010",
+    "zh_tactic": "数据渗出"
+  },
+  "T1105": {
+    "zh_name": "入口工具传输",
+    "zh_desc": "攻击者通过C2信道向受控主机传输额外的攻击工具和恶意文件，扩展攻击能力。",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1216.002": {
+    "zh_name": "SyncAppvPublishingServer脚本代理",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1098.002": {
+    "zh_name": "额外邮箱委托权限",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1588.003": {
+    "zh_name": "获取代码签名证书",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1648": {
+    "zh_name": "Serverless执行",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1548.006": {
+    "zh_name": "TCC操纵(macOS)",
+    "zh_desc": "",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1027.018": {
+    "zh_name": "不可见Unicode字符",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1055.008": {
+    "zh_name": "Ptrace系统调用注入",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1653": {
+    "zh_name": "电源设置",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1027.007": {
+    "zh_name": "动态API解析",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1021.001": {
+    "zh_name": "远程桌面协议(RDP)",
+    "zh_desc": "",
+    "tactic_id": "TA0008",
+    "zh_tactic": "横向移动"
+  },
+  "T1037.001": {
+    "zh_name": "Windows登录脚本",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1055.015": {
+    "zh_name": "ListPlanting注入",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1665": {
+    "zh_name": "隐藏基础设施",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1484": {
+    "zh_name": "域或租户策略修改",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1220": {
+    "zh_name": "XSL脚本处理",
+    "zh_desc": "攻击者利用XSL（可扩展样式表语言）处理功能执行恶意脚本，通常用于绕过安全软件的检测。",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1596.005": {
+    "zh_name": "扫描数据库搜索",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1564.001": {
+    "zh_name": "隐藏文件和目录",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1578.001": {
+    "zh_name": "创建快照",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1591.001": {
+    "zh_name": "确定物理位置",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1137.002": {
+    "zh_name": "Office Test",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1587": {
+    "zh_name": "开发能力",
+    "zh_desc": "攻击者自主研发或定制用于攻击行动的能力，包括开发恶意软件、获取代码签名证书、开发漏洞利用等。该技术处于攻击准备阶段。",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1003.003": {
+    "zh_name": "NTDS.dit转储",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1686.001": {
+    "zh_name": "云防火墙",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1602.001": {
+    "zh_name": "SNMP(MIB转储)",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1686": {
+    "zh_name": "禁用或修改系统防火墙",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1001.002": {
+    "zh_name": "隐写术",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1204.001": {
+    "zh_name": "恶意链接",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1550.001": {
+    "zh_name": "应用程序访问令牌",
+    "zh_desc": "",
+    "tactic_id": "TA0008",
+    "zh_tactic": "横向移动"
+  },
+  "T1547.008": {
+    "zh_name": "LSASS驱动程序",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1569.002": {
+    "zh_name": "Windows服务执行",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1078.004": {
+    "zh_name": "云账号",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1480.001": {
+    "zh_name": "环境密钥",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1008": {
+    "zh_name": "后备信道",
+    "zh_desc": "攻击者建立备用通信信道，以防主C2信道被发现和切断后仍能保持对目标的控制。",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1680": {
+    "zh_name": "本地存储发现",
+    "zh_desc": "",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1564.004": {
+    "zh_name": "NTFS文件属性(ADS)",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1558.003": {
+    "zh_name": "Kerberoasting",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1003.006": {
+    "zh_name": "DCSync目录复制",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1124": {
+    "zh_name": "系统时间发现",
+    "zh_desc": "",
+    "tactic_id": "TA0007",
+    "zh_tactic": "发现"
+  },
+  "T1053.002": {
+    "zh_name": "At计划任务",
+    "zh_desc": "",
+    "tactic_id": "TA0002",
+    "zh_tactic": "执行"
+  },
+  "T1055.001": {
+    "zh_name": "DLL注入",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1588.005": {
+    "zh_name": "获取漏洞利用",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1556": {
+    "zh_name": "修改认证过程",
+    "zh_desc": "攻击者通过修改系统的认证过程和组件（域控制器认证、密码过滤器、PAM模块等）来拦截或绕过密码验证。",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1546.017": {
+    "zh_name": "Udev规则",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1056.004": {
+    "zh_name": "凭证API钩子",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1495": {
+    "zh_name": "固件损坏",
+    "zh_desc": "攻击者损坏目标系统的固件，导致硬件设备无法启动或正常运行，造成持久性的物理损坏。",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1490": {
+    "zh_name": "抑制系统恢复",
+    "zh_desc": "攻击者禁用或删除系统的恢复功能（如Windows卷影副本、备份目录），使受害者难以从数据破坏中恢复。",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1546.007": {
+    "zh_name": "Netsh Helper DLL",
+    "zh_desc": "",
+    "tactic_id": "TA0004",
+    "zh_tactic": "权限提升"
+  },
+  "T1566.003": {
+    "zh_name": "通过服务鱼叉式钓鱼",
+    "zh_desc": "",
+    "tactic_id": "TA0001",
+    "zh_tactic": "初始访问"
+  },
+  "T1090.001": {
+    "zh_name": "内部代理",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1216": {
+    "zh_name": "系统脚本代理执行",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1102.001": {
+    "zh_name": "死信箱解析器",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1001.001": {
+    "zh_name": "垃圾数据",
+    "zh_desc": "",
+    "tactic_id": "TA0011",
+    "zh_tactic": "命令与控制"
+  },
+  "T1598.001": {
+    "zh_name": "鱼叉式钓鱼服务",
+    "zh_desc": "",
+    "tactic_id": "TA0043",
+    "zh_tactic": "侦察"
+  },
+  "T1505.006": {
+    "zh_name": "vSphere安装包",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1552.007": {
+    "zh_name": "容器API凭证",
+    "zh_desc": "",
+    "tactic_id": "TA0006",
+    "zh_tactic": "凭证访问"
+  },
+  "T1584.001": {
+    "zh_name": "攻陷域名",
+    "zh_desc": "",
+    "tactic_id": "TA0042",
+    "zh_tactic": "资源开发"
+  },
+  "T1505.001": {
+    "zh_name": "SQL存储过程",
+    "zh_desc": "",
+    "tactic_id": "TA0003",
+    "zh_tactic": "持久化"
+  },
+  "T1556.004": {
+    "zh_name": "网络设备认证",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1561.001": {
+    "zh_name": "磁盘内容擦除",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1213.005": {
+    "zh_name": "即时通讯应用",
+    "zh_desc": "",
+    "tactic_id": "TA0009",
+    "zh_tactic": "收集"
+  },
+  "T1048.003": {
+    "zh_name": "通过非加密非C2协议渗出",
+    "zh_desc": "",
+    "tactic_id": "TA0010",
+    "zh_tactic": "数据渗出"
+  },
+  "T1027.015": {
+    "zh_name": "压缩混淆",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1574.004": {
+    "zh_name": "Dylib劫持",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1601.002": {
+    "zh_name": "降级系统镜像",
+    "zh_desc": "",
+    "tactic_id": "TA0112",
+    "zh_tactic": "防御削弱"
+  },
+  "T1684.002": {
+    "zh_name": "电子邮件欺骗",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1078.003": {
+    "zh_name": "本地账号",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1669": {
+    "zh_name": "Wi-Fi网络",
+    "zh_desc": "",
+    "tactic_id": "TA0001",
+    "zh_tactic": "初始访问"
+  },
+  "T1211": {
+    "zh_name": "利用漏洞隐蔽",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1127": {
+    "zh_name": "受信任的开发者工具代理执行",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1529": {
+    "zh_name": "系统关机/重启",
+    "zh_desc": "",
+    "tactic_id": "TA0040",
+    "zh_tactic": "影响"
+  },
+  "T1218.014": {
+    "zh_name": "MMC代理执行",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1564.010": {
+    "zh_name": "进程参数欺骗",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  },
+  "T1574.012": {
+    "zh_name": "COR_PROFILER劫持",
+    "zh_desc": "",
+    "tactic_id": "TA0005",
+    "zh_tactic": "隐蔽"
+  }
+}

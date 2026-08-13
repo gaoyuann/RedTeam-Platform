@@ -1,0 +1,15 @@
+{
+  "id": "sqlmap_data_dump",
+  "name": "SQLmap 成功提取数据库数据",
+  "when": {
+    "toolId": "sqlmap",
+    "stdoutRegex": "fetching entries|Database: dvwa|Table: users|admin.*password|dumped to CSV"
+  },
+  "then": {
+    "mitre": [
+      {"id": "T1530", "name": "Data from Cloud Storage"},
+      {"id": "T1041", "name": "Exfiltration Over C2 Channel"}
+    ],
+    "recommendations": []
+  }
+}

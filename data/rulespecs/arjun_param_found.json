@@ -1,0 +1,27 @@
+{
+  "id": "arjun_param_found",
+  "name": "Arjun Parameter Found",
+  "description": "Identifies discovered HTTP parameters from Arjun output. Matches both extracted known params and newly discovered hidden params.",
+  "when": {
+    "toolId": "arjun",
+    "stdoutRegex": "Extracted \\d+ parameters|Parameters found|\\[\\+\\].*param"
+  },
+  "then": {
+    "mitre": [
+      {"id": "T1595", "name": "Active Scanning"},
+      {"id": "T1595.002", "name": "Vulnerability Scanning"}
+    ],
+    "recommendations": [
+      {
+        "title": "对发现的参数进行 SQL 注入测试（sqlmap）",
+        "suggestedTool": "sqlmap",
+        "suggestedArgs": ["-u", "<target>", "--batch", "--dbs"]
+      },
+      {
+        "title": "对发现的参数进行 XSS 测试（nuclei）",
+        "suggestedTool": "nuclei",
+        "suggestedArgs": ["-u", "<target>", "-t", "xss"]
+      }
+    ]
+  }
+}

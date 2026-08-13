@@ -1,0 +1,21 @@
+{
+  "id": "evil-winrm_shell",
+  "name": "Evil-WinRM Shell Connected",
+  "description": "Detects a successful shell connection using Evil-WinRM.",
+  "when": {
+    "toolId": "evil-winrm",
+    "stdoutRegex": "\\*Evil-WinRM\\* PS"
+  },
+  "then": {
+    "mitre": [
+      {"id": "T1021.006", "name": "Remote Services: Windows Remote Management"}
+    ],
+    "recommendations": [
+      {
+        "title": "在获得 WinRM shell 后进行权限提升",
+        "suggestedTool": "system-tools",
+        "suggestedArgs": ["whoami /priv"]
+      }
+    ]
+  }
+}

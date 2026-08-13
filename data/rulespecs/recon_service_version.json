@@ -1,0 +1,22 @@
+{
+  "id": "recon_service_version",
+  "name": "服务版本指纹识别",
+  "description": "当 nmap 输出包含服务版本信息时，命中 T1595 主动扫描技术",
+  "when": {
+    "toolId": "nmap",
+    "stdoutRegex": "(Apache|nginx|OpenSSH|vsftpd|Microsoft|Samba|MySQL|PostgreSQL|\\d+\\.\\d+\\.\\d+)"
+  },
+  "then": {
+    "mitre": [
+      {"id": "T1595", "name": "Active Scanning"},
+      {"id": "T1592", "name": "Gather Victim Host Information"}
+    ],
+    "recommendations": [
+      {
+        "title": "对识别的服务版本搜索已知漏洞",
+        "suggestedTool": "searchsploit",
+        "suggestedArgs": ["<service_name>", "<version>"]
+      }
+    ]
+  }
+}

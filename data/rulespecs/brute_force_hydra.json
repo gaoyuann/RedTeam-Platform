@@ -1,0 +1,33 @@
+{
+  "id": "brute_force_hydra",
+  "name": "Hydra 弱口令爆破攻击检测",
+  "description": "检测 Hydra 弱口令爆破攻击，命中 T1110 Brute Force 及相关子技术",
+  "when": {
+    "toolId": "hydra",
+    "stdoutRegex": "Hydra.*starting|\\[DATA\\].*attacking|valid password found|successfully completed"
+  },
+  "then": {
+    "mitre": [
+      {"id": "T1110", "name": "Brute Force"},
+      {"id": "T1110.001", "name": "Password Guessing"},
+      {"id": "T1110.003", "name": "Password Spraying"}
+    ],
+    "recommendations": [
+      {
+        "title": "实施账户锁定策略（连续失败 5 次锁定 15 分钟）",
+        "suggestedTool": null,
+        "suggestedArgs": []
+      },
+      {
+        "title": "启用多因素认证（MFA）",
+        "suggestedTool": null,
+        "suggestedArgs": []
+      },
+      {
+        "title": "部署 Web 应用防火墙，限制登录请求频率",
+        "suggestedTool": null,
+        "suggestedArgs": []
+      }
+    ]
+  }
+}

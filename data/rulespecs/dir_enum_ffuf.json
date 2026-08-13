@@ -1,0 +1,28 @@
+{
+  "id": "dir_enum_ffuf",
+  "name": "ffuf 目录枚举结果检测",
+  "description": "检测 ffuf 目录枚举的执行结果，识别发现的路径和 MITRE ATT&CK 技术",
+  "when": {
+    "toolId": "ffuf",
+    "stdoutRegex": "\\[Status:|\"status\":|ffuf.*starting|:: Progress:|FUZZ|req/sec"
+  },
+  "then": {
+    "mitre": [
+      {"id": "T1083", "name": "File and Directory Discovery"},
+      {"id": "T1595.002", "name": "Vulnerability Scanning"},
+      {"id": "T1592", "name": "Gather Victim Host Information"}
+    ],
+    "recommendations": [
+      {
+        "title": "对发现的路径进行深度漏洞扫描",
+        "suggestedTool": "nuclei",
+        "suggestedArgs": ["-u", "<target>", "-no-interactsh", "-duc"]
+      },
+      {
+        "title": "使用 nikto 对发现的 Web 路径进行漏洞检测",
+        "suggestedTool": "nikto",
+        "suggestedArgs": ["-h", "<target>", "-maxtime", "30s"]
+      }
+    ]
+  }
+}

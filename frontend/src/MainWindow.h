@@ -4,43 +4,41 @@
 #include <QMainWindow>
 #include <QListWidget>
 #include <QStackedWidget>
-#include <QStatusBar>
-#include <QNetworkAccessManager>
 #include <QPushButton>
-#include <QTableWidget>
 #include <QLabel>
-#include <QTextEdit>
+
+class ApiClient;
+class LoginDialog;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
-    explicit MainWindow(QWidget *parent = nullptr);
+    explicit MainWindow(ApiClient *api, const QString &role = "admin",
+                        const QString &username = "", QWidget *parent = nullptr);
+    void switchToPage(int index);
+
+signals:
+    void navigateToExecution(const QString &runId);
+    void roleSwitchRequested(const QString &role, const QString &username);
 
 private slots:
     void onModuleChanged(int row);
     void onCheckBackend();
-    void onBackendReply(QNetworkReply *reply);
-    void onFetchDbData();
-    void onDbDataReply(QNetworkReply *reply);
-    void onContainerTest();
-    void onContainerTestReply(QNetworkReply *reply);
+    void onLogout();
 
 private:
     void setupUI();
-    void setupVerificationPage(QWidget *page);
 
     QListWidget *m_navList;
     QStackedWidget *m_stackWidget;
     QPushButton *m_checkBackendBtn;
-    QNetworkAccessManager *m_networkMgr;
-
-    // Verification page widgets
+    QPushButton *m_logoutBtn;
     QLabel *m_backendStatusLabel;
-    QTableWidget *m_dbTable;
-    QPushButton *m_fetchDbBtn;
-    QPushButton *m_containerTestBtn;
-    QTextEdit *m_containerOutput;
+    QLabel *m_userInfoLabel;
+    ApiClient *m_api;
+    QString m_role;
+    QString m_username;
 
     const QStringList m_modules = {
         QStringLiteral("渗透测试资源部署配置"),

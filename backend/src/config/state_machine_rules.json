@@ -1,0 +1,60 @@
+{
+  "version": "1.0",
+  "description": "ReAct Runtime Guard Rules for RedTeam-Platform",
+  "global": {
+    "max_total_react_inserts": 15
+  },
+  "actions": {
+    "stop": {
+      "required_status": ["RUNNING", "PENDING"],
+      "forbidden_if_status": ["COMPLETED", "ABORTED", "FAILED"],
+      "state_transitions": {
+        "to": "COMPLETED",
+        "block_all_subsequent": true
+      }
+    },
+    "parallel": {
+      "global_max_parallel_groups": 10,
+      "per_category_limit": {
+        "dir_enum": 2,
+        "subdomain_enum": 1,
+        "vuln_scan": 2,
+        "brute_force": 3,
+        "cloud_scan": 1,
+        "port_scan": 3,
+        "default": 2
+      },
+      "tool_categories": {
+        "gobuster": "dir_enum",
+        "dirb": "dir_enum",
+        "ffuf": "dir_enum",
+        "subfinder": "subdomain_enum",
+        "amass": "subdomain_enum",
+        "nuclei": "vuln_scan",
+        "nikto": "vuln_scan",
+        "sqlmap": "vuln_scan",
+        "hydra": "brute_force",
+        "john": "brute_force",
+        "hashcat": "brute_force",
+        "nmap": "port_scan",
+        "masscan": "port_scan",
+        "netexec": "brute_force",
+        "evil-winrm": "brute_force",
+        "responder": "cloud_scan",
+        "cloudmapper": "cloud_scan",
+        "pacu": "cloud_scan"
+      }
+    },
+    "insert": {
+      "per_category_limit": {
+        "dir_enum": 2,
+        "subdomain_enum": 1,
+        "vuln_scan": 2,
+        "brute_force": 3,
+        "cloud_scan": 1,
+        "port_scan": 3,
+        "default": 2
+      }
+    }
+  }
+}

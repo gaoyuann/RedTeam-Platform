@@ -1,121 +1,150 @@
-/**
- * RedTeam Platform Backend - Phase 0 Verification Server
- *
- * Minimal Express server that verifies:
- *   1. Qt ↔ Node.js HTTP communication (/api/health)
- *   2. Node.js ↔ SQLite database chain (/api/db-test)
- *   3. Node.js ↔ Docker container chain (/api/container-test)
- */
-
 import express from 'express';
 import cors from 'cors';
+import { createServer } from 'http';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import BetterSqlite3 from 'better-sqlite3';
-import { readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+
+import { getDb } from './db/connection.js';
+import { runMigrations } from './db/migrate.js';
+import errorHandler from './middleware/errorHandler.js';
+import { authenticate } from './middleware/auth.js';
+import { rbacGuard } from './middleware/rbac.js';
+import { initWebSocket } from './services/wsManager.js';
+
+import healthRoutes from './routes/health.js';
+import userRoutes from './routes/users.js';
+import classRoutes from './routes/classes.js';
+import membershipRoutes from './routes/memberships.js';
+import assignmentRoutes from './routes/assignments.js';
+import submissionRoutes from './routes/submissions.js';
+import playbookRoutes from './routes/playbooks.js';
+import runRoutes from './routes/runs.js';
+import auditRoutes from './routes/audit.js';
+import scanRoutes from './routes/scans.js';
+import configRoutes from './routes/config.js';
+import reportRoutes from './routes/reports.js';
+import toolRoutes from './routes/tools.js';
+import topologyRoutes from './routes/topology.js';
+import knowledgeRoutes from './routes/knowledge.js';
+import payloadRoutes from './routes/payloads.js';
 
 // ── Config ──────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..', '..');
-const DB_PATH = resolve(PROJECT_ROOT, 'data', 'redteam.db');
 const PORT = process.env.PORT || 3002;
+const MIGRATIONS_DIR = resolve(__dirname, 'db', 'migrations');
 
 const execAsync = promisify(exec);
 
-// ── SQLite Setup ────────────────────────────────────────────────────────
-console.log(`[DB] Opening database at: ${DB_PATH}`);
-const db = new BetterSqlite3(DB_PATH);
-
-// Create verification test table and seed data
-db.exec(`
-  CREATE TABLE IF NOT EXISTS verification_test (
-    id    INTEGER PRIMARY KEY AUTOINCREMENT,
-    name  TEXT    NOT NULL,
-    value TEXT    NOT NULL,
-    created_at TEXT DEFAULT (datetime('now'))
-  );
-`);
-
-// Seed test data if table is empty
-const count = db.prepare('SELECT COUNT(*) AS n FROM verification_test').get();
-if (count.n === 0) {
-  const insert = db.prepare(
-    'INSERT INTO verification_test (name, value) VALUES (?, ?)'
-  );
-  const seed = [
-    ['backend_engine', 'Express.js 4.x'],
-    ['database_engine', 'SQLite 3.x via better-sqlite3'],
-    ['frontend_engine', 'Qt 5.15.3 C++'],
-    ['container_engine', 'Docker (Podman fallback)'],
-    ['protocol', 'HTTP REST on 127.0.0.1:3002'],
-  ];
-  const tx = db.transaction((rows) => {
-    for (const [name, value] of rows) insert.run(name, value);
-  });
-  tx(seed);
-  console.log(`[DB] Seeded ${seed.length} verification rows`);
-} else {
-  console.log(`[DB] verification_test already has ${count.n} rows, skip seed`);
-}
+// ── Database & Migrations ───────────────────────────────────────────────
+const db = getDb();
 
 // ── Express App ─────────────────────────────────────────────────────────
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ── API: Health Check ───────────────────────────────────────────────────
-app.get('/api/health', (_req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-  });
-});
+// ── Mount Routes ────────────────────────────────────────────────────────
+// Public routes (no auth required)
+app.use('/api', healthRoutes(db));
+app.use('/api/users', userRoutes(db));  // login/refresh are public; CRUD is protected internally
 
-// ── API: SQLite Data Test ───────────────────────────────────────────────
+// Protected routes (authenticate + RBAC guard)
+const protectedRoutes = [
+  ['/api/classes',     classRoutes(db),     'classes'],
+  ['/api/memberships', membershipRoutes(db),'memberships'],
+  ['/api/assignments', assignmentRoutes(db),'assignments'],
+  ['/api/submissions', submissionRoutes(db),'submissions'],
+  ['/api/playbooks',   playbookRoutes(db),  'playbooks'],
+  ['/api/runs',        runRoutes(db),       'runs'],
+  ['/api/audit',       auditRoutes(db),     'audit'],
+  ['/api/scan-tasks',  scanRoutes(db),      'scan-tasks'],
+  ['/api/config',      configRoutes(db),    'config'],
+  ['/api/tools',       toolRoutes(db),      'tools'],
+  ['/api/reports',     reportRoutes(db),    'reports'],
+  ['/api/topology',    topologyRoutes(db),  'topology'],
+  ['/api/kg',          knowledgeRoutes(db), 'kg'],
+  ['/api/payloads',    payloadRoutes(db),   'payloads'],
+];
+for (const [path, routeFn, guard] of protectedRoutes) {
+  app.use(path, authenticate, rbacGuard(guard), routeFn);
+}
+
+// ── Legacy Phase 0 endpoints (keep for Qt frontend compat) ──────────────
 app.get('/api/db-test', (_req, res) => {
   try {
-    const rows = db.prepare('SELECT * FROM verification_test ORDER BY id').all();
-    res.json({ status: 'ok', source: 'SQLite', count: rows.length, data: rows });
+    const tables = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE '\\_%' ESCAPE '\\' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+    ).all().map(r => r.name);
+    const stats = {};
+    for (const t of tables) {
+      const row = db.prepare(`SELECT COUNT(*) AS n FROM "${t}"`).get();
+      stats[t] = row.n;
+    }
+    res.json({ status: 'ok', source: 'SQLite', tables: stats });
   } catch (err) {
     res.status(500).json({ status: 'error', message: err.message });
   }
 });
 
-// ── API: Container Tool Test ────────────────────────────────────────────
 app.get('/api/container-test', async (_req, res) => {
-  const IMAGE = 'redteam-nmap:latest';
-  const CMD = `docker run --rm ${IMAGE} nmap --version`;
-
   try {
-    const { stdout, stderr } = await execAsync(CMD, { timeout: 15000 });
+    const { runTool } = await import('./tools/toolRunner.js');
+    const result = await runTool('nmap', ['--version'], { timeout: 15000 });
     res.json({
-      status: 'ok',
-      engine: 'docker',
+      status: result.success ? 'ok' : 'error',
+      engine: result.executionMode,
       tool: 'nmap',
-      image: IMAGE,
-      output: stdout.trim() || stderr.trim(),
+      image: 'rt-recon:latest',
+      output: result.stdout || result.stderr,
+      ...(result.success ? {} : { message: result.stderr }),
     });
   } catch (err) {
-    // Docker not available or image not found
-    res.json({
-      status: 'error',
-      engine: 'docker',
-      tool: 'nmap',
-      image: IMAGE,
-      message: err.message,
-      hint: 'Run: docker build -t redteam-nmap:latest containers/nmap/',
-    });
+    res.json({ status: 'error', engine: 'unknown', tool: 'nmap', message: err.message });
   }
 });
 
-// ── Start ───────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`[Server] RedTeam Backend running on http://127.0.0.1:${PORT}`);
-  console.log(`[Server] Endpoints:`);
-  console.log(`[Server]   GET /api/health        - Health check`);
-  console.log(`[Server]   GET /api/db-test       - SQLite verification data`);
-  console.log(`[Server]   GET /api/container-test - Docker nmap test`);
+// ── DB Admin ────────────────────────────────────────────────────────────
+app.get('/api/db/stats', (_req, res) => {
+  try {
+    const tables = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE '\\_%' ESCAPE '\\' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+    ).all().map(r => r.name);
+    const stats = {};
+    for (const t of tables) {
+      const row = db.prepare(`SELECT COUNT(*) AS n FROM "${t}"`).get();
+      stats[t] = row.n;
+    }
+    import('fs').then(fs => fs.promises.stat(resolve(PROJECT_ROOT, 'data', 'redteam.db'))).then(({ size }) => {
+      res.json({ status: 'ok', data: { tableRowCounts: stats, dbSizeBytes: size } });
+    }).catch(() => {
+      res.json({ status: 'ok', data: { tableRowCounts: stats, dbSizeBytes: null } });
+    });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
 });
+
+// ── Error Handler ───────────────────────────────────────────────────────
+app.use(errorHandler);
+
+// ── Start ───────────────────────────────────────────────────────────────
+async function start() {
+  const applied = await runMigrations(db, MIGRATIONS_DIR);
+  if (applied.length > 0) {
+    console.log(`[DB] Applied ${applied.length} new migrations`);
+  }
+
+  const HOST = process.env.HOST || '0.0.0.0';
+  const server = createServer(app);
+  initWebSocket(server);
+  server.listen(PORT, HOST, () => {
+    console.log(`[Server] RedTeam Backend running on http://${HOST}:${PORT}`);
+    console.log(`[Server] WebSocket available at ws://${HOST}:${PORT}/ws`);
+    console.log(`[Server] API endpoints mounted: /api/users, /api/classes, /api/playbooks, /api/runs, /api/scan-tasks, /api/config, ...`);
+  });
+}
+
+start();

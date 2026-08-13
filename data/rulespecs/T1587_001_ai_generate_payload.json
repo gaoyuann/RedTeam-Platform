@@ -1,0 +1,29 @@
+{
+  "id": "T1587_001_ai_generate_payload",
+  "name": "开发恶意软件（ai_generate_payload）",
+  "description": "[自动生成] 工具 ai_generate_payload 执行时匹配 MITRE T1587.001 技术",
+  "type": "suggestion",
+  "priority": "medium",
+  "when": {
+    "toolId": "ai_generate_payload",
+    "stdoutRegex": "ai_generate_payload"
+  },
+  "then": {
+    "mitre": [
+      {
+        "id": "T1587.001",
+        "name": "Malware"
+      }
+    ],
+    "recommendations": []
+  },
+  "metadata": {
+    "auto_generated": true,
+    "source_technique": "T1587.001",
+    "source_tool": "ai_generate_payload",
+    "generated_at": "2026-06-25T08:48:22.754Z",
+    "needs_teacher_review": false,
+    "enabled": true,
+    "accepted_at": "2026-06-25T08:48:43.107Z"
+  }
+}

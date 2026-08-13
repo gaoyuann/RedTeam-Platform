@@ -1,0 +1,20 @@
+{
+  "id": "sqlmap_injectable",
+  "name": "SQLmap 检测到可注入参数",
+  "when": {
+    "toolId": "sqlmap",
+    "stdoutRegex": "appears to be injectable|is injectable|identified the following injection point"
+  },
+  "then": {
+    "mitre": [
+      {"id": "T1190", "name": "Exploit Public-Facing Application"}
+    ],
+    "recommendations": [
+      {
+        "title": "枚举目标数据库列表",
+        "suggestedTool": "sqlmap",
+        "suggestedArgs": ["-u", "<target>", "--batch", "--dbs"]
+      }
+    ]
+  }
+}

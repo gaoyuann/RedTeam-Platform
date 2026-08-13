@@ -1,0 +1,27 @@
+{
+  "id": "httpx_live_url",
+  "name": "HTTPX Live URL Found",
+  "description": "Identifies a live web server based on a successful HTTP response (2xx/3xx).",
+  "when": {
+    "toolId": "httpx",
+    "stdoutRegex": "status_code"
+  },
+  "then": {
+    "mitre": [
+      {"id": "T1595", "name": "Active Scanning"},
+      {"id": "T1590", "name": "Gather Victim Network Information"}
+    ],
+    "recommendations": [
+      {
+        "title": "对发现的存活 URL 进行深度目录枚举（ffuf/gobuster）",
+        "suggestedTool": "ffuf",
+        "suggestedArgs": ["-u", "<target>/FUZZ", "-w", "/usr/share/wordlists/dirb/common.txt"]
+      },
+      {
+        "title": "对存活 URL 进行漏洞扫描（nikto/nuclei）",
+        "suggestedTool": "nuclei",
+        "suggestedArgs": ["-u", "<target>", "-severity", "medium,high,critical"]
+      }
+    ]
+  }
+}

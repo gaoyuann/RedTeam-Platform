@@ -1,5 +1,7 @@
+# ── Build artifacts ──────────────────────────
 build/
 cmake-build-*/
+dist/
 *.autosave
 *.user
 *.o
@@ -8,7 +10,37 @@ cmake-build-*/
 moc_*
 ui_*
 qrc_*
+
+# ── Node.js ─────────────────────────────────
 node_modules/
+
+# ── SQLite runtime files ────────────────────
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.db:ro
+
+# ── Data: large/downloaded content ──────────
+data/nuclei-templates/
+data/output/
+
+# ── Archives ────────────────────────────────
 *.tar
 *.tar.gz
-data/*.db
+*.tar.xz
+
+# ── Secrets ─────────────────────────────────
+pentagi_key
+*.pem
+*.key
+
+# ── Claude Code local config ────────────────
+.claude/
+
+# ── Container binaries (too large for git) ──
+containers/recon/binaries/
+
+# ── One-off scripts (not part of project) ───
+check_*.mjs
+fix_data.mjs
+pentagi-v3/

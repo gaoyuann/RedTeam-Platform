@@ -1,0 +1,26 @@
+{
+  "id": "recon_open_ports",
+  "name": "发现开放端口",
+  "description": "当 nmap 输出出现 open 端口时，给出下一步枚举建议",
+  "when": {
+    "toolId": "nmap",
+    "stdoutRegex": "\\bopen\\b"
+  },
+  "then": {
+    "mitre": [
+      {"id": "T1046", "name": "Network Service Discovery"}
+    ],
+    "recommendations": [
+      {
+        "title": "对开放端口做服务指纹识别",
+        "suggestedTool": "nmap",
+        "suggestedArgs": ["-sV", "<target>"]
+      },
+      {
+        "title": "对 Web 服务做目录枚举",
+        "suggestedTool": "gobuster",
+        "suggestedArgs": ["dir", "-u", "<target>", "-w", "config/wordlists/common_dirs.txt"]
+      }
+    ]
+  }
+}

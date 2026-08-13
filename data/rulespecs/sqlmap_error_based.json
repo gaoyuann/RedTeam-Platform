@@ -1,0 +1,14 @@
+{
+  "id": "sqlmap_error_based",
+  "name": "SQLmap 发现报错注入",
+  "when": {
+    "toolId": "sqlmap",
+    "stdoutRegex": "error-based.*injectable|Type: error-based"
+  },
+  "then": {
+    "mitre": [
+      {"id": "T1190", "name": "Exploit Public-Facing Application"}
+    ],
+    "recommendations": []
+  }
+}

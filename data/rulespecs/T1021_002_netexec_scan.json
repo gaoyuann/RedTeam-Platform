@@ -1,0 +1,29 @@
+{
+  "id": "T1021_002_netexec_scan",
+  "name": "SMB/Windows管理共享（netexec_scan）",
+  "description": "[自动生成] 工具 netexec_scan 执行时匹配 MITRE T1021.002 技术",
+  "type": "suggestion",
+  "priority": "medium",
+  "when": {
+    "toolId": "netexec_scan",
+    "stdoutRegex": "smb|admin\\$|c\\$|pwn3d|login successful"
+  },
+  "then": {
+    "mitre": [
+      {
+        "id": "T1021.002",
+        "name": "SMB/Windows Admin Shares"
+      }
+    ],
+    "recommendations": []
+  },
+  "metadata": {
+    "auto_generated": true,
+    "source_technique": "T1021.002",
+    "source_tool": "netexec_scan",
+    "generated_at": "2026-05-29T05:19:11.765Z",
+    "needs_teacher_review": false,
+    "enabled": true,
+    "accepted_at": "2026-05-29T05:19:28.442Z"
+  }
+}

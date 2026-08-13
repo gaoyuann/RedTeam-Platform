@@ -1,0 +1,22 @@
+{
+  "id": "responder_hash_capture",
+  "name": "Responder NTLM Hash Captured",
+  "description": "Detects when Responder captures an NTLM hash via SMB, HTTP, or other protocols.",
+  "when": {
+    "toolId": "responder",
+    "stdoutRegex": "NTLMv[12]"
+  },
+  "then": {
+    "mitre": [
+      {"id": "T1557", "name": "Man-in-the-Middle"},
+      {"id": "T1557.001", "name": "LLMNR/NBT-NS Poisoning and Relay"}
+    ],
+    "recommendations": [
+      {
+        "title": "将捕获的 NTLMv2 哈希传递给 john 进行离线破解",
+        "suggestedTool": "john",
+        "suggestedArgs": ["<hash_file>", "--wordlist=/usr/share/wordlists/rockyou.txt", "--format=netntlmv2"]
+      }
+    ]
+  }
+}

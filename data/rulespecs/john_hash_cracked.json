@@ -1,0 +1,21 @@
+{
+  "id": "john_hash_cracked",
+  "name": "John the Ripper Hash Cracked",
+  "description": "Detects when John the Ripper successfully cracks a password hash.",
+  "when": {
+    "toolId": "john",
+    "stdoutRegex": "\\d+g \\d+:\\d+:\\d+:\\d+ DONE"
+  },
+  "then": {
+    "mitre": [
+      {"id": "T1110.002", "name": "Password Cracking"}
+    ],
+    "recommendations": [
+      {
+        "title": "使用破解的凭证尝试登录目标系统",
+        "suggestedTool": "evil-winrm",
+        "suggestedArgs": ["-i", "<target_ip>", "-u", "<username>", "-p", "<cracked_password>"]
+      }
+    ]
+  }
+}

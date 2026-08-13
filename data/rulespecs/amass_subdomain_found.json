@@ -1,0 +1,22 @@
+{
+  "id": "amass_subdomain_found",
+  "name": "Amass Subdomain Found",
+  "description": "Identifies discovered subdomains from amass enum output.",
+  "when": {
+    "toolId": "amass",
+    "stdoutRegex": "[a-zA-Z0-9\\-]+\\.[a-zA-Z]{2,}"
+  },
+  "then": {
+    "mitre": [
+      {"id": "T1592", "name": "Gather Victim Host Information"},
+      {"id": "T1589", "name": "Gather Victim Identity Information"}
+    ],
+    "recommendations": [
+      {
+        "title": "对发现的子域名进行存活验证（httpx）",
+        "suggestedTool": "httpx",
+        "suggestedArgs": ["-l", "<subdomain_list>", "-silent", "-json"]
+      }
+    ]
+  }
+}

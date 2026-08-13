@@ -1,0 +1,28 @@
+{
+  "id": "recon_web_fingerprint",
+  "name": "Web 技术栈指纹识别",
+  "description": "当 whatweb 输出包含任何 Web 服务器/框架/CMS 信息时，命中 T1592.002 软件信息收集",
+  "when": {
+    "toolId": "whatweb",
+    "stdoutRegex": "(WordPress|Drupal|Joomla|Laravel|Django|Rails|PHP|ASP\\.NET|jQuery|Bootstrap|Express|Nginx|Apache|IIS|X-Powered-By|\\[200|\\[301|\\[302|\\[403|\\[404)"
+  },
+  "then": {
+    "mitre": [
+      {"id": "T1592.002", "name": "Software"},
+      {"id": "T1592", "name": "Gather Victim Host Information"},
+      {"id": "T1589", "name": "Gather Victim Identity Information"}
+    ],
+    "recommendations": [
+      {
+        "title": "对识别的 Web 服务做漏洞扫描",
+        "suggestedTool": "nuclei",
+        "suggestedArgs": ["-u", "<target>", "-severity", "medium,high,critical"]
+      },
+      {
+        "title": "对 Web 服务做目录枚举",
+        "suggestedTool": "gobuster",
+        "suggestedArgs": ["-u", "<target>", "-w", "config/wordlists/common_dirs.txt", "-t", "5"]
+      }
+    ]
+  }
+}

@@ -1,0 +1,1196 @@
+{
+  "metadata": {
+    "version": "1.0.0",
+    "generated_at": "2026-05-05T08:00:15.495226Z",
+    "task_id": "TC-KG-IMPORT-01",
+    "source_commit": "main",
+    "readonly": true,
+    "description": "只读知识索引，从 external_knowledge/ 生成，不影响运行时逻辑",
+    "counts": {
+      "mcp_tools": 28,
+      "agents": 12,
+      "decision_rules": 10,
+      "tool_attck_mappings": 22,
+      "kg_nodes": 11,
+      "kg_edges": 11
+    }
+  },
+  "attck_meta": {
+    "task_id": "TC-ATTCK-01",
+    "source_system": "MITRE ATT&CK",
+    "source_repository": "mitre-attack/attack-stix-data",
+    "source_branch": "master",
+    "stix_version": "2.1",
+    "selected_domain": "enterprise-attack",
+    "source_files": [
+      "README.md",
+      "index.json"
+    ],
+    "collection_index": {
+      "name": "MITRE ATT&CK",
+      "index_modified": "2026-04-28T14:00:00.188Z"
+    },
+    "enterprise_collection": {
+      "name": "Enterprise ATT&CK",
+      "selected_version": "19.0",
+      "url": "https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack-19.0.json",
+      "modified": "2026-04-28T14:00:00.188Z"
+    },
+    "extraction_scope": [
+      "lightweight technique index for required TC-ATTCK-01 validation techniques",
+      "tactic index for mapped techniques",
+      "mitigation and relationship skeletons for teaching/SOC enrichment"
+    ],
+    "required_validation_techniques": [
+      "T1046",
+      "T1595",
+      "T1190",
+      "T1110"
+    ],
+    "runtime_import_status": "external_reference_only",
+    "import_status": "candidate",
+    "requires_teacher_review": true,
+    "notes": [
+      "This task creates a lightweight local index, not a full mirror of enterprise-attack-19.0.json.",
+      "Full STIX object import should be handled by a later parser task if full coverage is required.",
+      "All ATT&CK content is used for teaching, mapping, and explanation only at this stage."
+    ]
+  },
+  "tools": {
+    "nmap_scan": {
+      "tool_id": "nmap_scan",
+      "tool_name": "nmap",
+      "category": "network_reconnaissance",
+      "description": "Execute enhanced Nmap scan against a target with service and version discovery.",
+      "endpoint": "api/tools/nmap",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "port_discovery",
+        "service_detection",
+        "version_fingerprinting"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "gobuster_scan": {
+      "tool_id": "gobuster_scan",
+      "tool_name": "gobuster",
+      "category": "web_application_security",
+      "description": "Execute Gobuster for directory, DNS, fuzzing, or virtual-host enumeration.",
+      "endpoint": "api/tools/gobuster",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "directory_enumeration",
+        "dns_enumeration",
+        "virtual_host_enumeration",
+        "endpoint_discovery"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "nuclei_scan": {
+      "tool_id": "nuclei_scan",
+      "tool_name": "nuclei",
+      "category": "web_application_security",
+      "description": "Execute Nuclei vulnerability scanner with template, severity, and tag filters.",
+      "endpoint": "api/tools/nuclei",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "vulnerability_template_scan",
+        "misconfiguration_detection",
+        "cve_detection"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "prowler_scan": {
+      "tool_id": "prowler_scan",
+      "tool_name": "prowler",
+      "category": "cloud_security",
+      "description": "Execute Prowler for AWS, Azure, or GCP security assessment.",
+      "endpoint": "api/tools/prowler",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "cloud_security_assessment",
+        "compliance_check",
+        "cloud_misconfiguration_detection"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "trivy_scan": {
+      "tool_id": "trivy_scan",
+      "tool_name": "trivy",
+      "category": "cloud_container_security",
+      "description": "Execute Trivy for container image, filesystem, repository, or configuration scanning.",
+      "endpoint": "api/tools/trivy",
+      "risk_level": "low",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "container_vulnerability_scan",
+        "filesystem_scan",
+        "iac_scan",
+        "sbom_security"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "scout_suite_assessment": {
+      "tool_id": "scout_suite_assessment",
+      "tool_name": "scout-suite",
+      "category": "cloud_security",
+      "description": "Execute Scout Suite for multi-cloud security assessment.",
+      "endpoint": "api/tools/scout-suite",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "multi_cloud_audit",
+        "cloud_misconfiguration_detection",
+        "compliance_assessment"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "cloudmapper_analysis": {
+      "tool_id": "cloudmapper_analysis",
+      "tool_name": "cloudmapper",
+      "category": "cloud_security",
+      "description": "Execute CloudMapper for AWS network visualization and security analysis.",
+      "endpoint": "api/tools/cloudmapper",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "aws_network_visualization",
+        "cloud_asset_analysis",
+        "cloud_security_analysis"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "pacu_exploitation": {
+      "tool_id": "pacu_exploitation",
+      "tool_name": "pacu",
+      "category": "cloud_security",
+      "description": "Execute Pacu AWS exploitation framework modules.",
+      "endpoint": "api/tools/pacu",
+      "risk_level": "high",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "aws_security_testing",
+        "cloud_exploitation_framework",
+        "privilege_path_analysis"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "kube_hunter_scan": {
+      "tool_id": "kube_hunter_scan",
+      "tool_name": "kube-hunter",
+      "category": "cloud_container_security",
+      "description": "Execute kube-hunter for Kubernetes penetration testing.",
+      "endpoint": "api/tools/kube-hunter",
+      "risk_level": "high",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "kubernetes_security_assessment",
+        "cluster_exposure_detection",
+        "active_hunting"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "kube_bench_cis": {
+      "tool_id": "kube_bench_cis",
+      "tool_name": "kube-bench",
+      "category": "cloud_container_security",
+      "description": "Execute kube-bench for CIS Kubernetes benchmark checks.",
+      "endpoint": "api/tools/kube-bench",
+      "risk_level": "low",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "cis_benchmark_check",
+        "kubernetes_compliance",
+        "configuration_assessment"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "docker_bench_security_scan": {
+      "tool_id": "docker_bench_security_scan",
+      "tool_name": "docker-bench-security",
+      "category": "cloud_container_security",
+      "description": "Execute Docker Bench for Security using CIS Docker guidance.",
+      "endpoint": "api/tools/docker-bench-security",
+      "risk_level": "low",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "docker_security_assessment",
+        "cis_docker_benchmark",
+        "container_runtime_configuration"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "clair_vulnerability_scan": {
+      "tool_id": "clair_vulnerability_scan",
+      "tool_name": "clair",
+      "category": "cloud_container_security",
+      "description": "Execute Clair for container vulnerability analysis.",
+      "endpoint": "api/tools/clair",
+      "risk_level": "low",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "container_vulnerability_analysis",
+        "cve_detection"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "falco_runtime_monitoring": {
+      "tool_id": "falco_runtime_monitoring",
+      "tool_name": "falco",
+      "category": "cloud_container_security",
+      "description": "Execute Falco for runtime security monitoring.",
+      "endpoint": "api/tools/falco",
+      "risk_level": "low",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "runtime_security_monitoring",
+        "container_behavior_detection",
+        "kubernetes_runtime_detection"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "checkov_iac_scan": {
+      "tool_id": "checkov_iac_scan",
+      "tool_name": "checkov",
+      "category": "infrastructure_as_code_security",
+      "description": "Execute Checkov for infrastructure-as-code security scanning.",
+      "endpoint": "api/tools/checkov",
+      "risk_level": "low",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "iac_security_scan",
+        "policy_as_code",
+        "misconfiguration_detection"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "terrascan_iac_scan": {
+      "tool_id": "terrascan_iac_scan",
+      "tool_name": "terrascan",
+      "category": "infrastructure_as_code_security",
+      "description": "Execute Terrascan for infrastructure-as-code security scanning.",
+      "endpoint": "api/tools/terrascan",
+      "risk_level": "low",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "iac_security_scan",
+        "policy_as_code",
+        "cloud_configuration_assessment"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "rustscan_scan": {
+      "tool_id": "rustscan_scan",
+      "tool_name": "rustscan",
+      "category": "network_reconnaissance",
+      "description": "Ultra-fast port scanning declared in HexStrike Common MCP Tools.",
+      "endpoint": "api/tools/rustscan",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "fast_port_discovery",
+        "service_discovery"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "masscan_scan": {
+      "tool_id": "masscan_scan",
+      "tool_name": "masscan",
+      "category": "network_reconnaissance",
+      "description": "High-speed port scanning declared in HexStrike Common MCP Tools.",
+      "endpoint": "api/tools/masscan",
+      "risk_level": "high",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "high_speed_port_discovery",
+        "internet_scale_scanning"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "autorecon_scan": {
+      "tool_id": "autorecon_scan",
+      "tool_name": "autorecon",
+      "category": "network_reconnaissance",
+      "description": "Comprehensive automated reconnaissance declared in HexStrike Common MCP Tools.",
+      "endpoint": "api/tools/autorecon",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "automated_reconnaissance",
+        "multi_tool_recon"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "amass_enum": {
+      "tool_id": "amass_enum",
+      "tool_name": "amass",
+      "category": "osint_reconnaissance",
+      "description": "Subdomain enumeration and OSINT declared in HexStrike Common MCP Tools.",
+      "endpoint": "api/tools/amass",
+      "risk_level": "low",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "subdomain_enumeration",
+        "osint",
+        "dns_reconnaissance"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "feroxbuster_scan": {
+      "tool_id": "feroxbuster_scan",
+      "tool_name": "feroxbuster",
+      "category": "web_application_security",
+      "description": "Recursive content discovery declared in HexStrike Common MCP Tools.",
+      "endpoint": "api/tools/feroxbuster",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "recursive_content_discovery",
+        "endpoint_discovery"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "ffuf_scan": {
+      "tool_id": "ffuf_scan",
+      "tool_name": "ffuf",
+      "category": "web_application_security",
+      "description": "Fast web fuzzing declared in HexStrike Common MCP Tools.",
+      "endpoint": "api/tools/ffuf",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "web_fuzzing",
+        "endpoint_discovery",
+        "parameter_fuzzing"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "sqlmap_scan": {
+      "tool_id": "sqlmap_scan",
+      "tool_name": "sqlmap",
+      "category": "web_application_security",
+      "description": "SQL injection testing declared in HexStrike Common MCP Tools.",
+      "endpoint": "api/tools/sqlmap",
+      "risk_level": "high",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "sql_injection_testing",
+        "database_vulnerability_assessment"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "wpscan_scan": {
+      "tool_id": "wpscan_scan",
+      "tool_name": "wpscan",
+      "category": "web_application_security",
+      "description": "WordPress security assessment declared in HexStrike Common MCP Tools.",
+      "endpoint": "api/tools/wpscan",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "wordpress_vulnerability_scan",
+        "cms_security_assessment"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "ghidra_analyze": {
+      "tool_id": "ghidra_analyze",
+      "tool_name": "ghidra",
+      "category": "binary_analysis",
+      "description": "Software reverse engineering declared in HexStrike Common MCP Tools.",
+      "endpoint": "api/tools/ghidra",
+      "risk_level": "low",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "reverse_engineering",
+        "binary_static_analysis"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "radare2_analyze": {
+      "tool_id": "radare2_analyze",
+      "tool_name": "radare2",
+      "category": "binary_analysis",
+      "description": "Advanced reverse engineering declared in HexStrike Common MCP Tools.",
+      "endpoint": "api/tools/radare2",
+      "risk_level": "low",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "reverse_engineering",
+        "binary_static_analysis"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "gdb_debug": {
+      "tool_id": "gdb_debug",
+      "tool_name": "gdb",
+      "category": "binary_analysis",
+      "description": "GNU debugger with exploit-development support declared in HexStrike Common MCP Tools.",
+      "endpoint": "api/tools/gdb",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "debugging",
+        "dynamic_binary_analysis",
+        "exploit_development_support"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "pwntools_exploit": {
+      "tool_id": "pwntools_exploit",
+      "tool_name": "pwntools",
+      "category": "binary_analysis",
+      "description": "CTF framework and exploit-development support declared in HexStrike Common MCP Tools.",
+      "endpoint": "api/tools/pwntools",
+      "risk_level": "high",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "ctf_exploit_development",
+        "binary_exploitation_workflow"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    },
+    "angr_analyze": {
+      "tool_id": "angr_analyze",
+      "tool_name": "angr",
+      "category": "binary_analysis",
+      "description": "Binary analysis with symbolic execution declared in HexStrike Common MCP Tools.",
+      "endpoint": "api/tools/angr",
+      "risk_level": "low",
+      "import_status": "candidate",
+      "capability_candidates": [
+        "symbolic_execution",
+        "binary_analysis"
+      ],
+      "source": "hx_mcp_tools.yaml"
+    }
+  },
+  "agents": {
+    "HX-AGENT-001": {
+      "agent_id": "HX-AGENT-001",
+      "name": "IntelligentDecisionEngine",
+      "role": "Tool selection and parameter optimization engine",
+      "capabilities": [],
+      "tools": [],
+      "source": "hx_agent_catalog.yaml"
+    },
+    "HX-AGENT-002": {
+      "agent_id": "HX-AGENT-002",
+      "name": "BugBountyWorkflowManager",
+      "role": "Bug bounty workflow orchestration",
+      "capabilities": [],
+      "tools": [],
+      "source": "hx_agent_catalog.yaml"
+    },
+    "HX-AGENT-003": {
+      "agent_id": "HX-AGENT-003",
+      "name": "CTFWorkflowManager",
+      "role": "CTF challenge workflow assistance",
+      "capabilities": [],
+      "tools": [],
+      "source": "hx_agent_catalog.yaml"
+    },
+    "HX-AGENT-004": {
+      "agent_id": "HX-AGENT-004",
+      "name": "CVEIntelligenceManager",
+      "role": "Vulnerability intelligence and CVE context enrichment",
+      "capabilities": [],
+      "tools": [],
+      "source": "hx_agent_catalog.yaml"
+    },
+    "HX-AGENT-005": {
+      "agent_id": "HX-AGENT-005",
+      "name": "AIExploitGenerator",
+      "role": "Exploit-development assistance",
+      "capabilities": [],
+      "tools": [],
+      "source": "hx_agent_catalog.yaml"
+    },
+    "HX-AGENT-006": {
+      "agent_id": "HX-AGENT-006",
+      "name": "VulnerabilityCorrelator",
+      "role": "Attack chain discovery and finding correlation",
+      "capabilities": [],
+      "tools": [],
+      "source": "hx_agent_catalog.yaml"
+    },
+    "HX-AGENT-007": {
+      "agent_id": "HX-AGENT-007",
+      "name": "TechnologyDetector",
+      "role": "Technology stack identification",
+      "capabilities": [],
+      "tools": [],
+      "source": "hx_agent_catalog.yaml"
+    },
+    "HX-AGENT-008": {
+      "agent_id": "HX-AGENT-008",
+      "name": "RateLimitDetector",
+      "role": "Rate limiting and throttling detection",
+      "capabilities": [],
+      "tools": [],
+      "source": "hx_agent_catalog.yaml"
+    },
+    "HX-AGENT-009": {
+      "agent_id": "HX-AGENT-009",
+      "name": "FailureRecoverySystem",
+      "role": "Error handling and recovery",
+      "capabilities": [],
+      "tools": [],
+      "source": "hx_agent_catalog.yaml"
+    },
+    "HX-AGENT-010": {
+      "agent_id": "HX-AGENT-010",
+      "name": "PerformanceMonitor",
+      "role": "System and process optimization monitoring",
+      "capabilities": [],
+      "tools": [],
+      "source": "hx_agent_catalog.yaml"
+    },
+    "HX-AGENT-011": {
+      "agent_id": "HX-AGENT-011",
+      "name": "ParameterOptimizer",
+      "role": "Context-aware parameter optimization",
+      "capabilities": [],
+      "tools": [],
+      "source": "hx_agent_catalog.yaml"
+    },
+    "HX-AGENT-012": {
+      "agent_id": "HX-AGENT-012",
+      "name": "GracefulDegradation",
+      "role": "Fault-tolerant operation and fallback selection",
+      "capabilities": [],
+      "tools": [],
+      "source": "hx_agent_catalog.yaml"
+    }
+  },
+  "rules": {
+    "HX-TOOLSEL-WEB-001": {
+      "rule_id": "HX-TOOLSEL-WEB-001",
+      "name": "",
+      "condition": {
+        "target_type": "web_application",
+        "objective": [
+          "web_reconnaissance",
+          "endpoint_discovery",
+          "vulnerability_assessment"
+        ]
+      },
+      "action": "",
+      "import_status": "candidate",
+      "requires_teacher_review": true,
+      "source": "hx_decision_rules.yaml"
+    },
+    "HX-TOOLSEL-WEB-SQLI-001": {
+      "rule_id": "HX-TOOLSEL-WEB-SQLI-001",
+      "name": "",
+      "condition": {
+        "target_type": "web_application",
+        "objective": [
+          "sql_injection_testing"
+        ],
+        "prerequisite_findings": [
+          "injectable_parameter_candidate"
+        ]
+      },
+      "action": "",
+      "import_status": "candidate",
+      "requires_teacher_review": true,
+      "source": "hx_decision_rules.yaml"
+    },
+    "HX-TOOLSEL-NETWORK-001": {
+      "rule_id": "HX-TOOLSEL-NETWORK-001",
+      "name": "",
+      "condition": {
+        "target_type": "network_host",
+        "objective": [
+          "port_discovery",
+          "service_detection"
+        ]
+      },
+      "action": "",
+      "import_status": "candidate",
+      "requires_teacher_review": true,
+      "source": "hx_decision_rules.yaml"
+    },
+    "HX-TOOLSEL-SMB-001": {
+      "rule_id": "HX-TOOLSEL-SMB-001",
+      "name": "",
+      "condition": {
+        "target_type": "network_host",
+        "service_hint": [
+          "smb",
+          "netbios",
+          "windows_domain"
+        ]
+      },
+      "action": "",
+      "import_status": "candidate",
+      "requires_teacher_review": true,
+      "source": "hx_decision_rules.yaml"
+    },
+    "HX-TOOLSEL-API-001": {
+      "rule_id": "HX-TOOLSEL-API-001",
+      "name": "",
+      "condition": {
+        "target_type": "api_endpoint",
+        "objective": [
+          "api_discovery",
+          "hidden_parameter_discovery",
+          "api_vulnerability_assessment"
+        ]
+      },
+      "action": "",
+      "import_status": "candidate",
+      "requires_teacher_review": true,
+      "source": "hx_decision_rules.yaml"
+    },
+    "HX-TOOLSEL-DOMAIN-OSINT-001": {
+      "rule_id": "HX-TOOLSEL-DOMAIN-OSINT-001",
+      "name": "",
+      "condition": {
+        "target_type": "domain",
+        "objective": [
+          "subdomain_enumeration",
+          "external_attack_surface_mapping"
+        ]
+      },
+      "action": "",
+      "import_status": "candidate",
+      "requires_teacher_review": true,
+      "source": "hx_decision_rules.yaml"
+    },
+    "HX-TOOLSEL-CMS-WORDPRESS-001": {
+      "rule_id": "HX-TOOLSEL-CMS-WORDPRESS-001",
+      "name": "",
+      "condition": {
+        "target_type": "web_application",
+        "detected_technology": [
+          "wordpress"
+        ]
+      },
+      "action": "",
+      "import_status": "candidate",
+      "requires_teacher_review": true,
+      "source": "hx_decision_rules.yaml"
+    },
+    "HX-TOOLSEL-CLOUD-001": {
+      "rule_id": "HX-TOOLSEL-CLOUD-001",
+      "name": "",
+      "condition": {
+        "target_type": "cloud_service",
+        "objective": [
+          "cloud_security_assessment",
+          "compliance_check",
+          "cloud_misconfiguration_detection"
+        ]
+      },
+      "action": "",
+      "import_status": "candidate",
+      "requires_teacher_review": true,
+      "source": "hx_decision_rules.yaml"
+    },
+    "HX-TOOLSEL-K8S-001": {
+      "rule_id": "HX-TOOLSEL-K8S-001",
+      "name": "",
+      "condition": {
+        "target_type": "kubernetes_cluster",
+        "objective": [
+          "kubernetes_security_assessment",
+          "cis_benchmark_check"
+        ]
+      },
+      "action": "",
+      "import_status": "candidate",
+      "requires_teacher_review": true,
+      "source": "hx_decision_rules.yaml"
+    },
+    "HX-TOOLSEL-BINARY-001": {
+      "rule_id": "HX-TOOLSEL-BINARY-001",
+      "name": "",
+      "condition": {
+        "target_type": "binary_file",
+        "objective": [
+          "reverse_engineering",
+          "binary_analysis",
+          "ctf_exercise"
+        ]
+      },
+      "action": "",
+      "import_status": "candidate",
+      "requires_teacher_review": true,
+      "source": "hx_decision_rules.yaml"
+    }
+  },
+  "tool_to_techniques": {
+    "nmap_scan": [
+      {
+        "technique_id": "T1046",
+        "technique_name": "Network Service Discovery",
+        "tactic": "Discovery",
+        "confidence": "high"
+      },
+      {
+        "technique_id": "T1595",
+        "technique_name": "Active Scanning",
+        "tactic": "Reconnaissance",
+        "confidence": "medium"
+      }
+    ],
+    "rustscan_scan": [
+      {
+        "technique_id": "T1046",
+        "technique_name": "Network Service Discovery",
+        "tactic": "Discovery",
+        "confidence": "high"
+      }
+    ],
+    "masscan_scan": [
+      {
+        "technique_id": "T1595",
+        "technique_name": "Active Scanning",
+        "tactic": "Reconnaissance",
+        "confidence": "high"
+      }
+    ],
+    "autorecon_scan": [
+      {
+        "technique_id": "T1046",
+        "technique_name": "Network Service Discovery",
+        "tactic": "Discovery",
+        "confidence": "medium"
+      }
+    ],
+    "amass_enum": [
+      {
+        "technique_id": "T1590",
+        "technique_name": "Gather Victim Network Information",
+        "tactic": "Reconnaissance",
+        "confidence": "high"
+      },
+      {
+        "technique_id": "T1595",
+        "technique_name": "Active Scanning",
+        "tactic": "Reconnaissance",
+        "confidence": "medium"
+      }
+    ],
+    "gobuster_scan": [
+      {
+        "technique_id": "T1595",
+        "technique_name": "Active Scanning",
+        "tactic": "Reconnaissance",
+        "confidence": "high"
+      }
+    ],
+    "ffuf_scan": [
+      {
+        "technique_id": "T1595",
+        "technique_name": "Active Scanning",
+        "tactic": "Reconnaissance",
+        "confidence": "high"
+      }
+    ],
+    "feroxbuster_scan": [
+      {
+        "technique_id": "T1595",
+        "technique_name": "Active Scanning",
+        "tactic": "Reconnaissance",
+        "confidence": "high"
+      }
+    ],
+    "nuclei_scan": [
+      {
+        "technique_id": "T1190",
+        "technique_name": "Exploit Public-Facing Application",
+        "tactic": "Initial Access",
+        "confidence": "medium"
+      },
+      {
+        "technique_id": "T1595",
+        "technique_name": "Active Scanning",
+        "tactic": "Reconnaissance",
+        "confidence": "medium"
+      }
+    ],
+    "sqlmap_scan": [
+      {
+        "technique_id": "T1190",
+        "technique_name": "Exploit Public-Facing Application",
+        "tactic": "Initial Access",
+        "confidence": "medium"
+      }
+    ],
+    "hydra_scan": [
+      {
+        "technique_id": "T1110",
+        "technique_name": "Brute Force",
+        "tactic": "Credential Access",
+        "confidence": "high"
+      }
+    ],
+    "wpscan_scan": [
+      {
+        "technique_id": "T1592",
+        "technique_name": "Gather Victim Host Information",
+        "tactic": "Reconnaissance",
+        "confidence": "medium"
+      },
+      {
+        "technique_id": "T1190",
+        "technique_name": "Exploit Public-Facing Application",
+        "tactic": "Initial Access",
+        "confidence": "medium"
+      }
+    ],
+    "httpx_probe": [
+      {
+        "technique_id": "T1595",
+        "technique_name": "Active Scanning",
+        "tactic": "Reconnaissance",
+        "confidence": "medium"
+      }
+    ],
+    "whatweb_scan": [
+      {
+        "technique_id": "T1592",
+        "technique_name": "Gather Victim Host Information",
+        "tactic": "Reconnaissance",
+        "confidence": "high"
+      }
+    ],
+    "arjun_scan": [
+      {
+        "technique_id": "T1595",
+        "technique_name": "Active Scanning",
+        "tactic": "Reconnaissance",
+        "confidence": "medium"
+      }
+    ],
+    "katana_crawl": [
+      {
+        "technique_id": "T1595",
+        "technique_name": "Active Scanning",
+        "tactic": "Reconnaissance",
+        "confidence": "medium"
+      }
+    ],
+    "trivy_scan": [
+      {
+        "technique_id": "T1611",
+        "technique_name": "Escape to Host",
+        "tactic": "Privilege Escalation",
+        "confidence": "low"
+      }
+    ],
+    "kube_hunter_scan": [
+      {
+        "technique_id": "T1611",
+        "technique_name": "Escape to Host",
+        "tactic": "Privilege Escalation",
+        "confidence": "low"
+      }
+    ]
+  },
+  "technique_to_tools": {
+    "T1046": [
+      {
+        "tool_id": "nmap_scan",
+        "tool_name": "nmap",
+        "confidence": "high"
+      },
+      {
+        "tool_id": "rustscan_scan",
+        "tool_name": "rustscan",
+        "confidence": "high"
+      },
+      {
+        "tool_id": "autorecon_scan",
+        "tool_name": "autorecon",
+        "confidence": "medium"
+      }
+    ],
+    "T1595": [
+      {
+        "tool_id": "nmap_scan",
+        "tool_name": "nmap",
+        "confidence": "medium"
+      },
+      {
+        "tool_id": "masscan_scan",
+        "tool_name": "masscan",
+        "confidence": "high"
+      },
+      {
+        "tool_id": "amass_enum",
+        "tool_name": "amass",
+        "confidence": "medium"
+      },
+      {
+        "tool_id": "gobuster_scan",
+        "tool_name": "gobuster",
+        "confidence": "high"
+      },
+      {
+        "tool_id": "ffuf_scan",
+        "tool_name": "ffuf",
+        "confidence": "high"
+      },
+      {
+        "tool_id": "feroxbuster_scan",
+        "tool_name": "feroxbuster",
+        "confidence": "high"
+      },
+      {
+        "tool_id": "nuclei_scan",
+        "tool_name": "nuclei",
+        "confidence": "medium"
+      },
+      {
+        "tool_id": "httpx_probe",
+        "tool_name": "httpx_probe",
+        "confidence": "medium"
+      },
+      {
+        "tool_id": "arjun_scan",
+        "tool_name": "arjun_scan",
+        "confidence": "medium"
+      },
+      {
+        "tool_id": "katana_crawl",
+        "tool_name": "katana_crawl",
+        "confidence": "medium"
+      }
+    ],
+    "T1590": [
+      {
+        "tool_id": "amass_enum",
+        "tool_name": "amass",
+        "confidence": "high"
+      }
+    ],
+    "T1190": [
+      {
+        "tool_id": "nuclei_scan",
+        "tool_name": "nuclei",
+        "confidence": "medium"
+      },
+      {
+        "tool_id": "sqlmap_scan",
+        "tool_name": "sqlmap",
+        "confidence": "medium"
+      },
+      {
+        "tool_id": "wpscan_scan",
+        "tool_name": "wpscan",
+        "confidence": "medium"
+      }
+    ],
+    "T1110": [
+      {
+        "tool_id": "hydra_scan",
+        "tool_name": "hydra_scan",
+        "confidence": "high"
+      }
+    ],
+    "T1592": [
+      {
+        "tool_id": "wpscan_scan",
+        "tool_name": "wpscan",
+        "confidence": "medium"
+      },
+      {
+        "tool_id": "whatweb_scan",
+        "tool_name": "whatweb_scan",
+        "confidence": "high"
+      }
+    ],
+    "T1611": [
+      {
+        "tool_id": "trivy_scan",
+        "tool_name": "trivy",
+        "confidence": "low"
+      },
+      {
+        "tool_id": "kube_hunter_scan",
+        "tool_name": "kube-hunter",
+        "confidence": "low"
+      }
+    ]
+  },
+  "kg": {
+    "nodes": {
+      "nmap_scan": {
+        "id": "nmap_scan",
+        "type": "tool",
+        "capabilities": [
+          "port_discovery",
+          "service_detection",
+          "version_fingerprinting"
+        ],
+        "agent": [
+          "IntelligentDecisionEngine"
+        ]
+      },
+      "gobuster_scan": {
+        "id": "gobuster_scan",
+        "type": "tool",
+        "capabilities": [
+          "directory_enumeration",
+          "dns_enumeration",
+          "virtual_host_enumeration",
+          "endpoint_discovery"
+        ],
+        "agent": [
+          "IntelligentDecisionEngine"
+        ]
+      },
+      "nuclei_scan": {
+        "id": "nuclei_scan",
+        "type": "tool",
+        "capabilities": [
+          "vulnerability_template_scan",
+          "misconfiguration_detection",
+          "cve_detection"
+        ],
+        "agent": [
+          "IntelligentDecisionEngine"
+        ]
+      },
+      "sqlmap_scan": {
+        "id": "sqlmap_scan",
+        "type": "tool",
+        "capabilities": [
+          "sql_injection_testing",
+          "database_vulnerability_assessment"
+        ],
+        "agent": [
+          "IntelligentDecisionEngine"
+        ]
+      },
+      "hydra_scan": {
+        "id": "hydra_scan",
+        "type": "tool",
+        "capabilities": [
+          "credential_guessing",
+          "network_login_testing"
+        ],
+        "agent": [
+          "IntelligentDecisionEngine"
+        ]
+      },
+      "IntelligentDecisionEngine": {
+        "id": "IntelligentDecisionEngine",
+        "type": "agent",
+        "responsibilities": [
+          "tool_selection",
+          "parameter_optimization",
+          "attack_chain_support"
+        ]
+      },
+      "HX-TOOLSEL-WEB-001": {
+        "id": "HX-TOOLSEL-WEB-001",
+        "type": "rule",
+        "target": [
+          "web_application"
+        ],
+        "decision_tools": [
+          "httpx",
+          "whatweb",
+          "gobuster",
+          "ffuf",
+          "feroxbuster",
+          "nuclei",
+          "nikto",
+          "katana"
+        ]
+      },
+      "T1046": {
+        "id": "T1046",
+        "type": "attck_technique",
+        "name": "Network Service Discovery",
+        "tactic": "Discovery"
+      },
+      "T1595": {
+        "id": "T1595",
+        "type": "attck_technique",
+        "name": "Active Scanning",
+        "tactic": "Reconnaissance"
+      },
+      "T1190": {
+        "id": "T1190",
+        "type": "attck_technique",
+        "name": "Exploit Public-Facing Application",
+        "tactic": "Initial Access"
+      },
+      "T1110": {
+        "id": "T1110",
+        "type": "attck_technique",
+        "name": "Brute Force",
+        "tactic": "Credential Access"
+      }
+    },
+    "edges": [
+      {
+        "from": "IntelligentDecisionEngine",
+        "to": "nmap_scan",
+        "relation": "calls"
+      },
+      {
+        "from": "IntelligentDecisionEngine",
+        "to": "gobuster_scan",
+        "relation": "calls"
+      },
+      {
+        "from": "IntelligentDecisionEngine",
+        "to": "nuclei_scan",
+        "relation": "calls"
+      },
+      {
+        "from": "IntelligentDecisionEngine",
+        "to": "sqlmap_scan",
+        "relation": "calls"
+      },
+      {
+        "from": "IntelligentDecisionEngine",
+        "to": "hydra_scan",
+        "relation": "calls"
+      },
+      {
+        "from": "nmap_scan",
+        "to": "T1046",
+        "relation": "maps_to"
+      },
+      {
+        "from": "nmap_scan",
+        "to": "T1595",
+        "relation": "maps_to"
+      },
+      {
+        "from": "gobuster_scan",
+        "to": "T1595",
+        "relation": "maps_to"
+      },
+      {
+        "from": "nuclei_scan",
+        "to": "T1190",
+        "relation": "maps_to"
+      },
+      {
+        "from": "sqlmap_scan",
+        "to": "T1190",
+        "relation": "maps_to"
+      },
+      {
+        "from": "hydra_scan",
+        "to": "T1110",
+        "relation": "maps_to"
+      }
+    ],
+    "node_count": 11,
+    "edge_count": 11
+  }
+}

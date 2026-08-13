@@ -1,0 +1,29 @@
+{
+  "id": "T1021_002_enum4linux_ng_advanced",
+  "name": "SMB/Windows管理共享（enum4linux_ng_advanced）",
+  "description": "[自动生成] 工具 enum4linux_ng_advanced 执行时匹配 MITRE T1021.002 技术",
+  "type": "suggestion",
+  "priority": "medium",
+  "when": {
+    "toolId": "enum4linux_ng_advanced",
+    "stdoutRegex": "enum4linux_ng_advanced"
+  },
+  "then": {
+    "mitre": [
+      {
+        "id": "T1021.002",
+        "name": "SMB/Windows Admin Shares"
+      }
+    ],
+    "recommendations": []
+  },
+  "metadata": {
+    "auto_generated": true,
+    "source_technique": "T1021.002",
+    "source_tool": "enum4linux_ng_advanced",
+    "generated_at": "2026-05-31T07:10:22.255Z",
+    "needs_teacher_review": false,
+    "enabled": true,
+    "accepted_at": "2026-05-31T07:10:43.691Z"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "netexec_enum_shares",
+  "name": "NetExec Share Enumeration",
+  "description": "Identifies enumerated network shares from NetExec/CrackMapExec output.",
+  "when": {
+    "toolId": "netexec",
+    "stdoutRegex": "SMB|LDAP|READ|WRITE|Enumerated"
+  },
+  "then": {
+    "mitre": [
+      {"id": "T1087", "name": "Account Discovery"},
+      {"id": "T1069", "name": "Permission Groups Discovery"},
+      {"id": "T1135", "name": "Network Share Discovery"}
+    ],
+    "recommendations": [
+      {
+        "title": "对发现的共享目录进行内容枚举",
+        "suggestedTool": null,
+        "suggestedArgs": []
+      },
+      {
+        "title": "尝试使用发现的凭据进行横向移动",
+        "suggestedTool": "netexec",
+        "suggestedArgs": ["smb", "<target>", "-u", "<user>", "-p", "<pass>", "--exec-method", "smbexec"]
+      }
+    ]
+  }
+}
