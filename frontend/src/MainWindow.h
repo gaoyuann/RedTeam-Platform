@@ -9,6 +9,9 @@
 
 class ApiClient;
 class LoginDialog;
+class DashboardPage;
+class WsClient;
+class ToastOverlay;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -29,6 +32,10 @@ private slots:
 
 private:
     void setupUI();
+    void setupWebSocket();
+
+    // Keep toast overlay positioned in top-right on resize
+    void resizeEvent(QResizeEvent *event) override;
 
     QListWidget *m_navList;
     QStackedWidget *m_stackWidget;
@@ -40,15 +47,13 @@ private:
     QString m_role;
     QString m_username;
 
-    const QStringList m_modules = {
-        QStringLiteral("渗透测试资源部署配置"),
-        QStringLiteral("漏洞利用想定与预案"),
-        QStringLiteral("网络拓扑探测与绘制"),
-        QStringLiteral("脆弱性扫描"),
-        QStringLiteral("漏洞攻击测试"),
-        QStringLiteral("测试评估"),
-        QStringLiteral("系统管理")
-    };
+    // Dashboard + WebSocket + Toast
+    DashboardPage *m_dashboardPage = nullptr;
+    WsClient *m_ws = nullptr;
+    ToastOverlay *m_toastOverlay = nullptr;
+
+    // Module names (built dynamically, first item is 总览大屏 for admin)
+    QStringList m_modules;
 };
 
 #endif // MAINWINDOW_H

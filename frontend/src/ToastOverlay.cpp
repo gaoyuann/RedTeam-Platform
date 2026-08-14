@@ -23,7 +23,7 @@ public:
     setStyleSheet(
       QString(
         "QWidget#toastCard {"
-        "  background: rgba(26, 31, 46, 235);"
+        "  background: rgba(255, 255, 255, 245);"
         "  border-left: 3px solid %1;"
         "  border-radius: 6px;"
         "  padding: 0px;"
@@ -55,7 +55,7 @@ public:
       auto *msgLabel = new QLabel(message, this);
       msgLabel->setWordWrap(true);
       msgLabel->setMaximumWidth(280);
-      msgLabel->setStyleSheet("color: #a0aec0; font-size: 12px; background: transparent;");
+      msgLabel->setStyleSheet("color: #64748b; font-size: 12px; background: transparent;");
       layout->addWidget(msgLabel);
     }
 
@@ -141,10 +141,10 @@ void ToastOverlay::onScanCompleted(const QJsonObject &data)
   if (status == "COMPLETED") {
     int count = data["resultsCount"].toInt(0);
     showToast("✅", QString("%1 扫描完成").arg(user),
-              QString("发现 %1 条结果").arg(count), "#48bb78");
+              QString("发现 %1 条结果").arg(count), "#22c55e");
   } else {
     showToast("❌", QString("%1 扫描失败").arg(user),
-              data["error"].toString().left(50), "#fc8181");
+              data["error"].toString().left(50), "#ef4444");
   }
 }
 
@@ -161,7 +161,7 @@ void ToastOverlay::onRunStepComplete(const QJsonObject &data)
 
   if (success) {
     showToast("⚡", QString("%1 步骤 %2/%3").arg(user).arg(step).arg(total),
-              QString("[%1] 执行成功").arg(tool), "#fbd38d");
+              QString("[%1] 执行成功").arg(tool), "#f59e0b");
   }
 }
 
@@ -177,8 +177,8 @@ void ToastOverlay::onRunCompleted(const QJsonObject &data)
 
   if (status == "COMPLETED") {
     showToast("🎯", QString("%1 攻击完成").arg(user),
-              QString("%1/%2 步骤成功").arg(completed).arg(total), "#68d391");
+              QString("%1/%2 步骤成功").arg(completed).arg(total), "#22c55e");
   } else {
-    showToast("💥", QString("%1 攻击失败").arg(user), "", "#fc8181");
+    showToast("💥", QString("%1 攻击失败").arg(user), "", "#ef4444");
   }
 }

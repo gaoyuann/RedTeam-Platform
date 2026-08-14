@@ -23,19 +23,19 @@ LiveActivityPanel::LiveActivityPanel(const QString &role, const QString &usernam
   headerFrame->setFixedHeight(32);
   headerFrame->setStyleSheet(
     "QFrame#activityHeader {"
-    "  background: #1a1f2e;"
-    "  border-bottom: 1px solid #2d3548;"
+    "  background: #ffffff;"
+    "  border-bottom: 1px solid #e2e8f0;"
     "}"
   );
   auto *headerLayout = new QHBoxLayout(headerFrame);
   headerLayout->setContentsMargins(12, 0, 12, 0);
 
   m_titleLabel = new QLabel(QStringLiteral("📡 实时动态"), this);
-  m_titleLabel->setStyleSheet("color: #63b3ed; font-size: 13px; font-weight: bold;");
+  m_titleLabel->setStyleSheet("color: #2563eb; font-size: 13px; font-weight: bold; background: transparent;");
   headerLayout->addWidget(m_titleLabel);
 
   m_countLabel = new QLabel(QStringLiteral("0 条"), this);
-  m_countLabel->setStyleSheet("color: #718096; font-size: 12px;");
+  m_countLabel->setStyleSheet("color: #94a3b8; font-size: 12px; background: transparent;");
   headerLayout->addWidget(m_countLabel);
 
   headerLayout->addStretch();
@@ -43,8 +43,8 @@ LiveActivityPanel::LiveActivityPanel(const QString &role, const QString &usernam
   m_collapseBtn = new QPushButton(QStringLiteral("▼"), this);
   m_collapseBtn->setFixedSize(24, 24);
   m_collapseBtn->setStyleSheet(
-    "QPushButton { border: none; color: #718096; font-size: 14px; }"
-    "QPushButton:hover { color: #a0aec0; }"
+    "QPushButton { border: none; color: #94a3b8; font-size: 14px; background: transparent; }"
+    "QPushButton:hover { color: #64748b; }"
   );
   connect(m_collapseBtn, &QPushButton::clicked, this, &LiveActivityPanel::onToggleCollapse);
   headerLayout->addWidget(m_collapseBtn);
@@ -56,7 +56,7 @@ LiveActivityPanel::LiveActivityPanel(const QString &role, const QString &usernam
   m_eventList->setObjectName("activityList");
   m_eventList->setStyleSheet(
     "QListWidget#activityList {"
-    "  background: #0d1117;"
+    "  background: #ffffff;"
     "  border: none;"
     "  font-family: 'Consolas', 'Monaco', monospace;"
     "  font-size: 12px;"
@@ -64,7 +64,7 @@ LiveActivityPanel::LiveActivityPanel(const QString &role, const QString &usernam
     "}"
     "QListWidget#activityList::item {"
     "  padding: 4px 12px;"
-    "  border-bottom: 1px solid #161b22;"
+    "  border-bottom: 1px solid #f1f5f9;"
     "}"
     "QListWidget#activityList::item:selected {"
     "  background: transparent;"
@@ -83,7 +83,7 @@ void LiveActivityPanel::setCompact(bool compact)
   if (compact) {
     setFixedHeight(180);
   } else {
-    setMinimumHeight(300);
+    setMinimumHeight(200);
     setMaximumHeight(QWIDGETSIZE_MAX);
   }
 }
@@ -97,7 +97,7 @@ void LiveActivityPanel::onScanCreated(const QJsonObject &data)
   QString scanType = data["scanType"].toString();
   addEvent("🔵",
     QString("%1 创建扫描 [%2] → %3").arg(user, scanType, target),
-    "#63b3ed");
+    "#2563eb");
 }
 
 void LiveActivityPanel::onScanStarted(const QJsonObject &data)
@@ -107,7 +107,7 @@ void LiveActivityPanel::onScanStarted(const QJsonObject &data)
   id = id.left(16);
   addEvent("▶️",
     QString("%1 启动扫描 %2...").arg(user, id),
-    "#4fd1c5");
+    "#0891b2");
 }
 
 void LiveActivityPanel::onScanCompleted(const QJsonObject &data)
@@ -120,13 +120,13 @@ void LiveActivityPanel::onScanCompleted(const QJsonObject &data)
     int count = data["resultsCount"].toInt(0);
     addEvent("✅",
       QString("%1 扫描完成 %2... (%3 条结果)").arg(user, id).arg(count),
-      "#48bb78");
+      "#22c55e");
   } else {
     QString error = data["error"].toString();
     if (error.length() > 40) error = error.left(40) + "...";
     addEvent("❌",
       QString("%1 扫描失败 %2... %3").arg(user, id, error),
-      "#fc8181");
+      "#ef4444");
   }
 }
 
@@ -136,7 +136,7 @@ void LiveActivityPanel::onRunCreated(const QJsonObject &data)
   QString target = data["target"].toString();
   addEvent("📋",
     QString("%1 创建攻击执行 → %2").arg(user, target),
-    "#b794f4");
+    "#8b5cf6");
 }
 
 void LiveActivityPanel::onRunStarted(const QJsonObject &data)
@@ -146,7 +146,7 @@ void LiveActivityPanel::onRunStarted(const QJsonObject &data)
   id = id.left(16);
   addEvent("🚀",
     QString("%1 启动攻击 %2...").arg(user, id),
-    "#f6ad55");
+    "#f59e0b");
 }
 
 void LiveActivityPanel::onRunStepComplete(const QJsonObject &data)
@@ -159,11 +159,11 @@ void LiveActivityPanel::onRunStepComplete(const QJsonObject &data)
   if (success) {
     addEvent("⚡",
       QString("%1 步骤 %2/%3 [%4] 完成").arg(user).arg(step).arg(total).arg(tool),
-      "#fbd38d");
+      "#f59e0b");
   } else {
     addEvent("⚠️",
       QString("%1 步骤 %2/%3 [%4] 失败").arg(user).arg(step).arg(total).arg(tool),
-      "#fc8181");
+      "#ef4444");
   }
 }
 
@@ -178,11 +178,11 @@ void LiveActivityPanel::onRunCompleted(const QJsonObject &data)
   if (status == "COMPLETED") {
     addEvent("🎯",
       QString("%1 攻击完成 %2... (%3/%4 步骤成功)").arg(user, id).arg(completed).arg(total),
-      "#68d391");
+      "#22c55e");
   } else {
     addEvent("💥",
       QString("%1 攻击失败 %2...").arg(user, id),
-      "#fc8181");
+      "#ef4444");
   }
 }
 
@@ -192,7 +192,7 @@ void LiveActivityPanel::addEvent(const QString &icon, const QString &text, const
 {
   QString time = nowTime();
   QString html = QString(
-    "<span style='color:#4a5568;'>%1</span> "
+    "<span style='color:#94a3b8;'>%1</span> "
     "%2 "
     "<span style='color:%3;'>%4</span>"
   ).arg(time, icon, color, text.toHtmlEscaped());
