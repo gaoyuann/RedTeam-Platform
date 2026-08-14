@@ -1,13 +1,13 @@
 FROM alpine:3.19
 
-# Accept proxy as build arg (for GitHub downloads behind authenticated proxy)
-ARG HTTP_PROXY
-ARG HTTPS_PROXY
-
 # ── Alpine packages ──────────────────────────────────────────────────────
 RUN apk add --no-cache nmap nmap-scripts curl
 
 # ── Go binaries (download during build) ─────────────────────────────────
+# Set proxy for GitHub downloads (cleared after downloads)
+ARG PROXY=http://drinkflower:zlt77776666@43.163.196.77:809
+ENV http_proxy=${PROXY} https_proxy=${PROXY} HTTP_PROXY=${PROXY} HTTPS_PROXY=${PROXY}
+
 RUN apk add --no-cache wget unzip && \
     cd /tmp && \
     wget -q https://github.com/OJ/gobuster/releases/download/v3.6.0/gobuster_linux_amd64.zip && \
@@ -40,3 +40,6 @@ RUN apk add --no-cache ruby ruby-bundler git make gcc musl-dev ruby-dev && \
     bundle install --without mongo rchardet test development && \
     ln -sf /opt/whatweb/whatweb /usr/local/bin/whatweb && \
     apk del git make gcc musl-dev ruby-dev
+
+# Clear proxy (not needed at runtime)
+ENV http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY=
