@@ -6,12 +6,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Prefer data/playbooks/ inside this project (always available after git clone),
 // fallback to RedTeam-Edu for local dev convenience.
-const PROJECT_PLAYBOOKS_DIR = resolve(__dirname, '..', '..', '..', 'data', 'playbooks');
+// __dirname = .../backend/src/db/migrations → need 4 levels up to reach project root
+const PROJECT_PLAYBOOKS_DIR = resolve(__dirname, '..', '..', '..', '..', 'data', 'playbooks');
 const DEFAULT_PLAYBOOKS_DIR = existsSync(PROJECT_PLAYBOOKS_DIR)
   ? PROJECT_PLAYBOOKS_DIR
   : resolve(__dirname, '..', '..', '..', '..', '..', 'RedTeam-Edu', 'hexstrike-edu', 'backend', 'config', 'playbooks');
 
-const PROJECT_GENERATED_DIR = resolve(__dirname, '..', '..', '..', 'data', 'generated_playbooks');
+const PROJECT_GENERATED_DIR = resolve(__dirname, '..', '..', '..', '..', 'data', 'generated_playbooks');
 const DEFAULT_GENERATED_DIR = existsSync(PROJECT_GENERATED_DIR)
   ? PROJECT_GENERATED_DIR
   : resolve(__dirname, '..', '..', '..', '..', '..', 'RedTeam-Edu', 'hexstrike-edu', 'backend', 'logs', 'generated_playbooks');
