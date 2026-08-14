@@ -2,18 +2,11 @@
 #include "ApiClient.h"
 #include "LoginDialog.h"
 #include "Theme.h"
-#include "WsClient.h"
-#include "LiveActivityPanel.h"
-#include "ToastOverlay.h"
-#include "pages/DashboardPage.h"
 #include "pages/ScanPage.h"
 #include "pages/ExecutionPage.h"
 #include "pages/EvaluatePage.h"
 #include "pages/PayloadPage.h"
 #include "pages/PlaybookPage.h"
-#include "pages/DeployConfigPage.h"
-#include "pages/TopologyPage.h"
-#include "pages/SystemPage.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
@@ -32,7 +25,6 @@
 #include <QJsonDocument>
 #include <QTextEdit>
 #include <QUuid>
-#include <QResizeEvent>
 
 // ── Formatting helpers ────────────────────────────────────────────────
 
@@ -62,12 +54,8 @@ SimpleMainWindow::SimpleMainWindow(ApiClient *api, const QString &role,
     , m_api(api)
     , m_role(role)
     , m_username(username)
-    , m_ws(nullptr)
-    , m_activityPanel(nullptr)
-    , m_toastOverlay(nullptr)
 {
   setupUI();
-  setupWebSocket();
   loadHistory();
 }
 
@@ -82,31 +70,6 @@ void SimpleMainWindow::setupUI()
   auto *mainLayout = new QHBoxLayout(centralWidget);
 
   // ── Left: navigation ───────────────────────────────────────────────
-  // Build module list based on role
-  if (m_role == "admin" || m_role == "teacher") {
-    m_modules = QStringList({
-      QStringLiteral("总览大屏"),
-      QStringLiteral("快速测试"),
-      QStringLiteral("扫描任务"),
-      QStringLiteral("载荷库"),
-      QStringLiteral("想定预案"),
-      QStringLiteral("攻击执行"),
-      QStringLiteral("测试评估"),
-      QStringLiteral("部署配置"),
-      QStringLiteral("拓扑探测"),
-      QStringLiteral("系统管理")
-    });
-  } else {
-    m_modules = QStringList({
-      QStringLiteral("快速测试"),
-      QStringLiteral("扫描任务"),
-      QStringLiteral("载荷库"),
-      QStringLiteral("想定预案"),
-      QStringLiteral("攻击执行"),
-      QStringLiteral("测试评估")
-    });
-  }
-
   m_navList = new QListWidget(this);
   m_navList->setObjectName("navList");
   m_navList->setFixedWidth(220);
@@ -118,70 +81,40 @@ void SimpleMainWindow::setupUI()
   // ── Right: stacked pages ───────────────────────────────────────────
   m_stackWidget = new QStackedWidget(this);
 
-  int pageIdx = 0;
-
-  // Page: Dashboard (总览大屏) — admin only
-  if (m_role == "admin" || m_role == "teacher") {
-    m_dashboardPage = new DashboardPage(m_api, m_role, m_username, this);
-    m_stackWidget->addWidget(m_dashboardPage);
-    m_dashboardPageIndex = pageIdx++;
-  } else {
-    m_dashboardPage = nullptr;
-    m_dashboardPageIndex = -1;
-  }
-
-  // Page: Quick test (custom page)
+  // Page 0: Quick test (custom page)
   auto *quickPage = new QWidget;
   setupQuickTestPage(quickPage);
   m_stackWidget->addWidget(quickPage);
-  pageIdx++;
 
-  // Page: Scan tasks (reuse ScanPage)
+  // Page 1: Scan tasks (reuse ScanPage)
   m_scanPage = new ScanPage(m_api, m_role, m_username, this);
   m_stackWidget->addWidget(m_scanPage);
-  pageIdx++;
 
-  // Page: Payload library
+  // Page 2: Payload library
   m_stackWidget->addWidget(new PayloadPage(m_api, m_role, m_username, this));
-  pageIdx++;
 
-  // Page: Playbook (想定预案)
+  // Page 3: Playbook (想定预案)
   m_playbookPage = new PlaybookPage(m_api, m_role, m_username, this);
   m_stackWidget->addWidget(m_playbookPage);
-  pageIdx++;
 
-  // Page: Execution (攻击执行)
+  // Page 4: Execution (攻击执行)
   m_executionPage = new ExecutionPage(m_api, m_role, m_username, this);
   m_stackWidget->addWidget(m_executionPage);
-  pageIdx++;
 
-  // Page: Evaluate (测试评估)
+  // Page 5: Evaluate (测试评估)
   m_stackWidget->addWidget(new EvaluatePage(m_api, m_role, m_username, this));
-  pageIdx++;
-
-  // Admin-only pages (from old MainWindow)
-  if (m_role == "admin" || m_role == "teacher") {
-    m_stackWidget->addWidget(new DeployConfigPage(m_api, m_role, m_username, this));
-    pageIdx++;
-    m_stackWidget->addWidget(new TopologyPage(m_api, m_role, m_username, this));
-    pageIdx++;
-    m_stackWidget->addWidget(new SystemPage(m_api, m_role, m_username, this));
-    pageIdx++;
-  }
 
   // Cross-page navigation: ScanPage → ExecutionPage (select playbook)
   connect(m_scanPage, &ScanPage::playbookNavigateRequested, this, [this](const QString &playbookId) {
     m_executionPage->selectPlaybook(playbookId, QString());
-    int execRow = m_modules.indexOf(QStringLiteral("攻击执行"));
-    if (execRow >= 0) m_navList->setCurrentRow(execRow);
+    m_navList->setCurrentRow(4);  // switch to "攻击执行" page
   });
 
   // Cross-page navigation: PlaybookPage → ExecutionPage (go execute)
   // Primary: direct callback (most reliable)
   m_playbookPage->setGoExecuteCallback([this](const QString &playbookId) {
     m_executionPage->selectPlaybook(playbookId, QString());
-    int execRow = m_modules.indexOf(QStringLiteral("攻击执行"));
-    if (execRow >= 0) m_navList->setCurrentRow(execRow);
+    m_navList->setCurrentRow(4);  // switch to "攻击执行" page
     statusBar()->showMessage(QString("已跳转到攻击执行，预填 Playbook: %1").arg(playbookId), 3000);
   });
   // Secondary: Qt signal (for any other listeners)
@@ -191,30 +124,8 @@ void SimpleMainWindow::setupUI()
   });
 
   mainLayout->addWidget(m_navList);
-
-  // Right column: pages + activity panel
-  auto *rightColumn = new QVBoxLayout();
-  rightColumn->setSpacing(0);
-  rightColumn->addWidget(m_stackWidget, 1);
-
-  // Bottom: LiveActivityPanel (compact mode)
-  m_activityPanel = new LiveActivityPanel(m_role, m_username, this);
-  m_activityPanel->setCompact(true);
-  // For student, default collapsed
-  if (m_role != "admin" && m_role != "teacher") {
-    m_activityPanel->onToggleCollapse();  // start collapsed
-  }
-  rightColumn->addWidget(m_activityPanel);
-
-  mainLayout->addLayout(rightColumn, 1);
+  mainLayout->addWidget(m_stackWidget, 1);
   setCentralWidget(centralWidget);
-
-  // Toast overlay (positioned in top-right corner)
-  m_toastOverlay = new ToastOverlay(this);
-  // Only show toasts for admin/teacher
-  if (m_role != "admin" && m_role != "teacher") {
-    m_toastOverlay->hide();
-  }
 
   // ── Status bar ─────────────────────────────────────────────────────
   auto *checkBtn = new QPushButton(QStringLiteral("检测连接"), this);
@@ -272,91 +183,6 @@ void SimpleMainWindow::setupUI()
       onPollRun();
     }
   });
-}
-
-// ── WebSocket setup ────────────────────────────────────────────────────
-
-void SimpleMainWindow::setupWebSocket()
-{
-  m_ws = new WsClient(m_api, this);
-  m_ws->connectToServer();
-
-  // ── Wire to LiveActivityPanel ──────────────────────────────────────
-  connect(m_ws, &WsClient::scanCreated, m_activityPanel, &LiveActivityPanel::onScanCreated);
-  connect(m_ws, &WsClient::scanStarted, m_activityPanel, &LiveActivityPanel::onScanStarted);
-  connect(m_ws, &WsClient::scanCompleted, m_activityPanel, &LiveActivityPanel::onScanCompleted);
-  connect(m_ws, &WsClient::runCreated, m_activityPanel, &LiveActivityPanel::onRunCreated);
-  connect(m_ws, &WsClient::runStarted, m_activityPanel, &LiveActivityPanel::onRunStarted);
-  connect(m_ws, &WsClient::runStepComplete, m_activityPanel, &LiveActivityPanel::onRunStepComplete);
-  connect(m_ws, &WsClient::runCompleted, m_activityPanel, &LiveActivityPanel::onRunCompleted);
-
-  // ── Wire to DashboardPage's activity panel ─────────────────────────
-  if (m_dashboardPage) {
-    auto *dashPanel = m_dashboardPage->activityPanel();
-    if (dashPanel) {
-      connect(m_ws, &WsClient::scanCreated, dashPanel, &LiveActivityPanel::onScanCreated);
-      connect(m_ws, &WsClient::scanStarted, dashPanel, &LiveActivityPanel::onScanStarted);
-      connect(m_ws, &WsClient::scanCompleted, dashPanel, &LiveActivityPanel::onScanCompleted);
-      connect(m_ws, &WsClient::runCreated, dashPanel, &LiveActivityPanel::onRunCreated);
-      connect(m_ws, &WsClient::runStarted, dashPanel, &LiveActivityPanel::onRunStarted);
-      connect(m_ws, &WsClient::runStepComplete, dashPanel, &LiveActivityPanel::onRunStepComplete);
-      connect(m_ws, &WsClient::runCompleted, dashPanel, &LiveActivityPanel::onRunCompleted);
-    }
-  }
-
-  // ── Wire to ToastOverlay (admin only) ──────────────────────────────
-  if (m_role == "admin" || m_role == "teacher") {
-    connect(m_ws, &WsClient::scanCompleted, m_toastOverlay, &ToastOverlay::onScanCompleted);
-    connect(m_ws, &WsClient::runStepComplete, m_toastOverlay, &ToastOverlay::onRunStepComplete);
-    connect(m_ws, &WsClient::runCompleted, m_toastOverlay, &ToastOverlay::onRunCompleted);
-  }
-
-  // ── Wire to ScanPage: auto-refresh on events from other users ─────
-  connect(m_ws, &WsClient::scanCompleted, m_scanPage, [this](const QJsonObject &data) {
-    Q_UNUSED(data);
-    // Refresh task list when any scan completes (especially from other users)
-    m_scanPage->onRefreshTasks();
-  });
-  connect(m_ws, &WsClient::scanCreated, m_scanPage, [this](const QJsonObject &data) {
-    // Only refresh if the event is from a different user
-    QString eventUser = data["userId"].toString();
-    if (eventUser != m_username) {
-      m_scanPage->onRefreshTasks();
-    }
-  });
-
-  // ── Wire to ExecutionPage: auto-refresh on run events ──────────────
-  connect(m_ws, &WsClient::runStepComplete, m_executionPage, [this](const QJsonObject &data) {
-    Q_UNUSED(data);
-    // Trigger a refresh of the currently viewed run if it matches
-    // ExecutionPage will check internally
-    m_executionPage->onRefreshRuns();
-  });
-  connect(m_ws, &WsClient::runCompleted, m_executionPage, [this](const QJsonObject &data) {
-    Q_UNUSED(data);
-    m_executionPage->onRefreshRuns();
-  });
-
-  // ── WebSocket connection status in status bar ──────────────────────
-  connect(m_ws, &WsClient::connected, this, [this]() {
-    statusBar()->showMessage(QStringLiteral("WebSocket 已连接"), 3000);
-  });
-  connect(m_ws, &WsClient::disconnected, this, [this]() {
-    statusBar()->showMessage(QStringLiteral("WebSocket 断开"), 3000);
-  });
-  connect(m_ws, &WsClient::connectionError, this, [this](const QString &err) {
-    statusBar()->showMessage(QString("WebSocket 错误: %1").arg(err), 5000);
-  });
-}
-
-// ── Resize event: reposition toast overlay ─────────────────────────────
-
-void SimpleMainWindow::resizeEvent(QResizeEvent *event)
-{
-  QMainWindow::resizeEvent(event);
-  if (m_toastOverlay && m_toastOverlay->isVisible()) {
-    m_toastOverlay->reposition();
-  }
 }
 
 // ── Quick test page ───────────────────────────────────────────────────
@@ -563,8 +389,7 @@ void SimpleMainWindow::setupQuickTestPage(QWidget *page)
   connect(m_gotoExecBtn, &QPushButton::clicked, this, [this]() {
     if (!m_playbookId.isEmpty() && m_executionPage) {
       m_executionPage->selectPlaybook(m_playbookId, m_target);
-      int execRow = m_modules.indexOf(QStringLiteral("攻击执行"));
-      if (execRow >= 0) m_navList->setCurrentRow(execRow);
+      m_navList->setCurrentRow(4);  // switch to "攻击执行" page
     }
   });
 
@@ -1565,9 +1390,6 @@ void SimpleMainWindow::onLogout()
   if (msgBox.exec() != QMessageBox::Yes) return;
 
   m_pollTimer->stop();
-
-  // Disconnect WebSocket
-  if (m_ws) m_ws->disconnectFromServer();
 
   // Exit the event loop — main.cpp's loop will delete this window
   // and show the login dialog again.

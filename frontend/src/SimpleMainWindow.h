@@ -16,10 +16,6 @@ class ApiClient;
 class ExecutionPage;
 class ScanPage;
 class PlaybookPage;
-class WsClient;
-class LiveActivityPanel;
-class ToastOverlay;
-class DashboardPage;
 
 class SimpleMainWindow : public QMainWindow {
     Q_OBJECT
@@ -45,14 +41,10 @@ private slots:
 private:
     void setupUI();
     void setupQuickTestPage(QWidget *page);
-    void setupWebSocket();
     void loadHistory();
     void advanceStage();
     void checkBothScansDone();
     void startExecution();
-
-    // Keep toast overlay positioned in top-right on resize
-    void resizeEvent(QResizeEvent *event) override;
 
     // Stage management
     enum Stage {
@@ -77,7 +69,6 @@ private:
     // Navigation
     QListWidget *m_navList;
     QStackedWidget *m_stackWidget;
-    DashboardPage *m_dashboardPage;
     ScanPage *m_scanPage;
     PlaybookPage *m_playbookPage;
     ExecutionPage *m_executionPage;
@@ -132,12 +123,13 @@ private:
     QJsonArray m_portResults;
     QJsonArray m_vulnResults;
 
-    // ── WebSocket + Real-time ──────────────────────────────────────────
-    WsClient *m_ws;
-    LiveActivityPanel *m_activityPanel;
-    ToastOverlay *m_toastOverlay;
-    int m_dashboardPageIndex = -1;  // index in stack widget (-1 if not added)
-
-    // Module names (built dynamically based on role)
-    QStringList m_modules;
+    // Module names
+    const QStringList m_modules = {
+        QStringLiteral("快速测试"),
+        QStringLiteral("扫描任务"),
+        QStringLiteral("载荷库"),
+        QStringLiteral("想定预案"),
+        QStringLiteral("攻击执行"),
+        QStringLiteral("测试评估")
+    };
 };
