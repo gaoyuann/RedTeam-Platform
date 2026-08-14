@@ -10,6 +10,7 @@
 #include <QTextEdit>
 #include <QTimer>
 #include <QJsonArray>
+#include <QTabWidget>
 
 class ApiClient;
 
@@ -37,6 +38,7 @@ private:
   void loadRunDetails(const QString &runId);
 
   ApiClient *m_api;
+  QTabWidget *m_tabWidget;
   QComboBox *m_playbookCombo;
   QLineEdit *m_targetInput;
   QPushButton *m_execBtn;

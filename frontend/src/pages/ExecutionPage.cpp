@@ -3,7 +3,6 @@
 #include "../ApiClient.h"
 #include <QScrollArea>
 #include <QFrame>
-#include <QSplitter>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -32,11 +31,16 @@ ExecutionPage::ExecutionPage(ApiClient *api, const QString &role, const QString 
 void ExecutionPage::setupUI() {
   setStyleSheet(Theme::PageStyle);
 
-  auto *scrollArea = new QScrollArea(this);
-  scrollArea->setWidgetResizable(true);
-  scrollArea->setFrameShape(QFrame::NoFrame);
-  auto *container = new QWidget;
-  auto *layout = new QVBoxLayout(container);
+  auto *mainLayout = new QVBoxLayout(this);
+  mainLayout->setContentsMargins(12, 8, 12, 8);
+
+  // ── Tab widget ─────────────────────────────────────────────────────
+  m_tabWidget = new QTabWidget(this);
+
+  // ── Tab 1: 执行记录 ────────────────────────────────────────────────
+  auto *tab1 = new QWidget;
+  auto *tab1Layout = new QVBoxLayout(tab1);
+  tab1Layout->setContentsMargins(8, 8, 8, 8);
 
   // ── Attack category filter ─────────────────────────────────────────
   auto *catH = new QHBoxLayout;
@@ -56,7 +60,7 @@ void ExecutionPage::setupUI() {
   catH->addWidget(m_catTamper);
   catH->addWidget(m_catDeviceCtrl);
   catH->addStretch();
-  layout->addLayout(catH);
+  tab1Layout->addLayout(catH);
   connect(m_catGroup, QOverload<int>::of(&QButtonGroup::buttonClicked),
           this, &ExecutionPage::onAttackCategoryChanged);
 
@@ -79,18 +83,12 @@ void ExecutionPage::setupUI() {
   m_execBtn = new QPushButton("执行");
   m_execBtn->setProperty("primary", true);
   h1->addWidget(m_execBtn);
-  layout->addLayout(h1);
+  tab1Layout->addLayout(h1);
   connect(m_execBtn, &QPushButton::clicked, this, &ExecutionPage::onExecute);
 
-  // ── Main vertical splitter (draggable sections) ───────────────────
-  auto *mainSplitter = new QSplitter(Qt::Vertical);
-
-  // ── Run list (top section) ────────────────────────────────────────
-  auto *runW = new QWidget;
-  auto *runL = new QVBoxLayout(runW);
-  runL->setContentsMargins(0, 0, 0, 0);
+  // ── Run list ──────────────────────────────────────────────────────
   auto *runLabel = new QLabel("执行记录"); runLabel->setStyleSheet(Theme::SectionStyle);
-  runL->addWidget(runLabel);
+  tab1Layout->addWidget(runLabel);
   m_runTable = new QTableWidget(0, 5);
   m_runTable->setHorizontalHeaderLabels({"执行ID", "预案", "目标", "状态", "创建时间"});
   m_runTable->setAlternatingRowColors(true);
@@ -98,18 +96,30 @@ void ExecutionPage::setupUI() {
   m_runTable->setSelectionBehavior(QAbstractItemView::SelectRows);
   m_runTable->setSortingEnabled(true);
   m_runTable->setContextMenuPolicy(Qt::CustomContextMenu);
-  runL->addWidget(m_runTable, 1);
-  mainSplitter->addWidget(runW);
+  tab1Layout->addWidget(m_runTable, 1);
   connect(m_runTable, &QTableWidget::cellClicked, this, &ExecutionPage::onRunClicked);
 
-  // ── Step details (middle section) ─────────────────────────────────
-  auto *stepW = new QWidget;
-  auto *stepL = new QVBoxLayout(stepW);
-  stepL->setContentsMargins(0, 0, 0, 0);
+  // ── Refresh ───────────────────────────────────────────────────────
+  auto *refreshBtn = new QPushButton("刷新");
+  tab1Layout->addWidget(refreshBtn);
+  connect(refreshBtn, &QPushButton::clicked, this, &ExecutionPage::onRefreshRuns);
+
+  m_tabWidget->addTab(tab1, QStringLiteral("执行记录"));
+
+  // ── Tab 2: 执行详情 ────────────────────────────────────────────────
+  auto *tab2 = new QWidget;
+  auto *tab2Scroll = new QScrollArea;
+  tab2Scroll->setWidgetResizable(true);
+  tab2Scroll->setFrameShape(QFrame::NoFrame);
+  auto *tab2Inner = new QWidget;
+  auto *tab2Layout = new QVBoxLayout(tab2Inner);
+  tab2Layout->setContentsMargins(8, 8, 8, 8);
+
+  // ── Status + Step details ─────────────────────────────────────────
   m_statusLabel = new QLabel;
-  stepL->addWidget(m_statusLabel);
+  tab2Layout->addWidget(m_statusLabel);
   auto *stepLabel = new QLabel("步骤执行详情"); stepLabel->setStyleSheet(Theme::SectionStyle);
-  stepL->addWidget(stepLabel);
+  tab2Layout->addWidget(stepLabel);
   m_stepTable = new QTableWidget(0, 7);
   m_stepTable->setHorizontalHeaderLabels({"步骤", "工具", "参数", "成功", "输出摘要", "载荷", "推理"});
   m_stepTable->setAlternatingRowColors(true);
@@ -123,17 +133,13 @@ void ExecutionPage::setupUI() {
   m_stepTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
   m_stepTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
   m_stepTable->horizontalHeader()->setSectionResizeMode(6, QHeaderView::ResizeToContents);
-  stepL->addWidget(m_stepTable, 1);
-  mainSplitter->addWidget(stepW);
+  tab2Layout->addWidget(m_stepTable, 1);
 
-  // ── Evidence display (bottom section) ─────────────────────────────
-  auto *evW = new QWidget;
-  auto *evL = new QVBoxLayout(evW);
-  evL->setContentsMargins(0, 0, 0, 0);
+  // ── Evidence display ─────────────────────────────────────────────
   m_evidenceLabel = new QLabel;
-  evL->addWidget(m_evidenceLabel);
+  tab2Layout->addWidget(m_evidenceLabel);
   auto *evLabel = new QLabel("攻击证据"); evLabel->setStyleSheet(Theme::SectionStyle);
-  evL->addWidget(evLabel);
+  tab2Layout->addWidget(evLabel);
   m_evidenceTable = new QTableWidget(0, 5);
   m_evidenceTable->setHorizontalHeaderLabels({"步骤", "类型", "数据摘要", "MITRE命中", "建议"});
   m_evidenceTable->setAlternatingRowColors(true);
@@ -145,13 +151,12 @@ void ExecutionPage::setupUI() {
   m_evidenceTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
   m_evidenceTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
   m_evidenceTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
-  evL->addWidget(m_evidenceTable, 1);
+  tab2Layout->addWidget(m_evidenceTable, 1);
 
   m_evidenceDetail = new QTextEdit;
   m_evidenceDetail->setReadOnly(true);
   m_evidenceDetail->setPlaceholderText("点击证据行查看详情");
-  evL->addWidget(m_evidenceDetail, 1);
-  mainSplitter->addWidget(evW);
+  tab2Layout->addWidget(m_evidenceDetail, 1);
 
   // ── ReAct reasoning panel ────────────────────────────────────────
   m_reactPanel = new QWidget;
@@ -169,7 +174,7 @@ void ExecutionPage::setupUI() {
   m_reactThoughtView->setMaximumHeight(200);
   reactL->addWidget(m_reactThoughtView, 1);
   m_reactPanel->hide();  // shown only when ReAct data exists
-  mainSplitter->addWidget(m_reactPanel);
+  tab2Layout->addWidget(m_reactPanel);
 
   // ── Payload info panel ───────────────────────────────────────────
   m_payloadPanel = new QWidget;
@@ -187,21 +192,15 @@ void ExecutionPage::setupUI() {
   m_payloadDetailView->setMaximumHeight(200);
   payloadL->addWidget(m_payloadDetailView, 1);
   m_payloadPanel->hide();  // shown only when payload data exists
-  mainSplitter->addWidget(m_payloadPanel);
+  tab2Layout->addWidget(m_payloadPanel);
 
-  // Set proportional sizes for the 5 sections
-  mainSplitter->setStretchFactor(0, 2);  // run list
-  mainSplitter->setStretchFactor(1, 3);  // step details
-  mainSplitter->setStretchFactor(2, 3);  // evidence
-  mainSplitter->setStretchFactor(3, 1);  // ReAct reasoning
-  mainSplitter->setStretchFactor(4, 1);  // Payload info
-  mainSplitter->setSizes({200, 300, 300, 150, 150});
-  layout->addWidget(mainSplitter, 1);
+  tab2Scroll->setWidget(tab2Inner);
+  auto *tab2OuterLayout = new QVBoxLayout(tab2);
+  tab2OuterLayout->addWidget(tab2Scroll);
 
-  // ── Refresh ───────────────────────────────────────────────────────
-  auto *refreshBtn = new QPushButton("刷新");
-  layout->addWidget(refreshBtn);
-  connect(refreshBtn, &QPushButton::clicked, this, &ExecutionPage::onRefreshRuns);
+  m_tabWidget->addTab(tab2, QStringLiteral("执行详情"));
+
+  mainLayout->addWidget(m_tabWidget, 1);
 
   // ── Right-click menus ────────────────────────────────────────────────
   connect(m_runTable, &QTableWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
@@ -231,10 +230,6 @@ void ExecutionPage::setupUI() {
     });
     menu.exec(m_evidenceTable->viewport()->mapToGlobal(pos));
   });
-
-  scrollArea->setWidget(container);
-  auto *outerLayout = new QVBoxLayout(this);
-  outerLayout->addWidget(scrollArea);
 }
 
 // ── Load all playbooks ───────────────────────────────────────────────
@@ -338,6 +333,8 @@ void ExecutionPage::onExecute() {
       m_pollTimer->start();
       // Immediately load this run's details (don't wait for full refresh)
       loadRunDetails(runId);
+      // Switch to detail tab to show execution progress
+      m_tabWidget->setCurrentIndex(1);
       // Refresh run list in background
       onRefreshRuns();
     });
@@ -394,6 +391,8 @@ void ExecutionPage::onRunClicked(int row, int) {
   if (!runItem) return;
   QString runId = runItem->text();
   loadRunDetails(runId);
+  // Auto-switch to detail tab
+  m_tabWidget->setCurrentIndex(1);
 }
 
 // ── Load run details by ID (shared by onRunClicked and onExecute) ────

@@ -45,9 +45,9 @@
         "-i",
         "{{host}}",
         "-u",
-        "REPLACE_ME",
+        "{{username}}",
         "-p",
-        "qwer1234",
+        "{{password}}",
         "-s",
         "/tmp/kylin_shutdown.sh"
       ],
@@ -91,7 +91,7 @@
   ],
   "baselineGroup": "impact-demonstration",
   "expectedOutputPolicy": "expect_output",
-  "emptyOutputExplanation": "关机脚本通过 ssh-exec 远程执行；需要目标开放 SSH 22 端口、凭据有效、且已配置 shutdown 的 sudo 免密权限（echo 'REPLACE_ME ALL=(ALL) NOPASSWD: /sbin/shutdown' | sudo tee /etc/sudoers.d/demo-shutdown）",
+  "emptyOutputExplanation": "关机脚本通过 ssh-exec 远程执行；需要目标开放 SSH 22 端口、凭据有效、且已配置 shutdown 的 sudo 免密权限（echo '{{username}} ALL=(ALL) NOPASSWD: /sbin/shutdown' | sudo tee /etc/sudoers.d/demo-shutdown）",
   "applicableTargetType": [
     "local_ip"
   ],

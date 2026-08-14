@@ -13,6 +13,7 @@
 #include <QJsonObject>
 #include <QJsonDocument>
 #include <QDateTime>
+#include <algorithm>
 
 // ── Dashboard Page ─────────────────────────────────────────────────────
 
@@ -129,9 +130,58 @@ LiveActivityPanel *DashboardPage::activityPanel() const
 
 void DashboardPage::refreshStats()
 {
+  // Fetch scan tasks and runs in parallel, then merge into activity table
+  // We use two separate requests and merge results by time
+
+  struct ActivityEntry {
+    QDateTime dt;
+    QString timeStr;
+    QString user;
+    QString action;
+    QString status;
+    QColor statusColor;
+  };
+
+  // Shared state for merging
+  auto *scanEntries = new QList<ActivityEntry>();
+  auto *runEntries = new QList<ActivityEntry>();
+  auto *pending = new int(2);  // countdown: scan + run
+
+  auto mergeAndDisplay = [this, scanEntries, runEntries, pending]() {
+    (*pending)--;
+    if (*pending > 0) return;  // still waiting for the other request
+
+    // Merge and sort by time (newest first)
+    QList<ActivityEntry> all;
+    all << *scanEntries << *runEntries;
+    std::sort(all.begin(), all.end(),
+      [](const ActivityEntry &a, const ActivityEntry &b) {
+        return a.dt > b.dt;  // descending
+      });
+
+    // Populate table (max 20 rows)
+    m_activityTable->setRowCount(0);
+    int count = qMin(all.size(), 20);
+    for (int i = 0; i < count; i++) {
+      const auto &e = all[i];
+      int row = m_activityTable->rowCount();
+      m_activityTable->insertRow(row);
+      m_activityTable->setItem(row, 0, new QTableWidgetItem(e.timeStr));
+      m_activityTable->setItem(row, 1, new QTableWidgetItem(e.user));
+      m_activityTable->setItem(row, 2, new QTableWidgetItem(e.action));
+      auto *statusItem = new QTableWidgetItem(e.status);
+      statusItem->setForeground(e.statusColor);
+      m_activityTable->setItem(row, 3, statusItem);
+    }
+
+    delete scanEntries;
+    delete runEntries;
+    delete pending;
+  };
+
   // Fetch scan task stats
-  m_api->get("/api/scan-tasks", 5000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
+  m_api->get("/api/scan-tasks", 5000, [this, scanEntries, mergeAndDisplay](const QJsonObject &res) {
+    if (res["status"].toString() != "ok") { mergeAndDisplay(); return; }
     auto arr = res["data"].toArray();
     int total = arr.size();
     int running = 0, completed = 0;
@@ -144,44 +194,58 @@ void DashboardPage::refreshStats()
     m_scanRunningLabel->setText(QString::number(running));
     m_scanCompletedLabel->setText(QString::number(completed));
 
-    // Populate recent activity table (last 20 scans)
-    m_activityTable->setRowCount(0);
-    int count = qMin(arr.size(), 20);
-    for (int i = 0; i < count; i++) {
-      auto r = arr[i].toObject();
-      int row = m_activityTable->rowCount();
-      m_activityTable->insertRow(row);
-
+    // Build scan entries
+    for (const auto &item : arr) {
+      auto r = item.toObject();
+      ActivityEntry e;
       QString time = r["created_at"].toString();
-      auto dt = QDateTime::fromString(time, Qt::ISODate);
-      if (dt.isValid()) time = dt.toString("MM-dd HH:mm:ss");
-      m_activityTable->setItem(row, 0, new QTableWidgetItem(time));
-
-      QString user = r["created_by"].toString();
-      if (user.isEmpty()) user = QStringLiteral("-");
-      m_activityTable->setItem(row, 1, new QTableWidgetItem(user));
-
+      e.dt = QDateTime::fromString(time, Qt::ISODate);
+      e.timeStr = e.dt.isValid() ? e.dt.toString("MM-dd HH:mm:ss") : time;
+      e.user = r["created_by"].toString();
+      if (e.user.isEmpty()) e.user = QStringLiteral("-");
       QString scanType = r["scan_type"].toString();
       if (scanType == "port_scan") scanType = QStringLiteral("端口扫描");
       else if (scanType == "vuln_scan") scanType = QStringLiteral("漏洞扫描");
       else if (scanType == "web_scan") scanType = QStringLiteral("Web扫描");
       QString target = r["target"].toString();
-      m_activityTable->setItem(row, 2, new QTableWidgetItem(
-        QStringLiteral("扫描 %1 → %2").arg(scanType, target)));
-
-      QString status = r["status"].toString();
-      auto *statusItem = new QTableWidgetItem(status);
-      if (status == "COMPLETED") statusItem->setForeground(QColor("#22c55e"));
-      else if (status == "RUNNING") statusItem->setForeground(QColor("#2563eb"));
-      else if (status == "FAILED") statusItem->setForeground(QColor("#ef4444"));
-      m_activityTable->setItem(row, 3, statusItem);
+      e.action = QStringLiteral("扫描 %1 → %2").arg(scanType, target);
+      e.status = r["status"].toString();
+      if (e.status == "COMPLETED") e.statusColor = QColor("#22c55e");
+      else if (e.status == "RUNNING") e.statusColor = QColor("#2563eb");
+      else if (e.status == "FAILED") e.statusColor = QColor("#ef4444");
+      else e.statusColor = QColor("#94a3b8");
+      scanEntries->append(e);
     }
+    mergeAndDisplay();
   });
 
   // Fetch run stats
-  m_api->get("/api/runs", 5000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
+  m_api->get("/api/runs", 5000, [this, runEntries, mergeAndDisplay](const QJsonObject &res) {
+    if (res["status"].toString() != "ok") { mergeAndDisplay(); return; }
     auto arr = res["data"].toArray();
     m_runTotalLabel->setText(QString::number(arr.size()));
+
+    // Build run entries
+    for (const auto &item : arr) {
+      auto r = item.toObject();
+      ActivityEntry e;
+      QString time = r["created_at"].toString();
+      e.dt = QDateTime::fromString(time, Qt::ISODate);
+      e.timeStr = e.dt.isValid() ? e.dt.toString("MM-dd HH:mm:ss") : time;
+      e.user = r["user_sub"].toString();
+      if (e.user.isEmpty()) e.user = r["created_by"].toString();
+      if (e.user.isEmpty()) e.user = QStringLiteral("-");
+      QString pbName = r["playbook_name"].toString();
+      if (pbName.isEmpty()) pbName = r["playbook_id"].toString().left(12);
+      QString target = r["target"].toString();
+      e.action = QStringLiteral("攻击 %1 → %2").arg(pbName, target);
+      e.status = r["status"].toString();
+      if (e.status == "COMPLETED") e.statusColor = QColor("#22c55e");
+      else if (e.status == "RUNNING") e.statusColor = QColor("#2563eb");
+      else if (e.status == "FAILED") e.statusColor = QColor("#ef4444");
+      else e.statusColor = QColor("#94a3b8");
+      runEntries->append(e);
+    }
+    mergeAndDisplay();
   });
 }

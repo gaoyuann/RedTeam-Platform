@@ -21,6 +21,11 @@ export function buildWebContext(targetProfile) {
   const portSuffix = (port === 80 || port === 443) ? '' : `:${port}`;
   const base = `${scheme}://${host}${portSuffix}`;
 
+  // SSH/remote credentials for Linux targets — configurable via env vars
+  // REDTEAM_SSH_USER / REDTEAM_SSH_PASS override the defaults
+  const username = process.env.REDTEAM_SSH_USER || targetProfile.username || 'root';
+  const password = process.env.REDTEAM_SSH_PASS || targetProfile.password || 'qwer1234';
+
   return {
     host,
     port: String(port),
@@ -28,6 +33,8 @@ export function buildWebContext(targetProfile) {
     base_url: base,
     target_url: base,
     target_class: targetProfile.target_class || 'web_url',
+    username,
+    password,
 
     // Web 通用路径
     login_url: `${base}/login`,

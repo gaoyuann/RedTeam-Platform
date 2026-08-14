@@ -1,7 +1,7 @@
 {
   "id": "kylin_trojan_simulation",
   "name": "银河麒麟 - 木马持久化完整攻击链",
-  "description": "教学目的：模拟远程攻击者对银河麒麟（Linux）靶标从侦察发现、凭据验证到 Cron 持久化植入的完整攻击链。通过 SSH 远程通道在目标上部署隐蔽的 Cron 后门任务，每分钟自动写入标记文件。演示 MITRE ATT&CK 的 Discovery → Execution → Persistence 全流程。\n\n前置条件：攻击者已获取目标 Linux 主机的用户凭据（REPLACE_ME / qwer1234），SSH 服务（端口 22）已开放。",
+  "description": "教学目的：模拟远程攻击者对银河麒麟（Linux）靶标从侦察发现、凭据验证到 Cron 持久化植入的完整攻击链。通过 SSH 远程通道在目标上部署隐蔽的 Cron 后门任务，每分钟自动写入标记文件。演示 MITRE ATT&CK 的 Discovery → Execution → Persistence 全流程。\n\n前置条件：攻击者已获取目标 Linux 主机的用户凭据（{{username}} / {{password}}），SSH 服务（端口 22）已开放。",
   "category": "exploitation",
   "difficulty": "medium",
   "estimatedDuration": "5 min",
@@ -53,9 +53,9 @@
         "-i",
         "{{host}}",
         "-u",
-        "REPLACE_ME",
+        "{{username}}",
         "-p",
-        "qwer1234"
+        "{{password}}"
       ],
       "score": 15,
       "status": "PENDING",
@@ -87,9 +87,9 @@
         "-i",
         "{{host}}",
         "-u",
-        "REPLACE_ME",
+        "{{username}}",
         "-p",
-        "qwer1234",
+        "{{password}}",
         "-s",
         "/tmp/kylin_trojan_deploy.sh"
       ],

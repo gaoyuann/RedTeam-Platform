@@ -31,6 +31,7 @@ export function buildContextForTarget(targetProfile, dvwaProfile = {}) {
         dvwaProfile,
       });
     case 'local_ip':
+    case 'linux_host':
     case 'web_url':
       // 如果有 dvwa_profile，优先使用 DVWA 上下文
       if (dvwaProfile && dvwaProfile.base_url) {
@@ -58,6 +59,7 @@ export function checkTargetCompatibility(requiredClass, targetProfile) {
   switch (requiredClass) {
     case 'dvwa':
     case 'local_ip':
+    case 'linux_host':
     case 'web_url':
       return checkDvwaCompatibility(targetProfile);
     case 'windows_ad':

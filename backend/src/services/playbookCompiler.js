@@ -87,6 +87,12 @@ export function compilePlaybook({ steps, target, db }) {
     // 3. Template variable check - look for unresolved {{var}} patterns
     if (!compiled.compile_status.startsWith('BLOCKED')) {
       const argsStr = step.args_template || '';
+
+      // 3a. Check for literal REPLACE_ME / CHANGE_ME in args (not template vars)
+      if (argsStr.includes('REPLACE_ME') || argsStr.includes('CHANGE_ME')) {
+        warnings.push(`Step '${step.name || i}' contains literal placeholder (REPLACE_ME/CHANGE_ME) — should use {{username}}/{{password}} template variables`);
+      }
+
       const unresolvedVars = argsStr.match(/\{\{[^}]+\}\}/g);
       if (unresolvedVars) {
         // Variables resolved at runtime by commandTemplateRenderer + targetAdapters

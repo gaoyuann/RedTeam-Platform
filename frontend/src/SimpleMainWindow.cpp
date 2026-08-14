@@ -909,6 +909,7 @@ void SimpleMainWindow::advanceStage()
           QString(" (%1步)").arg(steps));
         m_playbookLabel->setStyleSheet("font-size: 15px; color: #1a2a3a;");
         m_viewPlaybookBtn->setVisible(true);
+        m_gotoExecBtn->setVisible(true);
 
         // Done — stop here, user can view the playbook
         setStage(Done);

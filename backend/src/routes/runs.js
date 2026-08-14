@@ -21,6 +21,15 @@ export default function (db) {
     if (limit) { sql += ' LIMIT ?'; params.push(Number(limit)); }
     if (offset) { sql += ' OFFSET ?'; params.push(Number(offset)); }
     const rows = db.prepare(sql).all(...params);
+    // Enrich each row with playbook_name for display
+    for (const row of rows) {
+      if (row.playbook_id) {
+        const pb = db.prepare('SELECT name FROM playbooks WHERE playbook_id = ?').get(row.playbook_id);
+        row.playbook_name = pb ? pb.name : row.playbook_id;
+      } else {
+        row.playbook_name = '';
+      }
+    }
     res.json({ status: 'ok', data: rows, meta: { total: rows.length } });
   });
 

@@ -23,6 +23,7 @@ const UNRESOLVED_PATTERNS = [
   /^target$/i,
   /^example\.com$/i,
   /^CHANGE_ME$/,
+  /^REPLACE_ME$/,
   /^http:\/\/target/i,
   /^https:\/\/target/i,
 ];
