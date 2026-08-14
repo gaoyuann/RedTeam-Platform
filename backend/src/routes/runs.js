@@ -5,6 +5,7 @@ import { computeGrade } from '../services/gradingEngine.js';
 import { buildAttackGraph, buildAttackGraphSummary } from '../services/graphBuilder.js';
 import { inferNextActions } from '../services/pathPlanner.js';
 import { runPreflightChecks } from '../services/preflightGate.js';
+import { getWsManager } from '../services/wsManager.js';
 
 export default function (db) {
   const router = Router();
@@ -46,6 +47,14 @@ export default function (db) {
       db.prepare(`INSERT INTO execution_runs (run_id, playbook_id, user_sub, user_role, target, scan_task_id, status, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)`).run(rid, playbook_id || null, user_sub || null, user_role || null, target || null, scan_task_id || null, now, now);
       const row = db.prepare('SELECT * FROM execution_runs WHERE run_id = ?').get(rid);
+      // WebSocket: notify run created
+      const ws = getWsManager();
+      if (ws) ws.broadcast('run:created', {
+        runId: rid, playbookId: playbook_id || null, target: target || null,
+        userId: req.user?.sub || user_sub || null,
+        username: req.user?.sub || null,
+        role: req.user?.role || null,
+      });
       res.status(201).json({ status: 'ok', data: row });
     } catch (err) {
       if (err.message.includes('UNIQUE')) return res.status(409).json({ status: 'error', error: { message: 'Run ID already exists' } });
@@ -189,6 +198,14 @@ export default function (db) {
 
     // Fire and forget — execution happens in background
     executeRun(req.params.runId).catch(() => {});
+    // WebSocket: notify run started
+    const ws = getWsManager();
+    if (ws) ws.broadcast('run:started', {
+      runId: req.params.runId,
+      userId: req.user?.sub || null,
+      username: req.user?.sub || null,
+      role: req.user?.role || null,
+    });
     res.status(202).json({ status: 'ok', data: { run_id: req.params.runId, message: 'Execution started' } });
   });
 

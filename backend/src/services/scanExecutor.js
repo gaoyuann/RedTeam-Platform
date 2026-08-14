@@ -561,9 +561,14 @@ export async function executeScan(scanTaskId) {
     const completedAt = new Date().toISOString();
     db.prepare("UPDATE scan_tasks SET status = 'COMPLETED', completed_at = ? WHERE scan_task_id = ?")
       .run(completedAt, scanTaskId);
-    // WebSocket: notify scan completed
+    // WebSocket: notify scan completed (include operator info)
     const ws = getWsManager();
-    if (ws) ws.broadcast('scan:completed', { scanTaskId, status: 'COMPLETED', resultsCount: totalResults });
+    const taskInfo = db.prepare('SELECT created_by FROM scan_tasks WHERE scan_task_id = ?').get(scanTaskId);
+    if (ws) ws.broadcast('scan:completed', {
+      scanTaskId, status: 'COMPLETED', resultsCount: totalResults,
+      userId: taskInfo?.created_by || null,
+      username: taskInfo?.created_by || null,
+    });
 
     return { ok: true, scanTaskId, status: 'COMPLETED', resultsCount: totalResults };
 
@@ -571,9 +576,14 @@ export async function executeScan(scanTaskId) {
     const completedAt = new Date().toISOString();
     db.prepare("UPDATE scan_tasks SET status = 'FAILED', completed_at = ?, error_message = ? WHERE scan_task_id = ?")
       .run(completedAt, err.message, scanTaskId);
-    // WebSocket: notify scan failed
+    // WebSocket: notify scan failed (include operator info)
     const ws = getWsManager();
-    if (ws) ws.broadcast('scan:completed', { scanTaskId, status: 'FAILED', error: err.message });
+    const taskInfo = db.prepare('SELECT created_by FROM scan_tasks WHERE scan_task_id = ?').get(scanTaskId);
+    if (ws) ws.broadcast('scan:completed', {
+      scanTaskId, status: 'FAILED', error: err.message,
+      userId: taskInfo?.created_by || null,
+      username: taskInfo?.created_by || null,
+    });
 
     return { ok: false, error: err.message };
   } finally {

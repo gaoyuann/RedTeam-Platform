@@ -123,11 +123,13 @@ void WsClient::onTextMessageReceived(const QString &message)
   }
   if (event == "pong") return;
 
-  if (event == "scan:created")     emit scanCreated(data);
-  if (event == "scan:started")     emit scanStarted(data);
-  if (event == "scan:completed")   emit scanCompleted(data);
-  if (event == "run:step_start")   emit runStepStart(data);
-  if (event == "run:step_complete") emit runStepComplete(data);
-  if (event == "run:completed")    emit runCompleted(data);
-  if (event == "container:status") emit containerStatus(data);
+  // Domain event dispatch — aligned with backend event names
+  if (event == "scan:created")      emit scanCreated(data);
+  if (event == "scan:started")      emit scanStarted(data);
+  if (event == "scan:completed")    emit scanCompleted(data);
+  if (event == "run:created")       emit runCreated(data);
+  if (event == "run:started")       emit runStarted(data);
+  if (event == "run:step")          emit runStepComplete(data);
+  if (event == "run:complete")      emit runCompleted(data);
+  if (event == "container:status")  emit containerStatus(data);
 }

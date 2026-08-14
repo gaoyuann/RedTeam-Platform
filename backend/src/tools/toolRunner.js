@@ -141,8 +141,12 @@ function runInContainer(engine, image, bin, args, options = {}) {
 
     child.on('close', (code) => {
       clearTimeout(timer);
+      // For SSH/exploit tools, exit code is the authoritative success indicator
+      // (stdout may contain progress messages even on failure)
+      const isExploitTool = ['ssh-exec', 'evil-winrm', 'netexec'].includes(options.toolId);
+      const success = isExploitTool ? code === 0 : (code === 0 || stdout.length > 0);
       resolve({
-        success: code === 0 || stdout.length > 0,
+        success,
         exitCode: code,
         stdout: stdout.trim(),
         stderr: stderr.trim(),

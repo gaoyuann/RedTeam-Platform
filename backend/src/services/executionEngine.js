@@ -344,6 +344,7 @@ export async function executeRun(runId) {
       // ── WebSocket broadcast: step completed ──────────────────────────
       const ws = getWsManager();
       if (ws) {
+        const runInfo = db.prepare('SELECT user_sub FROM execution_runs WHERE run_id = ?').get(runId);
         ws.broadcast('run:step', {
           run_id: runId,
           step_index: step.step_index,
@@ -354,6 +355,8 @@ export async function executeRun(runId) {
           completed_steps: completedSteps,
           failed_steps: failedSteps,
           total_steps: mutableSteps.length,
+          userId: runInfo?.user_sub || null,
+          username: runInfo?.user_sub || null,
         });
       }
 
@@ -511,6 +514,7 @@ export async function executeRun(runId) {
     // ── WebSocket broadcast: run completed ────────────────────────────
     const wsEnd = getWsManager();
     if (wsEnd) {
+      const runInfo = db.prepare('SELECT user_sub FROM execution_runs WHERE run_id = ?').get(runId);
       wsEnd.broadcast('run:complete', {
         run_id: runId,
         status: finalStatus,
@@ -518,6 +522,8 @@ export async function executeRun(runId) {
         failed_steps: failedSteps,
         total_steps: mutableSteps.length,
         stop_reason: stopReason,
+        userId: runInfo?.user_sub || null,
+        username: runInfo?.user_sub || null,
       });
     }
 

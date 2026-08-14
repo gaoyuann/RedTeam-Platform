@@ -38,9 +38,14 @@ export default function (db) {
     db.prepare(`INSERT INTO scan_tasks (scan_task_id, target, scan_type, target_class, parameters, created_by, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)`).run(scan_task_id, target, scan_type, targetProfile.target_class, parameters ? JSON.stringify(parameters) : null, created_by || null, now);
     const row = db.prepare('SELECT * FROM scan_tasks WHERE scan_task_id = ?').get(scan_task_id);
-    // WebSocket: notify all clients about new scan
+    // WebSocket: notify all clients about new scan (include operator info)
     const ws = getWsManager();
-    if (ws) ws.broadcast('scan:created', { scanTaskId: scan_task_id, target, scanType: scan_type });
+    if (ws) ws.broadcast('scan:created', {
+      scanTaskId: scan_task_id, target, scanType: scan_type,
+      userId: req.user?.sub || created_by || null,
+      username: req.user?.sub || null,
+      role: req.user?.role || null,
+    });
     res.status(201).json({ status: 'ok', data: row });
   });
 
@@ -91,9 +96,14 @@ export default function (db) {
 
     // Fire and forget — execution happens in background
     executeScan(req.params.scanTaskId).catch(() => {});
-    // WebSocket: notify scan started
+    // WebSocket: notify scan started (include operator info)
     const ws = getWsManager();
-    if (ws) ws.broadcast('scan:started', { scanTaskId: req.params.scanTaskId });
+    if (ws) ws.broadcast('scan:started', {
+      scanTaskId: req.params.scanTaskId,
+      userId: req.user?.sub || null,
+      username: req.user?.sub || null,
+      role: req.user?.role || null,
+    });
     res.status(202).json({ status: 'ok', data: { scan_task_id: req.params.scanTaskId, message: 'Scan execution started' } });
   });
 

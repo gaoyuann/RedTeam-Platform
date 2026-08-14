@@ -21,8 +21,10 @@ public:
   /// Select a playbook by ID and pre-fill the target, for cross-page navigation
   void selectPlaybook(const QString &playbookId, const QString &target);
 
-private slots:
+public slots:
   void onRefreshRuns();
+
+private slots:
   void onRunClicked(int row, int col);
   void onExecute();
   void onAttackCategoryChanged(int id);

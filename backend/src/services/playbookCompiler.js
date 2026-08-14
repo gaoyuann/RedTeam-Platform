@@ -89,8 +89,26 @@ export function compilePlaybook({ steps, target, db }) {
       const argsStr = step.args_template || '';
       const unresolvedVars = argsStr.match(/\{\{[^}]+\}\}/g);
       if (unresolvedVars) {
-        // Filter out <target> which will be resolved at runtime
-        const realUnresolved = unresolvedVars.filter(v => v !== '<target>' && !v.startsWith('{{target'));
+        // Variables resolved at runtime by commandTemplateRenderer + targetAdapters
+        const RUNTIME_RESOLVABLE = new Set([
+          'host', 'port', 'base_url', 'target_url', 'login_url',
+          'dvwa_login_url', 'sqli_url', 'dvwa_sqli_url', 'dvwa_cookie',
+          'wordlist_small', 'wordlist_small_users', 'wordlist_small_passwords',
+          'nuclei_template_dir', 'evidence_dir', 'domain', 'scheme',
+          'target_class', 'username', 'password', 'smb_port',
+          'winrm_port', 'aws_region', 'aws_profile', 's3_bucket',
+          'ad_domain',
+        ]);
+        // Filter out <target>, runtime-resolvable {{var}}, and cross-step evidence refs ({{stepN_...}})
+        // which will be resolved at execution time
+        const realUnresolved = unresolvedVars.filter(v => {
+          if (v === '<target>' || v.startsWith('{{target')) return false;
+          const varName = v.replace(/\{\{|\}\}/g, '');
+          if (RUNTIME_RESOLVABLE.has(varName)) return false;
+          // Cross-step evidence references: {{stepN_name.evidence.data.xxx}}
+          if (/^step\d+_/.test(varName)) return false;
+          return true;
+        });
         if (realUnresolved.length > 0) {
           // If payload_variables are provided, they may resolve some vars
           let payloadVars = {};

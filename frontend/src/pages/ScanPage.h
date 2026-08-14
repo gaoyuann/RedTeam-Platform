@@ -18,9 +18,11 @@ public:
 signals:
   void playbookNavigateRequested(const QString &playbookId);
 
+public slots:
+  void onRefreshTasks();
+
 private slots:
   void onCreateScan();
-  void onRefreshTasks();
   void onTaskClicked(int row, int col);
   void onGeneratePlaybook();
   void onPollStatus();

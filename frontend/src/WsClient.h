@@ -28,14 +28,15 @@ signals:
   void disconnected();
   void connectionError(const QString &error);
 
-  // Domain events
-  void scanCreated(const QJsonObject &data);
-  void scanStarted(const QJsonObject &data);
-  void scanCompleted(const QJsonObject &data);
-  void runStepStart(const QJsonObject &data);
-  void runStepComplete(const QJsonObject &data);
-  void runCompleted(const QJsonObject &data);
-  void containerStatus(const QJsonObject &data);
+  // Domain events — aligned with backend broadcast event names
+  void scanCreated(const QJsonObject &data);      // scan:created
+  void scanStarted(const QJsonObject &data);      // scan:started
+  void scanCompleted(const QJsonObject &data);    // scan:completed
+  void runCreated(const QJsonObject &data);       // run:created
+  void runStarted(const QJsonObject &data);       // run:started
+  void runStepComplete(const QJsonObject &data);  // run:step  (step finished)
+  void runCompleted(const QJsonObject &data);     // run:complete
+  void containerStatus(const QJsonObject &data);  // container:status
 
 private slots:
   void onTextMessageReceived(const QString &message);
