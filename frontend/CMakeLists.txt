@@ -9,7 +9,6 @@ endif()
 
 set(SOURCES
     src/main.cpp
-    src/MainWindow.cpp
     src/SimpleMainWindow.cpp
     src/ApiClient.cpp
     src/WsClient.cpp
@@ -31,7 +30,6 @@ set(SOURCES
 )
 
 set(HEADERS
-    src/MainWindow.h
     src/SimpleMainWindow.h
     src/ApiClient.h
     src/WsClient.h

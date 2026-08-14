@@ -11,6 +11,9 @@
 #include "pages/EvaluatePage.h"
 #include "pages/PayloadPage.h"
 #include "pages/PlaybookPage.h"
+#include "pages/DeployConfigPage.h"
+#include "pages/TopologyPage.h"
+#include "pages/SystemPage.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
@@ -88,7 +91,10 @@ void SimpleMainWindow::setupUI()
       QStringLiteral("载荷库"),
       QStringLiteral("想定预案"),
       QStringLiteral("攻击执行"),
-      QStringLiteral("测试评估")
+      QStringLiteral("测试评估"),
+      QStringLiteral("部署配置"),
+      QStringLiteral("拓扑探测"),
+      QStringLiteral("系统管理")
     });
   } else {
     m_modules = QStringList({
@@ -152,6 +158,16 @@ void SimpleMainWindow::setupUI()
   // Page: Evaluate (测试评估)
   m_stackWidget->addWidget(new EvaluatePage(m_api, m_role, m_username, this));
   pageIdx++;
+
+  // Admin-only pages (from old MainWindow)
+  if (m_role == "admin" || m_role == "teacher") {
+    m_stackWidget->addWidget(new DeployConfigPage(m_api, m_role, m_username, this));
+    pageIdx++;
+    m_stackWidget->addWidget(new TopologyPage(m_api, m_role, m_username, this));
+    pageIdx++;
+    m_stackWidget->addWidget(new SystemPage(m_api, m_role, m_username, this));
+    pageIdx++;
+  }
 
   // Cross-page navigation: ScanPage → ExecutionPage (select playbook)
   connect(m_scanPage, &ScanPage::playbookNavigateRequested, this, [this](const QString &playbookId) {

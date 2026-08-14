@@ -1,4 +1,3 @@
-#include "MainWindow.h"
 #include "SimpleMainWindow.h"
 #include "SplashDialog.h"
 #include "LoginDialog.h"
@@ -248,13 +247,9 @@ int main(int argc, char *argv[])
         QString role = login.role();
         QString username = login.username();
 
-        // Create the appropriate window type for this role
+        // All roles use SimpleMainWindow (includes dashboard, live activity, toast for admin)
         QMainWindow *window = nullptr;
-        if (role == "admin" || role == "teacher") {
-            window = new MainWindow(&api, role, username);
-        } else {
-            window = new SimpleMainWindow(&api, role, username);
-        }
+        window = new SimpleMainWindow(&api, role, username);
 
         // Match splash/login size and position (76% width, 76% height, centered)
         auto *scr = QGuiApplication::primaryScreen();
