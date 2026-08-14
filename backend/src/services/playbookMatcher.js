@@ -22,6 +22,17 @@ const PORT_GROUP_MAP = {
   3306: 'exploit', 5432: 'exploit',  // DB
 };
 
+// Port + target_class → preferred baseline_group (stronger than port-only)
+const PORT_CLASS_GROUP_MAP = {
+  '22:local_ip': 'impact-demonstration',   // SSH to Linux → kylin playbooks
+  '22:linux_host': 'impact-demonstration',
+  '80:local_ip': 'web-vuln-scan',          // Web on Linux → DVWA/web playbooks
+  '8080:local_ip': 'web-vuln-scan',
+  '5080:local_ip': 'web-vuln-scan',
+  '445:windows_ad': 'windows-exploitation', // SMB to AD → Windows playbooks
+  '3389:windows_ad': 'windows-exploitation',
+};
+
 // Severity weight
 const SEVERITY_WEIGHT = { critical: 4, high: 3, medium: 2, low: 1, info: 0.5 };
 
@@ -66,6 +77,11 @@ export function matchPlaybooks(scanResults, targetClass = null) {
         const data = JSON.parse(result.result_data || '{}');
         const port = data.port || data.port_number;
         if (port && PORT_GROUP_MAP[port]) group = PORT_GROUP_MAP[port];
+        // Port + target_class specific override (stronger signal)
+        if (port && targetClass) {
+          const key = `${port}:${targetClass}`;
+          if (PORT_CLASS_GROUP_MAP[key]) group = PORT_CLASS_GROUP_MAP[key];
+        }
       } catch {}
     }
 
@@ -105,6 +121,15 @@ export function matchPlaybooks(scanResults, targetClass = null) {
         } else {
           // Compatible: bonus
           addScore(pb.playbook_id, 1, `target_type match: ${targetClass}`);
+        }
+        // Extra penalty: DVWA-only playbooks recommended for non-DVWA local_ip targets
+        // (e.g. don't recommend golden_dvwa_max_tools for a Linux SSH host)
+        if (targetClass === 'local_ip' && pb.targetTypes.includes('dvwa') && !pb.targetTypes.includes('local_ip')) {
+          addScore(pb.playbook_id, -3, `DVWA-only playbook for non-DVWA local_ip target`);
+        }
+        // Extra bonus: playbooks that explicitly list local_ip for local_ip targets
+        if (targetClass === 'local_ip' && pb.targetTypes.includes('local_ip')) {
+          addScore(pb.playbook_id, 3, `explicit local_ip match`);
         }
       }
     }

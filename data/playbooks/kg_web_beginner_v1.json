@@ -1,0 +1,189 @@
+{
+  "id": "kg_web_beginner_v1",
+  "name": "Web应用渗透测试入门",
+  "description": "本Playbook旨在帮助网络安全初学者掌握Web应用渗透测试的基础流程，包括信息收集、Web扫描和漏洞发现三个阶段，使用真实工具进行实战演练。",
+  "target": "<target>",
+  "author": "RedTeam-Edu KG+LLM 自动生成 (TC-KG-LLM-VERIFY-01)",
+  "difficulty": "beginner",
+  "estimatedTimeMinutes": 60,
+  "rolesAllowed": [
+    "viewer",
+    "operator",
+    "admin",
+    "teacher",
+    "student"
+  ],
+  "steps": [
+    {
+      "id": "step1_nmap",
+      "name": "信息收集 - 网络端口扫描",
+      "toolId": "nmap",
+      "argsTemplate": [
+        "-sV",
+        "-p",
+        "80,8080",
+        "--open",
+        "<target>"
+      ],
+      "description": "使用nmap_scan工具对目标主机进行端口和服务扫描，识别开放端口和运行服务，为后续扫描做准备。",
+      "status": "PENDING",
+      "score": 10,
+      "expectedMitre": [
+        "T1046",
+        "T1595"
+      ],
+      "teachingNote": "强调端口扫描的重要性，讲解常见端口及服务的意义，提醒被测试单位合理控制扫描频率避免被防护设备阻断。",
+      "requiresTeacherReview": true,
+      "kgWrapperRef": "wrapper:nmap_scan",
+      "payload_id": "port-scan"
+    },
+    {
+      "id": "step2_gobuster",
+      "name": "信息收集 - Web目录扫描",
+      "toolId": "gobuster",
+      "argsTemplate": [
+        "dir",
+        "-u",
+        "<target>",
+        "-w",
+        "config/wordlists/common_dirs.txt"
+      ],
+      "description": "使用gobuster_scan工具对目标Web服务器进行目录和文件爆破，发现隐藏的Web资源和入口点。",
+      "status": "PENDING",
+      "score": 10,
+      "expectedMitre": [
+        "T1595.003",
+        "T1595"
+      ],
+      "teachingNote": "讲解目录爆破的原理和常用字典的选择，提醒被测试单位注意爆破过程中的请求频率和目标响应。",
+      "requiresTeacherReview": true,
+      "kgWrapperRef": "wrapper:gobuster_scan",
+      "payload_id": "gobuster"
+    },
+    {
+      "id": "step3_httpx",
+      "name": "Web扫描 - Web技术指纹识别",
+      "toolId": "httpx",
+      "argsTemplate": [
+        "-u",
+        "<target>",
+        "-title",
+        "-status-code"
+      ],
+      "description": "使用httpx_probe工具对目标Web应用进行技术指纹识别，获取Web服务器、框架及中间件信息。",
+      "status": "PENDING",
+      "score": 10,
+      "expectedMitre": [
+        "T1592",
+        "T1595"
+      ],
+      "teachingNote": "讲解指纹识别的作用，如何利用技术信息辅助漏洞分析，提醒被测试单位注意合法授权范围内操作。",
+      "requiresTeacherReview": true,
+      "kgWrapperRef": "wrapper:httpx_probe",
+      "payload_id": "httpx"
+    },
+    {
+      "id": "step4_nikto",
+      "name": "漏洞发现 - Web漏洞扫描",
+      "toolId": "nikto",
+      "argsTemplate": [
+        "-h",
+        "<target>"
+      ],
+      "description": "使用nikto_scan工具对目标Web应用进行漏洞扫描，检测常见的安全漏洞和配置错误。",
+      "status": "PENDING",
+      "score": 10,
+      "expectedMitre": [
+        "T1190",
+        "T1595"
+      ],
+      "teachingNote": "讲解漏洞扫描的基本原理，如何分析扫描结果，强调扫描过程中遵守法律法规和道德规范。",
+      "requiresTeacherReview": true,
+      "kgWrapperRef": "wrapper:nikto_scan",
+      "payload_id": "nikto"
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "step1_completed",
+        "desc": "完成信息收集 - 网络端口扫描",
+        "points": 10,
+        "predicate": {
+          "kind": "step_completed",
+          "stepId": "step1_nmap"
+        }
+      },
+      {
+        "id": "step2_completed",
+        "desc": "完成信息收集 - Web目录扫描",
+        "points": 10,
+        "predicate": {
+          "kind": "step_completed",
+          "stepId": "step2_gobuster"
+        }
+      },
+      {
+        "id": "step3_completed",
+        "desc": "完成Web扫描 - Web技术指纹识别",
+        "points": 10,
+        "predicate": {
+          "kind": "step_completed",
+          "stepId": "step3_httpx"
+        }
+      },
+      {
+        "id": "step4_completed",
+        "desc": "完成漏洞发现 - Web漏洞扫描",
+        "points": 10,
+        "predicate": {
+          "kind": "step_completed",
+          "stepId": "step4_nikto"
+        }
+      }
+    ],
+    "totalPoints": 40
+  },
+  "targetType": [
+    "dvwa",
+    "web"
+  ],
+  "teachingObjective": "掌握Web应用渗透测试的基础流程; 熟悉常用信息收集和扫描工具的使用方法; 理解Web应用常见漏洞及其发现手段; 培养安全合规的渗透测试意识",
+  "attckTactics": [
+    "TA0043",
+    "TA0001"
+  ],
+  "attckTechniques": [
+    "T1046",
+    "T1595.003",
+    "T1190"
+  ],
+  "kgGenerated": true,
+  "kgSource": "TC-KG-INTEGRATE-01",
+  "generatedBy": "LLM+KG",
+  "candidateOnly": true,
+  "requiresTeacherApproval": true,
+  "safetyNotes": [
+    "所有测试必须在合法授权范围内进行，严禁对未授权目标进行攻击。",
+    "控制扫描频率，避免对目标系统造成不可预期的影响。",
+    "测试过程中注意保护个人隐私和目标数据安全。",
+    "测试管理员需全程监督，确保教学环境安全合规。"
+  ],
+  "createdAt": "2026-05-06T11:26:59Z",
+  "dvwa_profile": {
+    "target_type": "dvwa",
+    "host": "localhost",
+    "port": 8080,
+    "base_url": "http://localhost:8080",
+    "login_url": "http://localhost:8080/login.php",
+    "sqli_url": "http://localhost:8080/vulnerabilities/sqli/?id=1&Submit=Submit",
+    "security_level": "low",
+    "requires_cookie": false
+  },
+  "target_class": "dvwa",
+  "notSuitableFor": [
+    "windows_ad",
+    "cloud",
+    "subdomain"
+  ]
+}

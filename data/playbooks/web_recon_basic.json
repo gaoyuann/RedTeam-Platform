@@ -1,0 +1,84 @@
+{
+  "id": "web_recon_basic",
+  "name": "Web Recon Basic",
+  "description": "面向教学的最小 Web 侦察演练：端口扫描 -> 指纹识别 -> 目录枚举",
+  "rolesAllowed": [
+    "viewer",
+    "operator",
+    "admin",
+    "teacher",
+    "student"
+  ],
+  "steps": [
+    {
+      "id": "step1_nmap_fast",
+      "name": "快速端口扫描",
+      "toolId": "nmap",
+      "argsTemplate": [
+        "-F",
+        "<target>"
+      ],
+      "evidence": {
+        "stdoutRegex": "\\bopen\\b"
+      },
+      "score": 30,
+      "payload_id": "port-scan"
+    },
+    {
+      "id": "step2_nmap_service",
+      "name": "服务版本探测",
+      "toolId": "nmap",
+      "argsTemplate": [
+        "-sV",
+        "<target>"
+      ],
+      "evidence": {
+        "stdoutRegex": "\\bService\\b|\\bVERSION\\b|\\bopen\\b"
+      },
+      "score": 30,
+      "payload_id": "port-scan"
+    },
+    {
+      "id": "step3_gobuster_dir",
+      "name": "目录枚举",
+      "toolId": "gobuster",
+      "argsTemplate": [
+        "dir",
+        "-u",
+        "<target>",
+        "-w",
+        "config/wordlists/common_dirs.txt"
+      ],
+      "evidence": {
+        "stdoutRegex": "Status:|Found:"
+      },
+      "score": 40,
+      "payload_id": "gobuster"
+    }
+  ],
+  "targetType": [
+    "web_url",
+    "dvwa"
+  ],
+  "notSuitableFor": [],
+  "baselineGroup": "recon",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "Web 基础侦察，需要目标为 HTTP Web 服务",
+  "applicableTargetType": [
+    "web_url",
+    "dvwa"
+  ],
+  "teachingObjective": "演示 Web 应用基础侦察技术组合",
+  "dvwa_profile": {
+    "target_type": "dvwa",
+    "host": "localhost",
+    "port": 8080,
+    "base_url": "http://localhost:8080",
+    "login_url": "http://localhost:8080/login.php",
+    "sqli_url": "http://localhost:8080/vulnerabilities/sqli/?id=1&Submit=Submit",
+    "security_level": "low",
+    "requires_cookie": false
+  },
+  "target_class": "dvwa",
+  "disableAutoInsert": true
+}

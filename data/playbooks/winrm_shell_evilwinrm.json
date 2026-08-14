@@ -1,0 +1,112 @@
+{
+  "id": "winrm_shell_evilwinrm",
+  "name": "Windows Remote Management Shell with Evil-WinRM",
+  "description": "教学目标：掌握 Evil-WinRM 工具通过 WinRM 协议获取 Windows 远程 Shell 的方法，理解横向移动（T1021.006）和凭据利用（T1078）技术。适合中级红队课程。",
+  "category": "lateral-movement",
+  "difficulty": "intermediate",
+  "estimatedDuration": "5-10 min",
+  "rolesAllowed": [
+    "operator",
+    "admin"
+  ],
+  "mitrePhases": [
+    "Lateral Movement"
+  ],
+  "mitreTechniques": [
+    "T1021.006",
+    "T1078"
+  ],
+  "targetType": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "win_profile": {
+    "username": "Administrator",
+    "password": "200209",
+    "winrm_port": "5985"
+  },
+  "steps": [
+    {
+      "id": "step1_prepare_script",
+      "name": "Prepare Command Script",
+      "description": "创建一个简单的 PowerShell 脚本，用于在目标机器上执行。演示 Evil-WinRM 的脚本上传和执行能力。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "echo 'whoami; hostname; ipconfig' > /tmp/whoami.ps1 && echo 'Script created: /tmp/whoami.ps1'"
+      ],
+      "score": 5,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1059.001"
+      ],
+      "educationalNote": "PowerShell 脚本是 Windows 后渗透中最常用的执行载体，T1059.001 描述了通过 PowerShell 执行命令的技术。"
+    },
+    {
+      "id": "step2_connect_and_execute",
+      "name": "Connect and Execute via Evil-WinRM",
+      "description": "使用 Evil-WinRM 连接到目标 Windows 主机并执行脚本。演示 T1021.006 WinRM 横向移动技术。",
+      "toolId": "evil-winrm",
+      "argsTemplate": [
+        "-i",
+        "{{host}}",
+        "-u",
+        "{{username}}",
+        "-p",
+        "{{password}}",
+        "--port",
+        "{{winrm_port}}"
+      ],
+      "score": 45,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1021.006",
+        "T1078"
+      ],
+      "ruleIds": [
+        "evil-winrm_shell"
+      ],
+      "educationalNote": "WinRM（Windows Remote Management）是微软的远程管理协议，默认运行在 5985（HTTP）和 5986（HTTPS）端口。Evil-WinRM 利用合法的 WinRM 服务进行横向移动，难以被传统安全工具检测。本环境为 Linux 靶机，WinRM 服务不可用，工具会输出连接错误信息，这正是实际渗透测试中遇到目标不可达时的正常情况。防御措施：禁用不必要的 WinRM 服务、限制 WinRM 访问范围、启用 JEA（Just Enough Administration）。 注意：此步骤需要 Windows 靶机环境，教学沙箱中标记为可选（optional）。",
+      "requires_teacher_review": true,
+      "optional": true,
+      "payload_id": "lateral-winrm"
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "script_created",
+        "desc": "成功创建 PowerShell 脚本",
+        "points": 5,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Script created|whoami.ps1"
+        }
+      },
+      {
+        "id": "winrm_connected",
+        "desc": "成功执行 Evil-WinRM 连接尝试（连接成功或收到目标响应/拒绝均算完成）",
+        "points": 45,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Evil-WinRM|WinRM|Connected|shell|Error|Connection|refused|timeout|ECONNREFUSED"
+        }
+      }
+    ]
+  },
+  "notSuitableFor": [
+    "dvwa",
+    "local_ip",
+    "web_url"
+  ],
+  "baselineGroup": "windows-exploitation",
+  "expectedOutputPolicy": "may_be_empty_if_no_match",
+  "emptyOutputExplanation": "evil-winrm 需要目标开放 WinRM (5985/5986) 端口且具有有效凭证；DVWA/Linux 目标不适用",
+  "applicableTargetType": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "teachingObjective": "演示使用 evil-winrm 通过 WinRM 获取 Windows 远程 Shell",
+  "target_class": "windows_ad",
+  "disableAutoInsert": true
+}

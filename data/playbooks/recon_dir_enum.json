@@ -1,0 +1,120 @@
+{
+  "id": "recon_dir_enum",
+  "name": "目录与文件枚举",
+  "description": "教学目标：掌握 Web 目录爆破技术，理解常见隐藏路径、备份文件、管理员页面发现方法，以及状态码过滤的重要性。",
+  "target": "<target>",
+  "author": "Hexstrike-EDU 教学团队",
+  "difficulty": "入门-中级",
+  "estimatedTimeMinutes": 12,
+  "rolesAllowed": [
+    "viewer",
+    "operator",
+    "admin",
+    "teacher",
+    "student"
+  ],
+  "steps": [
+    {
+      "id": "step1_gobuster_course_dict",
+      "name": "使用教学字典枚举 DVWA 路径",
+      "toolId": "gobuster",
+      "description": "使用专为 DVWA 设计的教学字典，发现 /login.php、/admin、/vulnerabilities 等常见路径。注意：DVWA 模拟服务器对未知路径返回 200，需要 -fw 参数强制继续枚举。",
+      "status": "PENDING",
+      "score": 15,
+      "expectedMitre": [
+        "T1083"
+      ],
+      "argsTemplate": [
+        "-u",
+        "<target>",
+        "-w",
+        "config/wordlists/course_web_dirs.txt",
+        "-t",
+        "10",
+        "-q",
+        "-fw"
+      ],
+      "payload_id": "gobuster"
+    },
+    {
+      "id": "step2_gobuster_status_filter",
+      "name": "过滤 403 路径（受保护目录）",
+      "toolId": "gobuster",
+      "description": "使用状态码过滤，重点关注 403（Forbidden）路径，这些是受保护的敏感目录，如 /admin、/backup、/config",
+      "status": "PENDING",
+      "score": 10,
+      "expectedMitre": [
+        "T1083"
+      ],
+      "argsTemplate": [
+        "-u",
+        "<target>",
+        "-w",
+        "config/wordlists/course_web_dirs.txt",
+        "-s",
+        "403",
+        "-t",
+        "10",
+        "-q",
+        "-fw"
+      ],
+      "payload_id": "gobuster"
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "dirs_found",
+        "desc": "发现至少 3 个路径（200/403 状态）",
+        "points": 15,
+        "predicate": {
+          "kind": "finding_type_min",
+          "type": "web_path",
+          "min": 3
+        }
+      },
+      {
+        "id": "admin_panel",
+        "desc": "发现管理员相关路径（如 /admin, /login.php, /config）",
+        "points": 10,
+        "predicate": {
+          "kind": "finding_contains",
+          "type": "web_path",
+          "contains": [
+            "/admin",
+            "/login",
+            "/dashboard",
+            "/wp-admin",
+            "/phpmyadmin"
+          ]
+        }
+      }
+    ]
+  },
+  "targetType": [
+    "web_url",
+    "dvwa"
+  ],
+  "notSuitableFor": [],
+  "baselineGroup": "recon",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "gobuster 目录枚举，需要目标为 HTTP Web 服务",
+  "applicableTargetType": [
+    "web_url",
+    "dvwa"
+  ],
+  "teachingObjective": "演示使用 gobuster 对 DVWA Web 应用进行目录枚举，发现 /admin、/login.php、/vulnerabilities 等关键路径",
+  "dvwa_profile": {
+    "target_type": "dvwa",
+    "host": "localhost",
+    "port": 8080,
+    "base_url": "http://localhost:8080",
+    "login_url": "http://localhost:8080/login.php",
+    "sqli_url": "http://localhost:8080/vulnerabilities/sqli/?id=1&Submit=Submit",
+    "security_level": "low",
+    "requires_cookie": false
+  },
+  "target_class": "dvwa",
+  "_fix_note": "v3.8.1: 修复 gobuster 命令格式（旧版无 dir 子命令），改用教学字典 course_web_dirs.txt，添加 -fw 参数处理 DVWA 通配符响应",
+  "disableAutoInsert": true
+}

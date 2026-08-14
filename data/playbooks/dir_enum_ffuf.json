@@ -1,0 +1,110 @@
+{
+  "id": "dir_enum_ffuf",
+  "name": "目录枚举（ffuf 高速模糊测试）",
+  "description": "教学目标：掌握 ffuf 高性能 Web 目录枚举技术，理解模糊测试（Fuzzing）原理，并通过 ffuf vs gobuster 效率对比，直观感受多线程并发对扫描速度的影响。",
+  "author": "Hexstrike-EDU 教学团队",
+  "difficulty": "入门",
+  "estimatedTimeMinutes": 3,
+  "rolesAllowed": [
+    "viewer",
+    "operator",
+    "admin",
+    "teacher",
+    "student"
+  ],
+  "steps": [
+    {
+      "id": "step1_ffuf_basic_dir",
+      "name": "基础目录枚举（50 线程）",
+      "toolId": "ffuf",
+      "argsTemplate": [
+        "-u",
+        "<target>:5202/FUZZ",
+        "-w",
+        "config/wordlists/common_dirs.txt",
+        "-mc",
+        "200,301,302,403",
+        "-t",
+        "50"
+      ],
+      "description": "使用 ffuf 以 50 线程并发枚举目标的目录和文件。FUZZ 关键字是 ffuf 的占位符，会被 wordlist 中的每一行替换。-mc 参数过滤只显示指定状态码的响应。",
+      "status": "PENDING",
+      "score": 20,
+      "expectedMitre": [
+        "T1595.003",
+        "T1083"
+      ],
+      "payload_id": "ffuf"
+    },
+    {
+      "id": "step2_ffuf_api_fuzz",
+      "name": "API 端点发现",
+      "toolId": "ffuf",
+      "argsTemplate": [
+        "-u",
+        "<target>:3001/api/FUZZ",
+        "-w",
+        "config/wordlists/common_dirs.txt",
+        "-mc",
+        "200,301,302,403,404",
+        "-t",
+        "50"
+      ],
+      "description": "针对 /api/ 路径进行专项枚举，发现后端 API 端点。现代 Web 应用通常将 API 路由集中在 /api/ 前缀下，这是信息收集的重要目标。",
+      "status": "PENDING",
+      "score": 20,
+      "expectedMitre": [
+        "T1592.002",
+        "T1083"
+      ],
+      "payload_id": "ffuf"
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "ffuf_executed",
+        "desc": "成功执行 ffuf 目录枚举",
+        "points": 20,
+        "predicate": {
+          "kind": "exit_code",
+          "value": 0
+        }
+      },
+      {
+        "id": "api_fuzz_executed",
+        "desc": "成功执行 API 端点发现",
+        "points": 20,
+        "predicate": {
+          "kind": "exit_code",
+          "value": 0
+        }
+      }
+    ]
+  },
+  "targetType": [
+    "web_url",
+    "dvwa"
+  ],
+  "notSuitableFor": [],
+  "baselineGroup": "web-vuln-scan",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "ffuf 目录枚举，需要目标为 HTTP Web 服务",
+  "applicableTargetType": [
+    "web_url",
+    "dvwa"
+  ],
+  "teachingObjective": "演示使用 ffuf 对 Web 应用进行目录和路径枚举",
+  "dvwa_profile": {
+    "target_type": "dvwa",
+    "host": "localhost",
+    "port": 8080,
+    "base_url": "http://localhost:8080",
+    "login_url": "http://localhost:8080/login.php",
+    "sqli_url": "http://localhost:8080/vulnerabilities/sqli/?id=1&Submit=Submit",
+    "security_level": "low",
+    "requires_cookie": false
+  },
+  "target_class": "dvwa",
+  "disableAutoInsert": true
+}

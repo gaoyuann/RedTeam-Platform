@@ -1,0 +1,105 @@
+{
+  "id": "web_server_scan_nikto",
+  "name": "Web 服务器漏洞扫描（Nikto）",
+  "description": "教学目标：掌握 Nikto 的基础用法，理解 Web 服务器安全配置缺陷（如缺失安全头、服务器版本泄露）的发现方法，以及规避检测的基本技巧。适合初始访问阶段的 Web 侦察课程。",
+  "target": "<target>",
+  "author": "Hexstrike-EDU 教学团队",
+  "difficulty": "入门-中级",
+  "estimatedTimeMinutes": 8,
+  "rolesAllowed": [
+    "viewer",
+    "operator",
+    "admin",
+    "teacher",
+    "student"
+  ],
+  "steps": [
+    {
+      "id": "step1_nikto_basic",
+      "name": "基础 Web 服务器扫描",
+      "toolId": "nikto",
+      "argsTemplate": [
+        "-h",
+        "<target>",
+        "-maxtime",
+        "60"
+      ],
+      "description": "使用 Nikto 对目标 Web 服务器进行基础扫描，检测安全头缺失、服务器版本泄露、危险文件等常见问题。-maxtime 60 限制最大执行时间为 60 秒。",
+      "status": "PENDING",
+      "score": 20,
+      "expectedMitre": [
+        "T1592.002",
+        "T1595.002"
+      ],
+      "payload_id": "nikto"
+    },
+    {
+      "id": "step2_nikto_evasion",
+      "name": "规避检测扫描",
+      "toolId": "nikto",
+      "argsTemplate": [
+        "-h",
+        "<target>",
+        "-evasion",
+        "1",
+        "-maxtime",
+        "60"
+      ],
+      "description": "使用 -evasion 1（随机 URL 编码）技术规避 WAF 和 IDS 检测，对比基础扫描结果，理解防御绕过的基本原理。",
+      "status": "PENDING",
+      "score": 15,
+      "expectedMitre": [
+        "T1190",
+        "T1595.002"
+      ],
+      "payload_id": "nikto"
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "security_headers_missing",
+        "desc": "发现至少 1 个缺失的安全头（如 X-Frame-Options、X-Content-Type-Options）",
+        "points": 20,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "X-Frame-Options|X-Content-Type|clickjacking"
+        }
+      },
+      {
+        "id": "server_info_leaked",
+        "desc": "发现服务器版本或技术栈信息泄露",
+        "points": 15,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Server:|x-powered-by|Retrieved"
+        }
+      }
+    ]
+  },
+  "targetType": [
+    "web_url",
+    "dvwa"
+  ],
+  "notSuitableFor": [],
+  "baselineGroup": "web-vuln-scan",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "nikto Web 服务器扫描，需要目标为 HTTP Web 服务",
+  "applicableTargetType": [
+    "web_url",
+    "dvwa"
+  ],
+  "teachingObjective": "演示使用 nikto 对 Web 服务器进行漏洞扫描",
+  "dvwa_profile": {
+    "target_type": "dvwa",
+    "host": "localhost",
+    "port": 8080,
+    "base_url": "http://localhost:8080",
+    "login_url": "http://localhost:8080/login.php",
+    "sqli_url": "http://localhost:8080/vulnerabilities/sqli/?id=1&Submit=Submit",
+    "security_level": "low",
+    "requires_cookie": false
+  },
+  "target_class": "dvwa",
+  "disableAutoInsert": true
+}

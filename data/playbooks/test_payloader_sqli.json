@@ -1,0 +1,75 @@
+{
+  "id": "test_payloader_sqli",
+  "name": "Payloader集成测试 - SQLMap错误注入载荷",
+  "description": "验证 Payloader 载荷集成：使用 payload_id 绑定 sqlmap 错误注入载荷，测试编译器的载荷加载、模板渲染及上下文注入功能。",
+  "targetType": [
+    "web_url"
+  ],
+  "target": "http://localhost:8080",
+  "dvwa_profile": {
+    "scheme": "http",
+    "host": "localhost",
+    "port": 8080,
+    "login_url": "http://localhost:8080/login.php",
+    "sqli_url": "http://localhost:8080/vulnerabilities/sqli/?id=1&Submit=Submit"
+  },
+  "steps": [
+    {
+      "id": "step_1",
+      "name": "SQLMap错误注入 - Payloader载荷",
+      "toolId": "sqlmap",
+      "payload_id": "sqli-mysql-basic",
+      "payload_variables": {
+        "host": "localhost",
+        "port": "8080"
+      },
+      "argsTemplate": [
+        "-u",
+        "{{sqli_url}}",
+        "--cookie={{dvwa_cookie}}",
+        "--batch"
+      ],
+      "expectedMitre": [
+        "T1190"
+      ],
+      "score": 20
+    },
+    {
+      "id": "step_2",
+      "name": "SQLMap错误注入高级绕过 - Payloader载荷",
+      "toolId": "sqlmap",
+      "payload_id": "sqli-error-based",
+      "payload_variables": {
+        "host": "localhost",
+        "port": "8080"
+      },
+      "argsTemplate": [
+        "-u",
+        "{{sqli_url}}",
+        "--cookie={{dvwa_cookie}}",
+        "--tamper=space2comment",
+        "--level=3"
+      ],
+      "expectedMitre": [
+        "T1190"
+      ],
+      "score": 25
+    },
+    {
+      "id": "step_3",
+      "name": "Nmap基础扫描 (无载荷，原有逻辑)",
+      "toolId": "nmap",
+      "argsTemplate": [
+        "-sV",
+        "-p",
+        "80,443",
+        "{{host}}"
+      ],
+      "expectedMitre": [
+        "T1046"
+      ],
+      "score": 10,
+      "payload_id": "port-scan"
+    }
+  ]
+}

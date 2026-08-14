@@ -1,0 +1,108 @@
+{
+  "id": "recon_web_fingerprint",
+  "name": "Web 技术栈与指纹识别",
+  "description": "教学目标：学会使用指纹识别工具快速判断目标网站使用的 CMS、框架、服务器、JavaScript 库等技术栈，为后续漏洞挖掘提供情报。",
+  "target": "<target>",
+  "author": "Hexstrike-EDU 教学团队",
+  "difficulty": "入门",
+  "estimatedTimeMinutes": 8,
+  "rolesAllowed": [
+    "viewer",
+    "operator",
+    "admin",
+    "teacher",
+    "student"
+  ],
+  "steps": [
+    {
+      "id": "step1_whatweb_basic",
+      "name": "基本指纹扫描",
+      "toolId": "whatweb",
+      "argsTemplate": [
+        "<target>",
+        "--log-brief=-"
+      ],
+      "description": "默认模式扫描，识别服务器、CMS、框架等",
+      "status": "PENDING",
+      "score": 10,
+      "expectedMitre": [
+        "T1592.002"
+      ],
+      "payload_id": "whatweb"
+    },
+    {
+      "id": "step2_whatweb_aggressive",
+      "name": "激进模式指纹识别",
+      "toolId": "whatweb",
+      "argsTemplate": [
+        "<target>",
+        "-a",
+        "3",
+        "--no-errors"
+      ],
+      "description": "使用 aggression=3 模式，更深入探测插件和隐藏技术",
+      "status": "PENDING",
+      "score": 15,
+      "expectedMitre": [
+        "T1592.002",
+        "T1595"
+      ],
+      "payload_id": "whatweb"
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "tech_detected",
+        "desc": "识别至少 3 种 Web 技术/组件",
+        "points": 15,
+        "predicate": {
+          "kind": "finding_type_min",
+          "type": "web_fingerprint",
+          "min": 3
+        }
+      },
+      {
+        "id": "cms_framework",
+        "desc": "识别出 CMS 或 Web 框架（如 WordPress、Django）",
+        "points": 10,
+        "predicate": {
+          "kind": "finding_contains",
+          "type": "web_fingerprint",
+          "contains": [
+            "WordPress",
+            "Drupal",
+            "Joomla",
+            "Django",
+            "Laravel"
+          ]
+        }
+      }
+    ]
+  },
+  "targetType": [
+    "web_url",
+    "dvwa"
+  ],
+  "notSuitableFor": [],
+  "baselineGroup": "recon",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "whatweb 指纹识别，需要目标为 HTTP Web 服务",
+  "applicableTargetType": [
+    "web_url",
+    "dvwa"
+  ],
+  "teachingObjective": "演示使用 whatweb 对 Web 应用进行技术栈指纹识别",
+  "dvwa_profile": {
+    "target_type": "dvwa",
+    "host": "localhost",
+    "port": 8080,
+    "base_url": "http://localhost:8080",
+    "login_url": "http://localhost:8080/login.php",
+    "sqli_url": "http://localhost:8080/vulnerabilities/sqli/?id=1&Submit=Submit",
+    "security_level": "low",
+    "requires_cookie": false
+  },
+  "target_class": "dvwa",
+  "disableAutoInsert": true
+}

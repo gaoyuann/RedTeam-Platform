@@ -28,6 +28,13 @@ export default function (db) {
     if (!row) return res.status(404).json({ status: 'error', error: { message: 'Run not found' } });
     row.steps = db.prepare('SELECT * FROM execution_steps WHERE run_id = ? ORDER BY step_index').all(req.params.runId);
     row.evidence = db.prepare('SELECT * FROM evidence_records WHERE run_id = ? ORDER BY recorded_at').all(req.params.runId);
+    // Enrich with playbook name for display
+    if (row.playbook_id) {
+      const pb = db.prepare('SELECT name FROM playbooks WHERE playbook_id = ?').get(row.playbook_id);
+      row.playbook_name = pb ? pb.name : row.playbook_id;
+    } else {
+      row.playbook_name = '';
+    }
     res.json({ status: 'ok', data: row });
   });
 

@@ -1,0 +1,298 @@
+{
+  "id": "golden_dvwa_max_tools",
+  "name": "DVWA 黄金杀伤链 (10工具饱和打击版 v2)",
+  "description": "结合定制轻量字典，调用 10 款全武器库进行饱和式打击。完美点亮 MITRE 攻击图谱并触达 100 分满分。",
+  "target": "172.17.0.3",
+  "rolesAllowed": [
+    "admin",
+    "teacher",
+    "student"
+  ],
+  "tags": [
+    "web",
+    "demo",
+    "recon",
+    "exploit",
+    "full_chain"
+  ],
+  "steps": [
+    {
+      "id": "step_1_nmap",
+      "name": "基础网络侦察",
+      "toolId": "nmap",
+      "argsTemplate": [
+        "-p",
+        "80,22",
+        "-sV",
+        "<target>"
+      ],
+      "description": "扫描目标开放的端口与服务版本。",
+      "status": "PENDING",
+      "score": 10,
+      "expectedMitre": [
+        "T1595",
+        "T1046"
+      ],
+      "payload_id": "port-scan"
+    },
+    {
+      "id": "step_2_whatweb",
+      "name": "深度指纹识别",
+      "toolId": "whatweb",
+      "argsTemplate": [
+        "<target>",
+        "--log-brief=-"
+      ],
+      "description": "提取 Web 框架、PHP 版本和中间件信息。",
+      "status": "PENDING",
+      "score": 10,
+      "expectedMitre": [
+        "T1592"
+      ],
+      "payload_id": "whatweb"
+    },
+    {
+      "id": "step_3_nikto",
+      "name": "Web 漏洞初筛",
+      "toolId": "nikto",
+      "argsTemplate": [
+        "-h",
+        "<target>",
+        "-maxtime",
+        "60s"
+      ],
+      "description": "扫描 Web 服务器的已知配置缺陷。",
+      "status": "PENDING",
+      "score": 10,
+      "expectedMitre": [
+        "T1592",
+        "T1190"
+      ],
+      "payload_id": "nikto"
+    },
+    {
+      "id": "step_4_gobuster",
+      "name": "目录暴力枚举",
+      "toolId": "gobuster",
+      "argsTemplate": [
+        "dir",
+        "-u",
+        "<target>",
+        "-w",
+        "config/wordlists/common_dirs.txt",
+        "-q"
+      ],
+      "description": "利用自定义字典发现 DVWA 隐藏的敏感路径。",
+      "status": "PENDING",
+      "score": 15,
+      "expectedMitre": [
+        "T1083"
+      ],
+      "payload_id": "gobuster"
+    },
+    {
+      "id": "step_5_curl_login",
+      "name": "获取有效登录会话",
+      "toolId": "curl",
+      "argsTemplate": [
+        "-s",
+        "-c",
+        "/tmp/dvwa_cookies.txt",
+        "-b",
+        "/tmp/dvwa_cookies.txt",
+        "--data",
+        "username=admin&password=password&Login=Login",
+        "<target>/login.php"
+      ],
+      "description": "使用默认凭据登录 DVWA，获取有效 session cookie。",
+      "status": "PENDING",
+      "score": 10,
+      "expectedMitre": [
+        "T1078"
+      ]
+    },
+    {
+      "id": "step_6_hydra",
+      "name": "凭据暴力破解",
+      "toolId": "hydra",
+      "argsTemplate": [
+        "-l",
+        "admin",
+        "-P",
+        "config/wordlists/common_passwords.txt",
+        "-t",
+        "2",
+        "-f",
+        "<target>",
+        "http-post-form",
+        "/login.php:username=^USER^&password=^PASS^&Login=Login:S=index.php"
+      ],
+      "description": "对 DVWA 登录表单发起暴力攻击。",
+      "status": "PENDING",
+      "score": 15,
+      "expectedMitre": [
+        "T1110"
+      ],
+      "requires_teacher_review": true,
+      "payload_id": "auth-brute"
+    },
+    {
+      "id": "step_7_sqlmap",
+      "name": "SQL 注入探测",
+      "toolId": "sqlmap",
+      "argsTemplate": [
+        "-u",
+        "<target>/vulnerabilities/sqli/?id=1&Submit=Submit",
+        "--cookie",
+        "security=low; PHPSESSID=dvwa_sess",
+        "--batch",
+        "--level",
+        "1",
+        "--risk",
+        "1"
+      ],
+      "description": "自动化测试 SQL 注入漏洞。",
+      "status": "PENDING",
+      "score": 10,
+      "expectedMitre": [
+        "T1190"
+      ],
+      "payload_id": "sqli-blind"
+    },
+    {
+      "id": "step_8_ffuf",
+      "name": "高级模糊测试",
+      "toolId": "ffuf",
+      "argsTemplate": [
+        "-u",
+        "<target>/FUZZ",
+        "-w",
+        "config/wordlists/common_dirs.txt"
+      ],
+      "description": "并发探测可能存在的未授权访问路径。如果 ffuf 未安装则跳过。",
+      "status": "PENDING",
+      "score": 5,
+      "expectedMitre": [
+        "T1083"
+      ],
+      "payload_id": "ffuf"
+    },
+    {
+      "id": "step_9_arjun",
+      "name": "隐藏参数发现",
+      "toolId": "arjun",
+      "argsTemplate": [
+        "-u",
+        "<target>/login.php"
+      ],
+      "description": "针对登录页面进行 HTTP 参数挖掘。如果 arjun 未安装则跳过。",
+      "status": "PENDING",
+      "score": 5,
+      "expectedMitre": [
+        "T1592"
+      ],
+      "payload_id": "arjun"
+    },
+    {
+      "id": "step_10_nuclei",
+      "name": "终极一击：高级绕过",
+      "toolId": "nuclei",
+      "argsTemplate": [
+        "-u",
+        "<target>",
+        "-id",
+        "dvwa-default-login",
+        "-timeout",
+        "15"
+      ],
+      "description": "利用高级模板直接获取管理员最高权限凭据。",
+      "status": "PENDING",
+      "score": 10,
+      "expectedMitre": [
+        "T1110",
+        "T1078"
+      ],
+      "payload_id": "nuclei"
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "port_found",
+        "desc": "基础侦察：发现目标开放端口",
+        "points": 20,
+        "predicate": {
+          "kind": "finding_type_min",
+          "type": "open_port",
+          "min": 1
+        }
+      },
+      {
+        "id": "fingerprint_found",
+        "desc": "指纹探测：成功提取 Web 架构信息",
+        "points": 20,
+        "predicate": {
+          "kind": "finding_type_min",
+          "type": "service_version",
+          "min": 1
+        }
+      },
+      {
+        "id": "dir_found",
+        "desc": "资产发现：挖掘出隐藏目录或 API",
+        "points": 20,
+        "predicate": {
+          "kind": "finding_type_min",
+          "type": "web_path",
+          "min": 1
+        }
+      },
+      {
+        "id": "vuln_found",
+        "desc": "漏洞扫描：确认存在安全漏洞",
+        "points": 20,
+        "predicate": {
+          "kind": "finding_type_min",
+          "type": "vulnerability",
+          "min": 1
+        }
+      },
+      {
+        "id": "cred_found",
+        "desc": "边界突破：成功窃取管理员凭据",
+        "points": 20,
+        "predicate": {
+          "kind": "finding_type_min",
+          "type": "compromised_credential",
+          "min": 1
+        }
+      }
+    ]
+  },
+  "targetType": [
+    "dvwa"
+  ],
+  "notSuitableFor": [
+    "domain",
+    "ad_domain",
+    "windows_host"
+  ],
+  "baselineGroup": "web-vuln-scan",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "专为 DVWA 靶机设计的综合攻击演示",
+  "applicableTargetType": [
+    "dvwa"
+  ],
+  "teachingObjective": "DVWA 靶机综合攻击演示，覆盖最多工具种类",
+  "dvwa_profile": {
+    "target_type": "dvwa",
+    "host": "localhost",
+    "port": 8080,
+    "base_url": "http://localhost:8080",
+    "login_url": "http://localhost:8080/login.php",
+    "sqli_url": "http://localhost:8080/vulnerabilities/sqli/?id=1&Submit=Submit",
+    "security_level": "low",
+    "requires_cookie": false
+  },
+  "target_class": "dvwa"
+}

@@ -1,0 +1,115 @@
+{
+  "id": "vuln_template_nuclei",
+  "name": "漏洞模板扫描（Nuclei）",
+  "description": "教学目标：掌握 Nuclei 基于 YAML 模板的漏洞扫描方法，理解安全配置缺失（如缺失 HSTS、X-Frame-Options）和已知 CVE 的自动化检测原理，体验从侦察到漏洞发现的完整链路。",
+  "target": "<target>",
+  "author": "Hexstrike-EDU 教学团队",
+  "difficulty": "入门-中级",
+  "estimatedTimeMinutes": 5,
+  "rolesAllowed": [
+    "viewer",
+    "operator",
+    "admin",
+    "teacher",
+    "student"
+  ],
+  "steps": [
+    {
+      "id": "step1_nuclei_security_headers",
+      "name": "HTTP 安全响应头缺失检测",
+      "toolId": "nuclei",
+      "argsTemplate": [
+        "-u",
+        "<target>",
+        "-id",
+        "http-missing-security-headers",
+        "-nm",
+        "-no-color",
+        "-no-interactsh",
+        "-duc",
+        "-timeout",
+        "5"
+      ],
+      "description": "使用 Nuclei 的 http-missing-security-headers 模板检测目标缺失的安全响应头（HSTS、X-Frame-Options、CSP、Referrer-Policy 等）。-j 参数启用 JSONL 结构化输出；-no-interactsh 禁用 OOB 回调；-duc 禁用更新检查，大幅加快启动速度。",
+      "status": "PENDING",
+      "score": 20,
+      "expectedMitre": [
+        "T1595.002",
+        "T1592.002"
+      ],
+      "payload_id": "nuclei"
+    },
+    {
+      "id": "step2_nuclei_exposure",
+      "name": "敏感信息暴露检测",
+      "toolId": "nuclei",
+      "argsTemplate": [
+        "-u",
+        "<target>",
+        "-tags",
+        "exposure,config",
+        "-nm",
+        "-no-color",
+        "-no-interactsh",
+        "-duc",
+        "-timeout",
+        "5"
+      ],
+      "description": "使用 Nuclei 内置 exposure/config 标签扫描配置文件暴露（不依赖本地模板路径）",
+      "status": "PENDING",
+      "score": 25,
+      "expectedMitre": [
+        "T1190",
+        "T1595.002"
+      ],
+      "payload_id": "nuclei"
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "security_headers_missing",
+        "desc": "发现至少 1 个缺失的安全响应头（如 HSTS、X-Frame-Options 等）",
+        "points": 20,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "http-missing-security-headers|matcher-name|strict-transport-security|x-frame-options"
+        }
+      },
+      {
+        "id": "exposure_scan_executed",
+        "desc": "成功执行敏感信息暴露扫描",
+        "points": 25,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "template-id|Templates loaded|Executing|Targets loaded"
+        }
+      }
+    ]
+  },
+  "targetType": [
+    "web_url",
+    "dvwa"
+  ],
+  "notSuitableFor": [],
+  "baselineGroup": "web-vuln-scan",
+  "expectedOutputPolicy": "may_be_empty_if_no_match",
+  "emptyOutputExplanation": "nuclei 基于模板匹配漏洞，若当前模板与目标漏洞不匹配则输出为空；DVWA 需要专用教学模板才能产生有效输出，此为预期行为",
+  "applicableTargetType": [
+    "web_url",
+    "dvwa"
+  ],
+  "teachingObjective": "演示使用 nuclei 模板引擎对 Web 应用进行漏洞扫描",
+  "dvwa_profile": {
+    "target_type": "dvwa",
+    "host": "localhost",
+    "port": 8080,
+    "base_url": "http://localhost:8080",
+    "login_url": "http://localhost:8080/login.php",
+    "sqli_url": "http://localhost:8080/vulnerabilities/sqli/?id=1&Submit=Submit",
+    "security_level": "low",
+    "requires_cookie": false
+  },
+  "target_class": "dvwa",
+  "disableAutoInsert": true
+}

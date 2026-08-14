@@ -32,6 +32,7 @@ private:
   void setupUI();
   void loadPlaybooks();
   void loadPlaybooksByGroup(const QStringList &groups);
+  void loadRunDetails(const QString &runId);
 
   ApiClient *m_api;
   QComboBox *m_playbookCombo;
@@ -65,6 +66,7 @@ private:
 
   // Real-time polling for running executions
   QString m_runningRunId;       // currently running run (auto-highlighted)
+  QString m_runningPlaybookId;  // playbook of the running run
   QTimer *m_pollTimer;          // polls every 2s while a run is RUNNING
 
   // Cached playbook data

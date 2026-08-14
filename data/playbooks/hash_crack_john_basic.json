@@ -1,0 +1,121 @@
+{
+  "id": "hash_crack_john_basic",
+  "name": "Offline Hash Cracking (Dictionary Attack)",
+  "description": "教学目标：掌握字典攻击破解 MD5 哈希的基本方法，理解凭据访问（T1110.002 Password Cracking）技术。使用 Python 脚本演示字典破解流程。",
+  "category": "credential-access",
+  "difficulty": "beginner",
+  "estimatedDuration": "5-10 min",
+  "rolesAllowed": [
+    "viewer",
+    "operator",
+    "admin",
+    "teacher",
+    "student"
+  ],
+  "mitrePhases": [
+    "Credential Access"
+  ],
+  "mitreTechniques": [
+    "T1110.002",
+    "T1552"
+  ],
+  "targetType": [
+    "local_file",
+    "any"
+  ],
+  "steps": [
+    {
+      "id": "step1_prepare_hash_file",
+      "name": "Prepare Hash File",
+      "description": "创建包含待破解哈希的文件。本例使用 MD5 哈希，对应密码为 'password'（5f4dcc3b5aa765d61d8327deb882cf99）。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "echo 'admin:5f4dcc3b5aa765d61d8327deb882cf99' > /tmp/hashes.txt && echo 'Hash file created: /tmp/hashes.txt' && cat /tmp/hashes.txt"
+      ],
+      "score": 5,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1552"
+      ],
+      "educationalNote": "哈希文件通常来源于数据库泄露、SAM 文件导出或 NTDS.dit 提取。MD5 是弱哈希算法，不应用于密码存储。"
+    },
+    {
+      "id": "step2_crack_hash",
+      "name": "Dictionary Attack with Python",
+      "description": "使用 Python 脚本加载字典文件，对 MD5 哈希进行字典攻击，演示 T1110.002 Password Cracking 技术。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "python3 -c \"\nimport hashlib, os, sys\nwith open('/tmp/hashes.txt') as f:\n    line = f.read().strip()\n    user, target = line.split(':', 1)\n# 尝试多个字典路径\nwordlist_paths = [\n    'config/wordlists/common_passwords.txt',\n    '/app/config/wordlists/common_passwords.txt',\n    os.path.join(os.path.dirname(os.path.abspath('.')), 'config/wordlists/common_passwords.txt')\n]\nwordlist = None\nfor p in wordlist_paths:\n    if os.path.exists(p):\n        wordlist = p\n        break\nif not wordlist:\n    # 内置常用密码作为 fallback\n    words = ['password', '123456', 'admin', 'letmein', 'qwerty', 'password123']\n    cracked = next((w for w in words if hashlib.md5(w.encode()).hexdigest() == target), None)\nelse:\n    cracked = None\n    with open(wordlist) as f:\n        for w in f:\n            w = w.strip()\n            if hashlib.md5(w.encode()).hexdigest() == target:\n                cracked = w\n                break\nif cracked:\n    print(f'Cracked: {user}:{cracked}')\n    print(f'Status: Cracked — password found = {cracked}')\nelse:\n    print('Status: Exhausted — password not in dictionary')\n\""
+      ],
+      "score": 40,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1110.002"
+      ],
+      "ruleIds": [
+        "john_hash_cracked"
+      ],
+      "educationalNote": "字典攻击（Dictionary Attack）是密码破解最常用的方法。脚本遍历字典中的每个单词，计算其 MD5 哈希并与目标比对。防御措施：使用 bcrypt/scrypt/Argon2 等强哈希算法，加盐（Salt）防止彩虹表攻击。"
+    },
+    {
+      "id": "step3_show_cracked",
+      "name": "Show Cracked Passwords",
+      "description": "显示破解出的密码，验证攻击成功。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "python3 -c \"\nimport hashlib, os\nwith open('/tmp/hashes.txt') as f:\n    user, target = f.read().strip().split(':', 1)\nwords = ['password', '123456', 'admin', 'letmein', 'qwerty', 'password123']\nwordlist_paths = ['config/wordlists/common_passwords.txt', '/app/config/wordlists/common_passwords.txt']\nfor p in wordlist_paths:\n    if os.path.exists(p):\n        with open(p) as f:\n            words = [w.strip() for w in f]\n        break\nfor w in words:\n    if hashlib.md5(w.encode()).hexdigest() == target:\n        print(f'{user}:{w}')\n        print('1 password hash cracked, 0 left')\n        break\n\""
+      ],
+      "score": 10,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1110.002"
+      ],
+      "educationalNote": "成功破解哈希后，攻击者获得了明文凭据，可用于横向移动或权限提升。这也说明了为什么不应使用弱密码或弱哈希算法存储凭据。"
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "hash_file_created",
+        "desc": "成功创建哈希文件",
+        "points": 5,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Hash file created|hashes.txt"
+        }
+      },
+      {
+        "id": "hash_cracked",
+        "desc": "成功破解 MD5 哈希，找到明文密码",
+        "points": 40,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Cracked|password found"
+        }
+      },
+      {
+        "id": "result_shown",
+        "desc": "成功显示破解结果",
+        "points": 10,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "admin|password|1 password hash cracked"
+        }
+      }
+    ]
+  },
+  "notSuitableFor": [],
+  "baselineGroup": "post-exploitation",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "字典破解本地哈希文件，不依赖网络目标",
+  "applicableTargetType": [
+    "local_file",
+    "any"
+  ],
+  "teachingObjective": "演示使用字典攻击破解 MD5 哈希",
+  "target_class": "local_hash",
+  "disableAutoInsert": true
+}

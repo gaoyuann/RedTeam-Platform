@@ -325,17 +325,20 @@ void ExecutionPage::onExecute() {
   QJsonObject body;
   body["playbook_id"] = playbookId;
   body["target"] = target;
-  m_api->post("/api/runs", body, 5000, [this](const QJsonObject &res) {
+  m_api->post("/api/runs", body, 5000, [this, playbookId](const QJsonObject &res) {
     if (res["status"].toString() != "ok") return;
     QString runId = res["data"].toObject()["run_id"].toString();
 
     QJsonObject empty;
-    m_api->post("/api/runs/" + runId + "/execute", empty, 5000, [this, runId](const QJsonObject &) {
+    m_api->post("/api/runs/" + runId + "/execute", empty, 5000, [this, runId, playbookId](const QJsonObject &) {
       m_targetInput->clear();
       // Track this run for real-time polling + auto-highlight
       m_runningRunId = runId;
+      m_runningPlaybookId = playbookId;
       m_pollTimer->start();
-      // Refresh and auto-select the new run
+      // Immediately load this run's details (don't wait for full refresh)
+      loadRunDetails(runId);
+      // Refresh run list in background
       onRefreshRuns();
     });
   });
@@ -390,6 +393,11 @@ void ExecutionPage::onRunClicked(int row, int) {
   auto *runItem = m_runTable->item(row, 0);
   if (!runItem) return;
   QString runId = runItem->text();
+  loadRunDetails(runId);
+}
+
+// ── Load run details by ID (shared by onRunClicked and onExecute) ────
+void ExecutionPage::loadRunDetails(const QString &runId) {
   m_api->get("/api/runs/" + runId, 5000, [this, runId](const QJsonObject &res) {
     if (res["status"].toString() != "ok") return;
     auto d = res["data"].toObject();
@@ -403,8 +411,12 @@ void ExecutionPage::onRunClicked(int row, int) {
     else if (statusVal == "COMPLETED") statusVal = "已完成";
     else if (statusVal == "FAILED") statusVal = "失败";
     else if (statusVal == "ABORTED") statusVal = "已中止";
+    // Show playbook name (not just ID) in status line
+    QString pbId = d["playbook_id"].toString();
+    QString pbName = d["playbook_name"].toString();
+    if (pbName.isEmpty()) pbName = pbId;
     QString statusText = QString("执行: %1 | 预案: %2 | 状态: %3 | 引擎: %4")
-        .arg(d["run_id"].toString(), d["playbook_id"].toString(), statusVal,
+        .arg(d["run_id"].toString(), pbName, statusVal,
              engineType.isEmpty() ? "机械" : engineType);
     if (!stopReason.isEmpty()) {
       statusText += " | 停止原因: " + stopReason;
@@ -438,7 +450,7 @@ void ExecutionPage::onRunClicked(int row, int) {
       m_stepTable->setItem(i, 3, new QTableWidgetItem(s["success"].toInt() ? "✓ 成功" : "✗ 失败"));
       m_stepTable->setItem(i, 4, new QTableWidgetItem(s["notes"].toString().left(500)));
 
-      // Column 5: Payload — extract from evidence_data JSON
+      // Column 5: Payload — extract from evidence_data JSON, or show tool+args as fallback
       QString payloadDisplay = "-";
       if (evidenceByStep.contains(stepIdx)) {
         auto evObj = evidenceByStep.value(stepIdx);
@@ -472,9 +484,24 @@ void ExecutionPage::onRunClicked(int row, int) {
           }
         }
       }
+      // Fallback: show tool + truncated args as payload info
+      if (payloadDisplay == "-") {
+        QString toolId = s["tool_id"].toString();
+        QString argsStr = s["args"].toString();
+        if (!toolId.isEmpty()) {
+          payloadDisplay = toolId;
+          if (!argsStr.isEmpty()) {
+            payloadDisplay += " " + argsStr.left(30);
+            if (argsStr.length() > 30) payloadDisplay += "...";
+          }
+          hasPayloadBindings = true;
+          payloadLines << QString("步骤 %1 [%2] → 命令: %3 %4")
+              .arg(stepIdx).arg(toolId).arg(toolId).arg(argsStr.left(80));
+        }
+      }
       m_stepTable->setItem(i, 5, new QTableWidgetItem(payloadDisplay));
 
-      // Column 6: ReAct thought summary
+      // Column 6: ReAct thought summary, or step description as fallback
       QString thought = s["react_thought"].toString();
       if (!thought.isEmpty()) {
         hasReactThoughts = true;
@@ -488,7 +515,18 @@ void ExecutionPage::onRunClicked(int row, int) {
         }
         reactLines << "";
       } else {
-        m_stepTable->setItem(i, 6, new QTableWidgetItem("-"));
+        // Fallback: show step description as "reasoning"
+        QString stepDesc = s["description"].toString();
+        if (stepDesc.isEmpty()) stepDesc = s["notes"].toString().left(100);
+        if (!stepDesc.isEmpty()) {
+          hasReactThoughts = true;
+          m_stepTable->setItem(i, 6, new QTableWidgetItem(stepDesc.left(100) + (stepDesc.length() > 100 ? "..." : "")));
+          reactLines << QString("━━ 步骤 %1 [%2] ━━").arg(stepIdx).arg(s["tool_id"].toString());
+          reactLines << "  📋 " + stepDesc.left(300);
+          reactLines << "";
+        } else {
+          m_stepTable->setItem(i, 6, new QTableWidgetItem("-"));
+        }
       }
     }
     m_stepTable->resizeColumnsToContents();
@@ -597,17 +635,11 @@ void ExecutionPage::onPollRunning() {
     auto d = res["data"].toObject();
     QString status = d["status"].toString();
 
-    // Update step table in-place with latest data
-    auto steps = d["steps"].toArray();
-    if (steps.size() > 0 && m_stepTable->rowCount() > 0) {
-      for (int i = 0; i < steps.size() && i < m_stepTable->rowCount(); i++) {
-        auto s = steps[i].toObject();
-        m_stepTable->setItem(i, 3, new QTableWidgetItem(s["success"].toInt() ? "✓ 成功" : "✗ 失败"));
-        m_stepTable->setItem(i, 4, new QTableWidgetItem(s["notes"].toString().left(500)));
-      }
-    }
+    // Full reload of run details to keep step table, evidence, etc. in sync
+    loadRunDetails(m_runningRunId);
 
     // Update status label with progress
+    auto steps = d["steps"].toArray();
     int done = 0, total = steps.size();
     for (const auto &s : steps) {
       if (s.toObject()["success"].toInt() == 1 || s.toObject()["success"].toInt() == 0) done++;
@@ -619,13 +651,20 @@ void ExecutionPage::onPollRunning() {
     else if (status == "FAILED") statusCn = "失败";
     else if (status == "ABORTED") statusCn = "已中止";
     else statusCn = status;
-    m_statusLabel->setText(m_statusLabel->text().split(" | ").first() +
-      QString(" | 状态: %1 (%2/%3步)").arg(statusCn).arg(done).arg(total));
+
+    // Show playbook name in status
+    QString pbName = d["playbook_name"].toString();
+    if (pbName.isEmpty()) pbName = d["playbook_id"].toString();
+    m_statusLabel->setText(QString("执行: %1 | 预案: %2 | 状态: %3 (%4/%5步)")
+        .arg(m_runningRunId, pbName, statusCn)
+        .arg(done).arg(total));
+    m_statusLabel->setStyleSheet(Theme::StatusInfoStyle);
 
     // Terminal state — stop polling
     if (status != "RUNNING" && status != "PENDING") {
       m_pollTimer->stop();
       m_runningRunId.clear();
+      m_runningPlaybookId.clear();
       // Full refresh to update final state
       onRefreshRuns();
     }

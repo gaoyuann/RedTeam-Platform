@@ -1,0 +1,109 @@
+{
+  "id": "winrm_local_recon",
+  "name": "Windows Remote Management - Local System & User Discovery",
+  "description": "教学与测试目的：在成功建立远程 WinRM 连接后，自动收集靶机上的本地系统基本配置信息、补丁安装情况、本地用户账号以及管理员组成员，演示 MITRE ATT&CK 的发现（Discovery）战术阶段。",
+  "category": "lateral-movement",
+  "difficulty": "easy",
+  "estimatedDuration": "5 min",
+  "rolesAllowed": [
+    "operator",
+    "admin"
+  ],
+  "mitrePhases": [
+    "Discovery"
+  ],
+  "mitreTechniques": [
+    "T1082",
+    "T1087.001",
+    "T1069.001"
+  ],
+  "targetType": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "win_profile": {
+    "username": "Administrator",
+    "password": "200209",
+    "winrm_port": "5985"
+  },
+  "steps": [
+    {
+      "id": "step1_prepare_recon_script",
+      "name": "Prepare Recon Script",
+      "description": "在本地生成一个收集主机信息、本地用户以及本地管理员组的探测 PowerShell 脚本。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "echo 'systeminfo | findstr /B /C:\"OS Name\" /C:\"OS Version\"; net user; net localgroup administrators' > /tmp/enum_info.ps1 && echo 'Script created: /tmp/enum_info.ps1'"
+      ],
+      "score": 10,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1059.001"
+      ]
+    },
+    {
+      "id": "step2_execute_remote_recon",
+      "name": "Execute Remote Recon",
+      "description": "通过 Evil-WinRM 上传并运行探测脚本，获取靶机系统与账号配置的详细信息。",
+      "toolId": "evil-winrm",
+      "argsTemplate": [
+        "-i",
+        "{{host}}",
+        "-u",
+        "{{username}}",
+        "-p",
+        "{{password}}",
+        "--port",
+        "{{winrm_port}}",
+        "-s",
+        "/tmp/enum_info.ps1"
+      ],
+      "score": 90,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1082",
+        "T1087.001",
+        "T1069.001"
+      ],
+      "payload_id": "lateral-winrm"
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "recon_script_created",
+        "desc": "成功创建本地信息收集脚本",
+        "points": 10,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Script created|enum_info.ps1"
+        }
+      },
+      {
+        "id": "recon_executed",
+        "desc": "成功远程收集靶机系统及账户信息",
+        "points": 90,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Connected successfully|OS Name|net user|administrators|Administrator"
+        }
+      }
+    ]
+  },
+  "notSuitableFor": [
+    "dvwa",
+    "local_ip",
+    "web_url"
+  ],
+  "baselineGroup": "windows-exploitation",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "信息收集在远程靶机中运行；需要 Windows 靶标开启 5985 端口且具备 Administrator 账号登录权限",
+  "applicableTargetType": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "teachingObjective": "演示使用 WinRM 对 Windows 靶标进行系统和账号层面的发现与枚举（T1082/T1087/T1069）",
+  "target_class": "windows_ad",
+  "disableAutoInsert": true
+}

@@ -1,0 +1,159 @@
+{
+  "id": "web_full_chain_external",
+  "name": "Web 全链路渗透（外部目标）",
+  "description": "完整的 Web 应用渗透测试链路：端口扫描 → Web 指纹识别 → 目录枚举 → 漏洞扫描 → SQL 注入 → 暴力破解。适用于外部 Web 目标的综合演练。",
+  "rolesAllowed": [
+    "operator",
+    "admin"
+  ],
+  "steps": [
+    {
+      "id": "step1_port_scan",
+      "name": "端口扫描（nmap）",
+      "toolId": "nmap",
+      "argsTemplate": [
+        "-sT",
+        "-sV",
+        "-p",
+        "80,443,8080,8443,3000,3001,5000",
+        "<target>"
+      ],
+      "score": 15,
+      "evidence": {
+        "stdoutRegex": "open|filtered",
+        "type": "port_scan"
+      },
+      "payload_id": "port-scan"
+    },
+    {
+      "id": "step2_web_fingerprint",
+      "name": "Web 指纹识别（whatweb）",
+      "toolId": "whatweb",
+      "argsTemplate": [
+        "<target>",
+        "--log-brief=-"
+      ],
+      "score": 15,
+      "evidence": {
+        "stdoutRegex": "HTTPServer|PHP|Apache|nginx|WordPress|Bootstrap|jQuery",
+        "type": "web_fingerprint"
+      },
+      "payload_id": "whatweb"
+    },
+    {
+      "id": "step3_dir_enum",
+      "name": "目录枚举（gobuster）",
+      "toolId": "gobuster",
+      "argsTemplate": [
+        "dir",
+        "-u",
+        "<target>",
+        "-w",
+        "config/wordlists/common_dirs.txt",
+        "-t",
+        "5"
+      ],
+      "score": 15,
+      "evidence": {
+        "stdoutRegex": "Status: 200|Status: 301|Status: 302|Found",
+        "type": "dir_enum"
+      },
+      "payload_id": "gobuster"
+    },
+    {
+      "id": "step4_vuln_scan",
+      "name": "漏洞扫描（nuclei）",
+      "toolId": "nuclei",
+      "argsTemplate": [
+        "-u",
+        "<target>",
+        "-t",
+        "~/nuclei-templates/http/misconfiguration/",
+        "-nm",
+        "-j",
+        "-no-color",
+        "-no-interactsh",
+        "-duc",
+        "-timeout",
+        "10"
+      ],
+      "score": 20,
+      "evidence": {
+        "stdoutRegex": "template-id|matched|critical|high|medium",
+        "type": "vulnerability_scan"
+      },
+      "payload_id": "nuclei"
+    },
+    {
+      "id": "step5_sqli_scan",
+      "name": "SQL 注入检测（sqlmap）",
+      "toolId": "sqlmap",
+      "argsTemplate": [
+        "-u",
+        "<target>/login.php",
+        "--forms",
+        "--batch",
+        "--level=1",
+        "--risk=1",
+        "--timeout=10",
+        "--no-cast",
+        "--cookie",
+        "security=low; PHPSESSID=dvwa_session"
+      ],
+      "score": 20,
+      "evidence": {
+        "stdoutRegex": "injectable|sqlmap identified|parameter|payload",
+        "type": "sqli_attack"
+      },
+      "payload_id": "sqli-blind"
+    },
+    {
+      "id": "step6_brute_force",
+      "name": "暴力破解（hydra）",
+      "toolId": "hydra",
+      "argsTemplate": [
+        "-l",
+        "admin",
+        "-P",
+        "config/wordlists/common_passwords.txt",
+        "-t",
+        "4",
+        "-f",
+        "<target>",
+        "http-post-form",
+        "/login:username=^USER^&password=^PASS^:F=incorrect"
+      ],
+      "score": 15,
+      "evidence": {
+        "stdoutRegex": "login:|password:|found|success",
+        "type": "credential_brute_force"
+      },
+      "requires_teacher_review": true,
+      "payload_id": "auth-brute"
+    }
+  ],
+  "targetType": [
+    "web_url",
+    "dvwa"
+  ],
+  "notSuitableFor": [],
+  "baselineGroup": "web-vuln-scan",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "完整 Web 攻击链，需要目标为 Web 服务",
+  "applicableTargetType": [
+    "web_url",
+    "dvwa"
+  ],
+  "teachingObjective": "演示针对外部 Web 目标的完整攻击链",
+  "dvwa_profile": {
+    "target_type": "dvwa",
+    "host": "localhost",
+    "port": 8080,
+    "base_url": "http://localhost:8080",
+    "login_url": "http://localhost:8080/login.php",
+    "sqli_url": "http://localhost:8080/vulnerabilities/sqli/?id=1&Submit=Submit",
+    "security_level": "low",
+    "requires_cookie": false
+  },
+  "target_class": "dvwa"
+}

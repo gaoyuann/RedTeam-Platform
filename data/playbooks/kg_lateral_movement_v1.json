@@ -1,0 +1,157 @@
+{
+  "id": "kg_lateral_movement_v1",
+  "name": "中级内网横向移动实战演练",
+  "description": "本Playbook旨在帮助中级学员掌握内网环境中凭证收集、内网枚举及横向移动的关键技术，重点教授ATT&CK横向移动战术（TA0008），通过真实工具操作提升实战能力。",
+  "target": "http://target.example.com 或 10.10.11.x",
+  "author": "RedTeam-Edu KG+LLM 自动生成 (TC-KG-LLM-VERIFY-01)",
+  "difficulty": "intermediate",
+  "estimatedTimeMinutes": 90,
+  "rolesAllowed": [
+    "viewer",
+    "operator",
+    "admin",
+    "teacher",
+    "student"
+  ],
+  "steps": [
+    {
+      "id": "step1_rpcclient",
+      "name": "信息收集 - 使用rpcclient空会话枚举用户与共享",
+      "toolId": "rpcclient",
+      "argsTemplate": [
+        "-N",
+        "-U",
+        "",
+        "{{host}}"
+      ],
+      "description": "利用rpcclient空会话(null session)匿名连接目标Windows主机，枚举域用户、组和共享信息。",
+      "status": "PENDING",
+      "score": 10,
+      "expectedMitre": [
+        "T1021.002",
+        "T1087",
+        "T1046"
+      ],
+      "teachingNote": "强调空会话枚举的原理及利用rpcclient -U '' -N 进行匿名认证的方法，注意合法授权范围内操作。",
+      "requiresTeacherReview": true,
+      "kgWrapperRef": "wrapper:rpcclient_enumeration"
+    },
+    {
+      "id": "step2_netexec",
+      "name": "内网枚举 - 使用netexec空会话枚举SMB共享",
+      "toolId": "netexec",
+      "argsTemplate": [
+        "smb",
+        "{{host}}",
+        "-u",
+        "",
+        "-p",
+        "",
+        "--shares"
+      ],
+      "description": "通过netexec以空会话(null session)匿名连接目标主机，枚举SMB共享资源，发现潜在横向移动路径。",
+      "status": "PENDING",
+      "score": 10,
+      "expectedMitre": [
+        "T1021.002",
+        "T1087",
+        "T1046"
+      ],
+      "teachingNote": "讲解SMB空会话(null session)枚举原理及netexec -u '' -p '' 匿名访问参数，指导学员分析共享列表寻找横向移动机会。",
+      "requiresTeacherReview": true,
+      "kgWrapperRef": "wrapper:enum4linux_ng_advanced",
+      "payload_id": "pass-the-hash"
+    },
+    {
+      "id": "step3_netexec",
+      "name": "横向移动 - 利用netexec进行RID枚举发现域用户",
+      "toolId": "netexec",
+      "argsTemplate": [
+        "smb",
+        "{{host}}",
+        "-u",
+        "",
+        "-p",
+        "",
+        "--rid-brute"
+      ],
+      "description": "使用netexec通过RID循环攻击(RID Cycling)枚举目标域内所有用户账户，为横向移动提供攻击面信息。",
+      "status": "PENDING",
+      "score": 10,
+      "expectedMitre": [
+        "T1021.002",
+        "T1087",
+        "T1046"
+      ],
+      "teachingNote": "重点讲解RID枚举攻击原理(MS-RPC SAMR接口)，如何在空会话基础上通过RID循环扩大信息收集范围，为横向移动提供目标用户列表。",
+      "requiresTeacherReview": true,
+      "kgWrapperRef": "wrapper:enum4linux_scan",
+      "payload_id": "pass-the-hash"
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "step1_completed",
+        "desc": "完成信息收集 - 使用rpcclient空会话枚举用户与共享",
+        "points": 10,
+        "predicate": {
+          "kind": "step_completed",
+          "stepId": "step1_rpcclient"
+        }
+      },
+      {
+        "id": "step2_completed",
+        "desc": "完成内网枚举 - 使用netexec空会话枚举SMB共享",
+        "points": 10,
+        "predicate": {
+          "kind": "step_completed",
+          "stepId": "step2_netexec"
+        }
+      },
+      {
+        "id": "step3_completed",
+        "desc": "完成横向移动 - 利用netexec进行RID枚举发现域用户",
+        "points": 10,
+        "predicate": {
+          "kind": "step_completed",
+          "stepId": "step3_netexec"
+        }
+      }
+    ],
+    "totalPoints": 30
+  },
+  "targetType": [
+    "windows_ad"
+  ],
+  "teachingObjective": "理解内网横向移动的基本流程和关键技术; 掌握凭证收集工具rpcclient_enumeration的使用; 熟悉内网枚举工具enum4linux_ng_advanced的操作方法; 能够利用enum4linux_scan实现内网横向移动; 提升分析和利用内网信息进行攻击的实战能力",
+  "attckTactics": [
+    "TA0006",
+    "TA0007",
+    "TA0008"
+  ],
+  "attckTechniques": [
+    "T1087",
+    "T1021.002",
+    "T1046"
+  ],
+  "kgGenerated": true,
+  "kgSource": "TC-KG-INTEGRATE-01",
+  "generatedBy": "LLM+KG",
+  "candidateOnly": true,
+  "requiresTeacherApproval": true,
+  "safetyNotes": [
+    "所有操作必须在合法授权的环境中进行，严禁未授权攻击行为。",
+    "工具使用过程中需严格遵守教学安全规范，防止对生产环境造成影响。",
+    "高风险操作必须在测试管理员监督下执行，确保教学安全。",
+    "学员应妥善保管凭证信息，防止泄露造成安全风险。"
+  ],
+  "createdAt": "2026-05-06T11:26:59Z",
+  "target_class": "windows_ad",
+  "notSuitableFor": [
+    "dvwa",
+    "local_ip",
+    "web_url",
+    "local_hash"
+  ]
+}

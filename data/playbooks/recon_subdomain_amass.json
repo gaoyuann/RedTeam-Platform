@@ -1,0 +1,59 @@
+{
+  "id": "recon_subdomain_amass",
+  "name": "Recon: Subdomain Enumeration (amass)",
+  "description": "Uses OWASP Amass to discover subdomains for a given domain, then filters for live hosts using httpx.",
+  "tags": [
+    "recon",
+    "subdomain",
+    "amass",
+    "osint"
+  ],
+  "steps": [
+    {
+      "id": "step1_enum_subdomains",
+      "name": "Enumerate Subdomains",
+      "description": "Run amass to discover subdomains for the target domain.",
+      "toolId": "amass",
+      "argsTemplate": [
+        "enum",
+        "-d",
+        "{{domain}}",
+        "-silent"
+      ],
+      "ruleIds": [
+        "amass_subdomain_found"
+      ],
+      "payload_id": "amass"
+    },
+    {
+      "id": "step2_filter_live",
+      "name": "Filter Live Subdomains",
+      "description": "Use httpx to check which of the discovered subdomains are live.",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "SUBDOMAINS_FILE=/tmp/subdomains_$(date +%s).txt && echo '{{step1_enum_subdomains.evidence.data.subdomains}}' | tr ',' '\\n' | grep -v '^$' > $SUBDOMAINS_FILE && if [ -s $SUBDOMAINS_FILE ]; then   httpx -l $SUBDOMAINS_FILE -silent -json 2>/dev/null || echo 'httpx probe complete'; else   echo 'No subdomains found from step1, skipping httpx probe'; fi"
+      ],
+      "ruleIds": [
+        "httpx_live_url"
+      ],
+      "optional": true
+    }
+  ],
+  "targetType": [
+    "domain"
+  ],
+  "notSuitableFor": [
+    "dvwa",
+    "local_ip",
+    "web_url"
+  ],
+  "baselineGroup": "domain-osint",
+  "expectedOutputPolicy": "may_be_empty_if_no_match",
+  "emptyOutputExplanation": "amass 子域名枚举仅适用于公网域名目标（如 example.com）；对本地 IP（127.0.0.1）或 DVWA 靶机无效，输出为空属于预期行为",
+  "applicableTargetType": [
+    "domain"
+  ],
+  "teachingObjective": "演示使用 amass 对公网域名进行子域名枚举和 OSINT 侦察",
+  "target_class": "subdomain"
+}

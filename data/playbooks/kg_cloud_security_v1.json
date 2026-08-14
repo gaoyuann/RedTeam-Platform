@@ -1,0 +1,140 @@
+{
+  "id": "kg_cloud_security_v1",
+  "name": "高级云安全渗透测试实战",
+  "description": "本Playbook面向高级学员，聚焦AWS云环境的安全测试，涵盖云资源枚举、权限提升及数据访问三个关键阶段，帮助学员掌握云环境下的渗透测试技术与防御措施。",
+  "target": "http://target.example.com 或 10.10.11.x",
+  "author": "RedTeam-Edu KG+LLM 自动生成 (TC-KG-LLM-VERIFY-01)",
+  "difficulty": "advanced",
+  "estimatedTimeMinutes": 120,
+  "rolesAllowed": [
+    "viewer",
+    "operator",
+    "admin",
+    "teacher",
+    "student"
+  ],
+  "steps": [
+    {
+      "id": "step1_cloudmapper",
+      "name": "云资源枚举",
+      "toolId": "cloudmapper",
+      "argsTemplate": [
+        "{{host}}"
+      ],
+      "description": "使用cloudmapper_analysis工具对AWS环境进行全面的云资源枚举，识别账户、权限及网络配置等信息。",
+      "status": "PENDING",
+      "score": 10,
+      "expectedMitre": [
+        "T1580",
+        "T1078"
+      ],
+      "teachingNote": "强调云资源枚举的重要性及cloudmapper_analysis的使用方法，注意数据准确性和权限限制。",
+      "requiresTeacherReview": true,
+      "kgWrapperRef": "wrapper:cloudmapper_analysis"
+    },
+    {
+      "id": "step2_pacu",
+      "name": "权限提升尝试",
+      "toolId": "pacu",
+      "argsTemplate": [
+        "{{host}}"
+      ],
+      "description": "利用pacu_exploitation工具尝试在AWS环境中进行权限提升，模拟攻击者通过有效凭证获取更高权限的过程。",
+      "status": "PENDING",
+      "score": 10,
+      "expectedMitre": [
+        "T1580",
+        "T1078"
+      ],
+      "teachingNote": "讲解权限提升的常见手段及pacu_exploitation的操作流程，强调合法合规测试的重要性。",
+      "requiresTeacherReview": true,
+      "kgWrapperRef": "wrapper:pacu_exploitation",
+      "requires_teacher_review": true
+    },
+    {
+      "id": "step3_pacu",
+      "name": "敏感数据访问与验证",
+      "toolId": "pacu",
+      "argsTemplate": [
+        "{{host}}"
+      ],
+      "description": "基于已提升的权限，继续使用pacu_exploitation工具访问云环境中的敏感数据，验证数据访问权限和安全控制有效性。",
+      "status": "PENDING",
+      "score": 10,
+      "expectedMitre": [
+        "T1580",
+        "T1078"
+      ],
+      "teachingNote": "强调数据访问的风险及防护措施，指导学员如何识别和报告安全漏洞。",
+      "requiresTeacherReview": true,
+      "kgWrapperRef": "wrapper:pacu_exploitation",
+      "requires_teacher_review": true
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "step1_completed",
+        "desc": "完成云资源枚举",
+        "points": 10,
+        "predicate": {
+          "kind": "step_completed",
+          "stepId": "step1_cloudmapper"
+        }
+      },
+      {
+        "id": "step2_completed",
+        "desc": "完成权限提升尝试",
+        "points": 10,
+        "predicate": {
+          "kind": "step_completed",
+          "stepId": "step2_pacu"
+        }
+      },
+      {
+        "id": "step3_completed",
+        "desc": "完成敏感数据访问与验证",
+        "points": 10,
+        "predicate": {
+          "kind": "step_completed",
+          "stepId": "step3_pacu"
+        }
+      }
+    ],
+    "totalPoints": 30
+  },
+  "targetType": [
+    "cloud"
+  ],
+  "teachingObjective": "掌握AWS云环境资源枚举技术; 理解并实践云环境中的权限提升方法; 能够验证和评估云环境中的数据访问安全; 了解云安全特有的防御策略和最佳实践",
+  "attckTactics": [
+    "TA0001",
+    "TA0004",
+    "TA0007"
+  ],
+  "attckTechniques": [
+    "T1580",
+    "T1078"
+  ],
+  "kgGenerated": true,
+  "kgSource": "TC-KG-INTEGRATE-01",
+  "generatedBy": "LLM+KG",
+  "candidateOnly": true,
+  "requiresTeacherApproval": true,
+  "safetyNotes": [
+    "所有测试必须在授权范围内进行，避免影响生产环境。",
+    "严格遵守云服务提供商的使用政策和法律法规。",
+    "测试过程中注意保护敏感信息，防止数据泄露。",
+    "建议在隔离的测试环境中执行操作，防止误操作影响业务。"
+  ],
+  "createdAt": "2026-05-06T11:26:59Z",
+  "target_class": "cloud",
+  "disableAutoInsert": true,
+  "notSuitableFor": [
+    "dvwa",
+    "local_ip",
+    "web_url",
+    "local_hash",
+    "windows_ad"
+  ]
+}

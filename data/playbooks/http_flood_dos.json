@@ -1,0 +1,66 @@
+{
+  "id": "http_flood_dos",
+  "name": "HTTP Flood DoS Attack Simulation",
+  "description": "教学与测试目的：对目标 Web 服务器进行控制在安全范围内的 HTTP 泛洪（Flood）拒绝服务攻击测试，通过高频访问测试服务器对并发请求的承受能力，观察响应状态，演示 DoS 攻击行为（T1498.011）。",
+  "category": "exploitation",
+  "difficulty": "easy",
+  "estimatedDuration": "3 min",
+  "rolesAllowed": [
+    "operator",
+    "admin"
+  ],
+  "mitrePhases": [
+    "Impact"
+  ],
+  "mitreTechniques": [
+    "T1498.011"
+  ],
+  "targetType": [
+    "web_url",
+    "dvwa"
+  ],
+  "steps": [
+    {
+      "id": "step1_http_flood",
+      "name": "HTTP Controlled Flood",
+      "description": "使用 curl 向目标 Web URL 快速发送 200 个并发/连续 HTTP 请求，统计响应码以评估靶机处理能力。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "for i in {1..200}; do curl -s -o /dev/null -w \"%{http_code}\\n\" \"<target>\"; done | sort | uniq -c"
+      ],
+      "score": 100,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1498.011"
+      ]
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "http_flood_completed",
+        "desc": "成功执行高频 HTTP 请求循环并获取响应码分布",
+        "points": 100,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "200"
+        }
+      }
+    ]
+  },
+  "notSuitableFor": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "baselineGroup": "web-vuln-scan",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "执行控制在无害范围内的 HTTP DoS 探测；需要目标 Web 服务在线可达",
+  "applicableTargetType": [
+    "web_url",
+    "dvwa"
+  ],
+  "teachingObjective": "演示和评估基本的 HTTP 拒绝服务（DoS）流量泛洪测试（T1498.011）",
+  "target_class": "dvwa",
+  "disableAutoInsert": true
+}

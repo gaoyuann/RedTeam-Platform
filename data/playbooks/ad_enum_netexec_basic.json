@@ -1,0 +1,89 @@
+{
+  "id": "ad_enum_netexec_basic",
+  "name": "AD Enum: Basic Share & User Enumeration (NetExec)",
+  "description": "Uses NetExec to perform basic enumeration of a Windows/AD target, listing shares and users via SMB with guest access.",
+  "tags": [
+    "ad",
+    "windows",
+    "smb",
+    "recon",
+    "netexec"
+  ],
+  "estimatedMinutes": 5,
+  "steps": [
+    {
+      "id": "step1_enum_shares",
+      "name": "Enumerate SMB Shares (Guest)",
+      "description": "Use netexec to enumerate SMB shares with guest credentials.",
+      "toolId": "netexec",
+      "argsTemplate": [
+        "smb",
+        "{{host}}",
+        "-u",
+        "guest",
+        "-p",
+        "",
+        "--shares"
+      ],
+      "ruleIds": [
+        "netexec_enum_shares"
+      ],
+      "score": 20,
+      "payload_id": "pass-the-hash"
+    },
+    {
+      "id": "step2_enum_users",
+      "name": "Enumerate SMB Users (Guest)",
+      "description": "Use netexec to enumerate users with guest credentials.",
+      "toolId": "netexec",
+      "argsTemplate": [
+        "smb",
+        "{{host}}",
+        "-u",
+        "guest",
+        "-p",
+        "",
+        "--users"
+      ],
+      "ruleIds": [
+        "netexec_enum_shares"
+      ],
+      "score": 20,
+      "payload_id": "pass-the-hash"
+    },
+    {
+      "id": "step3_port_scan",
+      "name": "Port Scan (SMB/RPC/LDAP)",
+      "description": "Run nmap to identify open AD-related ports on the target.",
+      "toolId": "nmap",
+      "argsTemplate": [
+        "-p",
+        "445,139,389,636,3389",
+        "-sV",
+        "--open",
+        "<target>"
+      ],
+      "ruleIds": [],
+      "score": 10,
+      "payload_id": "port-scan"
+    }
+  ],
+  "targetType": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "notSuitableFor": [
+    "dvwa",
+    "local_ip",
+    "web_url"
+  ],
+  "baselineGroup": "windows-exploitation",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "netexec 需要目标为 Windows SMB 服务，DVWA/本地 IP 不适用",
+  "applicableTargetType": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "teachingObjective": "演示 AD 环境中使用 netexec 进行 SMB 枚举",
+  "target_class": "windows_ad"
+}

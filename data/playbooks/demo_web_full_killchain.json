@@ -1,0 +1,199 @@
+{
+  "id": "demo_web_full_killchain",
+  "name": "Web 自动化杀伤链 (演示版)",
+  "description": "终极演示战术手册。依次执行：精准端口探测(80) -> 指纹识别 -> 敏感目录遍历 -> 漏洞扫描 -> DVWA 密码精准爆破。",
+  "target": "172.17.0.3 (Docker 内网)",
+  "rolesAllowed": [
+    "viewer",
+    "operator",
+    "admin",
+    "teacher",
+    "student"
+  ],
+  "tags": [
+    "web",
+    "demo",
+    "recon",
+    "exploit",
+    "brute_force"
+  ],
+  "steps": [
+    {
+      "id": "step_1_port_scan",
+      "name": "精准端口与服务探测",
+      "toolId": "nmap",
+      "argsTemplate": [
+        "-sV",
+        "-p",
+        "80",
+        "--open",
+        "-Pn",
+        "<target>"
+      ],
+      "description": "识别目标开放的 80 端口及内部真实中间件版本",
+      "status": "PENDING",
+      "score": 10,
+      "payload_id": "port-scan",
+      "expectedMitre": [
+        "T1595",
+        "T1046"
+      ]
+    },
+    {
+      "id": "step_2_fingerprint",
+      "name": "Web 指纹深度识别",
+      "toolId": "whatweb",
+      "argsTemplate": [
+        "-v",
+        "<target>"
+      ],
+      "description": "提取 HTTP 头、PHP 版本等关键指纹证据",
+      "status": "PENDING",
+      "score": 15,
+      "payload_id": "whatweb",
+      "expectedMitre": [
+        "T1592"
+      ]
+    },
+    {
+      "id": "step_3_dir_brute",
+      "name": "敏感目录自动巡航",
+      "toolId": "gobuster",
+      "description": "并发爆破 Web 后台隐藏路径 (适配全版本 Gobuster)",
+      "status": "PENDING",
+      "score": 20,
+      "payload_id": "gobuster",
+      "expectedMitre": [
+        "T1083"
+      ],
+      "argsTemplate": [
+        "-m",
+        "dir",
+        "-u",
+        "<target>",
+        "-w",
+        "config/wordlists/common_dirs.txt",
+        "-t",
+        "10"
+      ]
+    },
+    {
+      "id": "step_4_vuln_scan",
+      "name": "Web 综合漏洞扫描",
+      "toolId": "nuclei",
+      "argsTemplate": [
+        "-u",
+        "<target>",
+        "-id",
+        "http-missing-security-headers,dvwa-default-login,dvwa-sqli,phpinfo-files,phpmyadmin-panel,config-exposure,debug-endpoints,backup-files,default-login,drupal-detection,wordpress-detection,joomla-detection"
+      ],
+      "description": "对目标进行全面的 Web 安全漏洞扫描",
+      "status": "PENDING",
+      "score": 25,
+      "payload_id": "nuclei",
+      "expectedMitre": [
+        "T1190"
+      ]
+    },
+    {
+      "id": "step_5_brute_force",
+      "name": "Grand Finale - 靶场登录密码精准爆破",
+      "toolId": "hydra",
+      "argsTemplate": [
+        "-l",
+        "admin",
+        "-P",
+        "config/wordlists/common_passwords.txt",
+        "<target>",
+        "http-form-post",
+        "/login.php:username=^USER^&password=^PASS^&Login=Login:F=Login failed"
+      ],
+      "description": "对 DVWA 登录表单发起最终爆破打击。",
+      "status": "PENDING",
+      "score": 30,
+      "payload_id": "auth-brute",
+      "expectedMitre": [
+        "T1110"
+      ],
+      "requires_teacher_review": true
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "port_80_found",
+        "desc": "发现 80 端口服务",
+        "points": 10,
+        "predicate": {
+          "kind": "finding_type_min",
+          "type": "open_port",
+          "min": 1
+        }
+      },
+      {
+        "id": "web_fingerprint",
+        "desc": "指纹识别成功",
+        "points": 15,
+        "predicate": {
+          "kind": "finding_type_min",
+          "type": "service_version",
+          "min": 1
+        }
+      },
+      {
+        "id": "directory_found",
+        "desc": "发现隐藏路径",
+        "points": 20,
+        "predicate": {
+          "kind": "finding_type_min",
+          "type": "web_path",
+          "min": 1
+        }
+      },
+      {
+        "id": "vuln_found",
+        "desc": "扫描到关键漏洞",
+        "points": 25,
+        "predicate": {
+          "kind": "finding_type_min",
+          "type": "vulnerability",
+          "min": 1
+        }
+      },
+      {
+        "id": "password_cracked",
+        "desc": "成功获取登录凭据",
+        "points": 30,
+        "predicate": {
+          "kind": "finding_type_min",
+          "type": "compromised_credential",
+          "min": 1
+        }
+      }
+    ]
+  },
+  "targetType": [
+    "web_url",
+    "dvwa"
+  ],
+  "notSuitableFor": [],
+  "baselineGroup": "web-vuln-scan",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "完整 Web 攻击链演示，需要目标为 Web 服务",
+  "applicableTargetType": [
+    "web_url",
+    "dvwa"
+  ],
+  "teachingObjective": "演示从侦察到漏洞利用的完整 Web 攻击链",
+  "dvwa_profile": {
+    "target_type": "dvwa",
+    "host": "localhost",
+    "port": 8080,
+    "base_url": "http://localhost:8080",
+    "login_url": "http://localhost:8080/login.php",
+    "sqli_url": "http://localhost:8080/vulnerabilities/sqli/?id=1&Submit=Submit",
+    "security_level": "low",
+    "requires_cookie": false
+  },
+  "target_class": "dvwa"
+}

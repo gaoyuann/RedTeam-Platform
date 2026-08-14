@@ -1,0 +1,135 @@
+{
+  "id": "recon_nmap_basic",
+  "name": "基础端口与服务侦察",
+  "description": "教学目标：掌握 nmap 基础用法，包括快速端口扫描、服务版本探测和操作系统指纹识别。适合入门级红队课程第一课。",
+  "target": "<target>",
+  "author": "Hexstrike-EDU 教学团队",
+  "difficulty": "入门",
+  "estimatedTimeMinutes": 10,
+  "rolesAllowed": [
+    "viewer",
+    "operator",
+    "admin",
+    "teacher",
+    "student"
+  ],
+  "steps": [
+    {
+      "id": "step1_nmap_fast",
+      "name": "快速端口扫描",
+      "toolId": "nmap",
+      "argsTemplate": [
+        "-sT",
+        "-F",
+        "<target>"
+      ],
+      "description": "使用 -F 扫描最常见 100 个端口，快速发现开放服务",
+      "status": "PENDING",
+      "score": 10,
+      "expectedMitre": [
+        "T1595",
+        "T1046"
+      ],
+      "payload_id": "port-scan"
+    },
+    {
+      "id": "step2_nmap_service",
+      "name": "服务版本探测",
+      "toolId": "nmap",
+      "argsTemplate": [
+        "-sV",
+        "-p",
+        "80,8080",
+        "--open",
+        "<target>"
+      ],
+      "description": "对所有开放端口进行服务版本探测（-sV），有助于后续针对性攻击",
+      "status": "PENDING",
+      "score": 15,
+      "expectedMitre": [
+        "T1046",
+        "T1592"
+      ],
+      "payload_id": "port-scan"
+    },
+    {
+      "id": "step3_nmap_os",
+      "name": "操作系统指纹识别",
+      "toolId": "nmap",
+      "argsTemplate": [
+        "-O",
+        "<target>"
+      ],
+      "description": "尝试识别目标操作系统类型和版本（需 root 权限或 --osscan-guess）",
+      "status": "PENDING",
+      "score": 10,
+      "expectedMitre": [
+        "T1592.004"
+      ],
+      "payload_id": "port-scan"
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "open_ports_found",
+        "desc": "发现至少 1 个开放端口",
+        "points": 10,
+        "predicate": {
+          "kind": "finding_type_min",
+          "type": "open_port",
+          "min": 1
+        }
+      },
+      {
+        "id": "service_versions",
+        "desc": "识别至少 1 个服务的版本信息",
+        "points": 15,
+        "predicate": {
+          "kind": "finding_type_min",
+          "type": "service_version",
+          "min": 1
+        }
+      },
+      {
+        "id": "os_detected",
+        "desc": "成功识别操作系统",
+        "points": 10,
+        "predicate": {
+          "kind": "finding_type_min",
+          "type": "os_fingerprint",
+          "min": 1
+        }
+      }
+    ]
+  },
+  "targetType": [
+    "any",
+    "web_url",
+    "dvwa",
+    "local_ip"
+  ],
+  "notSuitableFor": [],
+  "baselineGroup": "recon",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "nmap 基础侦察，适用于任何 IP/域名目标",
+  "applicableTargetType": [
+    "any",
+    "web_url",
+    "dvwa",
+    "local_ip"
+  ],
+  "teachingObjective": "演示 nmap 基础侦察和服务识别",
+  "dvwa_profile": {
+    "target_type": "dvwa",
+    "host": "localhost",
+    "port": 8080,
+    "base_url": "http://localhost:8080",
+    "login_url": "http://localhost:8080/login.php",
+    "sqli_url": "http://localhost:8080/vulnerabilities/sqli/?id=1&Submit=Submit",
+    "security_level": "low",
+    "requires_cookie": false
+  },
+  "target_class": "dvwa",
+  "disableAutoInsert": true
+}

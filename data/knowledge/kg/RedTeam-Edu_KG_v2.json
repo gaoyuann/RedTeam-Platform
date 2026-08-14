@@ -1,0 +1,1584 @@
+{
+  "metadata": {
+    "version": "2.0.0",
+    "generated_at": "2026-05-05T08:01:38.640591Z",
+    "task_id": "TC-KG-BUILD-01",
+    "readonly": true,
+    "node_count": 77,
+    "edge_count": 162,
+    "node_types": [
+      "ATT&CK_Technique",
+      "Agent",
+      "Tool",
+      "DecisionRule",
+      "Playbook"
+    ],
+    "edge_types": [
+      "COVERS",
+      "MAPS_TO"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "tool:nmap_scan",
+      "type": "Tool",
+      "label": "nmap",
+      "category": "network_reconnaissance",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "description": "Execute enhanced Nmap scan against a target with service and version discovery."
+    },
+    {
+      "id": "tool:gobuster_scan",
+      "type": "Tool",
+      "label": "gobuster",
+      "category": "web_application_security",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "description": "Execute Gobuster for directory, DNS, fuzzing, or virtual-host enumeration."
+    },
+    {
+      "id": "tool:nuclei_scan",
+      "type": "Tool",
+      "label": "nuclei",
+      "category": "web_application_security",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "description": "Execute Nuclei vulnerability scanner with template, severity, and tag filters."
+    },
+    {
+      "id": "tool:prowler_scan",
+      "type": "Tool",
+      "label": "prowler",
+      "category": "cloud_security",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "description": "Execute Prowler for AWS, Azure, or GCP security assessment."
+    },
+    {
+      "id": "tool:trivy_scan",
+      "type": "Tool",
+      "label": "trivy",
+      "category": "cloud_container_security",
+      "risk_level": "low",
+      "import_status": "candidate",
+      "description": "Execute Trivy for container image, filesystem, repository, or configuration scanning."
+    },
+    {
+      "id": "tool:scout_suite_assessment",
+      "type": "Tool",
+      "label": "scout-suite",
+      "category": "cloud_security",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "description": "Execute Scout Suite for multi-cloud security assessment."
+    },
+    {
+      "id": "tool:cloudmapper_analysis",
+      "type": "Tool",
+      "label": "cloudmapper",
+      "category": "cloud_security",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "description": "Execute CloudMapper for AWS network visualization and security analysis."
+    },
+    {
+      "id": "tool:pacu_exploitation",
+      "type": "Tool",
+      "label": "pacu",
+      "category": "cloud_security",
+      "risk_level": "high",
+      "import_status": "candidate",
+      "description": "Execute Pacu AWS exploitation framework modules."
+    },
+    {
+      "id": "tool:kube_hunter_scan",
+      "type": "Tool",
+      "label": "kube-hunter",
+      "category": "cloud_container_security",
+      "risk_level": "high",
+      "import_status": "candidate",
+      "description": "Execute kube-hunter for Kubernetes penetration testing."
+    },
+    {
+      "id": "tool:kube_bench_cis",
+      "type": "Tool",
+      "label": "kube-bench",
+      "category": "cloud_container_security",
+      "risk_level": "low",
+      "import_status": "candidate",
+      "description": "Execute kube-bench for CIS Kubernetes benchmark checks."
+    },
+    {
+      "id": "tool:docker_bench_security_scan",
+      "type": "Tool",
+      "label": "docker-bench-security",
+      "category": "cloud_container_security",
+      "risk_level": "low",
+      "import_status": "candidate",
+      "description": "Execute Docker Bench for Security using CIS Docker guidance."
+    },
+    {
+      "id": "tool:clair_vulnerability_scan",
+      "type": "Tool",
+      "label": "clair",
+      "category": "cloud_container_security",
+      "risk_level": "low",
+      "import_status": "candidate",
+      "description": "Execute Clair for container vulnerability analysis."
+    },
+    {
+      "id": "tool:falco_runtime_monitoring",
+      "type": "Tool",
+      "label": "falco",
+      "category": "cloud_container_security",
+      "risk_level": "low",
+      "import_status": "candidate",
+      "description": "Execute Falco for runtime security monitoring."
+    },
+    {
+      "id": "tool:checkov_iac_scan",
+      "type": "Tool",
+      "label": "checkov",
+      "category": "infrastructure_as_code_security",
+      "risk_level": "low",
+      "import_status": "candidate",
+      "description": "Execute Checkov for infrastructure-as-code security scanning."
+    },
+    {
+      "id": "tool:terrascan_iac_scan",
+      "type": "Tool",
+      "label": "terrascan",
+      "category": "infrastructure_as_code_security",
+      "risk_level": "low",
+      "import_status": "candidate",
+      "description": "Execute Terrascan for infrastructure-as-code security scanning."
+    },
+    {
+      "id": "tool:rustscan_scan",
+      "type": "Tool",
+      "label": "rustscan",
+      "category": "network_reconnaissance",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "description": "Ultra-fast port scanning declared in HexStrike Common MCP Tools."
+    },
+    {
+      "id": "tool:masscan_scan",
+      "type": "Tool",
+      "label": "masscan",
+      "category": "network_reconnaissance",
+      "risk_level": "high",
+      "import_status": "candidate",
+      "description": "High-speed port scanning declared in HexStrike Common MCP Tools."
+    },
+    {
+      "id": "tool:autorecon_scan",
+      "type": "Tool",
+      "label": "autorecon",
+      "category": "network_reconnaissance",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "description": "Comprehensive automated reconnaissance declared in HexStrike Common MCP Tools."
+    },
+    {
+      "id": "tool:amass_enum",
+      "type": "Tool",
+      "label": "amass",
+      "category": "osint_reconnaissance",
+      "risk_level": "low",
+      "import_status": "candidate",
+      "description": "Subdomain enumeration and OSINT declared in HexStrike Common MCP Tools."
+    },
+    {
+      "id": "tool:feroxbuster_scan",
+      "type": "Tool",
+      "label": "feroxbuster",
+      "category": "web_application_security",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "description": "Recursive content discovery declared in HexStrike Common MCP Tools."
+    },
+    {
+      "id": "tool:ffuf_scan",
+      "type": "Tool",
+      "label": "ffuf",
+      "category": "web_application_security",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "description": "Fast web fuzzing declared in HexStrike Common MCP Tools."
+    },
+    {
+      "id": "tool:sqlmap_scan",
+      "type": "Tool",
+      "label": "sqlmap",
+      "category": "web_application_security",
+      "risk_level": "high",
+      "import_status": "candidate",
+      "description": "SQL injection testing declared in HexStrike Common MCP Tools."
+    },
+    {
+      "id": "tool:wpscan_scan",
+      "type": "Tool",
+      "label": "wpscan",
+      "category": "web_application_security",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "description": "WordPress security assessment declared in HexStrike Common MCP Tools."
+    },
+    {
+      "id": "tool:ghidra_analyze",
+      "type": "Tool",
+      "label": "ghidra",
+      "category": "binary_analysis",
+      "risk_level": "low",
+      "import_status": "candidate",
+      "description": "Software reverse engineering declared in HexStrike Common MCP Tools."
+    },
+    {
+      "id": "tool:radare2_analyze",
+      "type": "Tool",
+      "label": "radare2",
+      "category": "binary_analysis",
+      "risk_level": "low",
+      "import_status": "candidate",
+      "description": "Advanced reverse engineering declared in HexStrike Common MCP Tools."
+    },
+    {
+      "id": "tool:gdb_debug",
+      "type": "Tool",
+      "label": "gdb",
+      "category": "binary_analysis",
+      "risk_level": "medium",
+      "import_status": "candidate",
+      "description": "GNU debugger with exploit-development support declared in HexStrike Common MCP Tools."
+    },
+    {
+      "id": "tool:pwntools_exploit",
+      "type": "Tool",
+      "label": "pwntools",
+      "category": "binary_analysis",
+      "risk_level": "high",
+      "import_status": "candidate",
+      "description": "CTF framework and exploit-development support declared in HexStrike Common MCP Tools."
+    },
+    {
+      "id": "tool:angr_analyze",
+      "type": "Tool",
+      "label": "angr",
+      "category": "binary_analysis",
+      "risk_level": "low",
+      "import_status": "candidate",
+      "description": "Binary analysis with symbolic execution declared in HexStrike Common MCP Tools."
+    },
+    {
+      "id": "technique:T1046",
+      "type": "ATT&CK_Technique",
+      "label": "T1046: Network Service Discovery",
+      "technique_id": "T1046",
+      "technique_name": "Network Service Discovery",
+      "tactic": "Discovery"
+    },
+    {
+      "id": "technique:T1595",
+      "type": "ATT&CK_Technique",
+      "label": "T1595: Active Scanning",
+      "technique_id": "T1595",
+      "technique_name": "Active Scanning",
+      "tactic": "Reconnaissance"
+    },
+    {
+      "id": "technique:T1590",
+      "type": "ATT&CK_Technique",
+      "label": "T1590: Gather Victim Network Information",
+      "technique_id": "T1590",
+      "technique_name": "Gather Victim Network Information",
+      "tactic": "Reconnaissance"
+    },
+    {
+      "id": "technique:T1190",
+      "type": "ATT&CK_Technique",
+      "label": "T1190: Exploit Public-Facing Application",
+      "technique_id": "T1190",
+      "technique_name": "Exploit Public-Facing Application",
+      "tactic": "Initial Access"
+    },
+    {
+      "id": "technique:T1110",
+      "type": "ATT&CK_Technique",
+      "label": "T1110: Brute Force",
+      "technique_id": "T1110",
+      "technique_name": "Brute Force",
+      "tactic": "Credential Access"
+    },
+    {
+      "id": "technique:T1592",
+      "type": "ATT&CK_Technique",
+      "label": "T1592: Gather Victim Host Information",
+      "technique_id": "T1592",
+      "technique_name": "Gather Victim Host Information",
+      "tactic": "Reconnaissance"
+    },
+    {
+      "id": "technique:T1611",
+      "type": "ATT&CK_Technique",
+      "label": "T1611: Escape to Host",
+      "technique_id": "T1611",
+      "technique_name": "Escape to Host",
+      "tactic": "Privilege Escalation"
+    },
+    {
+      "id": "agent:HX-AGENT-001",
+      "type": "Agent",
+      "label": "IntelligentDecisionEngine",
+      "role": "Tool selection and parameter optimization engine",
+      "capabilities": ""
+    },
+    {
+      "id": "agent:HX-AGENT-002",
+      "type": "Agent",
+      "label": "BugBountyWorkflowManager",
+      "role": "Bug bounty workflow orchestration",
+      "capabilities": ""
+    },
+    {
+      "id": "agent:HX-AGENT-003",
+      "type": "Agent",
+      "label": "CTFWorkflowManager",
+      "role": "CTF challenge workflow assistance",
+      "capabilities": ""
+    },
+    {
+      "id": "agent:HX-AGENT-004",
+      "type": "Agent",
+      "label": "CVEIntelligenceManager",
+      "role": "Vulnerability intelligence and CVE context enrichment",
+      "capabilities": ""
+    },
+    {
+      "id": "agent:HX-AGENT-005",
+      "type": "Agent",
+      "label": "AIExploitGenerator",
+      "role": "Exploit-development assistance",
+      "capabilities": ""
+    },
+    {
+      "id": "agent:HX-AGENT-006",
+      "type": "Agent",
+      "label": "VulnerabilityCorrelator",
+      "role": "Attack chain discovery and finding correlation",
+      "capabilities": ""
+    },
+    {
+      "id": "agent:HX-AGENT-007",
+      "type": "Agent",
+      "label": "TechnologyDetector",
+      "role": "Technology stack identification",
+      "capabilities": ""
+    },
+    {
+      "id": "agent:HX-AGENT-008",
+      "type": "Agent",
+      "label": "RateLimitDetector",
+      "role": "Rate limiting and throttling detection",
+      "capabilities": ""
+    },
+    {
+      "id": "agent:HX-AGENT-009",
+      "type": "Agent",
+      "label": "FailureRecoverySystem",
+      "role": "Error handling and recovery",
+      "capabilities": ""
+    },
+    {
+      "id": "agent:HX-AGENT-010",
+      "type": "Agent",
+      "label": "PerformanceMonitor",
+      "role": "System and process optimization monitoring",
+      "capabilities": ""
+    },
+    {
+      "id": "agent:HX-AGENT-011",
+      "type": "Agent",
+      "label": "ParameterOptimizer",
+      "role": "Context-aware parameter optimization",
+      "capabilities": ""
+    },
+    {
+      "id": "agent:HX-AGENT-012",
+      "type": "Agent",
+      "label": "GracefulDegradation",
+      "role": "Fault-tolerant operation and fallback selection",
+      "capabilities": ""
+    },
+    {
+      "id": "rule:HX-TOOLSEL-WEB-001",
+      "type": "DecisionRule",
+      "label": "",
+      "import_status": "candidate",
+      "requires_teacher_review": "True"
+    },
+    {
+      "id": "rule:HX-TOOLSEL-WEB-SQLI-001",
+      "type": "DecisionRule",
+      "label": "",
+      "import_status": "candidate",
+      "requires_teacher_review": "True"
+    },
+    {
+      "id": "rule:HX-TOOLSEL-NETWORK-001",
+      "type": "DecisionRule",
+      "label": "",
+      "import_status": "candidate",
+      "requires_teacher_review": "True"
+    },
+    {
+      "id": "rule:HX-TOOLSEL-SMB-001",
+      "type": "DecisionRule",
+      "label": "",
+      "import_status": "candidate",
+      "requires_teacher_review": "True"
+    },
+    {
+      "id": "rule:HX-TOOLSEL-API-001",
+      "type": "DecisionRule",
+      "label": "",
+      "import_status": "candidate",
+      "requires_teacher_review": "True"
+    },
+    {
+      "id": "rule:HX-TOOLSEL-DOMAIN-OSINT-001",
+      "type": "DecisionRule",
+      "label": "",
+      "import_status": "candidate",
+      "requires_teacher_review": "True"
+    },
+    {
+      "id": "rule:HX-TOOLSEL-CMS-WORDPRESS-001",
+      "type": "DecisionRule",
+      "label": "",
+      "import_status": "candidate",
+      "requires_teacher_review": "True"
+    },
+    {
+      "id": "rule:HX-TOOLSEL-CLOUD-001",
+      "type": "DecisionRule",
+      "label": "",
+      "import_status": "candidate",
+      "requires_teacher_review": "True"
+    },
+    {
+      "id": "rule:HX-TOOLSEL-K8S-001",
+      "type": "DecisionRule",
+      "label": "",
+      "import_status": "candidate",
+      "requires_teacher_review": "True"
+    },
+    {
+      "id": "rule:HX-TOOLSEL-BINARY-001",
+      "type": "DecisionRule",
+      "label": "",
+      "import_status": "candidate",
+      "requires_teacher_review": "True"
+    },
+    {
+      "id": "playbook:ad_enum_netexec_basic",
+      "type": "Playbook",
+      "label": "AD Enum: Basic Share & User Enumeration (NetExec)",
+      "targetType": [
+        "windows_host",
+        "ad_domain"
+      ],
+      "baselineGroup": "windows-exploitation",
+      "difficulty": "",
+      "step_count": 3
+    },
+    {
+      "id": "playbook:brute_force_hydra",
+      "type": "Playbook",
+      "label": "Hydra 弱口令爆破教学",
+      "targetType": [
+        "web_url",
+        "dvwa",
+        "ssh_host"
+      ],
+      "baselineGroup": "web-vuln-scan",
+      "difficulty": "intermediate",
+      "step_count": 2
+    },
+    {
+      "id": "playbook:demo_web_full_killchain",
+      "type": "Playbook",
+      "label": "Web 自动化杀伤链 (演示版)",
+      "targetType": [
+        "web_url",
+        "dvwa"
+      ],
+      "baselineGroup": "web-vuln-scan",
+      "difficulty": "",
+      "step_count": 5
+    },
+    {
+      "id": "playbook:dir_enum_ffuf",
+      "type": "Playbook",
+      "label": "目录枚举（ffuf 高速模糊测试）",
+      "targetType": [
+        "web_url",
+        "dvwa"
+      ],
+      "baselineGroup": "web-vuln-scan",
+      "difficulty": "入门",
+      "step_count": 2
+    },
+    {
+      "id": "playbook:golden_dvwa_max_tools",
+      "type": "Playbook",
+      "label": "DVWA 黄金杀伤链 (10工具饱和打击版)",
+      "targetType": [
+        "dvwa"
+      ],
+      "baselineGroup": "web-vuln-scan",
+      "difficulty": "",
+      "step_count": 10
+    },
+    {
+      "id": "playbook:hash_crack_john_basic",
+      "type": "Playbook",
+      "label": "Offline Hash Cracking with John the Ripper",
+      "targetType": [
+        "local_file",
+        "any"
+      ],
+      "baselineGroup": "post-exploitation",
+      "difficulty": "beginner",
+      "step_count": 3
+    },
+    {
+      "id": "playbook:nmap_only_test",
+      "type": "Playbook",
+      "label": "Nmap Only Test (ReAct Insert Test)",
+      "targetType": [
+        "any",
+        "web_url",
+        "dvwa",
+        "local_ip"
+      ],
+      "baselineGroup": "recon",
+      "difficulty": "",
+      "step_count": 2
+    },
+    {
+      "id": "playbook:ntlm_relay_responder_basic",
+      "type": "Playbook",
+      "label": "NTLM Hash Capture with Responder",
+      "targetType": [
+        "windows_host",
+        "ad_domain"
+      ],
+      "baselineGroup": "windows-exploitation",
+      "difficulty": "intermediate",
+      "step_count": 3
+    },
+    {
+      "id": "playbook:recon_dir_enum",
+      "type": "Playbook",
+      "label": "目录与文件枚举",
+      "targetType": [
+        "web_url",
+        "dvwa"
+      ],
+      "baselineGroup": "recon",
+      "difficulty": "入门-中级",
+      "step_count": 2
+    },
+    {
+      "id": "playbook:recon_nmap_basic",
+      "type": "Playbook",
+      "label": "基础端口与服务侦察",
+      "targetType": [
+        "any",
+        "web_url",
+        "dvwa",
+        "local_ip"
+      ],
+      "baselineGroup": "recon",
+      "difficulty": "入门",
+      "step_count": 3
+    },
+    {
+      "id": "playbook:recon_subdomain_amass",
+      "type": "Playbook",
+      "label": "Recon: Subdomain Enumeration (amass)",
+      "targetType": [
+        "domain"
+      ],
+      "baselineGroup": "domain-osint",
+      "difficulty": "",
+      "step_count": 2
+    },
+    {
+      "id": "playbook:recon_web_fingerprint",
+      "type": "Playbook",
+      "label": "Web 技术栈与指纹识别",
+      "targetType": [
+        "web_url",
+        "dvwa"
+      ],
+      "baselineGroup": "recon",
+      "difficulty": "入门",
+      "step_count": 2
+    },
+    {
+      "id": "playbook:sqli_exploit_sqlmap_basic",
+      "type": "Playbook",
+      "label": "SQL 注入利用 - sqlmap 基础",
+      "targetType": [
+        "dvwa",
+        "web_url"
+      ],
+      "baselineGroup": "web-vuln-scan",
+      "difficulty": "medium",
+      "step_count": 4
+    },
+    {
+      "id": "playbook:vuln_template_nuclei",
+      "type": "Playbook",
+      "label": "漏洞模板扫描（Nuclei）",
+      "targetType": [
+        "web_url",
+        "dvwa"
+      ],
+      "baselineGroup": "web-vuln-scan",
+      "difficulty": "入门-中级",
+      "step_count": 2
+    },
+    {
+      "id": "playbook:web_full_chain_external",
+      "type": "Playbook",
+      "label": "Web 全链路渗透（外部目标）",
+      "targetType": [
+        "web_url",
+        "dvwa"
+      ],
+      "baselineGroup": "web-vuln-scan",
+      "difficulty": "",
+      "step_count": 6
+    },
+    {
+      "id": "playbook:web_param_enum_arjun",
+      "type": "Playbook",
+      "label": "Web Enum: Parameter Discovery (Arjun)",
+      "targetType": [
+        "web_url",
+        "dvwa"
+      ],
+      "baselineGroup": "recon",
+      "difficulty": "",
+      "step_count": 2
+    },
+    {
+      "id": "playbook:web_recon_basic",
+      "type": "Playbook",
+      "label": "Web Recon Basic",
+      "targetType": [
+        "web_url",
+        "dvwa"
+      ],
+      "baselineGroup": "recon",
+      "difficulty": "",
+      "step_count": 3
+    },
+    {
+      "id": "playbook:web_recon_httpx",
+      "type": "Playbook",
+      "label": "Web Recon: Live Host & Tech Detection (httpx)",
+      "targetType": [
+        "web_url",
+        "dvwa"
+      ],
+      "baselineGroup": "recon",
+      "difficulty": "",
+      "step_count": 2
+    },
+    {
+      "id": "playbook:web_server_scan_nikto",
+      "type": "Playbook",
+      "label": "Web 服务器漏洞扫描（Nikto）",
+      "targetType": [
+        "web_url",
+        "dvwa"
+      ],
+      "baselineGroup": "web-vuln-scan",
+      "difficulty": "入门-中级",
+      "step_count": 2
+    },
+    {
+      "id": "playbook:winrm_shell_evilwinrm",
+      "type": "Playbook",
+      "label": "Windows Remote Management Shell with Evil-WinRM",
+      "targetType": [
+        "windows_host",
+        "ad_domain"
+      ],
+      "baselineGroup": "windows-exploitation",
+      "difficulty": "intermediate",
+      "step_count": 2
+    }
+  ],
+  "edges": [
+    {
+      "source": "tool:nmap_scan",
+      "target": "technique:T1046",
+      "relation": "MAPS_TO",
+      "confidence": "high",
+      "tactic": "Discovery"
+    },
+    {
+      "source": "tool:nmap_scan",
+      "target": "technique:T1595",
+      "relation": "MAPS_TO",
+      "confidence": "medium",
+      "tactic": "Reconnaissance"
+    },
+    {
+      "source": "tool:rustscan_scan",
+      "target": "technique:T1046",
+      "relation": "MAPS_TO",
+      "confidence": "high",
+      "tactic": "Discovery"
+    },
+    {
+      "source": "tool:masscan_scan",
+      "target": "technique:T1595",
+      "relation": "MAPS_TO",
+      "confidence": "high",
+      "tactic": "Reconnaissance"
+    },
+    {
+      "source": "tool:autorecon_scan",
+      "target": "technique:T1046",
+      "relation": "MAPS_TO",
+      "confidence": "medium",
+      "tactic": "Discovery"
+    },
+    {
+      "source": "tool:amass_enum",
+      "target": "technique:T1590",
+      "relation": "MAPS_TO",
+      "confidence": "high",
+      "tactic": "Reconnaissance"
+    },
+    {
+      "source": "tool:amass_enum",
+      "target": "technique:T1595",
+      "relation": "MAPS_TO",
+      "confidence": "medium",
+      "tactic": "Reconnaissance"
+    },
+    {
+      "source": "tool:gobuster_scan",
+      "target": "technique:T1595",
+      "relation": "MAPS_TO",
+      "confidence": "high",
+      "tactic": "Reconnaissance"
+    },
+    {
+      "source": "tool:ffuf_scan",
+      "target": "technique:T1595",
+      "relation": "MAPS_TO",
+      "confidence": "high",
+      "tactic": "Reconnaissance"
+    },
+    {
+      "source": "tool:feroxbuster_scan",
+      "target": "technique:T1595",
+      "relation": "MAPS_TO",
+      "confidence": "high",
+      "tactic": "Reconnaissance"
+    },
+    {
+      "source": "tool:nuclei_scan",
+      "target": "technique:T1190",
+      "relation": "MAPS_TO",
+      "confidence": "medium",
+      "tactic": "Initial Access"
+    },
+    {
+      "source": "tool:nuclei_scan",
+      "target": "technique:T1595",
+      "relation": "MAPS_TO",
+      "confidence": "medium",
+      "tactic": "Reconnaissance"
+    },
+    {
+      "source": "tool:sqlmap_scan",
+      "target": "technique:T1190",
+      "relation": "MAPS_TO",
+      "confidence": "medium",
+      "tactic": "Initial Access"
+    },
+    {
+      "source": "tool:hydra_scan",
+      "target": "technique:T1110",
+      "relation": "MAPS_TO",
+      "confidence": "high",
+      "tactic": "Credential Access"
+    },
+    {
+      "source": "tool:wpscan_scan",
+      "target": "technique:T1592",
+      "relation": "MAPS_TO",
+      "confidence": "medium",
+      "tactic": "Reconnaissance"
+    },
+    {
+      "source": "tool:wpscan_scan",
+      "target": "technique:T1190",
+      "relation": "MAPS_TO",
+      "confidence": "medium",
+      "tactic": "Initial Access"
+    },
+    {
+      "source": "tool:httpx_probe",
+      "target": "technique:T1595",
+      "relation": "MAPS_TO",
+      "confidence": "medium",
+      "tactic": "Reconnaissance"
+    },
+    {
+      "source": "tool:whatweb_scan",
+      "target": "technique:T1592",
+      "relation": "MAPS_TO",
+      "confidence": "high",
+      "tactic": "Reconnaissance"
+    },
+    {
+      "source": "tool:arjun_scan",
+      "target": "technique:T1595",
+      "relation": "MAPS_TO",
+      "confidence": "medium",
+      "tactic": "Reconnaissance"
+    },
+    {
+      "source": "tool:katana_crawl",
+      "target": "technique:T1595",
+      "relation": "MAPS_TO",
+      "confidence": "medium",
+      "tactic": "Reconnaissance"
+    },
+    {
+      "source": "tool:trivy_scan",
+      "target": "technique:T1611",
+      "relation": "MAPS_TO",
+      "confidence": "low",
+      "tactic": "Privilege Escalation"
+    },
+    {
+      "source": "tool:kube_hunter_scan",
+      "target": "technique:T1611",
+      "relation": "MAPS_TO",
+      "confidence": "low",
+      "tactic": "Privilege Escalation"
+    },
+    {
+      "source": "playbook:ad_enum_netexec_basic",
+      "target": "technique:T1595",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:ad_enum_netexec_basic",
+      "target": "technique:T1611",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:ad_enum_netexec_basic",
+      "target": "technique:T1590",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:ad_enum_netexec_basic",
+      "target": "technique:T1046",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:ad_enum_netexec_basic",
+      "target": "technique:T1110",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:ad_enum_netexec_basic",
+      "target": "technique:T1190",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:ad_enum_netexec_basic",
+      "target": "technique:T1592",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:brute_force_hydra",
+      "target": "technique:T1595",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:brute_force_hydra",
+      "target": "technique:T1611",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:brute_force_hydra",
+      "target": "technique:T1590",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:brute_force_hydra",
+      "target": "technique:T1046",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:brute_force_hydra",
+      "target": "technique:T1110",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:brute_force_hydra",
+      "target": "technique:T1190",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:brute_force_hydra",
+      "target": "technique:T1592",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:demo_web_full_killchain",
+      "target": "technique:T1595",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:demo_web_full_killchain",
+      "target": "technique:T1611",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:demo_web_full_killchain",
+      "target": "technique:T1590",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:demo_web_full_killchain",
+      "target": "technique:T1046",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:demo_web_full_killchain",
+      "target": "technique:T1110",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:demo_web_full_killchain",
+      "target": "technique:T1190",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:demo_web_full_killchain",
+      "target": "technique:T1592",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:dir_enum_ffuf",
+      "target": "technique:T1595",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:dir_enum_ffuf",
+      "target": "technique:T1611",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:dir_enum_ffuf",
+      "target": "technique:T1590",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:dir_enum_ffuf",
+      "target": "technique:T1046",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:dir_enum_ffuf",
+      "target": "technique:T1110",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:dir_enum_ffuf",
+      "target": "technique:T1190",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:dir_enum_ffuf",
+      "target": "technique:T1592",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:golden_dvwa_max_tools",
+      "target": "technique:T1595",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:golden_dvwa_max_tools",
+      "target": "technique:T1611",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:golden_dvwa_max_tools",
+      "target": "technique:T1590",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:golden_dvwa_max_tools",
+      "target": "technique:T1046",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:golden_dvwa_max_tools",
+      "target": "technique:T1110",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:golden_dvwa_max_tools",
+      "target": "technique:T1190",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:golden_dvwa_max_tools",
+      "target": "technique:T1592",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:hash_crack_john_basic",
+      "target": "technique:T1595",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:hash_crack_john_basic",
+      "target": "technique:T1611",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:hash_crack_john_basic",
+      "target": "technique:T1590",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:hash_crack_john_basic",
+      "target": "technique:T1046",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:hash_crack_john_basic",
+      "target": "technique:T1110",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:hash_crack_john_basic",
+      "target": "technique:T1190",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:hash_crack_john_basic",
+      "target": "technique:T1592",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:nmap_only_test",
+      "target": "technique:T1595",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:nmap_only_test",
+      "target": "technique:T1611",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:nmap_only_test",
+      "target": "technique:T1590",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:nmap_only_test",
+      "target": "technique:T1046",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:nmap_only_test",
+      "target": "technique:T1110",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:nmap_only_test",
+      "target": "technique:T1190",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:nmap_only_test",
+      "target": "technique:T1592",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:ntlm_relay_responder_basic",
+      "target": "technique:T1595",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:ntlm_relay_responder_basic",
+      "target": "technique:T1611",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:ntlm_relay_responder_basic",
+      "target": "technique:T1590",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:ntlm_relay_responder_basic",
+      "target": "technique:T1046",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:ntlm_relay_responder_basic",
+      "target": "technique:T1110",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:ntlm_relay_responder_basic",
+      "target": "technique:T1190",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:ntlm_relay_responder_basic",
+      "target": "technique:T1592",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_dir_enum",
+      "target": "technique:T1595",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_dir_enum",
+      "target": "technique:T1611",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_dir_enum",
+      "target": "technique:T1590",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_dir_enum",
+      "target": "technique:T1046",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_dir_enum",
+      "target": "technique:T1110",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_dir_enum",
+      "target": "technique:T1190",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_dir_enum",
+      "target": "technique:T1592",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_nmap_basic",
+      "target": "technique:T1595",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_nmap_basic",
+      "target": "technique:T1611",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_nmap_basic",
+      "target": "technique:T1590",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_nmap_basic",
+      "target": "technique:T1046",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_nmap_basic",
+      "target": "technique:T1110",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_nmap_basic",
+      "target": "technique:T1190",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_nmap_basic",
+      "target": "technique:T1592",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_subdomain_amass",
+      "target": "technique:T1595",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_subdomain_amass",
+      "target": "technique:T1611",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_subdomain_amass",
+      "target": "technique:T1590",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_subdomain_amass",
+      "target": "technique:T1046",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_subdomain_amass",
+      "target": "technique:T1110",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_subdomain_amass",
+      "target": "technique:T1190",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_subdomain_amass",
+      "target": "technique:T1592",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_web_fingerprint",
+      "target": "technique:T1595",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_web_fingerprint",
+      "target": "technique:T1611",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_web_fingerprint",
+      "target": "technique:T1590",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_web_fingerprint",
+      "target": "technique:T1046",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_web_fingerprint",
+      "target": "technique:T1110",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_web_fingerprint",
+      "target": "technique:T1190",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:recon_web_fingerprint",
+      "target": "technique:T1592",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:sqli_exploit_sqlmap_basic",
+      "target": "technique:T1595",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:sqli_exploit_sqlmap_basic",
+      "target": "technique:T1611",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:sqli_exploit_sqlmap_basic",
+      "target": "technique:T1590",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:sqli_exploit_sqlmap_basic",
+      "target": "technique:T1046",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:sqli_exploit_sqlmap_basic",
+      "target": "technique:T1110",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:sqli_exploit_sqlmap_basic",
+      "target": "technique:T1190",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:sqli_exploit_sqlmap_basic",
+      "target": "technique:T1592",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:vuln_template_nuclei",
+      "target": "technique:T1595",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:vuln_template_nuclei",
+      "target": "technique:T1611",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:vuln_template_nuclei",
+      "target": "technique:T1590",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:vuln_template_nuclei",
+      "target": "technique:T1046",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:vuln_template_nuclei",
+      "target": "technique:T1110",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:vuln_template_nuclei",
+      "target": "technique:T1190",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:vuln_template_nuclei",
+      "target": "technique:T1592",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_full_chain_external",
+      "target": "technique:T1595",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_full_chain_external",
+      "target": "technique:T1611",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_full_chain_external",
+      "target": "technique:T1590",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_full_chain_external",
+      "target": "technique:T1046",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_full_chain_external",
+      "target": "technique:T1110",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_full_chain_external",
+      "target": "technique:T1190",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_full_chain_external",
+      "target": "technique:T1592",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_param_enum_arjun",
+      "target": "technique:T1595",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_param_enum_arjun",
+      "target": "technique:T1611",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_param_enum_arjun",
+      "target": "technique:T1590",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_param_enum_arjun",
+      "target": "technique:T1046",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_param_enum_arjun",
+      "target": "technique:T1110",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_param_enum_arjun",
+      "target": "technique:T1190",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_param_enum_arjun",
+      "target": "technique:T1592",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_recon_basic",
+      "target": "technique:T1595",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_recon_basic",
+      "target": "technique:T1611",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_recon_basic",
+      "target": "technique:T1590",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_recon_basic",
+      "target": "technique:T1046",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_recon_basic",
+      "target": "technique:T1110",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_recon_basic",
+      "target": "technique:T1190",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_recon_basic",
+      "target": "technique:T1592",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_recon_httpx",
+      "target": "technique:T1595",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_recon_httpx",
+      "target": "technique:T1611",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_recon_httpx",
+      "target": "technique:T1590",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_recon_httpx",
+      "target": "technique:T1046",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_recon_httpx",
+      "target": "technique:T1110",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_recon_httpx",
+      "target": "technique:T1190",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_recon_httpx",
+      "target": "technique:T1592",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_server_scan_nikto",
+      "target": "technique:T1595",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_server_scan_nikto",
+      "target": "technique:T1611",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_server_scan_nikto",
+      "target": "technique:T1590",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_server_scan_nikto",
+      "target": "technique:T1046",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_server_scan_nikto",
+      "target": "technique:T1110",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_server_scan_nikto",
+      "target": "technique:T1190",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:web_server_scan_nikto",
+      "target": "technique:T1592",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:winrm_shell_evilwinrm",
+      "target": "technique:T1595",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:winrm_shell_evilwinrm",
+      "target": "technique:T1611",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:winrm_shell_evilwinrm",
+      "target": "technique:T1590",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:winrm_shell_evilwinrm",
+      "target": "technique:T1046",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:winrm_shell_evilwinrm",
+      "target": "technique:T1110",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:winrm_shell_evilwinrm",
+      "target": "technique:T1190",
+      "relation": "COVERS"
+    },
+    {
+      "source": "playbook:winrm_shell_evilwinrm",
+      "target": "technique:T1592",
+      "relation": "COVERS"
+    }
+  ]
+}

@@ -1,0 +1,891 @@
+<?xml version='1.0' encoding='utf-8'?>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns">
+  <key id="node_type" for="node" attr.name="type" attr.type="string" />
+  <key id="node_label" for="node" attr.name="label" attr.type="string" />
+  <key id="node_category" for="node" attr.name="category" attr.type="string" />
+  <key id="node_tactic" for="node" attr.name="tactic" attr.type="string" />
+  <key id="node_import_status" for="node" attr.name="import_status" attr.type="string" />
+  <key id="edge_relation" for="edge" attr.name="relation" attr.type="string" />
+  <key id="edge_confidence" for="edge" attr.name="confidence" attr.type="string" />
+  <graph id="RedTeam-Edu-KG" edgedefault="directed">
+    <node id="tool_nmap_scan">
+      <data key="node_type">Tool</data>
+      <data key="node_label">nmap</data>
+      <data key="node_category">network_reconnaissance</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_gobuster_scan">
+      <data key="node_type">Tool</data>
+      <data key="node_label">gobuster</data>
+      <data key="node_category">web_application_security</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_nuclei_scan">
+      <data key="node_type">Tool</data>
+      <data key="node_label">nuclei</data>
+      <data key="node_category">web_application_security</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_prowler_scan">
+      <data key="node_type">Tool</data>
+      <data key="node_label">prowler</data>
+      <data key="node_category">cloud_security</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_trivy_scan">
+      <data key="node_type">Tool</data>
+      <data key="node_label">trivy</data>
+      <data key="node_category">cloud_container_security</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_scout_suite_assessment">
+      <data key="node_type">Tool</data>
+      <data key="node_label">scout-suite</data>
+      <data key="node_category">cloud_security</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_cloudmapper_analysis">
+      <data key="node_type">Tool</data>
+      <data key="node_label">cloudmapper</data>
+      <data key="node_category">cloud_security</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_pacu_exploitation">
+      <data key="node_type">Tool</data>
+      <data key="node_label">pacu</data>
+      <data key="node_category">cloud_security</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_kube_hunter_scan">
+      <data key="node_type">Tool</data>
+      <data key="node_label">kube-hunter</data>
+      <data key="node_category">cloud_container_security</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_kube_bench_cis">
+      <data key="node_type">Tool</data>
+      <data key="node_label">kube-bench</data>
+      <data key="node_category">cloud_container_security</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_docker_bench_security_scan">
+      <data key="node_type">Tool</data>
+      <data key="node_label">docker-bench-security</data>
+      <data key="node_category">cloud_container_security</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_clair_vulnerability_scan">
+      <data key="node_type">Tool</data>
+      <data key="node_label">clair</data>
+      <data key="node_category">cloud_container_security</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_falco_runtime_monitoring">
+      <data key="node_type">Tool</data>
+      <data key="node_label">falco</data>
+      <data key="node_category">cloud_container_security</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_checkov_iac_scan">
+      <data key="node_type">Tool</data>
+      <data key="node_label">checkov</data>
+      <data key="node_category">infrastructure_as_code_security</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_terrascan_iac_scan">
+      <data key="node_type">Tool</data>
+      <data key="node_label">terrascan</data>
+      <data key="node_category">infrastructure_as_code_security</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_rustscan_scan">
+      <data key="node_type">Tool</data>
+      <data key="node_label">rustscan</data>
+      <data key="node_category">network_reconnaissance</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_masscan_scan">
+      <data key="node_type">Tool</data>
+      <data key="node_label">masscan</data>
+      <data key="node_category">network_reconnaissance</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_autorecon_scan">
+      <data key="node_type">Tool</data>
+      <data key="node_label">autorecon</data>
+      <data key="node_category">network_reconnaissance</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_amass_enum">
+      <data key="node_type">Tool</data>
+      <data key="node_label">amass</data>
+      <data key="node_category">osint_reconnaissance</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_feroxbuster_scan">
+      <data key="node_type">Tool</data>
+      <data key="node_label">feroxbuster</data>
+      <data key="node_category">web_application_security</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_ffuf_scan">
+      <data key="node_type">Tool</data>
+      <data key="node_label">ffuf</data>
+      <data key="node_category">web_application_security</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_sqlmap_scan">
+      <data key="node_type">Tool</data>
+      <data key="node_label">sqlmap</data>
+      <data key="node_category">web_application_security</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_wpscan_scan">
+      <data key="node_type">Tool</data>
+      <data key="node_label">wpscan</data>
+      <data key="node_category">web_application_security</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_ghidra_analyze">
+      <data key="node_type">Tool</data>
+      <data key="node_label">ghidra</data>
+      <data key="node_category">binary_analysis</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_radare2_analyze">
+      <data key="node_type">Tool</data>
+      <data key="node_label">radare2</data>
+      <data key="node_category">binary_analysis</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_gdb_debug">
+      <data key="node_type">Tool</data>
+      <data key="node_label">gdb</data>
+      <data key="node_category">binary_analysis</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_pwntools_exploit">
+      <data key="node_type">Tool</data>
+      <data key="node_label">pwntools</data>
+      <data key="node_category">binary_analysis</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="tool_angr_analyze">
+      <data key="node_type">Tool</data>
+      <data key="node_label">angr</data>
+      <data key="node_category">binary_analysis</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="technique_T1046">
+      <data key="node_type">ATT&amp;CK_Technique</data>
+      <data key="node_label">T1046: Network Service Discovery</data>
+      <data key="node_tactic">Discovery</data>
+    </node>
+    <node id="technique_T1595">
+      <data key="node_type">ATT&amp;CK_Technique</data>
+      <data key="node_label">T1595: Active Scanning</data>
+      <data key="node_tactic">Reconnaissance</data>
+    </node>
+    <node id="technique_T1590">
+      <data key="node_type">ATT&amp;CK_Technique</data>
+      <data key="node_label">T1590: Gather Victim Network Information</data>
+      <data key="node_tactic">Reconnaissance</data>
+    </node>
+    <node id="technique_T1190">
+      <data key="node_type">ATT&amp;CK_Technique</data>
+      <data key="node_label">T1190: Exploit Public-Facing Application</data>
+      <data key="node_tactic">Initial Access</data>
+    </node>
+    <node id="technique_T1110">
+      <data key="node_type">ATT&amp;CK_Technique</data>
+      <data key="node_label">T1110: Brute Force</data>
+      <data key="node_tactic">Credential Access</data>
+    </node>
+    <node id="technique_T1592">
+      <data key="node_type">ATT&amp;CK_Technique</data>
+      <data key="node_label">T1592: Gather Victim Host Information</data>
+      <data key="node_tactic">Reconnaissance</data>
+    </node>
+    <node id="technique_T1611">
+      <data key="node_type">ATT&amp;CK_Technique</data>
+      <data key="node_label">T1611: Escape to Host</data>
+      <data key="node_tactic">Privilege Escalation</data>
+    </node>
+    <node id="agent_HX-AGENT-001">
+      <data key="node_type">Agent</data>
+      <data key="node_label">IntelligentDecisionEngine</data>
+    </node>
+    <node id="agent_HX-AGENT-002">
+      <data key="node_type">Agent</data>
+      <data key="node_label">BugBountyWorkflowManager</data>
+    </node>
+    <node id="agent_HX-AGENT-003">
+      <data key="node_type">Agent</data>
+      <data key="node_label">CTFWorkflowManager</data>
+    </node>
+    <node id="agent_HX-AGENT-004">
+      <data key="node_type">Agent</data>
+      <data key="node_label">CVEIntelligenceManager</data>
+    </node>
+    <node id="agent_HX-AGENT-005">
+      <data key="node_type">Agent</data>
+      <data key="node_label">AIExploitGenerator</data>
+    </node>
+    <node id="agent_HX-AGENT-006">
+      <data key="node_type">Agent</data>
+      <data key="node_label">VulnerabilityCorrelator</data>
+    </node>
+    <node id="agent_HX-AGENT-007">
+      <data key="node_type">Agent</data>
+      <data key="node_label">TechnologyDetector</data>
+    </node>
+    <node id="agent_HX-AGENT-008">
+      <data key="node_type">Agent</data>
+      <data key="node_label">RateLimitDetector</data>
+    </node>
+    <node id="agent_HX-AGENT-009">
+      <data key="node_type">Agent</data>
+      <data key="node_label">FailureRecoverySystem</data>
+    </node>
+    <node id="agent_HX-AGENT-010">
+      <data key="node_type">Agent</data>
+      <data key="node_label">PerformanceMonitor</data>
+    </node>
+    <node id="agent_HX-AGENT-011">
+      <data key="node_type">Agent</data>
+      <data key="node_label">ParameterOptimizer</data>
+    </node>
+    <node id="agent_HX-AGENT-012">
+      <data key="node_type">Agent</data>
+      <data key="node_label">GracefulDegradation</data>
+    </node>
+    <node id="rule_HX-TOOLSEL-WEB-001">
+      <data key="node_type">DecisionRule</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="rule_HX-TOOLSEL-WEB-SQLI-001">
+      <data key="node_type">DecisionRule</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="rule_HX-TOOLSEL-NETWORK-001">
+      <data key="node_type">DecisionRule</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="rule_HX-TOOLSEL-SMB-001">
+      <data key="node_type">DecisionRule</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="rule_HX-TOOLSEL-API-001">
+      <data key="node_type">DecisionRule</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="rule_HX-TOOLSEL-DOMAIN-OSINT-001">
+      <data key="node_type">DecisionRule</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="rule_HX-TOOLSEL-CMS-WORDPRESS-001">
+      <data key="node_type">DecisionRule</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="rule_HX-TOOLSEL-CLOUD-001">
+      <data key="node_type">DecisionRule</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="rule_HX-TOOLSEL-K8S-001">
+      <data key="node_type">DecisionRule</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="rule_HX-TOOLSEL-BINARY-001">
+      <data key="node_type">DecisionRule</data>
+      <data key="node_import_status">candidate</data>
+    </node>
+    <node id="playbook_ad_enum_netexec_basic">
+      <data key="node_type">Playbook</data>
+      <data key="node_label">AD Enum: Basic Share &amp; User Enumeration (NetExec)</data>
+    </node>
+    <node id="playbook_brute_force_hydra">
+      <data key="node_type">Playbook</data>
+      <data key="node_label">Hydra 弱口令爆破教学</data>
+    </node>
+    <node id="playbook_demo_web_full_killchain">
+      <data key="node_type">Playbook</data>
+      <data key="node_label">Web 自动化杀伤链 (演示版)</data>
+    </node>
+    <node id="playbook_dir_enum_ffuf">
+      <data key="node_type">Playbook</data>
+      <data key="node_label">目录枚举（ffuf 高速模糊测试）</data>
+    </node>
+    <node id="playbook_golden_dvwa_max_tools">
+      <data key="node_type">Playbook</data>
+      <data key="node_label">DVWA 黄金杀伤链 (10工具饱和打击版)</data>
+    </node>
+    <node id="playbook_hash_crack_john_basic">
+      <data key="node_type">Playbook</data>
+      <data key="node_label">Offline Hash Cracking with John the Ripper</data>
+    </node>
+    <node id="playbook_nmap_only_test">
+      <data key="node_type">Playbook</data>
+      <data key="node_label">Nmap Only Test (ReAct Insert Test)</data>
+    </node>
+    <node id="playbook_ntlm_relay_responder_basic">
+      <data key="node_type">Playbook</data>
+      <data key="node_label">NTLM Hash Capture with Responder</data>
+    </node>
+    <node id="playbook_recon_dir_enum">
+      <data key="node_type">Playbook</data>
+      <data key="node_label">目录与文件枚举</data>
+    </node>
+    <node id="playbook_recon_nmap_basic">
+      <data key="node_type">Playbook</data>
+      <data key="node_label">基础端口与服务侦察</data>
+    </node>
+    <node id="playbook_recon_subdomain_amass">
+      <data key="node_type">Playbook</data>
+      <data key="node_label">Recon: Subdomain Enumeration (amass)</data>
+    </node>
+    <node id="playbook_recon_web_fingerprint">
+      <data key="node_type">Playbook</data>
+      <data key="node_label">Web 技术栈与指纹识别</data>
+    </node>
+    <node id="playbook_sqli_exploit_sqlmap_basic">
+      <data key="node_type">Playbook</data>
+      <data key="node_label">SQL 注入利用 - sqlmap 基础</data>
+    </node>
+    <node id="playbook_vuln_template_nuclei">
+      <data key="node_type">Playbook</data>
+      <data key="node_label">漏洞模板扫描（Nuclei）</data>
+    </node>
+    <node id="playbook_web_full_chain_external">
+      <data key="node_type">Playbook</data>
+      <data key="node_label">Web 全链路渗透（外部目标）</data>
+    </node>
+    <node id="playbook_web_param_enum_arjun">
+      <data key="node_type">Playbook</data>
+      <data key="node_label">Web Enum: Parameter Discovery (Arjun)</data>
+    </node>
+    <node id="playbook_web_recon_basic">
+      <data key="node_type">Playbook</data>
+      <data key="node_label">Web Recon Basic</data>
+    </node>
+    <node id="playbook_web_recon_httpx">
+      <data key="node_type">Playbook</data>
+      <data key="node_label">Web Recon: Live Host &amp; Tech Detection (httpx)</data>
+    </node>
+    <node id="playbook_web_server_scan_nikto">
+      <data key="node_type">Playbook</data>
+      <data key="node_label">Web 服务器漏洞扫描（Nikto）</data>
+    </node>
+    <node id="playbook_winrm_shell_evilwinrm">
+      <data key="node_type">Playbook</data>
+      <data key="node_label">Windows Remote Management Shell with Evil-WinRM</data>
+    </node>
+    <edge id="e0" source="tool_nmap_scan" target="technique_T1046">
+      <data key="edge_relation">MAPS_TO</data>
+      <data key="edge_confidence">high</data>
+    </edge>
+    <edge id="e1" source="tool_nmap_scan" target="technique_T1595">
+      <data key="edge_relation">MAPS_TO</data>
+      <data key="edge_confidence">medium</data>
+    </edge>
+    <edge id="e2" source="tool_rustscan_scan" target="technique_T1046">
+      <data key="edge_relation">MAPS_TO</data>
+      <data key="edge_confidence">high</data>
+    </edge>
+    <edge id="e3" source="tool_masscan_scan" target="technique_T1595">
+      <data key="edge_relation">MAPS_TO</data>
+      <data key="edge_confidence">high</data>
+    </edge>
+    <edge id="e4" source="tool_autorecon_scan" target="technique_T1046">
+      <data key="edge_relation">MAPS_TO</data>
+      <data key="edge_confidence">medium</data>
+    </edge>
+    <edge id="e5" source="tool_amass_enum" target="technique_T1590">
+      <data key="edge_relation">MAPS_TO</data>
+      <data key="edge_confidence">high</data>
+    </edge>
+    <edge id="e6" source="tool_amass_enum" target="technique_T1595">
+      <data key="edge_relation">MAPS_TO</data>
+      <data key="edge_confidence">medium</data>
+    </edge>
+    <edge id="e7" source="tool_gobuster_scan" target="technique_T1595">
+      <data key="edge_relation">MAPS_TO</data>
+      <data key="edge_confidence">high</data>
+    </edge>
+    <edge id="e8" source="tool_ffuf_scan" target="technique_T1595">
+      <data key="edge_relation">MAPS_TO</data>
+      <data key="edge_confidence">high</data>
+    </edge>
+    <edge id="e9" source="tool_feroxbuster_scan" target="technique_T1595">
+      <data key="edge_relation">MAPS_TO</data>
+      <data key="edge_confidence">high</data>
+    </edge>
+    <edge id="e10" source="tool_nuclei_scan" target="technique_T1190">
+      <data key="edge_relation">MAPS_TO</data>
+      <data key="edge_confidence">medium</data>
+    </edge>
+    <edge id="e11" source="tool_nuclei_scan" target="technique_T1595">
+      <data key="edge_relation">MAPS_TO</data>
+      <data key="edge_confidence">medium</data>
+    </edge>
+    <edge id="e12" source="tool_sqlmap_scan" target="technique_T1190">
+      <data key="edge_relation">MAPS_TO</data>
+      <data key="edge_confidence">medium</data>
+    </edge>
+    <edge id="e13" source="tool_hydra_scan" target="technique_T1110">
+      <data key="edge_relation">MAPS_TO</data>
+      <data key="edge_confidence">high</data>
+    </edge>
+    <edge id="e14" source="tool_wpscan_scan" target="technique_T1592">
+      <data key="edge_relation">MAPS_TO</data>
+      <data key="edge_confidence">medium</data>
+    </edge>
+    <edge id="e15" source="tool_wpscan_scan" target="technique_T1190">
+      <data key="edge_relation">MAPS_TO</data>
+      <data key="edge_confidence">medium</data>
+    </edge>
+    <edge id="e16" source="tool_httpx_probe" target="technique_T1595">
+      <data key="edge_relation">MAPS_TO</data>
+      <data key="edge_confidence">medium</data>
+    </edge>
+    <edge id="e17" source="tool_whatweb_scan" target="technique_T1592">
+      <data key="edge_relation">MAPS_TO</data>
+      <data key="edge_confidence">high</data>
+    </edge>
+    <edge id="e18" source="tool_arjun_scan" target="technique_T1595">
+      <data key="edge_relation">MAPS_TO</data>
+      <data key="edge_confidence">medium</data>
+    </edge>
+    <edge id="e19" source="tool_katana_crawl" target="technique_T1595">
+      <data key="edge_relation">MAPS_TO</data>
+      <data key="edge_confidence">medium</data>
+    </edge>
+    <edge id="e20" source="tool_trivy_scan" target="technique_T1611">
+      <data key="edge_relation">MAPS_TO</data>
+      <data key="edge_confidence">low</data>
+    </edge>
+    <edge id="e21" source="tool_kube_hunter_scan" target="technique_T1611">
+      <data key="edge_relation">MAPS_TO</data>
+      <data key="edge_confidence">low</data>
+    </edge>
+    <edge id="e22" source="playbook_ad_enum_netexec_basic" target="technique_T1595">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e23" source="playbook_ad_enum_netexec_basic" target="technique_T1611">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e24" source="playbook_ad_enum_netexec_basic" target="technique_T1590">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e25" source="playbook_ad_enum_netexec_basic" target="technique_T1046">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e26" source="playbook_ad_enum_netexec_basic" target="technique_T1110">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e27" source="playbook_ad_enum_netexec_basic" target="technique_T1190">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e28" source="playbook_ad_enum_netexec_basic" target="technique_T1592">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e29" source="playbook_brute_force_hydra" target="technique_T1595">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e30" source="playbook_brute_force_hydra" target="technique_T1611">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e31" source="playbook_brute_force_hydra" target="technique_T1590">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e32" source="playbook_brute_force_hydra" target="technique_T1046">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e33" source="playbook_brute_force_hydra" target="technique_T1110">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e34" source="playbook_brute_force_hydra" target="technique_T1190">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e35" source="playbook_brute_force_hydra" target="technique_T1592">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e36" source="playbook_demo_web_full_killchain" target="technique_T1595">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e37" source="playbook_demo_web_full_killchain" target="technique_T1611">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e38" source="playbook_demo_web_full_killchain" target="technique_T1590">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e39" source="playbook_demo_web_full_killchain" target="technique_T1046">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e40" source="playbook_demo_web_full_killchain" target="technique_T1110">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e41" source="playbook_demo_web_full_killchain" target="technique_T1190">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e42" source="playbook_demo_web_full_killchain" target="technique_T1592">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e43" source="playbook_dir_enum_ffuf" target="technique_T1595">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e44" source="playbook_dir_enum_ffuf" target="technique_T1611">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e45" source="playbook_dir_enum_ffuf" target="technique_T1590">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e46" source="playbook_dir_enum_ffuf" target="technique_T1046">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e47" source="playbook_dir_enum_ffuf" target="technique_T1110">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e48" source="playbook_dir_enum_ffuf" target="technique_T1190">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e49" source="playbook_dir_enum_ffuf" target="technique_T1592">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e50" source="playbook_golden_dvwa_max_tools" target="technique_T1595">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e51" source="playbook_golden_dvwa_max_tools" target="technique_T1611">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e52" source="playbook_golden_dvwa_max_tools" target="technique_T1590">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e53" source="playbook_golden_dvwa_max_tools" target="technique_T1046">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e54" source="playbook_golden_dvwa_max_tools" target="technique_T1110">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e55" source="playbook_golden_dvwa_max_tools" target="technique_T1190">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e56" source="playbook_golden_dvwa_max_tools" target="technique_T1592">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e57" source="playbook_hash_crack_john_basic" target="technique_T1595">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e58" source="playbook_hash_crack_john_basic" target="technique_T1611">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e59" source="playbook_hash_crack_john_basic" target="technique_T1590">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e60" source="playbook_hash_crack_john_basic" target="technique_T1046">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e61" source="playbook_hash_crack_john_basic" target="technique_T1110">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e62" source="playbook_hash_crack_john_basic" target="technique_T1190">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e63" source="playbook_hash_crack_john_basic" target="technique_T1592">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e64" source="playbook_nmap_only_test" target="technique_T1595">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e65" source="playbook_nmap_only_test" target="technique_T1611">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e66" source="playbook_nmap_only_test" target="technique_T1590">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e67" source="playbook_nmap_only_test" target="technique_T1046">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e68" source="playbook_nmap_only_test" target="technique_T1110">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e69" source="playbook_nmap_only_test" target="technique_T1190">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e70" source="playbook_nmap_only_test" target="technique_T1592">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e71" source="playbook_ntlm_relay_responder_basic" target="technique_T1595">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e72" source="playbook_ntlm_relay_responder_basic" target="technique_T1611">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e73" source="playbook_ntlm_relay_responder_basic" target="technique_T1590">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e74" source="playbook_ntlm_relay_responder_basic" target="technique_T1046">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e75" source="playbook_ntlm_relay_responder_basic" target="technique_T1110">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e76" source="playbook_ntlm_relay_responder_basic" target="technique_T1190">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e77" source="playbook_ntlm_relay_responder_basic" target="technique_T1592">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e78" source="playbook_recon_dir_enum" target="technique_T1595">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e79" source="playbook_recon_dir_enum" target="technique_T1611">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e80" source="playbook_recon_dir_enum" target="technique_T1590">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e81" source="playbook_recon_dir_enum" target="technique_T1046">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e82" source="playbook_recon_dir_enum" target="technique_T1110">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e83" source="playbook_recon_dir_enum" target="technique_T1190">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e84" source="playbook_recon_dir_enum" target="technique_T1592">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e85" source="playbook_recon_nmap_basic" target="technique_T1595">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e86" source="playbook_recon_nmap_basic" target="technique_T1611">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e87" source="playbook_recon_nmap_basic" target="technique_T1590">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e88" source="playbook_recon_nmap_basic" target="technique_T1046">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e89" source="playbook_recon_nmap_basic" target="technique_T1110">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e90" source="playbook_recon_nmap_basic" target="technique_T1190">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e91" source="playbook_recon_nmap_basic" target="technique_T1592">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e92" source="playbook_recon_subdomain_amass" target="technique_T1595">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e93" source="playbook_recon_subdomain_amass" target="technique_T1611">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e94" source="playbook_recon_subdomain_amass" target="technique_T1590">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e95" source="playbook_recon_subdomain_amass" target="technique_T1046">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e96" source="playbook_recon_subdomain_amass" target="technique_T1110">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e97" source="playbook_recon_subdomain_amass" target="technique_T1190">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e98" source="playbook_recon_subdomain_amass" target="technique_T1592">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e99" source="playbook_recon_web_fingerprint" target="technique_T1595">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e100" source="playbook_recon_web_fingerprint" target="technique_T1611">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e101" source="playbook_recon_web_fingerprint" target="technique_T1590">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e102" source="playbook_recon_web_fingerprint" target="technique_T1046">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e103" source="playbook_recon_web_fingerprint" target="technique_T1110">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e104" source="playbook_recon_web_fingerprint" target="technique_T1190">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e105" source="playbook_recon_web_fingerprint" target="technique_T1592">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e106" source="playbook_sqli_exploit_sqlmap_basic" target="technique_T1595">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e107" source="playbook_sqli_exploit_sqlmap_basic" target="technique_T1611">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e108" source="playbook_sqli_exploit_sqlmap_basic" target="technique_T1590">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e109" source="playbook_sqli_exploit_sqlmap_basic" target="technique_T1046">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e110" source="playbook_sqli_exploit_sqlmap_basic" target="technique_T1110">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e111" source="playbook_sqli_exploit_sqlmap_basic" target="technique_T1190">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e112" source="playbook_sqli_exploit_sqlmap_basic" target="technique_T1592">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e113" source="playbook_vuln_template_nuclei" target="technique_T1595">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e114" source="playbook_vuln_template_nuclei" target="technique_T1611">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e115" source="playbook_vuln_template_nuclei" target="technique_T1590">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e116" source="playbook_vuln_template_nuclei" target="technique_T1046">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e117" source="playbook_vuln_template_nuclei" target="technique_T1110">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e118" source="playbook_vuln_template_nuclei" target="technique_T1190">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e119" source="playbook_vuln_template_nuclei" target="technique_T1592">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e120" source="playbook_web_full_chain_external" target="technique_T1595">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e121" source="playbook_web_full_chain_external" target="technique_T1611">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e122" source="playbook_web_full_chain_external" target="technique_T1590">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e123" source="playbook_web_full_chain_external" target="technique_T1046">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e124" source="playbook_web_full_chain_external" target="technique_T1110">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e125" source="playbook_web_full_chain_external" target="technique_T1190">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e126" source="playbook_web_full_chain_external" target="technique_T1592">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e127" source="playbook_web_param_enum_arjun" target="technique_T1595">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e128" source="playbook_web_param_enum_arjun" target="technique_T1611">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e129" source="playbook_web_param_enum_arjun" target="technique_T1590">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e130" source="playbook_web_param_enum_arjun" target="technique_T1046">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e131" source="playbook_web_param_enum_arjun" target="technique_T1110">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e132" source="playbook_web_param_enum_arjun" target="technique_T1190">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e133" source="playbook_web_param_enum_arjun" target="technique_T1592">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e134" source="playbook_web_recon_basic" target="technique_T1595">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e135" source="playbook_web_recon_basic" target="technique_T1611">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e136" source="playbook_web_recon_basic" target="technique_T1590">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e137" source="playbook_web_recon_basic" target="technique_T1046">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e138" source="playbook_web_recon_basic" target="technique_T1110">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e139" source="playbook_web_recon_basic" target="technique_T1190">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e140" source="playbook_web_recon_basic" target="technique_T1592">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e141" source="playbook_web_recon_httpx" target="technique_T1595">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e142" source="playbook_web_recon_httpx" target="technique_T1611">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e143" source="playbook_web_recon_httpx" target="technique_T1590">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e144" source="playbook_web_recon_httpx" target="technique_T1046">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e145" source="playbook_web_recon_httpx" target="technique_T1110">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e146" source="playbook_web_recon_httpx" target="technique_T1190">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e147" source="playbook_web_recon_httpx" target="technique_T1592">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e148" source="playbook_web_server_scan_nikto" target="technique_T1595">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e149" source="playbook_web_server_scan_nikto" target="technique_T1611">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e150" source="playbook_web_server_scan_nikto" target="technique_T1590">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e151" source="playbook_web_server_scan_nikto" target="technique_T1046">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e152" source="playbook_web_server_scan_nikto" target="technique_T1110">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e153" source="playbook_web_server_scan_nikto" target="technique_T1190">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e154" source="playbook_web_server_scan_nikto" target="technique_T1592">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e155" source="playbook_winrm_shell_evilwinrm" target="technique_T1595">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e156" source="playbook_winrm_shell_evilwinrm" target="technique_T1611">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e157" source="playbook_winrm_shell_evilwinrm" target="technique_T1590">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e158" source="playbook_winrm_shell_evilwinrm" target="technique_T1046">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e159" source="playbook_winrm_shell_evilwinrm" target="technique_T1110">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e160" source="playbook_winrm_shell_evilwinrm" target="technique_T1190">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+    <edge id="e161" source="playbook_winrm_shell_evilwinrm" target="technique_T1592">
+      <data key="edge_relation">COVERS</data>
+    </edge>
+  </graph>
+</graphml>

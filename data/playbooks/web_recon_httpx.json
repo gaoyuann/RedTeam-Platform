@@ -1,0 +1,73 @@
+{
+  "id": "web_recon_httpx",
+  "name": "Web Recon: Live Host & Tech Detection (httpx)",
+  "description": "Uses httpx to quickly identify live web servers from a list of URLs and performs basic technology detection.",
+  "tags": [
+    "web",
+    "recon",
+    "httpx",
+    "osint"
+  ],
+  "steps": [
+    {
+      "id": "step1_live_probe",
+      "name": "Live Host Probe",
+      "description": "Run httpx against the target to check for live web servers.",
+      "toolId": "httpx",
+      "argsTemplate": [
+        "-u",
+        "<target>",
+        "-silent",
+        "-json"
+      ],
+      "ruleIds": [
+        "httpx_live_url"
+      ],
+      "payload_id": "httpx"
+    },
+    {
+      "id": "step2_tech_detect",
+      "name": "Technology Detection",
+      "description": "Run httpx with technology detection enabled to identify web technologies.",
+      "toolId": "httpx",
+      "argsTemplate": [
+        "-u",
+        "<target>",
+        "-silent",
+        "-json",
+        "-title",
+        "-tech-detect",
+        "-status-code"
+      ],
+      "ruleIds": [
+        "httpx_live_url"
+      ],
+      "payload_id": "httpx"
+    }
+  ],
+  "targetType": [
+    "web_url",
+    "dvwa"
+  ],
+  "notSuitableFor": [],
+  "baselineGroup": "recon",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "httpx 探测，需要目标为 HTTP Web 服务",
+  "applicableTargetType": [
+    "web_url",
+    "dvwa"
+  ],
+  "teachingObjective": "演示使用 httpx 对 Web 服务进行快速探测和信息收集",
+  "dvwa_profile": {
+    "target_type": "dvwa",
+    "host": "localhost",
+    "port": 8080,
+    "base_url": "http://localhost:8080",
+    "login_url": "http://localhost:8080/login.php",
+    "sqli_url": "http://localhost:8080/vulnerabilities/sqli/?id=1&Submit=Submit",
+    "security_level": "low",
+    "requires_cookie": false
+  },
+  "target_class": "dvwa",
+  "disableAutoInsert": true
+}
