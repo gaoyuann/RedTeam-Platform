@@ -34,14 +34,17 @@ void PlaybookPage::setupUI() {
   m_groupFilter = new QComboBox;
   m_groupFilter->addItem("全部", "");
   m_groupFilter->addItem("侦察", "recon");
-  m_groupFilter->addItem("Web漏洞扫描", "web-vuln-scan");
+  m_groupFilter->addItem("网站漏洞扫描", "web-vuln-scan");
   m_groupFilter->addItem("Windows利用", "windows-exploitation");
   m_groupFilter->addItem("后渗透", "post-exploitation");
   m_groupFilter->addItem("内网横向", "internal-network-exploitation");
   m_groupFilter->addItem("本地安全检查", "local-security-check");
   m_groupFilter->addItem("影响演示", "impact-demonstration");
   m_groupFilter->addItem("域信息收集", "domain-osint");
-  m_showGenerated = new QCheckBox("含AI生成");
+  m_groupFilter->addItem("数据抵近窃取", "data-exfiltration");
+  m_groupFilter->addItem("信息篡改欺骗", "tampering-deception");
+  m_groupFilter->addItem("关键设备夺控", "device-control");
+  m_showGenerated = new QCheckBox("包含智能生成内容");
   filterH->addWidget(new QLabel("基线组:"));
   filterH->addWidget(m_groupFilter);
   filterH->addWidget(m_showGenerated);
@@ -141,13 +144,17 @@ QString PlaybookPage::formatDifficulty(const QString &s) {
 QString PlaybookPage::formatBaselineGroup(const QString &s) {
   if (s.isEmpty()) return "—";
   if (s == "recon")                           return "侦察";
-  if (s == "web-vuln-scan")                   return "Web漏洞扫描";
+  if (s == "web-vuln-scan")                   return "网站漏洞扫描";
   if (s == "windows-exploitation")            return "Windows利用";
   if (s == "post-exploitation")               return "后渗透";
   if (s == "internal-network-exploitation")   return "内网横向";
   if (s == "local-security-check")            return "本地安全检查";
   if (s == "impact-demonstration")            return "影响演示";
   if (s == "domain-osint")                    return "域信息收集";
+  if (s == "data-exfiltration")               return "数据抵近窃取";
+  if (s == "tampering-deception")             return "信息篡改欺骗";
+  if (s == "device-control")                  return "关键设备夺控";
+  if (s == "credential-access")               return "凭据获取";
   if (s == "brute")                           return "暴力破解";
   if (s == "exploit")                         return "漏洞利用";
   return s;
@@ -279,7 +286,7 @@ void PlaybookPage::onDeletePlaybook() {
   m_api->del("/api/playbooks/" + m_selectedId, 5000, [this](const QJsonObject &) {
     m_selectedId.clear();
     m_detailTree->clear();
-    m_detailLabel->setText("选择 Playbook 查看详情");
+    m_detailLabel->setText("选择预案查看详情");
     m_goExecBtn->setEnabled(false);
     onLoadList();
   });
@@ -321,6 +328,9 @@ void PlaybookPage::onNewPlaybook() {
   groupCombo->addItem("漏洞扫描", "vuln_scan");
   groupCombo->addItem("暴力破解", "brute");
   groupCombo->addItem("漏洞利用", "exploit");
+  groupCombo->addItem("数据抵近窃取", "data-exfiltration");
+  groupCombo->addItem("信息篡改欺骗", "tampering-deception");
+  groupCombo->addItem("关键设备夺控", "device-control");
   form->addRow("基线组:", groupCombo);
 
   auto *diffCombo = new QComboBox;

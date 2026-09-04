@@ -157,7 +157,7 @@
     "local_ip",
     "web_url"
   ],
-  "baselineGroup": "windows-exploitation",
+  "baselineGroup": "device-control",
   "expectedOutputPolicy": "expect_output",
   "emptyOutputExplanation": "木马自启动项在远程 Windows 靶机中注册；需要 Windows 靶机开放 WinRM 端口且提供有效的管理员凭据",
   "applicableTargetType": [
@@ -166,5 +166,6 @@
   ],
   "teachingObjective": "演示完整远程攻击链：侦察发现 WinRM 服务 → 凭据验证 → 载荷准备 → 通过计划任务（T1053.005）实现持久化植入并自验证。本战术手册诚实标注凭据为前置输入，模拟攻击者已获取有效身份后的操作流程。",
   "target_class": "windows_ad",
-  "disableAutoInsert": true
+  "disableAutoInsert": true,
+  "baseline_group": "device-control"
 }

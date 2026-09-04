@@ -1,0 +1,193 @@
+{
+  "id": "web_auto_killchain",
+  "name": "Web 自动杀伤链（通用版）",
+  "description": "通用 Web 应用自动杀伤链：从端口扫描、指纹识别、目录枚举到漏洞扫描的完整侦察流程，适用于任意 Web 应用目标。自动串联 nmap、whatweb、gobuster、nuclei、nikto 五大工具，提供全面 Web 攻击面画像。",
+  "category": "recon",
+  "difficulty": "入门",
+  "estimatedDuration": "15 min",
+  "rolesAllowed": [
+    "operator",
+    "admin"
+  ],
+  "mitrePhases": [
+    "Reconnaissance"
+  ],
+  "mitreTechniques": [
+    "T1046",
+    "T1595",
+    "T1083"
+  ],
+  "baseline_group": "recon",
+  "baselineGroup": "recon",
+  "targetType": [
+    "web_url",
+    "local_ip"
+  ],
+  "steps": [
+    {
+      "id": "step0_nmap_scan",
+      "name": "端口扫描 - nmap",
+      "description": "nmap 端口扫描与服务版本探测（-sV -Pn），发现目标开放的 TCP 端口和运行的服务版本信息，为后续侦察提供入口点。",
+      "toolId": "nmap",
+      "argsTemplate": [
+        "-sV",
+        "-Pn",
+        "<target>"
+      ],
+      "score": 15,
+      "status": "PENDING",
+      "optional": true,
+      "expectedMitre": [
+        "T1046",
+        "T1595"
+      ],
+      "payload_id": "port-scan"
+    },
+    {
+      "id": "step1_whatweb_fingerprint",
+      "name": "指纹识别 - whatweb",
+      "description": "whatweb 技术栈指纹识别，检测目标 Web 服务器使用的 CMS、框架、JavaScript 库、服务器类型等技术信息。",
+      "toolId": "whatweb",
+      "argsTemplate": [
+        "<target>",
+        "--log-brief=-"
+      ],
+      "score": 15,
+      "status": "PENDING",
+      "optional": true,
+      "expectedMitre": [
+        "T1595",
+        "T1592.002"
+      ],
+      "payload_id": "whatweb"
+    },
+    {
+      "id": "step2_gobuster_dir",
+      "name": "目录枚举 - gobuster",
+      "description": "gobuster 目录模式枚举，使用通用字典探测 Web 应用的隐藏目录和文件，扩大攻击面。",
+      "toolId": "gobuster",
+      "argsTemplate": [
+        "dir",
+        "-u",
+        "<target>",
+        "-w",
+        "config/wordlists/common_dirs.txt",
+        "-q"
+      ],
+      "score": 20,
+      "status": "PENDING",
+      "optional": true,
+      "expectedMitre": [
+        "T1083",
+        "T1595.003"
+      ],
+      "payload_id": "gobuster"
+    },
+    {
+      "id": "step3_nuclei_scan",
+      "name": "漏洞扫描 - nuclei",
+      "description": "nuclei 通用漏洞模板扫描，自动匹配已知 CVE、配置缺陷和敏感信息泄露等各类漏洞模板，全面检测 Web 应用安全风险。",
+      "toolId": "nuclei",
+      "argsTemplate": [
+        "-u",
+        "<target>",
+        "-nm",
+        "-no-color",
+        "-no-interactsh",
+        "-duc",
+        "-timeout",
+        "5"
+      ],
+      "score": 30,
+      "status": "PENDING",
+      "optional": true,
+      "expectedMitre": [
+        "T1595.002",
+        "T1190"
+      ],
+      "payload_id": "nuclei"
+    },
+    {
+      "id": "step4_nikto_scan",
+      "name": "Web 服务器扫描 - nikto",
+      "description": "nikto Web 服务器安全扫描，检测服务器配置缺陷、敏感文件泄露、CVE 漏洞和 HTTP 响应头安全缺失等问题。",
+      "toolId": "nikto",
+      "argsTemplate": [
+        "-h",
+        "<target>",
+        "-maxtime",
+        "60"
+      ],
+      "score": 20,
+      "status": "PENDING",
+      "optional": true,
+      "expectedMitre": [
+        "T1595.002",
+        "T1190"
+      ],
+      "payload_id": "nikto"
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "open_ports_found",
+        "desc": "nmap 发现至少 1 个开放端口",
+        "points": 15,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "open"
+        }
+      },
+      {
+        "id": "tech_fingerprinted",
+        "desc": "whatweb 识别出至少 1 种 Web 技术",
+        "points": 15,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Country|HTTPServer|Cookies"
+        }
+      },
+      {
+        "id": "dirs_enumerated",
+        "desc": "gobuster 发现至少 1 个目录或文件",
+        "points": 20,
+        "predicate": {
+          "kind": "stdout_contains",
+          "pattern": "Found:|Status:"
+        }
+      },
+      {
+        "id": "nuclei_executed",
+        "desc": "nuclei 漏洞扫描成功执行",
+        "points": 30,
+        "predicate": {
+          "kind": "exit_code",
+          "value": 0
+        }
+      },
+      {
+        "id": "nikto_executed",
+        "desc": "nikto Web 服务器扫描成功执行",
+        "points": 20,
+        "predicate": {
+          "kind": "exit_code",
+          "value": 0
+        }
+      }
+    ]
+  },
+  "notSuitableFor": [
+    "windows_host",
+    "ad_domain"
+  ],
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "Web 自动杀伤链适用于任意 HTTP/HTTPS Web 应用目标，需要目标网络可达且端口开放。若目标无响应或非 Web 服务，部分扫描步骤输出可能为空。",
+  "applicableTargetType": [
+    "web_url",
+    "local_ip"
+  ],
+  "teachingObjective": "演示 Web 应用自动侦察杀伤链：nmap 端口扫描 → whatweb 指纹识别 → gobuster 目录枚举 → nuclei 漏洞扫描 → nikto Web 服务器扫描的完整流程",
+  "target_class": "web_url",
+  "disableAutoInsert": false
+}

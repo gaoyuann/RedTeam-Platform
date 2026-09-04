@@ -78,7 +78,7 @@
     "windows_host",
     "ad_domain"
   ],
-  "baselineGroup": "web-vuln-scan",
+  "baselineGroup": "tampering-deception",
   "expectedOutputPolicy": "expect_output",
   "emptyOutputExplanation": "会话劫持验证注入 Cookie 绕过登录；需要目标 DVWA 容器及登录凭据有效，以便进行会话生成与劫持演示",
   "applicableTargetType": [
@@ -87,5 +87,6 @@
   ],
   "teachingObjective": "演示使用窃取的 PHPSESSID Cookie 进行会话劫持与身份认证绕过测试（T1539）",
   "target_class": "dvwa",
-  "disableAutoInsert": true
+  "disableAutoInsert": true,
+  "baseline_group": "tampering-deception"
 }

@@ -9,7 +9,7 @@ class QLabel;
 class QTableWidget;
 
 // ── Dashboard Page (总览大屏) ──────────────────────────────────────────
-// Admin-only overview dashboard — white-background, matches other pages.
+// Admin-only overview dashboard.
 // Layout:
 //   1. Stat cards row (4 cards: scan total / running / completed / run total)
 //   2. Recent activity table (last 20 scan + run records)

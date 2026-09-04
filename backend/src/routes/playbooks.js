@@ -38,10 +38,17 @@ export default function (db) {
     if (!includeGenerated || includeGenerated === 'false') { sql += ' AND is_generated = 0'; }
     sql += ' ORDER BY name';
     const rows = db.prepare(sql).all(...params);
-    // Attach step count to each playbook
+    // Attach step count and promote target_class from metadata to top-level
     const stepCountStmt = db.prepare('SELECT COUNT(*) as cnt FROM playbook_steps WHERE playbook_id = ?');
     for (const row of rows) {
       row.steps_count = stepCountStmt.get(row.playbook_id).cnt;
+      // Promote target_class from metadata JSON to top-level for frontend convenience
+      if (row.metadata) {
+        try {
+          const meta = typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata;
+          if (meta.target_class) row.target_class = meta.target_class;
+        } catch {}
+      }
     }
     res.json({ status: 'ok', data: rows, meta: { total: rows.length } });
   });
@@ -50,6 +57,13 @@ export default function (db) {
     const row = db.prepare('SELECT * FROM playbooks WHERE playbook_id = ?').get(req.params.playbookId);
     if (!row) return res.status(404).json({ status: 'error', error: { message: 'Playbook not found' } });
     row.steps = db.prepare('SELECT * FROM playbook_steps WHERE playbook_id = ? ORDER BY step_index').all(req.params.playbookId);
+    // Promote target_class from metadata JSON to top-level
+    if (row.metadata) {
+      try {
+        const meta = typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata;
+        if (meta.target_class) row.target_class = meta.target_class;
+      } catch {}
+    }
     res.json({ status: 'ok', data: row });
   });
 

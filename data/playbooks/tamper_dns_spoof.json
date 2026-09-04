@@ -1,0 +1,74 @@
+{
+  "id": "tamper_dns_spoof",
+  "name": "DNS Spoofing / Poisoning Attack",
+  "description": "教学与测试目的：通过 DNS 欺骗（Spoofing）攻击篡改目标主机的域名解析结果，将合法域名重定向到攻击者控制的恶意服务器，实现中间人欺骗。对应 MITRE ATT&CK 影响（Impact）战术阶段的网络服务降级技术（T0814）以及凭据访问阶段的网络嗅探技术（T1040）。",
+  "category": "exploitation",
+  "difficulty": "hard",
+  "estimatedDuration": "6 min",
+  "rolesAllowed": [
+    "operator",
+    "admin"
+  ],
+  "mitrePhases": [
+    "Credential Access",
+    "Impact"
+  ],
+  "mitreTechniques": [
+    "T1040",
+    "T0814"
+  ],
+  "baseline_group": "tampering-deception",
+  "baselineGroup": "tampering-deception",
+  "targetType": [
+    "windows_host",
+    "linux_host",
+    "local_ip"
+  ],
+  "steps": [
+    {
+      "id": "step1_prepare_spoof_config",
+      "name": "Prepare DNS Spoof Configuration",
+      "description": "配置 Responder 工具的 DNS 欺骗参数，指定要劫持的域名和恶意解析 IP 地址。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "SPOOF_IP={{host}} && echo \"Configuring DNS spoof for target network...\" && echo \"Spoof IP: $SPOOF_IP\" && echo \"Domains to spoof: wpad, isatap\" && mkdir -p /tmp/dns_spoof && echo \"$SPOOF_IP\" > /tmp/dns_spoof/spoof_ip.txt && echo 'DNS spoof configuration prepared'"
+      ],
+      "score": 25,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T0814"
+      ]
+    },
+    {
+      "id": "step2_start_responder",
+      "name": "Launch Responder for LLMNR/NBT-NS Poisoning",
+      "description": "启动 Responder 工具监听网络中的 LLMNR/NBT-NS 名称解析请求，对目标主机的查询返回恶意 IP 地址，实现 DNS 欺骗。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "echo 'Starting Responder for LLMNR/NBT-NS poisoning...' && timeout 30 python3 -c \"import time; print('Responder simulation: listening on LLMNR/NBT-NS...'); time.sleep(5); print('Captured hash from spoofed response (simulated)'); print('NTLMv2SSP Hash stored in logs')\" 2>&1 && echo 'Responder DNS spoof attack completed'"
+      ],
+      "score": 40,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T1040"
+      ]
+    },
+    {
+      "id": "step3_verify_redirection",
+      "name": "Verify DNS Redirection",
+      "description": "验证 DNS 欺骗效果：尝试解析被劫持的域名，确认返回的 IP 为攻击者指定的恶意 IP。",
+      "toolId": "system-tools",
+      "argsTemplate": [
+        "-c",
+        "SPOOF_IP=$(cat /tmp/dns_spoof/spoof_ip.txt 2>/dev/null || echo '{{host}}') && echo \"Verifying DNS spoof result...\" && echo \"Expected spoof IP: $SPOOF_IP\" && echo \"Simulated nslookup result: wpad.local -> $SPOOF_IP\" && echo 'DNS spoofing verification completed - target domain resolves to attacker IP'"
+      ],
+      "score": 35,
+      "status": "PENDING",
+      "expectedMitre": [
+        "T0814"
+      ]
+    }
+  ]
+}

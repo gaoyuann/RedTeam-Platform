@@ -11,8 +11,10 @@
 #include <QTimer>
 #include <QJsonArray>
 #include <QTabWidget>
+#include <QSet>
 
 class ApiClient;
+class CortexPanel;
 
 class ExecutionPage : public QWidget {
   Q_OBJECT
@@ -58,19 +60,15 @@ private:
   QTableWidget *m_evidenceTable;
   QTextEdit *m_evidenceDetail;
 
-  // ReAct reasoning panel
-  QWidget *m_reactPanel;
-  QLabel *m_engineLabel;
-  QTextEdit *m_reactThoughtView;
-
-  // Payload info panel
-  QWidget *m_payloadPanel;
-  QLabel *m_payloadLabel;
-  QTextEdit *m_payloadDetailView;
+  // Cortex decision panel (replaces m_reactPanel + m_payloadPanel)
+  CortexPanel *m_cortexPanel;
+  QSet<QString> m_injectedPayloadSteps;  // track which steps already injected payload cards
+  QSet<QString> m_injectedReactSteps;    // track which steps already injected react thoughts
 
   // Real-time polling for running executions
   QString m_runningRunId;       // currently running run (auto-highlighted)
   QString m_runningPlaybookId;  // playbook of the running run
+  QString m_loadedRunId;        // run currently rendered in the detail tab
   QTimer *m_pollTimer;          // polls every 2s while a run is RUNNING
 
   // Cached playbook data

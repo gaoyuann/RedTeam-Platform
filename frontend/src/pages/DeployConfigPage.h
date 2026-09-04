@@ -28,6 +28,9 @@ private:
   void loadLlmConfig();
   void loadSandboxConfig();
   static void tryParseLlmValue(const QString &jsonStr, QJsonObject &out);
+  void loadLabList();
+  void onLabAction(const QString &action, const QString &name);
+  void onLabVerify(const QString &name);
 
   ApiClient *m_api;
 
@@ -56,4 +59,10 @@ private:
   QCheckBox *m_sandboxEnabled;
   QComboBox *m_sandboxType;
   QPushButton *m_sandboxSaveBtn;
+  QLabel *m_sandboxStatusLabel;
+
+  // Lab management
+  QTableWidget *m_labTable;
+  QLabel *m_labStatusLabel;
+  QPushButton *m_labRefreshBtn;
 };

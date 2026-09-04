@@ -87,7 +87,7 @@
     "local_ip",
     "web_url"
   ],
-  "baselineGroup": "windows-exploitation",
+  "baselineGroup": "data-exfiltration",
   "expectedOutputPolicy": "may_be_empty_if_no_match",
   "emptyOutputExplanation": "mitm6 + Responder 链路需要：(1) mitm6 已安装并以 root 运行 (pip install mitm6)；(2) HEXSTRIKE_WIN_DOMAIN 已设置为目标 AD 域名；(3) 攻击机与靶机在同一 IPv6 link-local 广播域；(4) 靶机未禁用 IPv6；(5) 防火墙未拦截 ICMPv6 RA。教学沙箱环境若不满足条件，NTLMv2 哈希可能无法捕获。",
   "applicableTargetType": [
@@ -96,5 +96,6 @@
   ],
   "teachingObjective": "演示无凭据 NTLM 捕获链：mitm6 IPv6 RA 欺骗劫持 DNS → Responder DNS 毒化 + WPAD 劫持 → 靶机 HTTP/SMB 认证 → 截获 NTLMv2 哈希。展示 IPv6 攻击面的协议层欺骗技术。",
   "target_class": "windows_ad",
-  "disableAutoInsert": true
+  "disableAutoInsert": true,
+  "baseline_group": "data-exfiltration"
 }

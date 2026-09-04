@@ -27,9 +27,6 @@ private slots:
   void onRefreshUsers();
   void onAddUser();
   void onDeleteUser();
-  void onRefreshClasses();
-  void onAddClass();
-  void onDeleteClass();
   void onRefreshConfig();
   void onSaveConfig();
   void onConfigDoubleClicked(int row, int col);
@@ -40,6 +37,8 @@ private slots:
   void onKgNodeClicked(const QString &nodeId);
   void onKgSearch();
   void onKgMappingSearch();
+  void onRefreshPermissions();
+  void onSavePermissions();
 
 private:
   void setupUI();
@@ -65,13 +64,6 @@ private:
   QLineEdit *m_newUsername;
   QLineEdit *m_newPassword;
   QComboBox *m_newRole;
-
-  // Classes tab
-  QTableWidget *m_classTable;
-  QLineEdit *m_newClassName;
-  QLineEdit *m_newClassTeacher;
-  QPushButton *m_addClassBtn;
-  QPushButton *m_delClassBtn;
 
   // Config tab
   QTableWidget *m_configTable;
@@ -117,4 +109,9 @@ private:
   QComboBox *m_kgSearchTypeFilter;
   QTableWidget *m_kgSearchTable;
   QTextEdit *m_kgSearchDetail;
+
+  // Permissions tab
+  QTableWidget *m_permTable;
+  QPushButton *m_permSaveBtn;
+  QString m_role;  // store role for conditional UI
 };

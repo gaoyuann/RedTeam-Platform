@@ -133,7 +133,7 @@ export async function executeRun(runId) {
 
   // Determine engine type: use stored value, or auto-detect
   let engineType = run.engine_type;
-  if (!engineType || engineType === 'mechanical') {
+  if (!engineType || engineType === 'mechanical' || engineType === 'playbook') {
     // Auto-detect: if LLM is available, upgrade to react
     engineType = determineEngineType(db);
   }
@@ -194,6 +194,23 @@ export async function executeRun(runId) {
     }
   }
 
+  // ── Campaign artifact injection ─────────────────────────────────────
+  // If this run was spawned by the campaign engine, plan_data contains
+  // resolved args_template per step (with {{artifact.xxx}} replaced).
+  // Merge those resolved templates into the steps so they take effect.
+  if (run.plan_data) {
+    try {
+      const planData = JSON.parse(run.plan_data);
+      if (planData._campaignArtifacts) {
+        for (const step of steps) {
+          if (planData._campaignArtifacts[step.step_index] !== undefined) {
+            step.args_template = planData._campaignArtifacts[step.step_index];
+          }
+        }
+      }
+    } catch { /* not campaign context, ignore */ }
+  }
+
   // ── Playbook compilation ────────────────────────────────────────────
   const compiled = compilePlaybook({ steps, target: run.target, db });
   if (!compiled.ok) {
@@ -219,7 +236,39 @@ export async function executeRun(runId) {
   // ReAct state (only used when engineType === 'react')
   const evidenceHistory = [];
   let reactCallCount = 0;
+
+  // B5.3: Inject pipeline analysis results into ReAct initial evidence
+  // When a run originates from a pipeline, plan_data may contain _pipeline_analysis
+  // which provides scan analysis context so ReAct doesn't start "blind"
+  if (engineType === 'react' && run.plan_data) {
+    try {
+      const planData = typeof run.plan_data === 'string' ? JSON.parse(run.plan_data) : run.plan_data;
+      if (planData._pipeline_analysis) {
+        const analysis = planData._pipeline_analysis;
+        const summaryParts = [];
+        if (analysis.tech_stack?.length) summaryParts.push(`Tech stack: ${analysis.tech_stack.join(', ')}`);
+        if (analysis.attack_surface?.length) {
+          summaryParts.push(`Attack surface: ${analysis.attack_surface.slice(0, 5).map(a => a.type + ':' + (a.detail || a.path || a.port || '?')).join(', ')}`);
+        }
+        if (analysis.risk_assessment?.length) {
+          summaryParts.push(`Risks: ${analysis.risk_assessment.slice(0, 5).map(r => r.category || r.owasp_id || '?').join(', ')}`);
+        }
+        if (summaryParts.length) {
+          evidenceHistory.push({
+            stepIndex: -1,  // Virtual step: pipeline analysis
+            toolId: 'pipeline_analyzer',
+            success: true,
+            output: `[Pipeline Scan Analysis] ${summaryParts.join(' | ')}`,
+          });
+          console.log(`[executionEngine] Injected pipeline analysis into ReAct evidence (${summaryParts.length} parts)`);
+        }
+      }
+    } catch (e) {
+      console.warn('[executionEngine] Failed to parse plan_data for pipeline analysis injection:', e.message);
+    }
+  }
   const reactThoughts = [];
+  const failedToolCounts = [];  // [{ toolId, count }] — blacklist for 3+ failures
 
   try {
     // Use mutable steps array (ReAct may insert new steps)
@@ -336,7 +385,15 @@ export async function executeRun(runId) {
         completedSteps++;
       } else {
         failedSteps++;
-        if (!step.optional) {
+        // Track failed tool counts for ReAct blacklist
+        if (engineType === 'react') {
+          const existing = failedToolCounts.find(f => f.toolId === step.tool_id);
+          if (existing) { existing.count++; } else { failedToolCounts.push({ toolId: step.tool_id, count: 1 }); }
+        }
+        // In mechanical mode, non-optional step failure aborts immediately.
+        // In react mode, we let ReAct analyze the failure and decide
+        // (continue / adjust / insert / stop) — don't preempt the AI.
+        if (!step.optional && engineType !== 'react') {
           aborted = true;
         }
       }
@@ -361,7 +418,10 @@ export async function executeRun(runId) {
       }
 
       // ── ReAct: LLM-in-the-loop analysis ────────────────────────────
-      if (engineType === 'react' && !aborted && i < mutableSteps.length - 1) {
+      // Run on EVERY step (including failed ones and the last step) so
+      // the AI can analyze results and decide next action. The only
+      // exception is when a prior ReAct call already decided to stop.
+      if (engineType === 'react' && !aborted) {
         // Accumulate evidence
         evidenceHistory.push({
           stepIndex: step.step_index,
@@ -404,6 +464,10 @@ export async function executeRun(runId) {
           reactCallCount,
           guardState: { steps: mutableSteps, status: run.status, stopReason },
           ruleMatchContext,
+          payloadContext: step.payload_context || null,
+          failedToolCounts,
+          totalSteps: mutableSteps.length,
+          completedSteps,
         });
 
         reactCallCount++;
@@ -460,6 +524,52 @@ export async function executeRun(runId) {
               };
               mutableSteps.splice(i + 1, 0, newStep);
               console.log(`[ReAct] Inserted step: ${decision.toolId} ${JSON.stringify(decision.args)}`);
+
+              // B5.5: Record discovered sub-targets for evidence-driven target expansion
+              if (decision.newTarget) {
+                try {
+                  db.prepare(`
+                    INSERT INTO evidence_records (record_id, run_id, step_index, tool_id, result_type, result_data, created_at)
+                    VALUES (?, ?, ?, ?, 'discovered_target', ?, ?)
+                  `).run(
+                    `dt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                    run.run_id, step.step_index, decision.toolId,
+                    JSON.stringify({ target: decision.newTarget, source: 'react_insert' }),
+                    new Date().toISOString()
+                  );
+                  console.log(`[ReAct] Discovered new target: ${decision.newTarget}`);
+                } catch (e) {
+                  console.warn('[ReAct] Failed to record discovered target:', e.message);
+                }
+              }
+            }
+            break;
+
+          case 'pivot':
+            if (decision.toolId && decision.args) {
+              // Guard: validate insertion before proceeding
+              const guardState = { steps: mutableSteps, status: run.status, stopReason };
+              const guardResult = validateInsertion(guardState, 'pivot', decision.toolId);
+              if (!guardResult.allowed) {
+                recordBlock(guardState, guardResult.category, decision.toolId);
+                console.warn(`[ReAct Guard] ${guardResult.reason}`);
+                break;
+              }
+              // Remove all remaining steps after current position
+              mutableSteps.splice(i + 1);
+              // Insert new pivot step
+              const newStepIndex = mutableSteps[mutableSteps.length - 1].step_index + 1;
+              const newStep = {
+                step_index: newStepIndex,
+                step_id: `react_pivot_${newStepIndex}`,
+                name: `ReAct转向: ${decision.toolId}`,
+                tool_id: decision.toolId,
+                args_template: JSON.stringify(decision.args),
+                optional: true,
+                expected_mitre: '[]',
+              };
+              mutableSteps.push(newStep);
+              console.log(`[ReAct] Pivoted to: ${decision.toolId} ${JSON.stringify(decision.args)}`);
             }
             break;
 

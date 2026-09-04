@@ -31,6 +31,13 @@ const PORT_CLASS_GROUP_MAP = {
   '5080:local_ip': 'web-vuln-scan',
   '445:windows_ad': 'windows-exploitation', // SMB to AD → Windows playbooks
   '3389:windows_ad': 'windows-exploitation',
+  // Generic web_url targets — prefer generic playbooks over DVWA-specific
+  '80:web_url': 'web-vuln-scan',
+  '443:web_url': 'web-vuln-scan',
+  '8080:web_url': 'web-vuln-scan',
+  '8443:web_url': 'web-vuln-scan',
+  '3000:web_url': 'web-vuln-scan',
+  '5000:web_url': 'web-vuln-scan',
 };
 
 // Severity weight
@@ -39,18 +46,28 @@ const SEVERITY_WEIGHT = { critical: 4, high: 3, medium: 2, low: 1, info: 0.5 };
 export function matchPlaybooks(scanResults, targetClass = null) {
   const db = getDb();
 
-  // Load all non-generated playbooks
+  // Load all non-generated playbooks (include metadata for target_class extraction)
   const playbooks = db.prepare(
-    `SELECT playbook_id, name, difficulty, baseline_group, mitre_techniques, target_type
+    `SELECT playbook_id, name, difficulty, baseline_group, mitre_techniques, target_type, metadata
      FROM playbooks WHERE is_generated = 0`
   ).all();
 
-  // Parse mitre_techniques JSON for each playbook
-  const pbParsed = playbooks.map(pb => ({
-    ...pb,
-    mitreSet: new Set(tryJson(pb.mitre_techniques)),
-    targetTypes: tryJson(pb.target_type),
-  }));
+  // Parse mitre_techniques JSON for each playbook, promote target_class from metadata
+  const pbParsed = playbooks.map(pb => {
+    let targetClass = null;
+    if (pb.metadata) {
+      try {
+        const meta = typeof pb.metadata === 'string' ? JSON.parse(pb.metadata) : pb.metadata;
+        targetClass = meta.target_class || null;
+      } catch {}
+    }
+    return {
+      ...pb,
+      mitreSet: new Set(tryJson(pb.mitre_techniques)),
+      targetTypes: tryJson(pb.target_type),
+      target_class: targetClass,
+    };
+  });
 
   // Score each playbook
   const scores = new Map();
@@ -131,6 +148,15 @@ export function matchPlaybooks(scanResults, targetClass = null) {
         if (targetClass === 'local_ip' && pb.targetTypes.includes('local_ip')) {
           addScore(pb.playbook_id, 3, `explicit local_ip match`);
         }
+      }
+      // ── target_class based scoring (from metadata) ──────────────────
+      // Strong bonus: playbook's target_class matches the scan target's class
+      if (pb.target_class && pb.target_class === targetClass) {
+        addScore(pb.playbook_id, 5, `target_class exact match: ${targetClass}`);
+      }
+      // Strong penalty: playbook's target_class is different (e.g. dvwa playbook for web_url target)
+      if (pb.target_class && pb.target_class !== targetClass && targetClass !== 'local_ip') {
+        addScore(pb.playbook_id, -3, `target_class mismatch: ${pb.target_class} vs ${targetClass}`);
       }
     }
   }

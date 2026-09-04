@@ -20,6 +20,8 @@ const IMAGE_MAP = {
   'system-tools': 'rt-system',
   cat: 'rt-system', whoami: 'rt-system', id: 'rt-system',
   uname: 'rt-system', ping: 'rt-system', netstat: 'rt-system',
+  // ── Network capture tools ────────────────────────────────────────────
+  tcpdump: 'rt-capture', tshark: 'rt-capture',
 };
 
 // ── Tool → Binary name inside container ─────────────────────────────────
@@ -37,13 +39,16 @@ const BIN_MAP = {
 };
 
 // ── Tools requiring privileged container ────────────────────────────────
-const PRIVILEGED_TOOLS = new Set(['nmap', 'mitm6']);
+const PRIVILEGED_TOOLS = new Set(['nmap', 'mitm6', 'tcpdump']);
 
 // ── Tools needing wordlist volume mount ─────────────────────────────────
 const WORDLIST_TOOLS = new Set(['hydra', 'gobuster', 'ffuf', 'john', 'nikto', 'web-brute']);
 
 // ── Tools needing nuclei-templates volume mount ─────────────────────────
 const NUCLEI_TOOLS = new Set(['nuclei']);
+
+// ── Tools needing capture directory volume mount ────────────────────────
+const CAPTURE_TOOLS = new Set(['tcpdump', 'tshark']);
 
 // ── Virtual tools (no container needed, handled in JS) ─────────────────
 const VIRTUAL_TOOLS = new Set(['upload_shell', 'webshell', 'webshell_health']);
@@ -53,6 +58,7 @@ function getVolumeMounts(toolId) {
   const wordlistsDir = resolve(PROJECT_ROOT, 'data', 'wordlists');
   const nucleiTemplatesDir = resolve(PROJECT_ROOT, 'data', 'nuclei-templates');
   const outputDir = resolve(PROJECT_ROOT, 'data', 'output');
+  const capturesDir = resolve(PROJECT_ROOT, 'data', 'captures');
 
   if (WORDLIST_TOOLS.has(toolId)) {
     mounts.push('-v', `${wordlistsDir}:/usr/share/wordlists:ro`);
@@ -61,6 +67,11 @@ function getVolumeMounts(toolId) {
     mounts.push('-v', `${nucleiTemplatesDir}:/root/nuclei-templates`);
   }
   mounts.push('-v', `${outputDir}:/tmp/redteam-output`);
+
+  // Capture tools need access to the captures directory for PCAP read/write
+  if (CAPTURE_TOOLS.has(toolId)) {
+    mounts.push('-v', `${capturesDir}:/tmp/captures`);
+  }
 
   return mounts;
 }
@@ -178,4 +189,4 @@ export async function runTool(toolId, args, options = {}) {
   return runInContainer(engine, image, bin, args, { ...options, toolId });
 }
 
-export { IMAGE_MAP, BIN_MAP, PRIVILEGED_TOOLS, VIRTUAL_TOOLS };
+export { IMAGE_MAP, BIN_MAP, PRIVILEGED_TOOLS, VIRTUAL_TOOLS, CAPTURE_TOOLS };

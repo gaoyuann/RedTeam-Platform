@@ -42,14 +42,14 @@ protected:
 
 } // anonymous namespace
 
-SystemPage::SystemPage(ApiClient *api, const QString &role, const QString &username, QWidget *parent) : QWidget(parent), m_api(api) {
+SystemPage::SystemPage(ApiClient *api, const QString &role, const QString &username, QWidget *parent) : QWidget(parent), m_api(api), m_role(role) {
   setupUI();
   onRefreshUsers();
-  onRefreshClasses();
   onRefreshConfig();
   onRefreshAssignments();
   onRefreshSubmissions();
   onRefreshKnowledgeGraph();
+  if (m_role == "admin") onRefreshPermissions();
 }
 
 void SystemPage::setupUI() {
@@ -99,38 +99,35 @@ void SystemPage::setupUI() {
 
   m_tabs->addTab(userW, "用户管理");
 
-  // ── Classes tab (now with CRUD) ──────────────────────────────────
-  auto *classW = new QWidget;
-  auto *classL = new QVBoxLayout(classW);
-  m_classTable = new QTableWidget(0, 5);
-  m_classTable->setHorizontalHeaderLabels({"班级ID", "名称", "教师", "加入码", "创建时间"});
-  m_classTable->setAlternatingRowColors(true);
-  m_classTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-  m_classTable->setSortingEnabled(true);
-  m_classTable->setContextMenuPolicy(Qt::CustomContextMenu);
-  classL->addWidget(m_classTable);
+  // ── Permissions tab (admin only) ──────────────────────────────────
+  if (m_role == "admin") {
+    auto *permW = new QWidget;
+    auto *permL = new QVBoxLayout(permW);
 
-  auto *classAddH = new QHBoxLayout;
-  m_newClassName = new QLineEdit;
-  m_newClassName->setPlaceholderText("班级名称");
-  m_newClassTeacher = new QLineEdit;
-  m_newClassTeacher->setPlaceholderText("教师用户名");
-  m_addClassBtn = new QPushButton("添加班级");
-  m_addClassBtn->setProperty("primary", true);
-  m_delClassBtn = new QPushButton("删除选中");
-  m_delClassBtn->setProperty("danger", true);
-  classAddH->addWidget(m_newClassName);
-  classAddH->addWidget(m_newClassTeacher);
-  classAddH->addWidget(m_addClassBtn);
-  classAddH->addWidget(m_delClassBtn);
-  classL->addLayout(classAddH);
-  connect(m_addClassBtn, &QPushButton::clicked, this, &SystemPage::onAddClass);
-  connect(m_delClassBtn, &QPushButton::clicked, this, &SystemPage::onDeleteClass);
+    auto *permHint = new QLabel("细粒度权限配置：勾选每个路由组对各角色的读取/写入权限");
+    permHint->setStyleSheet("color:#64748b; font-size:13px;");
+    permHint->setWordWrap(true);
+    permL->addWidget(permHint);
 
-  auto *classRefresh = new QPushButton("刷新");
-  classL->addWidget(classRefresh);
-  connect(classRefresh, &QPushButton::clicked, this, &SystemPage::onRefreshClasses);
-  m_tabs->addTab(classW, "班级管理");
+    // Columns: 路由组 | admin R/W | teacher R/W | operator R/W | student R/W | viewer R/W
+    // We use a custom layout: header row + data rows with checkboxes
+    m_permTable = new QTableWidget(0, 6);
+    m_permTable->setHorizontalHeaderLabels({"路由组", "管理员", "教师", "操作员", "学生", "观察者"});
+    m_permTable->setAlternatingRowColors(true);
+    m_permTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_permTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    for (int c = 1; c <= 5; c++) {
+      m_permTable->horizontalHeader()->setSectionResizeMode(c, QHeaderView::ResizeToContents);
+    }
+    permL->addWidget(m_permTable, 1);
+
+    m_permSaveBtn = new QPushButton("保存权限配置");
+    m_permSaveBtn->setProperty("primary", true);
+    permL->addWidget(m_permSaveBtn);
+    connect(m_permSaveBtn, &QPushButton::clicked, this, &SystemPage::onSavePermissions);
+
+    m_tabs->addTab(permW, "权限管理");
+  }
 
   // ── Config tab (now editable) ────────────────────────────────────
   auto *cfgW = new QWidget;
@@ -160,7 +157,7 @@ void SystemPage::setupUI() {
   auto *asgnLabel = new QLabel("任务管理"); asgnLabel->setStyleSheet(Theme::SectionStyle);
   asgnL->addWidget(asgnLabel);
   m_assignmentTable = new QTableWidget(0, 6);
-  m_assignmentTable->setHorizontalHeaderLabels({"任务ID", "班级", "标题", "Playbook", "截止时间", "创建时间"});
+  m_assignmentTable->setHorizontalHeaderLabels({"任务编号", "班级", "标题", "预案", "截止时间", "创建时间"});
   m_assignmentTable->setAlternatingRowColors(true);
   m_assignmentTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_assignmentTable->setSortingEnabled(true);
@@ -170,7 +167,7 @@ void SystemPage::setupUI() {
   auto *asgnSubLabel = new QLabel("提交记录"); asgnSubLabel->setStyleSheet(Theme::SectionStyle);
   asgnL->addWidget(asgnSubLabel);
   m_submissionTable = new QTableWidget(0, 6);
-  m_submissionTable->setHorizontalHeaderLabels({"提交ID", "任务", "学生", "Run ID", "成绩", "提交时间"});
+  m_submissionTable->setHorizontalHeaderLabels({"提交编号", "任务", "学生", "执行编号", "成绩", "提交时间"});
   m_submissionTable->setAlternatingRowColors(true);
   m_submissionTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_submissionTable->setSortingEnabled(true);
@@ -232,15 +229,6 @@ void SystemPage::setupUI() {
       QApplication::clipboard()->setText(item->text());
     });
     menu.exec(m_userTable->viewport()->mapToGlobal(pos));
-  });
-  connect(m_classTable, &QTableWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
-    auto *item = m_classTable->itemAt(pos);
-    if (!item) return;
-    QMenu menu;
-    menu.addAction("复制单元格内容", [item]() {
-      QApplication::clipboard()->setText(item->text());
-    });
-    menu.exec(m_classTable->viewport()->mapToGlobal(pos));
   });
   connect(m_configTable, &QTableWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
     auto *item = m_configTable->itemAt(pos);
@@ -334,53 +322,6 @@ void SystemPage::onDeleteUser() {
   if (reply != QMessageBox::Yes) return;
   m_api->del("/api/users/" + username, 5000, [this](const QJsonObject &) {
     onRefreshUsers();
-  });
-}
-
-// ── Classes (now with CRUD) ─────────────────────────────────────────
-void SystemPage::onRefreshClasses() {
-  m_api->get("/api/classes", 5000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
-    auto arr = res["data"].toArray();
-    m_classTable->setRowCount(arr.size());
-    for (int i = 0; i < arr.size(); i++) {
-      auto c = arr[i].toObject();
-      m_classTable->setItem(i, 0, new QTableWidgetItem(c["class_id"].toString()));
-      m_classTable->setItem(i, 1, new QTableWidgetItem(c["name"].toString()));
-      m_classTable->setItem(i, 2, new QTableWidgetItem(c["teacher_sub"].toString()));
-      m_classTable->setItem(i, 3, new QTableWidgetItem(c["join_code"].toString().isEmpty() ? "—" : c["join_code"].toString()));
-      m_classTable->setItem(i, 4, new QTableWidgetItem(c["created_at"].toString()));
-    }
-    m_classTable->resizeColumnsToContents();
-    m_classTable->horizontalHeader()->setStretchLastSection(true);
-  });
-}
-
-void SystemPage::onAddClass() {
-  QString name = m_newClassName->text().trimmed();
-  if (name.isEmpty()) return;
-  QJsonObject body;
-  body["name"] = name;
-  body["teacher_sub"] = m_newClassTeacher->text().trimmed();
-  m_api->post("/api/classes", body, 5000, [this](const QJsonObject &) {
-    m_newClassName->clear();
-    m_newClassTeacher->clear();
-    onRefreshClasses();
-  });
-}
-
-void SystemPage::onDeleteClass() {
-  int row = m_classTable->currentRow();
-  if (row < 0) return;
-  auto *item = m_classTable->item(row, 0);
-  if (!item) return;
-  QString classId = item->text();
-  auto reply = QMessageBox::question(this->window(), "确认删除",
-    QString("确定要删除班级 \"%1\" 吗？此操作不可撤销。").arg(classId),
-    QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-  if (reply != QMessageBox::Yes) return;
-  m_api->del("/api/classes/" + classId, 5000, [this](const QJsonObject &) {
-    onRefreshClasses();
   });
 }
 
@@ -619,7 +560,7 @@ void SystemPage::setupKgStatsTab(QWidget *parent) {
   m_kgNodeCountLabel->setStyleSheet("font-size:18px; font-weight:bold; color:#3b82f6; padding:12px; background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px;");
   m_kgEdgeCountLabel = new QLabel("边: -");
   m_kgEdgeCountLabel->setStyleSheet("font-size:18px; font-weight:bold; color:#8b5cf6; padding:12px; background:#f5f3ff; border:1px solid #c4b5fd; border-radius:10px;");
-  m_kgVersionLabel = new QLabel("v-");
+  m_kgVersionLabel = new QLabel("版本：-");
   m_kgVersionLabel->setStyleSheet("font-size:14px; color:#64748b; padding:12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px;");
   cardsH->addWidget(m_kgNodeCountLabel);
   cardsH->addWidget(m_kgEdgeCountLabel);
@@ -766,7 +707,7 @@ void SystemPage::setupKgMappingsTab(QWidget *parent) {
   l->addLayout(filterH);
 
   m_kgMappingTable = new QTableWidget(0, 4);
-  m_kgMappingTable->setHorizontalHeaderLabels({"工具名称", "技术ID", "技术名称", "置信度"});
+  m_kgMappingTable->setHorizontalHeaderLabels({"工具名称", "技术编号", "技术名称", "置信度"});
   m_kgMappingTable->setAlternatingRowColors(true);
   m_kgMappingTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_kgMappingTable->setSortingEnabled(true);
@@ -791,7 +732,7 @@ void SystemPage::setupKgNodesTab(QWidget *parent) {
 
   auto *filterH = new QHBoxLayout;
   m_kgSearchEdit = new QLineEdit;
-  m_kgSearchEdit->setPlaceholderText("搜索节点名称或ID...");
+  m_kgSearchEdit->setPlaceholderText("搜索节点名称或编号...");
   filterH->addWidget(m_kgSearchEdit, 1);
   m_kgSearchTypeFilter = new QComboBox;
   m_kgSearchTypeFilter->addItem("全部", "");
@@ -849,7 +790,7 @@ void SystemPage::loadKgStats() {
 
     m_kgNodeCountLabel->setText(QString("节点: %1").arg(d["node_count"].toInt()));
     m_kgEdgeCountLabel->setText(QString("边: %1").arg(d["edge_count"].toInt()));
-    m_kgVersionLabel->setText(QString("v%1").arg(d["kg_version"].toString()));
+    m_kgVersionLabel->setText(QString("版本：%1").arg(d["kg_version"].toString()));
 
     // Node type distribution
     auto ntc = d["node_type_counts"].toObject();
@@ -1093,7 +1034,7 @@ void SystemPage::showKgNodeDetail(const QJsonObject &detail) {
     .arg(color, kgNodeTypeLabel(type), zhOrDefault(node, "name")));
 
   QStringList lines;
-  lines << QString("ID: %1").arg(node["id"].toString());
+  lines << QString("编号：%1").arg(node["id"].toString());
   lines << QString("来源: %1").arg(node["source_system"].toString());
   if (!node["risk_level"].toString().isEmpty()) {
     QString risk = node["risk_level"].toString();
@@ -1232,5 +1173,100 @@ void SystemPage::onKgSearch() {
     }
     m_kgSearchTable->resizeColumnsToContents();
     m_kgSearchTable->horizontalHeader()->setStretchLastSection(true);
+  });
+}
+
+// ── Permissions (RBAC) ────────────────────────────────────────────────
+
+void SystemPage::onRefreshPermissions() {
+  if (!m_permTable) return;
+  m_api->get("/api/users/permissions", 5000, [this](const QJsonObject &res) {
+    if (res["status"].toString() != "ok") return;
+    auto rbac = res["data"].toObject();
+
+    QStringList prefixes = rbac.keys();
+    std::sort(prefixes.begin(), prefixes.end());
+    QStringList roles = {"admin", "teacher", "operator", "student", "viewer"};
+
+    m_permTable->setRowCount(prefixes.size());
+    for (int i = 0; i < prefixes.size(); i++) {
+      const QString &prefix = prefixes[i];
+      m_permTable->setItem(i, 0, new QTableWidgetItem(prefix));
+
+      auto rules = rbac[prefix].toObject();
+      auto readArr = rules["read"].toArray();
+      auto writeArr = rules["write"].toArray();
+      QSet<QString> readSet, writeSet;
+      for (const auto &v : readArr) readSet.insert(v.toString());
+      for (const auto &v : writeArr) writeSet.insert(v.toString());
+
+      for (int j = 0; j < roles.size(); j++) {
+        const QString &role = roles[j];
+        // Create a widget with read and write checkboxes.
+        auto *widget = new QWidget;
+        auto *layout = new QHBoxLayout(widget);
+        layout->setContentsMargins(4, 2, 4, 2);
+        layout->setSpacing(2);
+        auto *readCb = new QCheckBox("读");
+        auto *writeCb = new QCheckBox("写");
+        readCb->setChecked(readSet.contains(role));
+        writeCb->setChecked(writeSet.contains(role));
+        // admin always has full access — disable to prevent lockout
+        if (role == "admin") {
+          readCb->setChecked(true);
+          writeCb->setChecked(true);
+          readCb->setEnabled(false);
+          writeCb->setEnabled(false);
+        }
+        layout->addWidget(readCb);
+        layout->addWidget(writeCb);
+        layout->addStretch();
+        m_permTable->setCellWidget(i, j + 1, widget);
+      }
+    }
+    m_permTable->resizeColumnsToContents();
+    m_permTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+  });
+}
+
+void SystemPage::onSavePermissions() {
+  if (!m_permTable) return;
+  QStringList roles = {"admin", "teacher", "operator", "student", "viewer"};
+
+  QJsonObject permissions;
+  for (int i = 0; i < m_permTable->rowCount(); i++) {
+    auto *prefixItem = m_permTable->item(i, 0);
+    if (!prefixItem) continue;
+    QString prefix = prefixItem->text();
+
+    QJsonArray readArr, writeArr;
+    for (int j = 0; j < roles.size(); j++) {
+      auto *widget = m_permTable->cellWidget(i, j + 1);
+      if (!widget) continue;
+      auto *readCb = widget->findChild<QCheckBox*>();
+      if (!readCb) continue;
+      // Find the second checkbox (W)
+      auto cbs = widget->findChildren<QCheckBox*>();
+      if (cbs.size() < 2) continue;
+      if (cbs[0]->isChecked()) readArr.append(roles[j]);
+      if (cbs[1]->isChecked()) writeArr.append(roles[j]);
+    }
+
+    QJsonObject rules;
+    rules["read"] = readArr;
+    rules["write"] = writeArr;
+    permissions[prefix] = rules;
+  }
+
+  QJsonObject body;
+  body["permissions"] = permissions;
+
+  m_permSaveBtn->setEnabled(false);
+  m_api->put("/api/users/permissions", body, 5000, [this](const QJsonObject &res) {
+    m_permSaveBtn->setEnabled(true);
+    if (res["status"].toString() == "ok") {
+      // Show success feedback in the table area
+      m_permTable->setToolTip("权限配置已保存并立即生效");
+    }
   });
 }

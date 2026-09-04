@@ -38,14 +38,14 @@ void PayloadPage::setupUI() {
   filterH->addWidget(new QLabel(QStringLiteral("类型:")));
   m_typeFilter = new QComboBox;
   m_typeFilter->addItem(QStringLiteral("全部"), QString());
-  m_typeFilter->addItem(QStringLiteral("Web攻击"), QStringLiteral("web"));
+  m_typeFilter->addItem(QStringLiteral("网站攻击"), QStringLiteral("web"));
   m_typeFilter->addItem(QStringLiteral("内网渗透"), QStringLiteral("intranet"));
   m_typeFilter->addItem(QStringLiteral("工具命令"), QStringLiteral("tool"));
-  m_typeFilter->addItem(QStringLiteral("AI生成"), QStringLiteral("ai_generated"));
+  m_typeFilter->addItem(QStringLiteral("智能生成"), QStringLiteral("ai_generated"));
   filterH->addWidget(m_typeFilter);
   filterH->addWidget(new QLabel(QStringLiteral("搜索:")));
   m_searchInput = new QLineEdit;
-  m_searchInput->setPlaceholderText(QStringLiteral("载荷ID/名称/标签..."));
+  m_searchInput->setPlaceholderText(QStringLiteral("载荷编号/名称/标签..."));
   m_searchInput->setClearButtonEnabled(true);
   filterH->addWidget(m_searchInput, 1);
   leftLayout->addLayout(filterH);
@@ -120,7 +120,7 @@ void PayloadPage::setupUI() {
   detailLayout->addWidget(m_commandsEdit);
 
   // Bypass variants
-  auto *bypassLabel = new QLabel(QStringLiteral("绕过变体 (WAF/EDR Bypass)"));
+  auto *bypassLabel = new QLabel(QStringLiteral("绕过变体（WAF/EDR）"));
   bypassLabel->setStyleSheet(Theme::SectionStyle);
   detailLayout->addWidget(bypassLabel);
   m_bypassEdit = new QTextEdit;
@@ -139,7 +139,7 @@ void PayloadPage::setupUI() {
   detailLayout->addWidget(m_defenseEdit);
 
   // OPSEC tips
-  auto *opsecLabel = new QLabel(QStringLiteral("OPSEC 建议"));
+  auto *opsecLabel = new QLabel(QStringLiteral("行动安全建议（OPSEC）"));
   opsecLabel->setStyleSheet(Theme::SectionStyle);
   detailLayout->addWidget(opsecLabel);
   m_opsecEdit = new QTextEdit;
@@ -152,8 +152,8 @@ void PayloadPage::setupUI() {
   // Action buttons
   auto *btnH = new QHBoxLayout;
   m_copyBtn = new QPushButton(QStringLiteral("复制载荷命令"));
-  m_bindBtn = new QPushButton(QStringLiteral("绑定到 Playbook"));
-  m_aiGenBtn = new QPushButton(QStringLiteral("AI 生成载荷"));
+  m_bindBtn = new QPushButton(QStringLiteral("绑定到预案"));
+  m_aiGenBtn = new QPushButton(QStringLiteral("智能生成载荷"));
   m_aiGenBtn->setProperty("primary", true);
   btnH->addWidget(m_copyBtn);
   btnH->addWidget(m_bindBtn);
@@ -211,8 +211,8 @@ void PayloadPage::onLoadCategories() {
       QStringLiteral("tool"), QStringLiteral("ai_generated")
     };
     const QStringList typeNames = {
-      QStringLiteral("Web攻击"), QStringLiteral("内网渗透"),
-      QStringLiteral("工具命令"), QStringLiteral("AI生成")
+      QStringLiteral("网站攻击"), QStringLiteral("内网渗透"),
+      QStringLiteral("工具命令"), QStringLiteral("智能生成")
     };
 
     for (int i = 0; i < typeLabels.size(); i++) {
@@ -291,10 +291,10 @@ void PayloadPage::loadPayloadList(const QString &category, const QString &type, 
 
     // Type label mapping
     QMap<QString, QString> typeLabelMap;
-    typeLabelMap["web"] = QStringLiteral("Web");
+    typeLabelMap["web"] = QStringLiteral("网站");
     typeLabelMap["intranet"] = QStringLiteral("内网");
     typeLabelMap["tool"] = QStringLiteral("工具");
-    typeLabelMap["ai_generated"] = QStringLiteral("AI");
+    typeLabelMap["ai_generated"] = QStringLiteral("智能生成");
 
     for (int i = 0; i < data.size(); i++) {
       const auto p = data[i].toObject();
@@ -347,7 +347,7 @@ void PayloadPage::showPayloadDetail(const QJsonObject &payload) {
     ? (catVal.toObject()["zh"].toString().isEmpty() ? catVal.toObject()["en"].toString() : catVal.toObject()["zh"].toString())
     : catVal.toString();
   m_categoryLabel->setText(
-    QStringLiteral("分类: %1 | 类型: %2 | ID: %3")
+    QStringLiteral("分类：%1 | 类型：%2 | 编号：%3")
       .arg(catDisplay)
       .arg(payload["_type"].toString())
       .arg(payload["id"].toString())
@@ -394,7 +394,7 @@ void PayloadPage::showPayloadDetail(const QJsonObject &payload) {
       opsecText += QStringLiteral("• %1\n").arg(tip.toString());
     }
   }
-  m_opsecEdit->setText(opsecText.isEmpty() ? QStringLiteral("无OPSEC建议") : opsecText);
+  m_opsecEdit->setText(opsecText.isEmpty() ? QStringLiteral("无行动安全建议") : opsecText);
 }
 
 void PayloadPage::clearDetail() {
@@ -421,16 +421,15 @@ void PayloadPage::onBindToPlaybook() {
     QMessageBox::information(this, QStringLiteral("提示"), QStringLiteral("请先选择一个载荷"));
     return;
   }
-  // Simple dialog: enter playbook ID + step index
   QMessageBox::information(this, QStringLiteral("绑定载荷"),
-    QStringLiteral("载荷 %1 可在 Playbook 编辑时通过 payload_id 字段绑定到步骤。\n\n"
-                   "请前往「战术手册」页面，编辑 Playbook 步骤，在 payload_id 下拉框中选择此载荷。").arg(m_selectedId));
+    QStringLiteral("载荷 %1 可在预案编辑时通过载荷编号字段绑定到步骤。\n\n"
+                   "请前往「战术手册」页面，编辑预案步骤并选择此载荷。").arg(m_selectedId));
 }
 
 void PayloadPage::onAiGenerate() {
   // Dialog for AI payload generation
   auto *dlg = new QDialog(this);
-  dlg->setWindowTitle(QStringLiteral("AI 生成载荷"));
+  dlg->setWindowTitle(QStringLiteral("智能生成载荷"));
   auto *layout = new QVBoxLayout(dlg);
 
   auto *form = new QFormLayout;
@@ -445,7 +444,7 @@ void PayloadPage::onAiGenerate() {
   form->addRow(QStringLiteral("载荷分类:"), catInput);
 
   auto *typeInput = new QComboBox;
-  typeInput->addItem(QStringLiteral("Web攻击"), QStringLiteral("web"));
+  typeInput->addItem(QStringLiteral("网站攻击"), QStringLiteral("web"));
   typeInput->addItem(QStringLiteral("内网渗透"), QStringLiteral("intranet"));
   form->addRow(QStringLiteral("目标类型:"), typeInput);
 
@@ -479,7 +478,7 @@ void PayloadPage::onAiGenerate() {
     [this, self](const QJsonObject &res) {
       if (!self) return;
       m_aiGenBtn->setEnabled(true);
-      m_aiGenBtn->setText(QStringLiteral("AI 生成载荷"));
+      m_aiGenBtn->setText(QStringLiteral("智能生成载荷"));
 
       if (res["status"].toString() != "ok") {
         QString errMsg = res["error"].isObject()
@@ -491,7 +490,7 @@ void PayloadPage::onAiGenerate() {
       }
 
       QMessageBox::information(this, QStringLiteral("生成成功"),
-        QStringLiteral("载荷已生成，状态为 candidate，需教师审核后可用。\n\n"
+        QStringLiteral("载荷已生成，当前处于候选状态，需教师审核后可用。\n\n"
                        "请前往载荷列表查看。"));
       onLoadCategories();
       loadPayloadList();

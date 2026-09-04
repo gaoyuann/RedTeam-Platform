@@ -6,6 +6,8 @@
  * Adapted: wordlist paths use container mount points
  *
  * 适用于 target_class = 'web_url' 或 'local_ip' 的目标。
+ * 注意：DVWA 专属变量（dvwa_login_url, sqli_url 等）已移至 dvwaTargetAdapter，
+ *       此适配器仅输出通用 Web 上下文。
  */
 
 /**
@@ -36,12 +38,12 @@ export function buildWebContext(targetProfile) {
     username,
     password,
 
-    // Web 通用路径
+    // Web 通用路径（不包含任何 DVWA 专属路径，DVWA 变量在 dvwaTargetAdapter 中）
     login_url: `${base}/login`,
-    dvwa_login_url: `${base}/login.php`,
-    sqli_url: `${base}/vulnerabilities/sqli/?id=1&Submit=Submit`,
-    dvwa_sqli_url: `${base}/vulnerabilities/sqli/?id=1&Submit=Submit`,
-    dvwa_cookie: '',
+    admin_url: `${base}/admin`,
+    api_base_url: `${base}/api`,
+    signup_url: `${base}/signup`,
+    reset_password_url: `${base}/reset-password`,
 
     // 字典路径（容器挂载点）
     wordlist_small: '/usr/share/wordlists/dirb/small.txt',

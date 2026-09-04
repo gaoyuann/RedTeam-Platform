@@ -96,7 +96,7 @@
     "local_ip",
     "web_url"
   ],
-  "baselineGroup": "windows-exploitation",
+  "baselineGroup": "device-control",
   "expectedOutputPolicy": "expect_output",
   "emptyOutputExplanation": "关机脚本远程执行；需要 Windows 靶机开放 5985 端口且具备 Administrator 账号登录权限",
   "applicableTargetType": [
@@ -105,5 +105,6 @@
   ],
   "teachingObjective": "演示如何通过有效凭据利用 WinRM 执行系统级操作（系统关闭/重启 - T1529）",
   "target_class": "windows_ad",
-  "disableAutoInsert": true
+  "disableAutoInsert": true,
+  "baseline_group": "device-control"
 }

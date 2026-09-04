@@ -1,6 +1,7 @@
 #include "ApiClient.h"
 #include <QSettings>
 #include <QDebug>
+#include <QRegularExpression>
 
 ApiClient::ApiClient(const QString &baseUrl, QObject *parent)
     : QObject(parent), m_baseUrl(baseUrl) {
@@ -206,9 +207,52 @@ void ApiClient::put(const QString &path, const QJsonObject &body,
   handleReply(reply, path, callback);
 }
 
+void ApiClient::patch(const QString &path, const QJsonObject &body,
+                       int timeoutMs,
+                       std::function<void(const QJsonObject &)> callback) {
+  auto req = makeRequest(path, timeoutMs);
+  // Qt5 QNetworkAccessManager doesn't have sendCustomRequest for PATCH easily,
+  // so we use sendCustomRequest with "PATCH" method
+  auto *reply = m_mgr->sendCustomRequest(req, "PATCH", QJsonDocument(body).toJson(QJsonDocument::Compact));
+  handleReply(reply, path, callback);
+}
+
 void ApiClient::del(const QString &path, int timeoutMs,
                     std::function<void(const QJsonObject &)> callback) {
   auto req = makeRequest(path, timeoutMs);
   auto *reply = m_mgr->deleteResource(req);
   handleReply(reply, path, callback);
+}
+
+// ── File Download ──────────────────────────────────────────────────────
+
+void ApiClient::download(const QString &path, int timeoutMs,
+                          std::function<void(bool, const QByteArray &, const QString &)> callback) {
+  auto req = makeRequest(path, timeoutMs);
+  auto *reply = m_mgr->get(req);
+
+  connect(reply, &QNetworkReply::finished, this, [this, reply, path, callback]() {
+    if (reply->error() == QNetworkReply::NoError) {
+      QByteArray data = reply->readAll();
+
+      // Extract filename from Content-Disposition header
+      QString filename;
+      QVariant cd = reply->header(QNetworkRequest::ContentDispositionHeader);
+      if (cd.isValid()) {
+        QString cdStr = cd.toString();
+        QRegularExpression re("filename=\"?([^\"]+)\"?");
+        QRegularExpressionMatch match = re.match(cdStr);
+        if (match.hasMatch()) {
+          filename = match.captured(1);
+        }
+      }
+
+      if (callback) callback(true, data, filename);
+    } else {
+      qDebug() << "[ApiClient DOWNLOAD ERROR]" << reply->url().toString() << reply->errorString();
+      emit apiError(path, reply->errorString());
+      if (callback) callback(false, QByteArray(), QString());
+    }
+    reply->deleteLater();
+  });
 }

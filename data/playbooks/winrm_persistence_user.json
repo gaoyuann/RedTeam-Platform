@@ -94,7 +94,7 @@
     "local_ip",
     "web_url"
   ],
-  "baselineGroup": "windows-exploitation",
+  "baselineGroup": "device-control",
   "expectedOutputPolicy": "expect_output",
   "emptyOutputExplanation": "新建后门账号在远程靶机中执行；需要 Windows 靶标开启 5985 端口且具备 Administrator 账号登录权限",
   "applicableTargetType": [
@@ -103,5 +103,6 @@
   ],
   "teachingObjective": "演示使用 WinRM 对 Windows 靶标进行本地用户持久化账号的建立（T1136.001）",
   "target_class": "windows_ad",
-  "disableAutoInsert": true
+  "disableAutoInsert": true,
+  "baseline_group": "device-control"
 }

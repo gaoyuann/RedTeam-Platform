@@ -78,7 +78,7 @@
     "dvwa",
     "web_url"
   ],
-  "baselineGroup": "local-security-check",
+  "baselineGroup": "data-exfiltration",
   "expectedOutputPolicy": "expect_output",
   "emptyOutputExplanation": "隐蔽信道数据外发依赖 ping 命令的 -p 填充参数；需要目标主机能够响应 ping 请求",
   "applicableTargetType": [
@@ -88,5 +88,6 @@
   ],
   "teachingObjective": "演示和分析使用 ICMP 数据包填充字段隐藏并外发数据的隐蔽信道技术（T1048.003）",
   "target_class": "linux_host",
-  "disableAutoInsert": true
+  "disableAutoInsert": true,
+  "baseline_group": "data-exfiltration"
 }

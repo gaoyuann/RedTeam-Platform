@@ -53,7 +53,7 @@
     "windows_host",
     "ad_domain"
   ],
-  "baselineGroup": "web-vuln-scan",
+  "baselineGroup": "tampering-deception",
   "expectedOutputPolicy": "expect_output",
   "emptyOutputExplanation": "执行控制在无害范围内的 HTTP DoS 探测；需要目标 Web 服务在线可达",
   "applicableTargetType": [
@@ -62,5 +62,6 @@
   ],
   "teachingObjective": "演示和评估基本的 HTTP 拒绝服务（DoS）流量泛洪测试（T1498.011）",
   "target_class": "dvwa",
-  "disableAutoInsert": true
+  "disableAutoInsert": true,
+  "baseline_group": "tampering-deception"
 }

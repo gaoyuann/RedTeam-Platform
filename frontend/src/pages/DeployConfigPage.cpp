@@ -51,11 +51,11 @@ void DeployConfigPage::setupUI() {
   layout->addLayout(platInfoH);
 
   // ── 2. LLM Config ─────────────────────────────────────────────────
-  auto *llmLabel = new QLabel("大语言模型 (LLM) 配置"); llmLabel->setStyleSheet(Theme::SectionStyle);
+  auto *llmLabel = new QLabel("大语言模型配置"); llmLabel->setStyleSheet(Theme::SectionStyle);
   layout->addWidget(llmLabel);
 
   auto *llmH1 = new QHBoxLayout;
-  llmH1->addWidget(new QLabel("API Key:"));
+  llmH1->addWidget(new QLabel("接口密钥："));
   m_llmApiKey = new QLineEdit;
   m_llmApiKey->setEchoMode(QLineEdit::Password);
   m_llmApiKey->setPlaceholderText("sk-...");
@@ -63,7 +63,7 @@ void DeployConfigPage::setupUI() {
   layout->addLayout(llmH1);
 
   auto *llmH2 = new QHBoxLayout;
-  llmH2->addWidget(new QLabel("Base URL:"));
+  llmH2->addWidget(new QLabel("服务地址："));
   m_llmBaseUrl = new QLineEdit;
   m_llmBaseUrl->setPlaceholderText("https://api.deepseek.com/v1");
   llmH2->addWidget(m_llmBaseUrl, 1);
@@ -75,7 +75,7 @@ void DeployConfigPage::setupUI() {
   layout->addLayout(llmH2);
 
   auto *llmBtnH = new QHBoxLayout;
-  m_llmSaveBtn = new QPushButton("保存 LLM 配置");
+  m_llmSaveBtn = new QPushButton("保存模型配置");
   m_llmSaveBtn->setProperty("primary", true);
   m_llmTestBtn = new QPushButton("测试连接");
   m_llmStatusLabel = new QLabel;
@@ -104,6 +104,8 @@ void DeployConfigPage::setupUI() {
   m_sandboxSaveBtn = new QPushButton("保存沙箱配置");
   m_sandboxSaveBtn->setProperty("primary", true);
   sbH->addWidget(m_sandboxSaveBtn);
+  m_sandboxStatusLabel = new QLabel;
+  sbH->addWidget(m_sandboxStatusLabel);
   sbH->addStretch();
   layout->addLayout(sbH);
   connect(m_sandboxSaveBtn, &QPushButton::clicked, this, &DeployConfigPage::onSaveSandboxConfig);
@@ -126,7 +128,7 @@ void DeployConfigPage::setupUI() {
   auto *toolLabel = new QLabel("工具列表"); toolLabel->setStyleSheet(Theme::SectionStyle);
   layout->addWidget(toolLabel);
   m_toolTable = new QTableWidget(0, 3);
-  m_toolTable->setHorizontalHeaderLabels({"工具ID", "镜像", "类型"});
+  m_toolTable->setHorizontalHeaderLabels({"工具编号", "镜像", "类型"});
   m_toolTable->setAlternatingRowColors(true);
   m_toolTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_toolTable->setSortingEnabled(true);
@@ -149,6 +151,30 @@ void DeployConfigPage::setupUI() {
   m_configTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
   m_configTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
   layout->addWidget(m_configTable);
+
+  // ── 7. Test Labs (测试靶场) ────────────────────────────────────────
+  auto *labHeaderH = new QHBoxLayout;
+  auto *labLabel = new QLabel("测试靶场"); labLabel->setStyleSheet(Theme::SectionStyle);
+  m_labRefreshBtn = new QPushButton("刷新列表");
+  m_labStatusLabel = new QLabel;
+  labHeaderH->addWidget(labLabel);
+  labHeaderH->addStretch();
+  labHeaderH->addWidget(m_labRefreshBtn);
+  labHeaderH->addWidget(m_labStatusLabel);
+  layout->addLayout(labHeaderH);
+
+  m_labTable = new QTableWidget(0, 3);
+  m_labTable->setHorizontalHeaderLabels({"靶场名称", "状态", "操作"});
+  m_labTable->setAlternatingRowColors(true);
+  m_labTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  m_labTable->setSortingEnabled(true);
+  m_labTable->setContextMenuPolicy(Qt::CustomContextMenu);
+  m_labTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+  m_labTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+  m_labTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+  layout->addWidget(m_labTable);
+
+  connect(m_labRefreshBtn, &QPushButton::clicked, this, &DeployConfigPage::loadLabList);
 
   // ── Right-click menus ────────────────────────────────────────────────
   connect(m_imageTable, &QTableWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
@@ -178,6 +204,15 @@ void DeployConfigPage::setupUI() {
     });
     menu.exec(m_configTable->viewport()->mapToGlobal(pos));
   });
+  connect(m_labTable, &QTableWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
+    auto *item = m_labTable->itemAt(pos);
+    if (!item) return;
+    QMenu menu;
+    menu.addAction("复制单元格内容", [item]() {
+      QApplication::clipboard()->setText(item->text());
+    });
+    menu.exec(m_labTable->viewport()->mapToGlobal(pos));
+  });
 
   // ── Refresh ───────────────────────────────────────────────────────
   m_refreshBtn = new QPushButton("刷新全部");
@@ -196,11 +231,14 @@ void DeployConfigPage::onRefresh() {
   loadSandboxConfig();    // merged: also loads container status
   loadToolList();
   loadConfig();
+  loadLabList();
 }
 
 // ── Slot: Check backend (merged with loadPlatformStatus) ─────────────
 void DeployConfigPage::onCheckBackend() {
+  m_checkBtn->setEnabled(false);
   m_api->get("/api/health", 3000, [this](const QJsonObject &res) {
+    m_checkBtn->setEnabled(true);
     if (res["status"].toString() == "ok") {
       m_engineLabel->setText("已连接");
       m_engineLabel->setStyleSheet(Theme::StatusSuccessStyle);
@@ -397,9 +435,24 @@ void DeployConfigPage::onSaveSandboxConfig() {
   bodyEngine["description"] = "Sandbox container engine";
 
   m_sandboxSaveBtn->setEnabled(false);
-  m_api->put("/api/config/sandbox/enabled", bodyEnabled, 3000, [this, bodyEngine](const QJsonObject &) {
-    m_api->put("/api/config/sandbox/engine", bodyEngine, 3000, [this](const QJsonObject &) {
+  m_sandboxStatusLabel->setText("保存中...");
+  m_sandboxStatusLabel->setStyleSheet(Theme::StatusInfoStyle);
+  m_api->put("/api/config/sandbox/enabled", bodyEnabled, 3000, [this, bodyEngine](const QJsonObject &enabledRes) {
+    if (enabledRes["status"].toString() != "ok") {
       m_sandboxSaveBtn->setEnabled(true);
+      m_sandboxStatusLabel->setText("保存失败");
+      m_sandboxStatusLabel->setStyleSheet(Theme::StatusErrorStyle);
+      return;
+    }
+    m_api->put("/api/config/sandbox/engine", bodyEngine, 3000, [this](const QJsonObject &engineRes) {
+      m_sandboxSaveBtn->setEnabled(true);
+      if (engineRes["status"].toString() == "ok") {
+        m_sandboxStatusLabel->setText("已保存");
+        m_sandboxStatusLabel->setStyleSheet(Theme::StatusSuccessStyle);
+      } else {
+        m_sandboxStatusLabel->setText("保存失败");
+        m_sandboxStatusLabel->setStyleSheet(Theme::StatusErrorStyle);
+      }
     });
   });
 }
@@ -438,6 +491,113 @@ void DeployConfigPage::loadConfig() {
       m_configTable->setItem(i, 0, new QTableWidgetItem(c["config_key"].toString()));
       m_configTable->setItem(i, 1, new QTableWidgetItem(c["config_value"].toString()));
       m_configTable->setItem(i, 2, new QTableWidgetItem(c["category"].toString()));
+    }
+  });
+}
+
+// ── Load lab list ──────────────────────────────────────────────────────
+void DeployConfigPage::loadLabList() {
+  m_api->get("/api/labs", 5000, [this](const QJsonObject &res) {
+    if (res["status"].toString() != "ok") return;
+    auto data = res["data"].toArray();
+    m_labTable->setRowCount(data.size());
+    for (int i = 0; i < data.size(); i++) {
+      auto lab = data[i].toObject();
+      QString name = lab["name"].toString();
+      // Backend returns "name" only, no "display_name" — capitalize for display
+      QString displayName = name;
+      displayName[0] = displayName[0].toUpper();
+      QString status = lab["status"].toString();
+
+      // Column 0: display name (store API name as UserRole data)
+      auto *nameItem = new QTableWidgetItem(displayName);
+      nameItem->setData(Qt::UserRole, name);
+      m_labTable->setItem(i, 0, nameItem);
+
+      // Column 1: status
+      QString statusDisplay = (status == "running") ? "运行中" : "已停止";
+      auto *statusItem = new QTableWidgetItem(statusDisplay);
+      m_labTable->setItem(i, 1, statusItem);
+
+      // Column 2: action buttons
+      auto *btnWidget = new QWidget;
+      auto *btnLayout = new QHBoxLayout(btnWidget);
+      btnLayout->setContentsMargins(4, 2, 4, 2);
+
+      auto *startBtn = new QPushButton("启动");
+      auto *stopBtn = new QPushButton("停止");
+      auto *verifyBtn = new QPushButton("自检");
+
+      stopBtn->setProperty("danger", true);
+      if (status == "running") {
+        startBtn->hide();
+      } else {
+        stopBtn->hide();
+      }
+
+      connect(startBtn, &QPushButton::clicked, this, [this, name]() { onLabAction("start", name); });
+      connect(stopBtn, &QPushButton::clicked, this, [this, name]() { onLabAction("stop", name); });
+      connect(verifyBtn, &QPushButton::clicked, this, [this, name]() { onLabVerify(name); });
+
+      btnLayout->addWidget(startBtn);
+      btnLayout->addWidget(stopBtn);
+      btnLayout->addWidget(verifyBtn);
+      m_labTable->setCellWidget(i, 2, btnWidget);
+    }
+  });
+}
+
+// ── Lab action (start / stop) ─────────────────────────────────────────
+void DeployConfigPage::onLabAction(const QString &action, const QString &name) {
+  QString actionLabel = (action == "start") ? "启动" : "停止";
+  m_labStatusLabel->setText(QString("%1 %2...").arg(actionLabel, name));
+  m_labStatusLabel->setStyleSheet(Theme::StatusInfoStyle);
+  m_labTable->setEnabled(false);
+  m_api->post("/api/labs/" + name + "/" + action, QJsonObject(), 30000,
+              [this, name](const QJsonObject &res) {
+    m_labTable->setEnabled(true);
+    if (res["status"].toString() == "ok") {
+      m_labStatusLabel->setText(name + " 操作成功");
+      m_labStatusLabel->setStyleSheet(Theme::StatusSuccessStyle);
+      loadLabList();
+    } else {
+      // Backend returns errors as {status:"error", error:{message:"..."}}
+      QString errMsg = res["error"].toObject()["message"].toString();
+      if (errMsg.isEmpty()) errMsg = res["message"].toString();
+      m_labStatusLabel->setText("操作失败: " + errMsg);
+      m_labStatusLabel->setStyleSheet(Theme::StatusErrorStyle);
+    }
+  });
+}
+
+// ── Lab verify ─────────────────────────────────────────────────────────
+void DeployConfigPage::onLabVerify(const QString &name) {
+  m_labStatusLabel->setText(QString("正在自检 %1...").arg(name));
+  m_labStatusLabel->setStyleSheet(Theme::StatusInfoStyle);
+  m_labTable->setEnabled(false);
+  m_api->post("/api/labs/" + name + "/verify", QJsonObject(), 180000,
+              [this, name](const QJsonObject &res) {
+    m_labTable->setEnabled(true);
+    if (res["status"].toString() == "ok") {
+      auto data = res["data"].toObject();
+      // Backend returns {ok, checks, duration, name}
+      bool ok = data["ok"].toBool();
+      double duration = data["duration"].toDouble();
+      auto checks = data["checks"].toArray();
+      int passCount = 0;
+      for (const auto &c : checks) {
+        const auto check = c.toObject();
+        if (check["passed"].toBool() || check["ok"].toBool()) passCount++;
+      }
+      QString result = ok ? QString("✅ 通过 (%1/%2 检查项, 耗时%3s)")
+                                .arg(passCount).arg(checks.size()).arg(duration, 0, 'f', 1)
+                          : QString("❌ 失败 (%1/%2 检查项通过)")
+                                .arg(passCount).arg(checks.size());
+      m_labStatusLabel->setText(QString("自检 %1: %2").arg(name, result));
+      m_labStatusLabel->setStyleSheet(Theme::StatusSuccessStyle);
+    } else {
+      m_labStatusLabel->setText(QString("自检 %1 失败: %2").arg(name, res["error"].toObject()["message"].toString()));
+      m_labStatusLabel->setStyleSheet(Theme::StatusErrorStyle);
     }
   });
 }

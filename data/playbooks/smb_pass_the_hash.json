@@ -61,7 +61,7 @@
     "local_ip",
     "web_url"
   ],
-  "baselineGroup": "windows-exploitation",
+  "baselineGroup": "device-control",
   "expectedOutputPolicy": "expect_output",
   "emptyOutputExplanation": "哈希传递尝试建立 SMB 认证连接；需要目标 Windows 靶机开放 445 端口且支持 SMB 连接",
   "applicableTargetType": [
@@ -70,5 +70,6 @@
   ],
   "teachingObjective": "演示在 Windows/SMB 认证场景中进行 Pass-the-Hash（哈希传递）凭证重放测试（T1550.002）",
   "target_class": "windows_ad",
-  "disableAutoInsert": true
+  "disableAutoInsert": true,
+  "baseline_group": "device-control"
 }

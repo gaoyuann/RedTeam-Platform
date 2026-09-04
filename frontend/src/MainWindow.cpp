@@ -11,6 +11,7 @@
 #include "pages/TopologyPage.h"
 #include "pages/ScanPage.h"
 #include "pages/ExecutionPage.h"
+#include "pages/CampaignPage.h"
 #include "pages/EvaluatePage.h"
 #include "pages/SystemPage.h"
 #include <QHBoxLayout>
@@ -19,7 +20,20 @@
 #include <QStatusBar>
 #include <QMessageBox>
 #include <QApplication>
+#include <QFrame>
 #include <QResizeEvent>
+
+namespace {
+QString displayRole(const QString &role)
+{
+    if (role == QStringLiteral("admin")) return QStringLiteral("管理员");
+    if (role == QStringLiteral("teacher")) return QStringLiteral("教师");
+    if (role == QStringLiteral("student")) return QStringLiteral("学生");
+    if (role == QStringLiteral("operator")) return QStringLiteral("操作员");
+    if (role == QStringLiteral("viewer")) return QStringLiteral("观察者");
+    return role;
+}
+}
 
 MainWindow::MainWindow(ApiClient *api, const QString &role, const QString &username, QWidget *parent)
     : QMainWindow(parent)
@@ -34,7 +48,7 @@ MainWindow::MainWindow(ApiClient *api, const QString &role, const QString &usern
 void MainWindow::setupUI()
 {
     setWindowTitle(QStringLiteral("信息系统渗透智能化测试平台"));
-    resize(1280, 800);
+    resize(1360, 860);
     setMinimumSize(1024, 600);
 
     auto *centralWidget = new QWidget(this);
@@ -53,7 +67,27 @@ void MainWindow::setupUI()
         QStringLiteral("系统管理")
     });
 
-    m_navList = new QListWidget(this);
+    auto *sidebar = new QFrame(centralWidget);
+    sidebar->setObjectName("sidebar");
+    sidebar->setFixedWidth(248);
+    auto *sidebarLayout = new QVBoxLayout(sidebar);
+    sidebarLayout->setContentsMargins(16, 18, 16, 14);
+    sidebarLayout->setSpacing(14);
+
+    auto *brandLabel = new QLabel(QStringLiteral("红队安全运营"), sidebar);
+    brandLabel->setObjectName("sidebarBrand");
+    sidebarLayout->addWidget(brandLabel);
+
+    auto *brandSubtitle = new QLabel(QStringLiteral("信息系统安全测试平台"), sidebar);
+    brandSubtitle->setObjectName("sidebarSubtitle");
+    sidebarLayout->addWidget(brandSubtitle);
+
+    auto *brandDivider = new QFrame(sidebar);
+    brandDivider->setObjectName("sidebarDivider");
+    brandDivider->setFrameShape(QFrame::HLine);
+    sidebarLayout->addWidget(brandDivider);
+
+    m_navList = new QListWidget(sidebar);
     m_navList->setObjectName("navList");
     m_navList->setFixedWidth(220);
     for (const auto &name : m_modules) {
@@ -78,12 +112,21 @@ void MainWindow::setupUI()
     // Page 3: Topology
     m_stackWidget->addWidget(new TopologyPage(m_api, m_role, m_username, this));
 
-    // Page 4: Scan
-    auto *scanPage = new ScanPage(m_api, m_role, m_username, this);
-    m_stackWidget->addWidget(scanPage);
+    // Page 4: Scan (scan→auto-generate→inline-execute workflow)
+    m_scanPage = new ScanPage(m_api, m_role, m_username, this);
+    m_stackWidget->addWidget(m_scanPage);
 
-    // Page 5: Execution
-    m_stackWidget->addWidget(new ExecutionPage(m_api, m_role, m_username, this));
+    // Page 5: 漏洞攻击测试 (Tab: 快速执行 + 攻击战役)
+    auto *page5 = new QWidget;
+    auto *page5Layout = new QVBoxLayout(page5);
+    page5Layout->setContentsMargins(0, 0, 0, 0);
+    auto *tab5 = new QTabWidget;
+    m_executionPage = new ExecutionPage(m_api, m_role, m_username, this);
+    tab5->addTab(m_executionPage, QStringLiteral("快速执行"));
+    m_campaignPage = new CampaignPage(m_api, m_role, m_username, this);
+    tab5->addTab(m_campaignPage, QStringLiteral("攻击战役"));
+    page5Layout->addWidget(tab5);
+    m_stackWidget->addWidget(page5);
 
     // Page 6: Evaluate
     m_stackWidget->addWidget(new EvaluatePage(m_api, m_role, m_username, this));
@@ -91,7 +134,14 @@ void MainWindow::setupUI()
     // Page 7: System
     m_stackWidget->addWidget(new SystemPage(m_api, m_role, m_username, this));
 
-    mainLayout->addWidget(m_navList);
+    sidebarLayout->addWidget(m_navList, 1);
+    auto *sidebarFooter = new QLabel(QStringLiteral("安全态势 · 实时联动"), sidebar);
+    sidebarFooter->setObjectName("sidebarFooter");
+    sidebarLayout->addWidget(sidebarFooter);
+
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+    mainLayout->setSpacing(0);
+    mainLayout->addWidget(sidebar);
     mainLayout->addWidget(m_stackWidget, 1);
     setCentralWidget(centralWidget);
 
@@ -109,7 +159,7 @@ void MainWindow::setupUI()
     statusBar()->addWidget(m_backendStatusLabel);
 
     // User info label in status bar
-    m_userInfoLabel = new QLabel(QStringLiteral("%1 [%2]").arg(m_username, m_role), this);
+    m_userInfoLabel = new QLabel(QStringLiteral("%1 [%2]").arg(m_username, displayRole(m_role)), this);
     m_userInfoLabel->setStyleSheet("color: #a0aec0; padding: 0 10px; font-size: 13px;");
     statusBar()->addWidget(m_userInfoLabel);
 
@@ -126,17 +176,26 @@ void MainWindow::setupUI()
 
     // Global API error → status bar
     connect(m_api, &ApiClient::apiError, this, [this](const QString &path, const QString &msg) {
-        statusBar()->showMessage(QString("API 错误: %1 — %2").arg(path, msg), 5000);
+        statusBar()->showMessage(QString("接口错误: %1 — %2").arg(path, msg), 5000);
     });
 
     // Logout button
     connect(m_logoutBtn, &QPushButton::clicked, this, &MainWindow::onLogout);
 
-    // Cross-page navigation: ScanPage → PlaybookPage (index 2)
-    connect(scanPage, &ScanPage::playbookNavigateRequested, this, [this, playbookPage](const QString &id) {
-        switchToPage(2);  // PlaybookPage is now index 2
-        playbookPage->selectPlaybook(id);
+    // Cross-page navigation: ScanPage → ExecutionPage (index 5, 快速执行 tab)
+    connect(m_scanPage, &ScanPage::playbookNavigateRequested, this, [this, tab5](const QString &id, const QString &target) {
+        switchToPage(5);  // 漏洞攻击测试 is index 5
+        tab5->setCurrentIndex(0);  // 切到"快速执行"Tab
+        m_executionPage->selectPlaybook(id, target);
     });
+
+    // Cross-page navigation: PlaybookPage → ExecutionPage
+    connect(playbookPage, &PlaybookPage::executeRequested, this,
+        [this, tab5](const QString &id) {
+            switchToPage(5);
+            tab5->setCurrentIndex(0);  // 切到"快速执行"Tab
+            m_executionPage->selectPlaybook(id, QString());
+        });
 }
 
 // ── WebSocket setup ────────────────────────────────────────────────────
@@ -146,7 +205,7 @@ void MainWindow::setupWebSocket()
     m_ws = new WsClient(m_api, this);
     m_ws->connectToServer();
 
-    // Wire to DashboardPage's activity panel
+    // Wire to DashboardPage's activity panel + refresh stats on events
     if (m_dashboardPage) {
         auto *dashPanel = m_dashboardPage->activityPanel();
         if (dashPanel) {
@@ -158,6 +217,24 @@ void MainWindow::setupWebSocket()
             connect(m_ws, &WsClient::runStepComplete, dashPanel, &LiveActivityPanel::onRunStepComplete);
             connect(m_ws, &WsClient::runCompleted, dashPanel, &LiveActivityPanel::onRunCompleted);
         }
+        // Refresh dashboard stats table when key events arrive
+        connect(m_ws, &WsClient::scanCreated, m_dashboardPage, &DashboardPage::refreshStats);
+        connect(m_ws, &WsClient::scanCompleted, m_dashboardPage, &DashboardPage::refreshStats);
+        connect(m_ws, &WsClient::runCreated, m_dashboardPage, &DashboardPage::refreshStats);
+        connect(m_ws, &WsClient::runCompleted, m_dashboardPage, &DashboardPage::refreshStats);
+    }
+
+    if (m_campaignPage) {
+        auto refreshCampaign = [this](const QJsonObject &) {
+            m_campaignPage->refresh();
+        };
+        connect(m_ws, &WsClient::campaignStarted, this, refreshCampaign);
+        connect(m_ws, &WsClient::campaignPaused, this, refreshCampaign);
+        connect(m_ws, &WsClient::campaignAborted, this, refreshCampaign);
+        connect(m_ws, &WsClient::campaignCompleted, this, refreshCampaign);
+        connect(m_ws, &WsClient::phaseStarted, this, refreshCampaign);
+        connect(m_ws, &WsClient::phaseCompleted, this, refreshCampaign);
+        connect(m_ws, &WsClient::phaseSkipped, this, refreshCampaign);
     }
 
     // Wire to ToastOverlay
@@ -167,13 +244,13 @@ void MainWindow::setupWebSocket()
 
     // WebSocket connection status in status bar
     connect(m_ws, &WsClient::connected, this, [this]() {
-        statusBar()->showMessage(QStringLiteral("WebSocket 已连接"), 3000);
+        statusBar()->showMessage(QStringLiteral("实时通道已连接"), 3000);
     });
     connect(m_ws, &WsClient::disconnected, this, [this]() {
-        statusBar()->showMessage(QStringLiteral("WebSocket 断开"), 3000);
+        statusBar()->showMessage(QStringLiteral("实时通道已断开"), 3000);
     });
     connect(m_ws, &WsClient::connectionError, this, [this](const QString &err) {
-        statusBar()->showMessage(QString("WebSocket 错误: %1").arg(err), 5000);
+        statusBar()->showMessage(QString("实时通道错误: %1").arg(err), 5000);
     });
 }
 
@@ -200,7 +277,21 @@ void MainWindow::onModuleChanged(int row)
         // Trigger page refresh if it's a BasePage subclass
         auto *page = m_stackWidget->widget(row);
         if (auto *basePage = qobject_cast<BasePage*>(page)) {
-            QMetaObject::invokeMethod(basePage, "refresh");
+            basePage->refresh();
+        }
+        // Also refresh BasePage children inside QTabWidget containers
+        auto *tab = page->findChild<QTabWidget*>();
+        if (tab) {
+            for (int i = 0; i < tab->count(); ++i) {
+                if (auto *bp = qobject_cast<BasePage*>(tab->widget(i))) {
+                    bp->refresh();
+                }
+            }
+        }
+        if (row == 4 && m_scanPage) {
+            m_scanPage->onRefreshTasks();
+        } else if (row == 5 && m_executionPage) {
+            m_executionPage->onRefreshRuns();
         }
     }
 }

@@ -725,7 +725,7 @@ void TopologyPage::setupUI() {
     m_scanTypeCombo = new QComboBox(leftPanel);
     m_scanTypeCombo->addItem(QStringLiteral("端口扫描"), QStringLiteral("port_scan"));
     m_scanTypeCombo->addItem(QStringLiteral("漏洞扫描"), QStringLiteral("vuln_scan"));
-    m_scanTypeCombo->addItem(QStringLiteral("Web扫描"), QStringLiteral("web_scan"));
+    m_scanTypeCombo->addItem(QStringLiteral("网站扫描"), QStringLiteral("web_scan"));
     leftLayout->addWidget(m_scanTypeCombo);
 
     m_createScanBtn = new QPushButton(QStringLiteral("创建扫描"), leftPanel);
@@ -774,7 +774,7 @@ void TopologyPage::setupUI() {
     leftLayout->addWidget(taskLabel);
 
     m_scanTaskTable = new QTableWidget(0, 4, leftPanel);
-    m_scanTaskTable->setHorizontalHeaderLabels({QStringLiteral("任务ID"),
+    m_scanTaskTable->setHorizontalHeaderLabels({QStringLiteral("任务编号"),
                                                   QStringLiteral("目标"),
                                                   QStringLiteral("类型"),
                                                   QStringLiteral("状态")});
@@ -961,9 +961,9 @@ void TopologyPage::setupUI() {
     m_servicesEdit->setMinimumHeight(72);
     m_servicesEdit->setMaximumHeight(100);
     m_servicesEdit->setPlaceholderText(
-        QStringLiteral("每行一个服务：port|protocol|service|product|version|state|note"));
+        QStringLiteral("每行一个服务：端口|协议|服务|产品|版本|状态|备注"));
     nodeFormLayout->addRow(QStringLiteral("名称"), m_nodeNameEdit);
-    nodeFormLayout->addRow(QStringLiteral("IP"), m_nodeIpEdit);
+    nodeFormLayout->addRow(QStringLiteral("IP 地址"), m_nodeIpEdit);
     nodeFormLayout->addRow(QStringLiteral("主机名"), m_nodeHostNameEdit);
     nodeFormLayout->addRow(QStringLiteral("系统"), m_nodeOsEdit);
     nodeFormLayout->addRow(QStringLiteral("设备类型"), m_nodeTypeEdit);
@@ -1210,7 +1210,7 @@ void TopologyPage::onRefreshScans() {
                                QString st = t[QStringLiteral("scan_type")].toString();
                                if (st == QStringLiteral("port_scan")) return QStringLiteral("端口扫描");
                                if (st == QStringLiteral("vuln_scan")) return QStringLiteral("漏洞扫描");
-                               if (st == QStringLiteral("web_scan")) return QStringLiteral("Web扫描");
+                               if (st == QStringLiteral("web_scan")) return QStringLiteral("网站扫描");
                                if (st == QStringLiteral("brute_force")) return QStringLiteral("暴力破解");
                                return st;
                            }()));
@@ -1282,7 +1282,7 @@ void TopologyPage::onGenerateTopology() {
     if (m_progressDialog) {
         delete m_progressDialog;
     }
-    m_progressDialog = new QProgressDialog(QStringLiteral("正在通过 AI 生成拓扑结构..."),
+    m_progressDialog = new QProgressDialog(QStringLiteral("正在通过智能模型生成拓扑结构..."),
                                             QString(), 0, 0, this);
     m_progressDialog->setWindowTitle(QStringLiteral("生成拓扑"));
     m_progressDialog->setWindowModality(Qt::WindowModal);
@@ -1294,7 +1294,7 @@ void TopologyPage::onGenerateTopology() {
     m_generateBtn->setEnabled(false);
     m_generateBtn->setText(QStringLiteral("生成中..."));
     qApp->setOverrideCursor(Qt::WaitCursor);
-    setStatusMessage(QStringLiteral("正在通过 AI 生成拓扑结构，请稍候..."), infoStatusStyle());
+    setStatusMessage(QStringLiteral("正在通过智能模型生成拓扑结构，请稍候..."), infoStatusStyle());
 
     if (m_currentStatusValueLabel) {
         m_currentStatusValueLabel->setText(QStringLiteral("生成中"));

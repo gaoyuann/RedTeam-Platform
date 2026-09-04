@@ -22,6 +22,11 @@ DashboardPage::DashboardPage(ApiClient *api, const QString &role,
     : QWidget(parent)
     , m_api(api)
     , m_role(role)
+    , m_scanTotalLabel(nullptr)
+    , m_scanRunningLabel(nullptr)
+    , m_scanCompletedLabel(nullptr)
+    , m_runTotalLabel(nullptr)
+    , m_activityTable(nullptr)
 {
   setupUI();
 
@@ -41,13 +46,24 @@ void DashboardPage::setupUI()
   mainLayout->setContentsMargins(20, 16, 20, 16);
   mainLayout->setSpacing(16);
 
-  // ── Title ──────────────────────────────────────────────────────────
-  auto *titleLabel = new QLabel(QStringLiteral("总览大屏"));
-  titleLabel->setStyleSheet(Theme::SectionStyle);
-  mainLayout->addWidget(titleLabel);
+  // ── Overview header ────────────────────────────────────────────────
+  auto *heroCard = new QFrame(this);
+  heroCard->setProperty("card", true);
+  auto *heroLayout = new QVBoxLayout(heroCard);
+  heroLayout->setContentsMargins(22, 18, 22, 18);
+  heroLayout->setSpacing(5);
+
+  auto *titleLabel = new QLabel(QStringLiteral("安全运营总览"), heroCard);
+  titleLabel->setStyleSheet("font-size:24px; font-weight:800; color:#172033;");
+  heroLayout->addWidget(titleLabel);
+
+  auto *subtitleLabel = new QLabel(
+      QStringLiteral("集中查看扫描、执行与实时事件，快速掌握当前测试态势。"), heroCard);
+  subtitleLabel->setStyleSheet("font-size:13px; color:#64748b;");
+  heroLayout->addWidget(subtitleLabel);
+  mainLayout->addWidget(heroCard);
 
   // ── Stat cards row ─────────────────────────────────────────────────
-  // 4 white cards in a horizontal row, matching Theme::PageStyle QFrame[card]
   auto *statsLayout = new QHBoxLayout();
   statsLayout->setSpacing(16);
 
@@ -59,7 +75,6 @@ void DashboardPage::setupUI()
     cardLayout->setContentsMargins(20, 16, 20, 16);
     cardLayout->setSpacing(6);
 
-    // Title line: icon + label
     auto *titleRow = new QHBoxLayout();
     titleRow->setSpacing(6);
     auto *iconLabel = new QLabel(icon, frame);
@@ -74,7 +89,6 @@ void DashboardPage::setupUI()
     titleRow->addStretch();
     cardLayout->addLayout(titleRow);
 
-    // Big number
     auto *valueLabel = new QLabel(QStringLiteral("0"), frame);
     valueLabel->setStyleSheet("color: #1a2a3a; font-size: 32px; font-weight: bold; background: transparent;");
     cardLayout->addWidget(valueLabel);
@@ -128,11 +142,10 @@ LiveActivityPanel *DashboardPage::activityPanel() const
   return m_activityPanel;
 }
 
+// ── Stats refresh (polling + merge) ───────────────────────────────────
+
 void DashboardPage::refreshStats()
 {
-  // Fetch scan tasks and runs in parallel, then merge into activity table
-  // We use two separate requests and merge results by time
-
   struct ActivityEntry {
     QDateTime dt;
     QString timeStr;
@@ -142,24 +155,21 @@ void DashboardPage::refreshStats()
     QColor statusColor;
   };
 
-  // Shared state for merging
   auto *scanEntries = new QList<ActivityEntry>();
   auto *runEntries = new QList<ActivityEntry>();
-  auto *pending = new int(2);  // countdown: scan + run
+  auto *pending = new int(2);
 
   auto mergeAndDisplay = [this, scanEntries, runEntries, pending]() {
     (*pending)--;
-    if (*pending > 0) return;  // still waiting for the other request
+    if (*pending > 0) return;
 
-    // Merge and sort by time (newest first)
     QList<ActivityEntry> all;
     all << *scanEntries << *runEntries;
     std::sort(all.begin(), all.end(),
       [](const ActivityEntry &a, const ActivityEntry &b) {
-        return a.dt > b.dt;  // descending
+        return a.dt > b.dt;
       });
 
-    // Populate table (max 20 rows)
     m_activityTable->setRowCount(0);
     int count = qMin(all.size(), 20);
     for (int i = 0; i < count; i++) {
@@ -185,37 +195,37 @@ void DashboardPage::refreshStats()
     auto arr = res["data"].toArray();
     int total = arr.size();
     int running = 0, completed = 0;
+
     for (const auto &item : arr) {
       QString status = item.toObject()["status"].toString();
       if (status == "RUNNING") running++;
       if (status == "COMPLETED") completed++;
-    }
-    m_scanTotalLabel->setText(QString::number(total));
-    m_scanRunningLabel->setText(QString::number(running));
-    m_scanCompletedLabel->setText(QString::number(completed));
 
-    // Build scan entries
-    for (const auto &item : arr) {
-      auto r = item.toObject();
       ActivityEntry e;
-      QString time = r["created_at"].toString();
+      QString time = item.toObject()["created_at"].toString();
       e.dt = QDateTime::fromString(time, Qt::ISODate);
       e.timeStr = e.dt.isValid() ? e.dt.toString("MM-dd HH:mm:ss") : time;
-      e.user = r["created_by"].toString();
+      e.user = item.toObject()["created_by"].toString();
       if (e.user.isEmpty()) e.user = QStringLiteral("-");
-      QString scanType = r["scan_type"].toString();
-      if (scanType == "port_scan") scanType = QStringLiteral("端口扫描");
-      else if (scanType == "vuln_scan") scanType = QStringLiteral("漏洞扫描");
-      else if (scanType == "web_scan") scanType = QStringLiteral("Web扫描");
-      QString target = r["target"].toString();
-      e.action = QStringLiteral("扫描 %1 → %2").arg(scanType, target);
-      e.status = r["status"].toString();
+      QString scanTypeLabel = item.toObject()["scan_type"].toString();
+      if (scanTypeLabel == "port_scan") scanTypeLabel = QStringLiteral("端口扫描");
+      else if (scanTypeLabel == "vuln_scan") scanTypeLabel = QStringLiteral("漏洞扫描");
+      else if (scanTypeLabel == "web_scan") scanTypeLabel = QStringLiteral("网站扫描");
+      else if (scanTypeLabel == "topology") scanTypeLabel = QStringLiteral("拓扑探测");
+      QString target = item.toObject()["target"].toString();
+      e.action = QStringLiteral("扫描 %1 → %2").arg(scanTypeLabel, target);
+      e.status = status;
       if (e.status == "COMPLETED") e.statusColor = QColor("#22c55e");
       else if (e.status == "RUNNING") e.statusColor = QColor("#2563eb");
       else if (e.status == "FAILED") e.statusColor = QColor("#ef4444");
       else e.statusColor = QColor("#94a3b8");
       scanEntries->append(e);
     }
+
+    m_scanTotalLabel->setText(QString::number(total));
+    m_scanRunningLabel->setText(QString::number(running));
+    m_scanCompletedLabel->setText(QString::number(completed));
+
     mergeAndDisplay();
   });
 
@@ -225,7 +235,6 @@ void DashboardPage::refreshStats()
     auto arr = res["data"].toArray();
     m_runTotalLabel->setText(QString::number(arr.size()));
 
-    // Build run entries
     for (const auto &item : arr) {
       auto r = item.toObject();
       ActivityEntry e;
@@ -246,6 +255,7 @@ void DashboardPage::refreshStats()
       else e.statusColor = QColor("#94a3b8");
       runEntries->append(e);
     }
+
     mergeAndDisplay();
   });
 }

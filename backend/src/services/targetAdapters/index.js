@@ -15,6 +15,7 @@ import { buildDvwaContext, checkDvwaCompatibility } from './dvwaTargetAdapter.js
 import { buildWebContext, checkWebCompatibility } from './genericWebTargetAdapter.js';
 import { buildWindowsContext, checkWindowsCompatibility } from './windowsHostTargetAdapter.js';
 import { buildCloudContext, checkCloudCompatibility } from './cloudTargetAdapter.js';
+import { buildApplicationContext, checkAppCompatibility } from './applicationTargetAdapter.js';
 
 /**
  * 根据 targetProfile.target_class 构建标准上下文
@@ -38,6 +39,11 @@ export function buildContextForTarget(targetProfile, dvwaProfile = {}) {
         return buildDvwaContext({ host: targetProfile.host, port: targetProfile.port, dvwaProfile });
       }
       return buildWebContext(targetProfile);
+    case 'web_app':
+    case 'rest_api':
+    case 'graphql_api':
+    case 'spa_app':
+      return buildApplicationContext(targetProfile);
     case 'windows_ad':
       return buildWindowsContext(targetProfile);
     case 'cloud':
@@ -62,6 +68,11 @@ export function checkTargetCompatibility(requiredClass, targetProfile) {
     case 'linux_host':
     case 'web_url':
       return checkDvwaCompatibility(targetProfile);
+    case 'web_app':
+    case 'rest_api':
+    case 'graphql_api':
+    case 'spa_app':
+      return checkAppCompatibility(targetProfile);
     case 'windows_ad':
       return checkWindowsCompatibility(targetProfile);
     case 'cloud':

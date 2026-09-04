@@ -137,6 +137,10 @@ export async function runPreflightChecks({ playbookId, target, db }) {
       cloud:      new Set(['cloudmapper','pacu','nmap','system-tools']),
       local_hash: new Set(['hashcat','john','system-tools']),
       subdomain:  new Set(['amass','gobuster','ffuf','httpx','system-tools']),
+      web_app:    new Set(['nmap','gobuster','ffuf','nuclei','nikto','whatweb','hydra','sqlmap','arjun','httpx','curl','python3','system-tools','web-brute']),
+      rest_api:   new Set(['nmap','gobuster','ffuf','nuclei','nikto','whatweb','hydra','sqlmap','arjun','httpx','curl','python3','system-tools','web-brute']),
+      graphql_api: new Set(['nmap','gobuster','ffuf','nuclei','nikto','whatweb','hydra','sqlmap','arjun','httpx','curl','python3','system-tools','web-brute']),
+      spa_app:    new Set(['nmap','gobuster','ffuf','nuclei','nikto','whatweb','hydra','sqlmap','arjun','httpx','curl','python3','system-tools','web-brute']),
     };
 
     // Get target_class from the previous check
@@ -191,6 +195,11 @@ export async function runPreflightChecks({ playbookId, target, db }) {
       'aws_region', 'aws_profile', 'aws_account_id', 's3_bucket',
       'wordlist_small', 'wordlist_medium', 'wordlist_small_users', 'wordlist_small_passwords',
       'nuclei_template_dir', 'evidence_dir',
+      // application target adapter context variables
+      'api_base_url', 'api_base_path', 'auth_method', 'auth_endpoint', 'content_type',
+      'graphql_endpoint', 'introspection_enabled',
+      'swagger_url', 'openapi_url',
+      'admin_url', 'signup_url',
     ]);
 
     const issues = [];

@@ -4,12 +4,16 @@
 #include <QMainWindow>
 #include <QListWidget>
 #include <QStackedWidget>
+#include <QTabWidget>
 #include <QPushButton>
 #include <QLabel>
 
 class ApiClient;
 class LoginDialog;
 class DashboardPage;
+class CampaignPage;
+class ScanPage;
+class ExecutionPage;
 class WsClient;
 class ToastOverlay;
 
@@ -49,6 +53,9 @@ private:
 
     // Dashboard + WebSocket + Toast
     DashboardPage *m_dashboardPage = nullptr;
+    CampaignPage *m_campaignPage = nullptr;
+    ScanPage *m_scanPage = nullptr;
+    ExecutionPage *m_executionPage = nullptr;
     WsClient *m_ws = nullptr;
     ToastOverlay *m_toastOverlay = nullptr;
 

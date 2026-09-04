@@ -24,8 +24,15 @@ public:
   void put(const QString &path, const QJsonObject &body, int timeoutMs = 30000,
             std::function<void(const QJsonObject &)> callback = nullptr);
 
+  void patch(const QString &path, const QJsonObject &body, int timeoutMs = 30000,
+             std::function<void(const QJsonObject &)> callback = nullptr);
+
   void del(const QString &path, int timeoutMs = 5000,
            std::function<void(const QJsonObject &)> callback = nullptr);
+
+  // File download (returns raw bytes, does not parse as JSON)
+  void download(const QString &path, int timeoutMs = 30000,
+                std::function<void(bool ok, const QByteArray &data, const QString &filename)> callback = nullptr);
 
   // Server URL management
   void setBaseUrl(const QString &url);

@@ -15,7 +15,6 @@ import { initWebSocket } from './services/wsManager.js';
 
 import healthRoutes from './routes/health.js';
 import userRoutes from './routes/users.js';
-import classRoutes from './routes/classes.js';
 import membershipRoutes from './routes/memberships.js';
 import assignmentRoutes from './routes/assignments.js';
 import submissionRoutes from './routes/submissions.js';
@@ -29,6 +28,10 @@ import toolRoutes from './routes/tools.js';
 import topologyRoutes from './routes/topology.js';
 import knowledgeRoutes from './routes/knowledge.js';
 import payloadRoutes from './routes/payloads.js';
+import campaignRoutes from './routes/campaigns.js';
+import labRoutes from './routes/labs.js';
+import pipelineRoutes from './routes/pipelines.js';
+import captureRoutes from './routes/captures.js';
 
 // ── Config ──────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -53,7 +56,6 @@ app.use('/api/users', userRoutes(db));  // login/refresh are public; CRUD is pro
 
 // Protected routes (authenticate + RBAC guard)
 const protectedRoutes = [
-  ['/api/classes',     classRoutes(db),     'classes'],
   ['/api/memberships', membershipRoutes(db),'memberships'],
   ['/api/assignments', assignmentRoutes(db),'assignments'],
   ['/api/submissions', submissionRoutes(db),'submissions'],
@@ -67,6 +69,10 @@ const protectedRoutes = [
   ['/api/topology',    topologyRoutes(db),  'topology'],
   ['/api/kg',          knowledgeRoutes(db), 'kg'],
   ['/api/payloads',    payloadRoutes(db),   'payloads'],
+  ['/api/campaigns',   campaignRoutes(db),  'campaign'],
+  ['/api/labs',        labRoutes(db),       'labs'],
+  ['/api/pipelines',   pipelineRoutes(db),  'pipelines'],
+  ['/api/capture-tasks', captureRoutes(db), 'capture-tasks'],
 ];
 for (const [path, routeFn, guard] of protectedRoutes) {
   app.use(path, authenticate, rbacGuard(guard), routeFn);
@@ -143,7 +149,7 @@ async function start() {
   server.listen(PORT, HOST, () => {
     console.log(`[Server] RedTeam Backend running on http://${HOST}:${PORT}`);
     console.log(`[Server] WebSocket available at ws://${HOST}:${PORT}/ws`);
-    console.log(`[Server] API endpoints mounted: /api/users, /api/classes, /api/playbooks, /api/runs, /api/scan-tasks, /api/config, ...`);
+    console.log(`[Server] API endpoints mounted: /api/users, /api/playbooks, /api/runs, /api/scan-tasks, /api/config, ...`);
   });
 }
 

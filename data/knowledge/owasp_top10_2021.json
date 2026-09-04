@@ -1,0 +1,528 @@
+[
+  {
+    "id": "A01:2021",
+    "name": "Broken Access Control",
+    "name_zh": "失效的访问控制",
+    "description": "Broken Access Control is the most severe category in OWASP Top 10 2021. It occurs when restrictions on what authenticated users are allowed to do are not properly enforced. Attackers can exploit these flaws to access unauthorized functionality and/or data, such as accessing other users' records, viewing sensitive files, or modifying data they should not be able to modify.",
+    "description_zh": "失效的访问控制是 OWASP Top 10 2021 中最严重的类别。当对经过身份验证的用户允许执行的操作的限制未得到正确执行时，就会发生这种情况。攻击者可以利用这些缺陷访问未经授权的功能和/或数据，例如访问其他用户的记录、查看敏感文件或修改他们不应修改的数据。",
+    "common_scenarios": [
+      "Insecure Direct Object References (IDOR) — accessing records by modifying ID parameters",
+      "Missing authentication on critical API endpoints",
+      "Privilege escalation — regular user accessing admin functionality",
+      "CORS misconfiguration allowing cross-origin data access",
+      "Force browsing to authenticated pages without proper authorization",
+      "Path traversal to access files outside web root",
+      "Mass assignment — modifying object properties via request parameters",
+      "Missing or improper role-based access controls",
+      "Vertical access control bypass via HTTP method manipulation",
+      "Horizontal access control — accessing another user's private data"
+    ],
+    "detection_tools": [
+      "ffuf",
+      "arjun",
+      "nuclei",
+      "burp",
+      "zap",
+      "curl",
+      "jwt_tool",
+      "postman"
+    ],
+    "attack_tools": [
+      "curl",
+      "ffuf",
+      "sqlmap",
+      "jwt_tool",
+      "nuclei",
+      "burp",
+      "metasploit"
+    ],
+    "mitre_mapping": [
+      "T1190: Exploit Public-Facing Application",
+      "T1078: Valid Accounts",
+      "T1548: Abuse Elevation Control Mechanism",
+      "T1530: Data from Cloud Storage Object",
+      "T1213: Data from Information Repositories",
+      "T1069: Permission Groups Discovery"
+    ],
+    "nuclei_tags": ["cve", "unauth", "idor", "acl", "auth-bypass", "exposure", "misconfiguration"],
+    "severity": "critical",
+    "cvss_avg": 7.8,
+    "tech_parent_techniques": [
+      "T1190",
+      "T1078.002",
+      "T1548.002",
+      "T1530",
+      "T1213"
+    ]
+  },
+  {
+    "id": "A02:2021",
+    "name": "Cryptographic Failures",
+    "name_zh": "加密机制失效",
+    "description": "Cryptographic Failures (formerly Sensitive Data Exposure) occurs when sensitive data is not properly protected in transit or at rest. This includes weak encryption algorithms, missing encryption, improper key management, and certificate validation issues. Attackers may steal or modify weakly protected data such as credit card numbers, health records, or credentials.",
+    "description_zh": "加密机制失效（原敏感数据泄露）是指敏感数据在传输或存储过程中未得到正确保护的情况。包括弱加密算法、缺失加密、不正确的密钥管理和证书验证问题。攻击者可能窃取或修改受保护薄弱的数据，如信用卡号、医疗记录或凭据。",
+    "common_scenarios": [
+      "Weak encryption algorithms (DES, RC4, MD5, SHA-1) used for sensitive data",
+      "Missing or improperly configured TLS/SSL",
+      "Hardcoded cryptographic keys in source code",
+      "Insufficient key management — weak key generation or storage",
+      "Sensitive data stored in plaintext in database",
+      "Mixed content — HTTPS page loading HTTP resources",
+      "Weak password hashing schemes (plaintext, unsalted SHA-1/MD5)",
+      "Insecure random number generators used for security-critical values",
+      "Certificate validation disabled or improperly configured",
+      "HTTP Strict Transport Security (HSTS) not implemented"
+    ],
+    "detection_tools": [
+      "nmap",
+      "nuclei",
+      "openssl",
+      "sslscan",
+      "testssl",
+      "zap",
+      "burp"
+    ],
+    "attack_tools": [
+      "hashcat",
+      "john",
+      "openssl",
+      "sslyze",
+      "curl",
+      "metasploit"
+    ],
+    "mitre_mapping": [
+      "T1557: Adversary-in-the-Middle",
+      "T1600: Weaken Encryption",
+      "T1040: Network Sniffing",
+      "T1552: Unsecured Credentials",
+      "T1539: Steal Web Session Cookie",
+      "T1555: Credentials from Password Stores"
+    ],
+    "nuclei_tags": ["ssl", "tls", "cve", "misconfig", "weak-encryption", "information-disclosure"],
+    "severity": "high",
+    "cvss_avg": 6.5,
+    "tech_parent_techniques": [
+      "T1600",
+      "T1600.001",
+      "T1600.002",
+      "T1040",
+      "T1552"
+    ]
+  },
+  {
+    "id": "A03:2021",
+    "name": "Injection",
+    "name_zh": "注入攻击",
+    "description": "Injection occurs when untrusted data is sent to an interpreter as part of a command or query. The attacker's hostile data can trick the interpreter into executing unintended commands or accessing data without proper authorization. Common injection types include SQL, NoSQL, OS command, LDAP, and XPath injection.",
+    "description_zh": "注入攻击是指当不受信任的数据作为命令或查询的一部分发送到解释器时发生。攻击者的恶意数据可以欺骗解释器执行非预期的命令或在未经适当授权的情况下访问数据。常见的注入类型包括 SQL、NoSQL、OS 命令、LDAP 和 XPath 注入。",
+    "common_scenarios": [
+      "SQL injection — classic UNION, blind/time-based, error-based, stacked queries",
+      "NoSQL injection — MongoDB query injection with $ne/$regex operators",
+      "OS command injection — injecting into shell commands via web parameters",
+      "LDAP injection — manipulating LDAP filters",
+      "XPath injection — exploiting XML-based query systems",
+      "ORM injection — Hibernate/Doctrine injection flaws",
+      "Template injection (SSTI) — Server-Side Template Injection (Jinja2, Freemarker, Pug)",
+      "Code injection — eval(), exec(), system() calls with user input",
+      "XSS (Cross-Site Scripting) — reflected, stored, DOM-based",
+      "Second-order injection — stored payload executed later"
+    ],
+    "detection_tools": [
+      "nuclei",
+      "sqlmap",
+      "xray",
+      "burp",
+      "zap",
+      "ffuf",
+      "arjun"
+    ],
+    "attack_tools": [
+      "sqlmap",
+      "nuclei",
+      "metasploit",
+      "commix",
+      "xray",
+      "nosqli",
+      "curl"
+    ],
+    "mitre_mapping": [
+      "T1190: Exploit Public-Facing Application",
+      "T1509: Server-Side Injection (SSTI)",
+      "T1059: Command and Scripting Interpreter",
+      "T1565: Data Manipulation",
+      "T1189: Drive-by Compromise",
+      "T1203: Exploitation for Client Execution"
+    ],
+    "nuclei_tags": ["cve", "sqli", "xss", "cmd-execution", "injection", "classic-rce"],
+    "severity": "critical",
+    "cvss_avg": 8.0,
+    "tech_parent_techniques": [
+      "T1190",
+      "T1509",
+      "T1059",
+      "T1059.003",
+      "T1059.007"
+    ]
+  },
+  {
+    "id": "A04:2021",
+    "name": "Insecure Design",
+    "name_zh": "不安全的设计",
+    "description": "Insecure Design represents risks related to design and architecture flaws, which manifest as missing or ineffective controls. This is not about incorrect implementation but rather about fundamental design weaknesses. It emphasizes the need for threat modeling, secure design patterns, and architecture review before development begins.",
+    "description_zh": "不安全的设计代表了与设计和架构缺陷相关的风险，表现为控制措施的缺失或无效。这不是关于错误的实现，而是关于根本性的设计弱点。它强调了在开发开始之前需要进行威胁建模、安全设计模式和架构评审的重要性。",
+    "common_scenarios": [
+      "Missing threat modeling during design phase",
+      "No rate limiting on authentication endpoints",
+      "No account lockout or weak lockout policy",
+      "Trusting external services without verification",
+      "Insufficient authorization checks assumed at design level",
+      "Over-reliance on client-side validation",
+      "No secure defaults — insecure configurations out of the box",
+      "Missing input validation strategy at architectural level",
+      "Improper separation of concerns — mixing data and logic",
+      "No mechanism to detect tampering with business logic flows"
+    ],
+    "detection_tools": [
+      "nuclei",
+      "burp",
+      "zap",
+      "ffuf",
+      "arjun"
+    ],
+    "attack_tools": [
+      "burp",
+      "metasploit",
+      "curl",
+      "ffuf"
+    ],
+    "mitre_mapping": [
+      "T1189: Drive-by Compromise",
+      "T1190: Exploit Public-Facing Application",
+      "T1546: Event Triggered Execution",
+      "T1608: Stage Capabilities",
+      "T1193: Spearphishing Attachment"
+    ],
+    "nuclei_tags": ["cve", "misconfig", "rate-limit", "logic-flaw"],
+    "severity": "high",
+    "cvss_avg": 6.8,
+    "tech_parent_techniques": [
+      "T1190",
+      "T1546",
+      "T1608"
+    ]
+  },
+  {
+    "id": "A05:2021",
+    "name": "Security Misconfiguration",
+    "name_zh": "安全配置错误",
+    "description": "Security Misconfiguration is one of the most common vulnerabilities, resulting from insecure default configurations, incomplete or ad-hoc configurations, open cloud storage, misconfigured HTTP headers, and verbose error messages containing sensitive information. It can affect any level of the application stack including the web server, database, framework, and custom code.",
+    "description_zh": "安全配置错误是最常见的漏洞之一，由不安全的默认配置、不完整或临时的配置、开放的云存储、配置错误的 HTTP 标头以及包含敏感信息的详细错误消息导致。它可以影响应用程序堆栈的任何级别，包括 Web 服务器、数据库、框架和自定义代码。",
+    "common_scenarios": [
+      "Default credentials unchanged (admin/admin, root/root)",
+      "Directory listing enabled on web servers",
+      "Debug/developer consoles accessible in production",
+      "Open cloud storage buckets (S3, GCS, Azure Blob)",
+      "Missing HTTP security headers (CSP, HSTS, X-Frame-Options, X-Content-Type-Options)",
+      "Verbose error messages exposing stack traces and paths",
+      "Unnecessary ports and services exposed",
+      "CORS misconfiguration allowing all origins (*)",
+      "Missing or improper Content Security Policy",
+      "Unpatched software due to misconfigured auto-update"
+    ],
+    "detection_tools": [
+      "nuclei",
+      "nmap",
+      "ffuf",
+      "curl",
+      "zap",
+      "burp",
+      "grype",
+      "trivy"
+    ],
+    "attack_tools": [
+      "curl",
+      "nuclei",
+      "metasploit",
+      "ffuf",
+      "hydra",
+      "medusa"
+    ],
+    "mitre_mapping": [
+      "T1102: Web Service",
+      "T1190: Exploit Public-Facing Application",
+      "T1525: Portal Capture",
+      "T1580: Container Administration Command",
+      "T1613: Container and Resource Discovery"
+    ],
+    "nuclei_tags": ["cve", "misconfig", "tech-detection", "default-login", "exposure"],
+    "severity": "high",
+    "cvss_avg": 6.5,
+    "tech_parent_techniques": [
+      "T1190",
+      "T1102",
+      "T1613"
+    ]
+  },
+  {
+    "id": "A06:2021",
+    "name": "Vulnerable and Outdated Components",
+    "name_zh": "使用含有已知漏洞的组件",
+    "description": "Vulnerable and Outdated Components (formerly Using Components with Known Vulnerabilities) occurs when organizations do not adequately inventory or manage third-party components. Attackers can exploit known vulnerabilities in libraries, frameworks, and other software modules that are not patched or updated, often through automated tools that scan for CVEs.",
+    "description_zh": "使用含有已知漏洞的组件（原使用含有已知漏洞的组件）是指组织未能充分盘点或管理第三方组件时发生的情况。攻击者可以利用未修补或更新的库、框架和其他软件模块中的已知漏洞，通常通过自动扫描 CVE 的工具进行攻击。",
+    "common_scenarios": [
+      "Using outdated library versions with known CVEs",
+      "Large attack surface from included unnecessary dependencies",
+      "No inventory management of software components",
+      "Unable to determine which component versions are in use",
+      "No automated vulnerability scanning pipeline for dependencies",
+      "Outdated or unpatched operating system and middleware",
+      "Using end-of-life software with no security patches",
+      "Failure to scan for known vulnerabilities in container images",
+      "Unverified or malicious packages from untrusted sources",
+      "Delayed application of security patches"
+    ],
+    "detection_tools": [
+      "nuclei",
+      "nmap",
+      "grype",
+      "trivy",
+      "semgrep",
+      "dependency-check",
+      "snyk"
+    ],
+    "attack_tools": [
+      "nuclei",
+      "metasploit",
+      "searchsploit"
+    ],
+    "mitre_mapping": [
+      "T1190: Exploit Public-Facing Application",
+      "T1203: Exploitation for Client Execution",
+      "T1210: Exploitation of Remote Services",
+      "T1068: Exploitation for Privilege Escalation",
+      "T1588.002: Obtain Capabilities — Tool",
+      "T1588.005: Obtain Capabilities — Exploits"
+    ],
+    "nuclei_tags": ["cve", "tech-detection", "misconfig"],
+    "severity": "high",
+    "cvss_avg": 7.0,
+    "tech_parent_techniques": [
+      "T1190",
+      "T1203",
+      "T1210",
+      "T1068",
+      "T1588.002",
+      "T1588.005"
+    ]
+  },
+  {
+    "id": "A07:2021",
+    "name": "Identification and Authentication Failures",
+    "name_zh": "身份识别和身份验证失败",
+    "description": "Identification and Authentication Failures (formerly Broken Authentication) encompasses vulnerabilities related to user identity, authentication, and session management. Common issues include credential stuffing, weak passwords, insecure password recovery, session fixation, and missing MFA. Compromised authentication mechanisms can lead to account takeover and data breaches.",
+    "description_zh": "身份识别和身份验证失败（原身份验证失效）涵盖了与用户身份、身份验证和会话管理相关的漏洞。常见问题包括凭据填充、弱密码、不安全的密码恢复、会话固定和缺少多因素认证。受损的身份验证机制可能导致账户被盗和数据泄露。",
+    "common_scenarios": [
+      "Credential stuffing — automated login attempts with breached credentials",
+      "Weak password policy allowing common/weak passwords",
+      "No multi-factor authentication (MFA) on critical accounts",
+      "Session fixation — attacker forces a known session ID",
+      "Insecure password recovery flows (trivial security questions)",
+      "Session timeout not properly implemented or too long",
+      "Credentials sent over unencrypted connections",
+      "User enumeration via login error messages (valid vs invalid)",
+      "JWT vulnerabilities — none algorithm, weak signing key, no expiration",
+      "Password in URL or log files"
+    ],
+    "detection_tools": [
+      "nuclei",
+      "ffuf",
+      "hydra",
+      "burp",
+      "zap",
+      "jwt_tool"
+    ],
+    "attack_tools": [
+      "hydra",
+      "medusa",
+      "hashcat",
+      "john",
+      "metasploit",
+      "jwt_tool",
+      "curl"
+    ],
+    "mitre_mapping": [
+      "T1078: Valid Accounts",
+      "T1110: Brute Force",
+      "T1110.001: Password Guessing",
+      "T1110.003: Password Spraying",
+      "T1110.004: Credential Stuffing",
+      "T1528: Steal Application Access Token",
+      "T1550: Use Alternate Authentication Material",
+      "T1557: Adversary-in-the-Middle"
+    ],
+    "nuclei_tags": ["cve", "default-login", "exposure", "jwt", "misconfig"],
+    "severity": "critical",
+    "cvss_avg": 7.5,
+    "tech_parent_techniques": [
+      "T1078",
+      "T1110",
+      "T1110.001",
+      "T1110.003",
+      "T1110.004",
+      "T1528",
+      "T1550"
+    ]
+  },
+  {
+    "id": "A08:2021",
+    "name": "Software and Data Integrity Failures",
+    "name_zh": "软件和数据完整性故障",
+    "description": "Software and Data Integrity Failures focuses on making assumptions related to software updates, critical data, and CI/CD pipelines without verifying integrity. This includes insecure deserialization, using untrusted software dependencies without verification, and failing to ensure that software updates come from legitimate sources.",
+    "description_zh": "软件和数据完整性故障关注的是与软件更新、关键数据和 CI/CD 管道相关的假设，而没有验证完整性。这包括不安全的反序列化、使用未经验证的不可信软件依赖项，以及未能确保软件更新来自合法来源。",
+    "common_scenarios": [
+      "Insecure deserialization — arbitrary code execution via serialized objects",
+      "CI/CD pipeline without integrity verification of artifacts",
+      "Spoofed updates — man-in-the-middle during software update",
+      "Using untrusted third-party libraries without integrity checks",
+      "Signed software not verified before installation",
+      "Auto-update mechanism without SSL validation",
+      "Dependency confusion — installing packages from wrong repository",
+      "Tampered container images from untrusted registries",
+      "No code signing or signature verification",
+      "SQLite/memory corruption via crafted serialized payloads"
+    ],
+    "detection_tools": [
+      "nuclei",
+      "burp",
+      "semgrep",
+      "trivy",
+      "grype",
+      "dependency-check"
+    ],
+    "attack_tools": [
+      "ysoserial",
+      "metasploit",
+      "nuclei",
+      "curl"
+    ],
+    "mitre_mapping": [
+      "T1190: Exploit Public-Facing Application",
+      "T1495: Firmware Corruption",
+      "T1553: Subvert Trust Controls",
+      "T1496: Resource Hijacking",
+      "T1558: Steal or Forge Kerberos Tickets",
+      "T1525: Portal Capture"
+    ],
+    "nuclei_tags": ["cve", "deserialization", "insecure-defaults", "misconfig"],
+    "severity": "high",
+    "cvss_avg": 7.2,
+    "tech_parent_techniques": [
+      "T1190",
+      "T1553",
+      "T1495",
+      "T1558"
+    ]
+  },
+  {
+    "id": "A09:2021",
+    "name": "Security Logging and Monitoring Failures",
+    "name_zh": "安全日志记录和监控失败",
+    "description": "Security Logging and Monitoring Failures (formerly Insufficient Logging & Monitoring) occurs when security-critical events are not logged, monitored, or alerted upon. This allows attackers to maintain persistence, pivot to other systems, and tamper with data without detection. Without proper logging, breaches cannot be detected in a timely manner, and forensic analysis is severely hampered.",
+    "description_zh": "安全日志记录和监控失败（原日志记录和监控不足）是指安全关键事件未被记录、监控或告警的情况。这使得攻击者能够维持持久性、转向其他系统以及篡改数据而不被发现。没有适当的日志记录，无法及时发现入侵行为，并且严重阻碍取证分析。",
+    "common_scenarios": [
+      "Failed login attempts not logged or monitored",
+      "No real-time alerting on suspicious activities",
+      "Logs stored locally with insufficient protection from tampering",
+      "No centralized logging system (SIEM) for cross-system correlation",
+      "Insufficient log retention period for forensic investigation",
+      "No monitoring of privileged user actions",
+      "Application errors not logged with security context",
+      "No audit trail for sensitive data access",
+      "Logging only success events, not failures",
+      "API calls not logged with source IP, user agent, and timestamp"
+    ],
+    "detection_tools": [
+      "nmap",
+      "nuclei",
+      "burp"
+    ],
+    "attack_tools": [
+      "metasploit",
+      "curl",
+      "log cleaners and tampering tools"
+    ],
+    "mitre_mapping": [
+      "T1070: Indicator Removal on Host",
+      "T1070.001: Clear Windows Event Logs",
+      "T1070.002: Clear Linux or Mac System Logs",
+      "T1070.003: Clear Command History",
+      "T1070.004: File Deletion",
+      "T1562: Impair Defenses",
+      "T1562.001: Disable or Modify Tools",
+      "T1562.006: Indicator Blocking"
+    ],
+    "nuclei_tags": ["cve", "info", "exposure", "misconfig"],
+    "severity": "medium",
+    "cvss_avg": 5.5,
+    "tech_parent_techniques": [
+      "T1070",
+      "T1070.001",
+      "T1070.002",
+      "T1070.003",
+      "T1562",
+      "T1562.001"
+    ]
+  },
+  {
+    "id": "A10:2021",
+    "name": "Server-Side Request Forgery (SSRF)",
+    "name_zh": "服务端请求伪造",
+    "description": "Server-Side Request Forgery (SSRF) occurs when a web application fetches a remote resource without validating the user-supplied URL. An attacker can coerce the server to make requests to unintended locations, including internal services, cloud metadata endpoints, or external systems. SSRF can lead to data exposure, remote code execution, and lateral movement within cloud environments.",
+    "description_zh": "服务端请求伪造是指 Web 应用程序在获取远程资源时未验证用户提供的 URL 时发生的情况。攻击者可以迫使服务器向非预期的位置发起请求，包括内部服务、云元数据端点或外部系统。SSRF 可导致数据泄露、远程代码执行以及云环境内的横向移动。",
+    "common_scenarios": [
+      "Cloud metadata endpoint access (169.254.169.254) for credential theft",
+      "Internal network scanning and port scanning via SSRF",
+      "Accessing localhost services (127.0.0.1) not exposed externally",
+      "File:// protocol to read local files",
+      "Blind SSRF — no direct response but triggers side effects",
+      "SSRF to access container orchestration APIs (Docker, Kubernetes)",
+      "Third-party service abuse — using vulnerable app as proxy",
+      "Partial URL validation bypassed via DNS rebinding",
+      "Redirect-based SSRF — attacker-controlled server redirects to internal",
+      "Schema-level SSRF — gopher://, dict://, redis:// protocols"
+    ],
+    "detection_tools": [
+      "nuclei",
+      "ffuf",
+      "burp",
+      "zap",
+      "curl",
+      "interactsh"
+    ],
+    "attack_tools": [
+      "curl",
+      "nuclei",
+      "metasploit",
+      "interactsh",
+      "ngrok"
+    ],
+    "mitre_mapping": [
+      "T1190: Exploit Public-Facing Application",
+      "T1525: Portal Capture",
+      "T1613: Container and Resource Discovery",
+      "T1082: System Information Discovery",
+      "T1595: Active Scanning",
+      "T1590: Gather Victim Network Information"
+    ],
+    "nuclei_tags": ["cve", "ssrf", "cve-2021", "exposure", "oob"],
+    "severity": "high",
+    "cvss_avg": 7.0,
+    "tech_parent_techniques": [
+      "T1190",
+      "T1525",
+      "T1613",
+      "T1082",
+      "T1595"
+    ]
+  }
+]

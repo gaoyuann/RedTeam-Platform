@@ -6,12 +6,18 @@ import { RBAC } from '../config/rbac.js';
  * Read operations (GET/HEAD/OPTIONS) check `rules.read`.
  * Write operations (POST/PUT/PATCH/DELETE) check `rules.write`.
  *
+ * The RBAC config is read from the live RBAC object (which may be updated
+ * at runtime via PUT /api/users/permissions). On first request per prefix,
+ * it resolves from DB if available, otherwise falls back to the hardcoded
+ * defaults in config/rbac.js.
+ *
  * @param {string} prefix - Route prefix key in RBAC config (e.g. 'scan-tasks')
  */
 export function rbacGuard(prefix) {
-  const rules = RBAC[prefix];
-
   return (req, res, next) => {
+    // Use the live RBAC object (may have been updated by permissions API)
+    const rules = RBAC[prefix];
+
     // If no RBAC rule defined for this prefix, deny by default
     if (!rules) {
       if (!req.user || req.user.role !== 'admin') {

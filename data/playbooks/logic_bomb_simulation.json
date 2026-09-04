@@ -130,7 +130,7 @@
     "domain",
     "localhost"
   ],
-  "baselineGroup": "windows-exploitation",
+  "baselineGroup": "tampering-deception",
   "expectedOutputPolicy": "expect_output",
   "emptyOutputExplanation": "炸弹脚本远程部署到 Windows 靶机并在后台监听触发条件；需要 Windows 靶机开放 WinRM 5985 端口且具备管理员凭据",
   "applicableTargetType": [
@@ -139,5 +139,6 @@
   ],
   "teachingObjective": "演示逻辑炸弹（Logic Bomb）在 Windows 平台的后台隐藏运行、msg 桌面弹窗警告与条件触发防御规避（T1059.001, T1489）",
   "target_class": "windows_ad",
-  "disableAutoInsert": true
+  "disableAutoInsert": true,
+  "baseline_group": "tampering-deception"
 }

@@ -17,6 +17,9 @@ public:
   explicit BasePage(ApiClient *api, const QString &role = "",
                     const QString &username = "", QWidget *parent = nullptr);
 
+  // Refresh data when the page becomes active.
+  virtual void refresh() {}
+
 protected:
   // ── UI helpers ─────────────────────────────────────────────────────
   // Create a section header label with the global SectionStyle
@@ -49,10 +52,6 @@ protected:
   // ── Dialog helpers ─────────────────────────────────────────────────
   // Show a "confirm delete?" dialog; returns true if user confirms
   bool confirmDelete(const QString &itemName);
-
-  // ── Refresh on page show ───────────────────────────────────────────
-  // Override in subclasses to refresh data when page becomes visible
-  virtual void refresh() {}
 
   ApiClient *m_api;
   QString m_role;

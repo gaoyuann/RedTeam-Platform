@@ -17,6 +17,7 @@ set(SOURCES
     src/ToastOverlay.cpp
     src/SplashDialog.cpp
     src/LoginDialog.cpp
+    src/CortexPanel.cpp
     src/pages/BasePage.cpp
     src/pages/DashboardPage.cpp
     src/pages/DeployConfigPage.cpp
@@ -26,6 +27,9 @@ set(SOURCES
     src/pages/ExecutionPage.cpp
     src/pages/EvaluatePage.cpp
     src/pages/SystemPage.cpp
+    src/pages/CampaignPage.cpp
+    src/pages/StepIndicator.cpp
+    src/pages/PhasePanel.cpp
     src/models/TopologyTypes.cpp
     src/pages/TopologyPage.cpp
 )
@@ -40,6 +44,7 @@ set(HEADERS
     src/SplashDialog.h
     src/LoginDialog.h
     src/Theme.h
+    src/CortexPanel.h
     src/pages/BasePage.h
     src/pages/DashboardPage.h
     src/pages/DeployConfigPage.h
@@ -49,6 +54,9 @@ set(HEADERS
     src/pages/ExecutionPage.h
     src/pages/EvaluatePage.h
     src/pages/SystemPage.h
+    src/pages/CampaignPage.h
+    src/pages/StepIndicator.h
+    src/pages/PhasePanel.h
     src/models/TopologyTypes.h
     src/pages/TopologyPage.h
 )

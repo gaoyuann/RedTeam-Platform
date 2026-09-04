@@ -4,6 +4,7 @@
 #include "LoginDialog.h"
 #include "ApiClient.h"
 #include <QApplication>
+#include <QProcess>
 #include <QFontDatabase>
 #include <QDir>
 #include <QTimer>
@@ -15,120 +16,88 @@
 #include <functional>
 
 static const char *GLOBAL_STYLE = R"css(
-/* ── QPushButton ──────────────────────────────────────────────── */
+QWidget { color: #172033; }
+QWidget#contentArea { background: #f3f6fb; }
+
 QPushButton {
-  background: #2a7dd6; color: #ffffff; border: none; border-radius: 5px;
-  padding: 8px 20px; font-size: 14px; font-weight: bold; min-height: 32px;
+  background: #f8fafc; color: #1e293b; border: 1px solid #cbd5e1; border-radius: 8px;
+  padding: 7px 14px; font-size: 14px; font-weight: 600; min-height: 30px;
 }
-QPushButton:hover { background: #1e6bb8; }
-QPushButton:pressed { background: #165a9e; }
-QPushButton:disabled { background: #bdc3c7; color: #7f8c8d; }
-QPushButton#secondaryBtn { background: #e8ecf0; color: #1a2a3a; font-weight: normal; }
-QPushButton#secondaryBtn:hover { background: #dce1e8; }
-QPushButton#dangerBtn { background: #e74c3c; color: #ffffff; }
-QPushButton#dangerBtn:hover { background: #c0392b; }
+QPushButton:hover { background: #eef4ff; border-color: #93b4ed; }
+QPushButton:pressed { background: #dbeafe; }
+QPushButton:disabled { background: #f1f5f9; color: #94a3b8; border-color: #e2e8f0; }
+QPushButton[primary="true"] { background: #2563eb; color: #ffffff; border-color: #1d4ed8; }
+QPushButton[primary="true"]:hover { background: #1d4ed8; border-color: #1e40af; }
+QPushButton[danger="true"], QPushButton#dangerBtn { background: #fff1f2; color: #b42318; border-color: #fecdd3; }
+QPushButton[danger="true"]:hover, QPushButton#dangerBtn:hover { background: #ffe4e6; border-color: #fda4af; }
 QPushButton#checkBtn {
-  background: transparent; color: #aabbcc; border: 1px solid #3a5a7a;
-  border-radius: 4px; padding: 4px 14px; font-weight: normal; min-height: 24px;
+  background: transparent; color: #cbd5e1; border: 1px solid #41546e;
+  border-radius: 7px; padding: 4px 12px; font-weight: 500; min-height: 22px;
 }
-QPushButton#checkBtn:hover { background: #243447; color: #ffffff; }
+QPushButton#checkBtn:hover { background: #253955; color: #ffffff; border-color: #6b8db8; }
 
-/* ── QLineEdit ────────────────────────────────────────────────── */
-QLineEdit {
-  border: 1px solid #dce1e8; border-radius: 5px; padding: 6px 10px;
+QLineEdit, QComboBox, QSpinBox {
+  border: 1px solid #cbd5e1; border-radius: 8px; padding: 6px 10px;
   font-size: 14px; background: #ffffff; min-height: 28px;
 }
-QLineEdit:focus { border-color: #2a7dd6; }
-
-/* ── QComboBox ────────────────────────────────────────────────── */
-QComboBox {
-  border: 1px solid #dce1e8; border-radius: 5px; padding: 6px 10px;
-  font-size: 14px; background: #ffffff; min-height: 28px;
-}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border-color: #3b82f6; background: #fefeff; }
 QComboBox::drop-down { border: none; width: 24px; }
-QComboBox QAbstractItemView {
-  selection-background-color: #2a7dd6; selection-color: #ffffff;
-  border: 1px solid #dce1e8;
-}
+QComboBox QAbstractItemView { selection-background-color: #2563eb; selection-color: #ffffff; border: 1px solid #cbd5e1; }
 
-/* ── QTableWidget ─────────────────────────────────────────────── */
-QTableWidget {
-  border: 1px solid #dce1e8; border-radius: 4px; gridline-color: #e8ecf0;
-  font-size: 14px; background: #ffffff; alternate-background-color: #f0f4f8;
+QTableWidget, QTreeWidget {
+  border: 1px solid #dbe3ef; border-radius: 10px; gridline-color: #edf2f7;
+  font-size: 14px; background: #ffffff; alternate-background-color: #f8fbff;
 }
-QTableWidget::item { padding: 6px; }
+QTableWidget::item, QTreeWidget::item { padding: 7px 8px; }
 QHeaderView::section {
-  background: #1a2a3a; color: #ffffff; font-size: 14px; font-weight: bold;
-  padding: 8px 6px; border: none;
+  background: #eef4fb; color: #334155; font-size: 13px; font-weight: 700;
+  padding: 9px 8px; border: none; border-bottom: 1px solid #dbe3ef;
 }
-QTableWidget::item:selected { background: #2a7dd6; color: #ffffff; }
+QTableWidget::item:selected, QTreeWidget::item:selected { background: #dbeafe; color: #1e3a8a; }
 
-/* ── QTabWidget ───────────────────────────────────────────────── */
-QTabWidget::pane {
-  border: 1px solid #dce1e8; border-radius: 4px; background: #f5f7fa;
-  padding: 8px;
-}
+QTabWidget::pane { border: 1px solid #dbe3ef; border-radius: 10px; background: #ffffff; padding: 8px; }
 QTabBar::tab {
-  background: #e8ecf0; color: #5a6a7a; padding: 10px 24px; font-size: 14px;
-  font-weight: bold; border-top-left-radius: 5px; border-top-right-radius: 5px;
-  margin-right: 2px;
+  background: transparent; color: #64748b; padding: 9px 16px; font-size: 14px;
+  font-weight: 600; border-bottom: 2px solid transparent; margin-right: 4px;
 }
-QTabBar::tab:selected { background: #2a7dd6; color: #ffffff; }
-QTabBar::tab:hover:!selected { background: #dce1e8; }
+QTabBar::tab:selected { color: #1d4ed8; border-bottom-color: #2563eb; }
+QTabBar::tab:hover:!selected { color: #334155; background: #f1f5f9; border-radius: 6px; }
 
-/* ── QTreeWidget ──────────────────────────────────────────────── */
-QTreeWidget {
-  border: 1px solid #dce1e8; border-radius: 4px; font-size: 14px;
-  background: #ffffff; alternate-background-color: #f0f4f8;
+QTextEdit, QPlainTextEdit {
+  border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px;
+  background: #fbfdff; padding: 8px;
 }
-QTreeWidget::item { padding: 4px; }
+QCheckBox, QRadioButton { font-size: 14px; spacing: 8px; }
+QProgressBar { background: #e2e8f0; border: none; border-radius: 5px; text-align: center; color: #334155; min-height: 10px; }
+QProgressBar::chunk { background: #2563eb; border-radius: 5px; }
 
-/* ── QTextEdit ────────────────────────────────────────────────── */
-QTextEdit {
-  border: 1px solid #dce1e8; border-radius: 4px; font-size: 13px;
-  background: #fafbfc; padding: 8px;
-}
-
-/* ── QCheckBox ────────────────────────────────────────────────── */
-QCheckBox { font-size: 14px; spacing: 8px; }
-
-/* ── QProgressBar ─────────────────────────────────────────────── */
-QProgressBar {
-  background: #1a2a3a; border: none; border-radius: 4px;
-  text-align: center; color: #ffffff; min-height: 10px;
-}
-QProgressBar::chunk { background: #3a8fd6; border-radius: 4px; }
-
-/* ── QScrollBar ───────────────────────────────────────────────── */
-QScrollBar:vertical { background: #f0f4f8; width: 10px; border: none; }
-QScrollBar::handle:vertical { background: #bdc3c7; border-radius: 5px; min-height: 30px; }
-QScrollBar::handle:vertical:hover { background: #95a5a6; }
+QScrollBar:vertical { background: transparent; width: 10px; border: none; }
+QScrollBar::handle:vertical { background: #cbd5e1; border-radius: 5px; min-height: 30px; }
+QScrollBar::handle:vertical:hover { background: #94a3b8; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-QScrollBar:horizontal { background: #f0f4f8; height: 10px; border: none; }
-QScrollBar::handle:horizontal { background: #bdc3c7; border-radius: 5px; min-width: 30px; }
-QScrollBar::handle:horizontal:hover { background: #95a5a6; }
+QScrollBar:horizontal { background: transparent; height: 10px; border: none; }
+QScrollBar::handle:horizontal { background: #cbd5e1; border-radius: 5px; min-width: 30px; }
+QScrollBar::handle:horizontal:hover { background: #94a3b8; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }
 
-/* ── QStatusBar ───────────────────────────────────────────────── */
-QStatusBar { background: #1a2a3a; color: #aabbcc; font-size: 13px; }
-
-/* ── Status label colors (unified) ────────────────────────────── */
+QStatusBar { background: #10243e; color: #cbd5e1; font-size: 13px; padding: 2px 8px; }
 QLabel#statusSuccess { color: #166534; }
-QLabel#statusError   { color: #991b1b; }
+QLabel#statusError   { color: #b42318; }
 QLabel#statusWarning { color: #b45309; }
 QLabel#statusInfo    { color: #1d4ed8; }
 
-/* ── Content area ─────────────────────────────────────────────── */
-QWidget#contentArea { background: #f5f7fa; }
-
-/* ── Navigation list ──────────────────────────────────────────── */
+QFrame#sidebar { background: #10243e; border: none; }
+QLabel#sidebarBrand { color: #ffffff; font-size: 19px; font-weight: 800; letter-spacing: 1px; }
+QLabel#sidebarSubtitle { color: #93b4d5; font-size: 12px; }
+QFrame#sidebarDivider { color: #294667; background: #294667; max-height: 1px; }
+QLabel#sidebarFooter { color: #6f91b5; font-size: 11px; padding: 4px 2px; }
 QListWidget#navList {
-  background: #1a2a3a; color: #aabbcc; border: none;
-  font-size: 15px; font-weight: bold; outline: none; padding: 8px;
+  background: transparent; color: #a8bdd5; border: none;
+  font-size: 14px; font-weight: 600; outline: none; padding: 2px 0;
 }
-QListWidget#navList::item { padding: 14px 16px; border-radius: 6px; margin: 2px 4px; }
-QListWidget#navList::item:selected { background: #2a7dd6; color: #ffffff; }
-QListWidget#navList::item:hover:!selected { background: #243447; color: #ffffff; }
+QListWidget#navList::item { padding: 12px 13px; border-radius: 8px; margin: 2px 0; }
+QListWidget#navList::item:selected { background: #2563eb; color: #ffffff; }
+QListWidget#navList::item:hover:!selected { background: #1d3655; color: #ffffff; }
 )css";
 
 static void loadBundledFonts() {
@@ -151,6 +120,48 @@ static void loadBundledFonts() {
 
 int main(int argc, char *argv[])
 {
+    // ── Input Method (IME) setup ───────────────────────────────────────
+    // On Linux/X11, Qt5 needs QT_IM_MODULE to connect to an IME framework.
+    // If not set, auto-detect: prefer fcitx5 > fcitx > ibus > compose.
+    // This must happen BEFORE QApplication is constructed.
+    if (!qEnvironmentVariableIsSet("QT_IM_MODULE")) {
+      // Check for running IME processes
+      QProcess imeCheck;
+      bool foundIme = false;
+
+      // Try fcitx5 first (most common on modern Linux)
+      imeCheck.start("pgrep", {"-x", "fcitx5"});
+      imeCheck.waitForFinished(1000);
+      if (imeCheck.exitCode() == 0) {
+        qputenv("QT_IM_MODULE", "fcitx");
+        foundIme = true;
+      }
+
+      if (!foundIme) {
+        imeCheck.start("pgrep", {"-x", "fcitx"});
+        imeCheck.waitForFinished(1000);
+        if (imeCheck.exitCode() == 0) {
+          qputenv("QT_IM_MODULE", "fcitx");
+          foundIme = true;
+        }
+      }
+
+      if (!foundIme) {
+        imeCheck.start("pgrep", {"-x", "ibus-daemon"});
+        imeCheck.waitForFinished(1000);
+        if (imeCheck.exitCode() == 0) {
+          qputenv("QT_IM_MODULE", "ibus");
+          foundIme = true;
+        }
+      }
+
+      if (!foundIme) {
+        // No IME process found — try ibus as default if plugin exists
+        // (ibus plugin ships with libqt5gui on Ubuntu)
+        qputenv("QT_IM_MODULE", "ibus");
+      }
+    }
+
     QApplication app(argc, argv);
 
     // Disable ALL proxy — frontend connects directly to backend on LAN.
@@ -225,13 +236,30 @@ int main(int argc, char *argv[])
     healthTimer.singleShot(5000, &healthLoop, &QEventLoop::quit);
     healthLoop.exec();
 
-    splash.updateProgress(100, "就绪");
-    app.processEvents();
-
-    // Brief display of "ready" state — show splash for ~10 seconds total
-    QTimer::singleShot(9500, &splash, &SplashDialog::hide);
+    // Animate progress from 80% → 100% over ~10 seconds (1% per 500ms)
+    // so the user sees the progress bar moving during the wait.
     QEventLoop finishLoop;
-    QTimer::singleShot(9600, &finishLoop, &QEventLoop::quit);
+    QTimer animTimer;
+    int animProgress = 80;
+    animTimer.start(500);
+
+    QObject::connect(&animTimer, &QTimer::timeout, [&]() {
+      animProgress++;
+      QString msg;
+      if (animProgress < 85)       msg = QStringLiteral("正在初始化模块...");
+      else if (animProgress < 90)  msg = QStringLiteral("正在加载配置...");
+      else if (animProgress < 100) msg = QStringLiteral("正在准备界面...");
+      else                         msg = QStringLiteral("就绪");
+
+      splash.updateProgress(animProgress, msg);
+
+      if (animProgress >= 100) {
+        animTimer.stop();
+        splash.hide();
+        finishLoop.quit();
+      }
+    });
+
     finishLoop.exec();
 
     // ── Login + Main Window loop ─────────────────────────────────────

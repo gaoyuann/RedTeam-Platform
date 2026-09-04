@@ -108,7 +108,7 @@
     ]
   },
   "notSuitableFor": [],
-  "baselineGroup": "post-exploitation",
+  "baselineGroup": "data-exfiltration",
   "expectedOutputPolicy": "expect_output",
   "emptyOutputExplanation": "字典破解本地哈希文件，不依赖网络目标",
   "applicableTargetType": [
@@ -117,5 +117,6 @@
   ],
   "teachingObjective": "演示使用字典攻击破解 MD5 哈希",
   "target_class": "local_hash",
-  "disableAutoInsert": true
+  "disableAutoInsert": true,
+  "baseline_group": "data-exfiltration"
 }

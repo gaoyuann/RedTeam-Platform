@@ -43,6 +43,11 @@ const WINDOWS_PATTERNS = [
   /^server\d*/i,
 ];
 
+// ── Application-level URL path patterns ───────────────────────────────────
+const GRAPHQL_PATH_PATTERN   = /\/(graphql|gql)/i;
+const REST_API_PATH_PATTERN  = /^\/?api\/v\d+\//i;
+const WEB_APP_PATH_PATTERNS  = [/^\/?api\//i, /\/graphql/i, /\/v[12]\//i];
+
 /**
  * Resolve a target string to a target profile object.
  * @param {string} target - raw target (URL, IP, hostname, file path)
@@ -95,7 +100,36 @@ export function resolveTargetProfile(target, hints = {}) {
     return { target_class: 'cloud', host, port, is_dvwa: false, raw };
   }
 
-  // Private IP
+  // HTTP/HTTPS URL -- detect application-level classes from path patterns FIRST
+  // (path-based classification like /graphql, /api/v1 takes priority over IP-based)
+  if (raw.startsWith('http://') || raw.startsWith('https://')) {
+    const pathName = parsed ? parsed.pathname : '';
+
+    // GraphQL API endpoint
+    if (GRAPHQL_PATH_PATTERN.test(pathName)) {
+      return { target_class: 'graphql_api', host, port, is_dvwa: false, raw };
+    }
+
+    // REST API with versioned path (/api/v1/...)
+    if (REST_API_PATH_PATTERN.test(pathName)) {
+      return { target_class: 'rest_api', host, port, is_dvwa: false, raw };
+    }
+
+    // Web application with common API/version paths
+    if (WEB_APP_PATH_PATTERNS.some(p => p.test(pathName))) {
+      return { target_class: 'web_app', host, port, is_dvwa: false, raw };
+    }
+
+    // Generic web URL fallback (even for private IPs with HTTP URL)
+    // If it's an http:// IP, it's more useful to classify as web_url than local_ip
+    if (!PRIVATE_IP_PATTERNS.some(p => p.test(host))) {
+      return { target_class: 'web_url', host, port, is_dvwa: false, raw };
+    }
+    // Private IP with HTTP URL but no special path → still useful as web_url
+    return { target_class: 'web_url', host, port, is_dvwa: false, raw };
+  }
+
+  // Private IP (non-URL form, e.g. "192.168.1.1" or "10.0.0.5")
   if (PRIVATE_IP_PATTERNS.some(p => p.test(host))) {
     return { target_class: 'local_ip', host, port, is_dvwa: false, raw };
   }
@@ -108,11 +142,6 @@ export function resolveTargetProfile(target, hints = {}) {
   // Windows/AD domain patterns
   if (preferredClass !== 'subdomain' && WINDOWS_PATTERNS.some(p => p.test(host))) {
     return { target_class: 'windows_ad', host, port, is_dvwa: false, raw };
-  }
-
-  // HTTP/HTTPS URL
-  if (raw.startsWith('http://') || raw.startsWith('https://')) {
-    return { target_class: 'web_url', host, port, is_dvwa: false, raw };
   }
 
   // Domain name (for subdomain enumeration)
@@ -177,4 +206,59 @@ export function checkTargetTypeCompatibility(targetTypes, targetClass) {
   };
 }
 
-export default { resolveTargetProfile, derivePreferredClass, checkTargetTypeCompatibility };
+/**
+ * Refine a target profile based on scan results.
+ * Can upgrade a target class (e.g., web_url -> rest_api if whatweb detects Swagger).
+ * @param {object} initialProfile - The profile from resolveTargetProfile
+ * @param {object[]} scanResults - Array of scan result objects from a scan execution
+ * @returns {object} A new or updated target profile with possible class upgrade
+ */
+export function refineTargetProfile(initialProfile, scanResults) {
+  if (!Array.isArray(scanResults) || scanResults.length === 0) {
+    return { ...initialProfile, source: 'initial' };
+  }
+
+  let refinedClass = initialProfile.target_class;
+  let source = 'initial';
+
+  for (const result of scanResults) {
+    const data = result.result_data || {};
+    const detail = (data.detail || data.output || '').toLowerCase();
+
+    // whatweb detected Swagger/OpenAPI  -> rest_api
+    if (/swagger|openapi|\/v3\/api-docs/.test(detail)) {
+      refinedClass = 'rest_api';
+      source = 'whatweb-scan';
+      break;
+    }
+
+    // whatweb detected GraphiQL/GraphQL Playground  -> graphql_api
+    if (/graphiql|graphql playground|apollo studio/.test(detail)) {
+      refinedClass = 'graphql_api';
+      source = 'whatweb-scan';
+      break;
+    }
+
+    // Generic SPA indicators from httpx/whatweb  -> spa_app
+    if (/react|angular|vue|svelte|single.*page|spa/i.test(detail)) {
+      refinedClass = 'spa_app';
+      source = 'scan-detected';
+      break;
+    }
+
+    // REST API detected via versioned endpoint patterns
+    if (/api\/v\d/.test(detail)) {
+      refinedClass = 'rest_api';
+      source = 'api-pattern-scan';
+      break;
+    }
+  }
+
+  return {
+    ...initialProfile,
+    target_class: refinedClass,
+    source,
+  };
+}
+
+export default { resolveTargetProfile, derivePreferredClass, checkTargetTypeCompatibility, refineTargetProfile };

@@ -7,19 +7,19 @@
 namespace Theme {
 
 // ── Brand / Primary ──────────────────────────────────────────────────
-constexpr const char* Primary       = "#2a7dd6";
-constexpr const char* PrimaryHover  = "#1e6bb8";
-constexpr const char* PrimaryPress  = "#165a9e";
+constexpr const char* Primary       = "#2563eb";
+constexpr const char* PrimaryHover  = "#1d4ed8";
+constexpr const char* PrimaryPress  = "#1e40af";
 
 // ── Dark palette (nav, table headers, status bar) ────────────────────
-constexpr const char* Dark          = "#1a2a3a";
-constexpr const char* DarkLighter   = "#243447";
+constexpr const char* Dark          = "#10243e";
+constexpr const char* DarkLighter   = "#1d3655";
 
 // ── Surface / Background ─────────────────────────────────────────────
-constexpr const char* Background    = "#f5f7fa";
-constexpr const char* Surface       = "#e8ecf0";
-constexpr const char* SurfaceHover  = "#dce1e8";
-constexpr const char* Border        = "#dce1e8";
+constexpr const char* Background    = "#f3f6fb";
+constexpr const char* Surface       = "#eef4fb";
+constexpr const char* SurfaceHover  = "#dbeafe";
+constexpr const char* Border        = "#dbe3ef";
 
 // ── Status colors (unified across all pages) ─────────────────────────
 constexpr const char* Success       = "#166534";
@@ -46,8 +46,8 @@ constexpr const char* TableAltRow   = "#f0f4f8";
 // ── Section header QSS ───────────────────────────────────────────────
 // Replaces the duplicated sectionStyle string in 6 page files.
 constexpr const char* SectionStyle =
-  "font-size: 16px; font-weight: bold; color: #1a2a3a; "
-  "padding: 4px 0; border-bottom: 2px solid #2a7dd6;";
+  "font-size:17px; font-weight:700; color:#172033; "
+  "padding:4px 0 7px; border-bottom:1px solid #dbe3ef;";
 
 // ── Page-level stylesheet (TopologyPage style) ───────────────────────
 // Apply via setStyleSheet(Theme::PageStyle) at start of each page's setupUI().
@@ -55,24 +55,24 @@ constexpr const char* SectionStyle =
 // card frames, and consistent focus styling.
 constexpr const char* PageStyle =
   "QLabel { background:transparent; border:none; }"
-  "QFrame[card=\"true\"] { background:#ffffff; border:1px solid #dbe5f0; border-radius:16px; }"
-  "QFrame[softCard=\"true\"] { background:#f8fbff; border:1px solid #dbe5f0; border-radius:12px; }"
+  "QFrame[card=\"true\"] { background:#ffffff; border:1px solid #dbe3ef; border-radius:14px; }"
+  "QFrame[softCard=\"true\"] { background:#f8fbff; border:1px solid #dbe3ef; border-radius:12px; }"
   "QLineEdit, QPlainTextEdit, QComboBox, QSpinBox { "
-    "background:#ffffff; border:1px solid #cfd9e6; border-radius:8px; padding:6px 8px; }"
+    "background:#ffffff; border:1px solid #cbd5e1; border-radius:8px; padding:6px 9px; }"
   "QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus { "
-    "border:1px solid #60a5fa; }"
+    "border:1px solid #3b82f6; }"
   "QPushButton { "
-    "background:#eef3fb; color:#0f172a; border:1px solid #c7d5ea; "
-    "border-radius:8px; padding:8px 14px; font-weight:600; }"
-  "QPushButton:hover { background:#d9e8ff; border:1px solid #9fc2f7; }"
+    "background:#f8fafc; color:#1e293b; border:1px solid #cbd5e1; "
+    "border-radius:8px; padding:7px 14px; font-weight:600; }"
+  "QPushButton:hover { background:#eef4ff; border:1px solid #93b4ed; }"
   "QPushButton[primary=\"true\"] { "
     "background:#2563eb; color:#ffffff; border:1px solid #1d4ed8; }"
   "QPushButton[primary=\"true\"]:hover { "
     "background:#1d4ed8; border:1px solid #1e40af; }"
   "QPushButton[danger=\"true\"] { "
-    "background:#fff1f2; color:#b42318; border:1px solid #f3b5bd; }"
+    "background:#fff1f2; color:#b42318; border:1px solid #fecdd3; }"
   "QPushButton[danger=\"true\"]:hover { "
-    "background:#ffe4e6; border:1px solid #e58b97; }"
+    "background:#ffe4e6; border:1px solid #fda4af; }"
   "QPushButton:disabled { "
     "background:#e5e7eb; color:#94a3b8; border:1px solid #d1d5db; }";
 

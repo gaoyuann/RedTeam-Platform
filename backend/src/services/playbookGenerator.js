@@ -7,9 +7,17 @@ const TOOL_LIST = [
   'dirb', 'gobuster', 'ffuf', 'whatweb', 'wpscan',
   'evil-winrm', 'netexec', 'sshpass', 'responder', 'mitm6',
   'arjun', 'cloudmapper', 'pacu', 'awscli',
+  // Application-layer tools (B3.4 enhancement)
+  'curl', 'httpie', 'jwt_tool', 'graphqlmap',
 ];
 
-export async function generatePlaybook(scanTaskId) {
+/**
+ * Generate a playbook from scan results.
+ * @param {string} scanTaskId - The scan task to generate from
+ * @param {object} [analysisResult] - Optional pipeline analysis result (tech_stack, attack_surface, risk_assessment, recommended_strategy)
+ *   When provided, the LLM prompt includes structured analysis for more targeted playbook generation.
+ */
+export async function generatePlaybook(scanTaskId, analysisResult = null) {
   const db = getDb();
 
   // Get scan task + results
@@ -61,6 +69,36 @@ export async function generatePlaybook(scanTaskId) {
   };
   const detectedTargetTypes = TARGET_CLASS_TO_TYPE[targetProfile.target_class] || ['any'];
 
+  // Build analysis context if provided (from pipeline scan→analyze step)
+  let analysisContext = '';
+  if (analysisResult) {
+    const parts = [];
+    if (analysisResult.tech_stack?.length) {
+      parts.push(`Identified tech stack: ${analysisResult.tech_stack.join(', ')}`);
+    }
+    if (analysisResult.attack_surface?.length) {
+      const surfaceLines = analysisResult.attack_surface.slice(0, 10).map(a =>
+        `- ${a.type || 'unknown'}: ${a.detail || a.path || a.port || JSON.stringify(a).slice(0, 100)}`
+      );
+      parts.push(`Attack surface:\n${surfaceLines.join('\n')}`);
+    }
+    if (analysisResult.risk_assessment?.length) {
+      const riskLines = analysisResult.risk_assessment.slice(0, 8).map(r =>
+        `- ${r.category || r.owasp_id || 'unknown'}: confidence=${r.confidence || '?'}, evidence=${(r.evidence || '').slice(0, 80)}`
+      );
+      parts.push(`Risk assessment:\n${riskLines.join('\n')}`);
+    }
+    if (analysisResult.recommended_strategy?.length) {
+      const stratLines = analysisResult.recommended_strategy.slice(0, 5).map(s =>
+        `- P${s.priority || '?'}: ${s.action || s.description || JSON.stringify(s).slice(0, 80)} (tools: ${(s.tools || []).join(',')})`
+      );
+      parts.push(`Recommended strategy:\n${stratLines.join('\n')}`);
+    }
+    if (parts.length) {
+      analysisContext = `\nPipeline Analysis Result:\n${parts.join('\n\n')}\n`;
+    }
+  }
+
   const prompt = `You are a red team playbook generator. Based on the scan results below, generate a penetration testing playbook in JSON format.
 
 Target: ${task.target}
@@ -69,7 +107,7 @@ Target class: ${targetProfile.target_class} (auto-detected)
 
 Findings:
 ${findings || 'No specific findings.'}
-
+${analysisContext}
 Available tools: ${TOOL_LIST.join(', ')}
 
 Output a single JSON object with this exact structure (no markdown, no explanation):

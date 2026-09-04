@@ -99,7 +99,7 @@
     "local_ip",
     "web_url"
   ],
-  "baselineGroup": "windows-exploitation",
+  "baselineGroup": "device-control",
   "expectedOutputPolicy": "may_be_empty_if_no_match",
   "emptyOutputExplanation": "evil-winrm 需要目标开放 WinRM (5985/5986) 端口且具有有效凭证；DVWA/Linux 目标不适用",
   "applicableTargetType": [
@@ -108,5 +108,6 @@
   ],
   "teachingObjective": "演示使用 evil-winrm 通过 WinRM 获取 Windows 远程 Shell",
   "target_class": "windows_ad",
-  "disableAutoInsert": true
+  "disableAutoInsert": true,
+  "baseline_group": "device-control"
 }

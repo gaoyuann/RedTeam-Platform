@@ -77,7 +77,7 @@ export async function callLlm(messages, options = {}) {
 // Never rejects — always returns a safe fallback string so the ReAct
 // engine never hangs on LLM failures.
 
-const REACT_SYSTEM_PROMPT = '你是渗透测试执行代理。请严格按照 ReAct 格式输出 Observation 和 Thought（中文），以及 Action（XML）。保持简洁，Thought 不超过100字。';
+const REACT_SYSTEM_PROMPT = '你是 ISST 的 AI 红队代理。请严格按照 ReAct 格式输出 Thought 和 Action（XML）。保持简洁，Thought 不超过 100 字，避免重复。';
 
 export async function callLlmReact(prompt, options = {}) {
   const { apiKey, baseUrl, model } = await getLlmConfig();
@@ -94,7 +94,7 @@ export async function callLlmReact(prompt, options = {}) {
       { role: 'system', content: REACT_SYSTEM_PROMPT },
       { role: 'user', content: prompt },
     ],
-    temperature: options.temperature ?? 0.3,  // More deterministic
+    temperature: options.temperature ?? 0.7,  // Match old system — creative enough for diverse decisions
     max_tokens: options.maxTokens ?? 2048,
   };
 

@@ -2,6 +2,37 @@ import { Router } from 'express';
 import { generateAccessToken, generateRefreshToken, refreshTokenExpiry,
          comparePassword, hashPassword, needsPasswordUpgrade } from '../middleware/jwtUtils.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
+import { RBAC as DEFAULT_RBAC } from '../config/rbac.js';
+
+// ── RBAC config helpers (DB-driven with fallback) ────────────────────────
+
+/**
+ * Load RBAC config: try DB first, fall back to hardcoded defaults.
+ * DB stores one row per (category='rbac', config_key=<prefix>) with
+ * config_value = JSON { read: [...], write: [...] }.
+ */
+function loadRBACFromDB(db) {
+  try {
+    const rows = db.prepare(
+      "SELECT config_key, config_value FROM system_config WHERE category = 'rbac'"
+    ).all();
+    if (rows.length === 0) return null;
+    const rbac = {};
+    for (const row of rows) {
+      try {
+        rbac[row.config_key] = JSON.parse(row.config_value);
+      } catch { /* skip malformed */ }
+    }
+    return Object.keys(rbac).length > 0 ? rbac : null;
+  } catch {
+    return null;
+  }
+}
+
+export function getEffectiveRBAC(db) {
+  return loadRBACFromDB(db) || DEFAULT_RBAC;
+}
+
 export default function (db) {
   const router = Router();
 
@@ -185,6 +216,65 @@ export default function (db) {
     const result = db.prepare('DELETE FROM users WHERE username = ?').run(req.params.username);
     if (result.changes === 0) return res.status(404).json({ status: 'error', error: { message: 'User not found' } });
     res.json({ status: 'ok', data: { deleted: true } });
+  });
+
+  // ── Permissions (RBAC) management ──────────────────────────────────────
+
+  // Get current RBAC configuration (admin only)
+  router.get('/permissions', requireRole('admin'), (_req, res) => {
+    const rbac = getEffectiveRBAC(db);
+    res.json({ status: 'ok', data: rbac });
+  });
+
+  // Update RBAC configuration (admin only)
+  // Body: { permissions: { <prefix>: { read: [...], write: [...] }, ... } }
+  router.put('/permissions', requireRole('admin'), (req, res) => {
+    const { permissions } = req.body;
+    if (!permissions || typeof permissions !== 'object') {
+      return res.status(400).json({ status: 'error', error: { message: 'permissions object is required' } });
+    }
+
+    // Validate: each key must have read/write arrays of role strings
+    const validRoles = ['admin', 'teacher', 'operator', 'student', 'viewer'];
+    for (const [prefix, rules] of Object.entries(permissions)) {
+      if (!rules || typeof rules !== 'object') {
+        return res.status(400).json({ status: 'error', error: { message: `Invalid rules for ${prefix}` } });
+      }
+      for (const accessType of ['read', 'write']) {
+        if (!Array.isArray(rules[accessType])) {
+          return res.status(400).json({ status: 'error', error: { message: `${prefix}.${accessType} must be an array` } });
+        }
+        for (const role of rules[accessType]) {
+          if (!validRoles.includes(role)) {
+            return res.status(400).json({ status: 'error', error: { message: `Invalid role: ${role}` } });
+          }
+        }
+      }
+    }
+
+    // Write each prefix as a separate system_config row (category='rbac')
+    const upsert = db.prepare(
+      `INSERT INTO system_config (category, config_key, config_value, description)
+       VALUES ('rbac', ?, ?, 'RBAC permission rule')
+       ON CONFLICT(category, config_key) DO UPDATE SET config_value = excluded.config_value`
+    );
+    for (const [prefix, rules] of Object.entries(permissions)) {
+      upsert.run(prefix, JSON.stringify(rules));
+    }
+
+    // Update the in-process RBAC cache so changes take effect immediately
+    const merged = { ...DEFAULT_RBAC };
+    for (const [prefix, rules] of Object.entries(permissions)) {
+      merged[prefix] = rules;
+    }
+    // Replace the live RBAC object keys
+    for (const key of Object.keys(DEFAULT_RBAC)) {
+      if (merged[key]) {
+        DEFAULT_RBAC[key] = merged[key];
+      }
+    }
+
+    res.json({ status: 'ok', data: { updated: Object.keys(permissions).length, message: '权限配置已更新' } });
   });
 
   return router;

@@ -4,7 +4,7 @@
 static const char *GLOBAL_STYLE_DARK = R"css(
 /* ── QPushButton ──────────────────────────────────────────────── */
 QPushButton {
-  background: #3a8fd6; color: #1a2a3a; border: none; border-radius: 5px;
+  background: #3a8fd6; color: #f8fafc; border: none; border-radius: 5px;
   padding: 8px 20px; font-size: 14px; font-weight: bold; min-height: 32px;
 }
 QPushButton:hover { background: #4da3e8; }
@@ -48,7 +48,7 @@ QHeaderView::section {
   background: #0d1520; color: #e2e8f0; font-size: 14px; font-weight: bold;
   padding: 8px 6px; border: none;
 }
-QTableWidget::item:selected { background: #3a8fd6; color: #1a2a3a; }
+QTableWidget::item:selected { background: #3a8fd6; color: #f8fafc; }
 
 /* ── QTabWidget ───────────────────────────────────────────────── */
 QTabWidget::pane {
@@ -60,7 +60,7 @@ QTabBar::tab {
   font-weight: bold; border-top-left-radius: 5px; border-top-right-radius: 5px;
   margin-right: 2px;
 }
-QTabBar::tab:selected { background: #3a8fd6; color: #1a2a3a; }
+QTabBar::tab:selected { background: #3a8fd6; color: #f8fafc; }
 QTabBar::tab:hover:!selected { background: #4a5568; }
 
 /* ── QTreeWidget ──────────────────────────────────────────────── */
@@ -103,12 +103,17 @@ QStatusBar { background: #0d1520; color: #a0aec0; font-size: 13px; }
 QWidget#contentArea { background: #1a202c; }
 
 /* ── Navigation list ──────────────────────────────────────────── */
+QFrame#sidebar { background: #0d1520; border: none; }
+QLabel#sidebarBrand { color: #f8fafc; font-size: 19px; font-weight: 800; letter-spacing: 1px; }
+QLabel#sidebarSubtitle { color: #8fa5bf; font-size: 12px; }
+QFrame#sidebarDivider { color: #29384a; background: #29384a; max-height: 1px; }
+QLabel#sidebarFooter { color: #718096; font-size: 11px; padding: 4px 2px; }
 QListWidget#navList {
   background: #0d1520; color: #a0aec0; border: none;
   font-size: 15px; font-weight: bold; outline: none; padding: 8px;
 }
 QListWidget#navList::item { padding: 14px 16px; border-radius: 6px; margin: 2px 4px; }
-QListWidget#navList::item:selected { background: #3a8fd6; color: #1a2a3a; }
+QListWidget#navList::item:selected { background: #3a8fd6; color: #f8fafc; }
 QListWidget#navList::item:hover:!selected { background: #2d3748; color: #ffffff; }
 
 /* ── Status label colors (unified) ────────────────────────────── */
@@ -119,7 +124,7 @@ QLabel#statusInfo    { color: #63b3ed; }
 
 /* ── QMenu (right-click) ──────────────────────────────────────── */
 QMenu { background: #2d3748; color: #e2e8f0; border: 1px solid #4a5568; }
-QMenu::item:selected { background: #3a8fd6; color: #1a2a3a; }
+QMenu::item:selected { background: #3a8fd6; color: #f8fafc; }
 
 /* ── QRadioButton ─────────────────────────────────────────────── */
 QRadioButton { color: #e2e8f0; }

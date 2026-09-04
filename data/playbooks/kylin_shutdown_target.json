@@ -89,7 +89,7 @@
     "ad_domain",
     "localhost"
   ],
-  "baselineGroup": "impact-demonstration",
+  "baselineGroup": "device-control",
   "expectedOutputPolicy": "expect_output",
   "emptyOutputExplanation": "关机脚本通过 ssh-exec 远程执行；需要目标开放 SSH 22 端口、凭据有效、且已配置 shutdown 的 sudo 免密权限（echo '{{username}} ALL=(ALL) NOPASSWD: /sbin/shutdown' | sudo tee /etc/sudoers.d/demo-shutdown）",
   "applicableTargetType": [
@@ -97,5 +97,6 @@
   ],
   "teachingObjective": "演示远程攻击链的最终阶段（Impact）：通过 SSH 远程下发关机指令，wall 全屏广播警告所有在线用户，展示攻击者对目标系统的完全控制与破坏能力（T1529）",
   "target_class": "linux_host",
-  "disableAutoInsert": true
+  "disableAutoInsert": true,
+  "baseline_group": "device-control"
 }

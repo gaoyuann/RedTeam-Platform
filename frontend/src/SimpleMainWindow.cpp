@@ -115,7 +115,7 @@ void SimpleMainWindow::setupUI()
   m_playbookPage->setGoExecuteCallback([this](const QString &playbookId) {
     m_executionPage->selectPlaybook(playbookId, QString());
     m_navList->setCurrentRow(4);  // switch to "攻击执行" page
-    statusBar()->showMessage(QString("已跳转到攻击执行，预填 Playbook: %1").arg(playbookId), 3000);
+    statusBar()->showMessage(QString("已跳转到攻击执行，已预填预案：%1").arg(playbookId), 3000);
   });
   // Secondary: Qt signal (for any other listeners)
   connect(m_playbookPage, &PlaybookPage::executeRequested, this, [this](const QString &playbookId) {
@@ -138,8 +138,14 @@ void SimpleMainWindow::setupUI()
   statusBar()->addWidget(statusLabel);
 
   // User info label
+  QString roleLabel = m_role;
+  if (m_role == "admin") roleLabel = "管理员";
+  else if (m_role == "teacher") roleLabel = "教师";
+  else if (m_role == "student") roleLabel = "学生";
+  else if (m_role == "operator") roleLabel = "操作员";
+  else if (m_role == "viewer") roleLabel = "观察者";
   auto *userLabel = new QLabel(
-    QString("%1 [%2]").arg(m_username, m_role), this);
+    QString("%1 [%2]").arg(m_username, roleLabel), this);
   userLabel->setStyleSheet("color: #a0aec0; padding: 0 10px; font-size: 13px;");
   statusBar()->addWidget(userLabel);
 
@@ -170,7 +176,7 @@ void SimpleMainWindow::setupUI()
 
   // Global API error → status bar
   connect(m_api, &ApiClient::apiError, this, [this](const QString &path, const QString &msg) {
-    statusBar()->showMessage(QString("API 错误: %1 -- %2").arg(path, msg), 5000);
+    statusBar()->showMessage(QString("接口错误: %1 -- %2").arg(path, msg), 5000);
   });
 
   // ── Poll timer ─────────────────────────────────────────────────────
@@ -858,7 +864,7 @@ void SimpleMainWindow::advanceStage()
 {
   if (m_currentStage == PortScan || m_currentStage == VulnScan) {
     setStage(GenPlaybook);
-    updateStageRow(2, ">>", 30, QStringLiteral("AI生成中..."), "#2563eb");
+    updateStageRow(2, ">>", 30, QStringLiteral("智能生成中..."), "#2563eb");
 
     QString scanId = m_vulnScanTaskId.isEmpty() ? m_portScanTaskId : m_vulnScanTaskId;
     if (scanId.isEmpty()) {
@@ -1245,8 +1251,8 @@ void SimpleMainWindow::onViewReport()
     } else {
       content->setText(
         QStringLiteral("目标: ") + m_target + "\n" +
-        QStringLiteral("报告ID: ") + m_latestReportId + "\n" +
-        QStringLiteral("运行ID: ") + data["run_id"].toString() + "\n" +
+        QStringLiteral("报告编号：") + m_latestReportId + "\n" +
+        QStringLiteral("执行编号：") + data["run_id"].toString() + "\n" +
         QStringLiteral("状态: ") + data["status"].toString());
     }
     layout->addWidget(content, 1);
@@ -1320,8 +1326,8 @@ void SimpleMainWindow::onViewHistoryReport(int row, int col)
       }
     } else {
       content->setText(
-        QStringLiteral("报告ID: ") + data["report_id"].toString() + "\n" +
-        QStringLiteral("运行ID: ") + data["run_id"].toString() + "\n" +
+        QStringLiteral("报告编号：") + data["report_id"].toString() + "\n" +
+        QStringLiteral("执行编号：") + data["run_id"].toString() + "\n" +
         QStringLiteral("状态: ") + data["status"].toString());
     }
     layout->addWidget(content, 1);

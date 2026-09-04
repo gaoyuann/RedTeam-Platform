@@ -190,7 +190,7 @@
     "windows_host",
     "localhost"
   ],
-  "baselineGroup": "web-vuln-scan",
+  "baselineGroup": "tampering-deception",
   "expectedOutputPolicy": "expect_output",
   "emptyOutputExplanation": "文件篡改攻击链需要 DVWA Docker 容器运行且 File Upload 漏洞可用；请确保 security=low 且 hackable/uploads 目录可写",
   "applicableTargetType": [
@@ -199,5 +199,6 @@
   ],
   "teachingObjective": "演示完整扫描→欺骗→篡改攻击链：nmap/gobuster 侦察发现入口，File Upload 漏洞上传伪装 PHP 载荷（伪装成系统诊断脚本），远程覆盖首页 index.php 实现可视化页面篡改，观众可在浏览器直接看到被篡改页面",
   "target_class": "dvwa",
-  "disableAutoInsert": true
+  "disableAutoInsert": true,
+  "baseline_group": "tampering-deception"
 }

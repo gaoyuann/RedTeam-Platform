@@ -2,7 +2,7 @@ import { getDb } from '../db/connection.js';
 import { computeGrade } from './gradingEngine.js';
 import { randomUUID } from 'crypto';
 
-export function generateReport(runId, title) {
+export function generateReport(runId, title, generatedBy) {
   const db = getDb();
 
   const run = db.prepare(
@@ -50,9 +50,9 @@ export function generateReport(runId, title) {
   const reportTitle = title || `测试报告 - ${playbookName || runId} - ${now.slice(0, 10)}`;
 
   db.prepare(`
-    INSERT INTO test_reports (report_id, title, run_id, template, status, content, created_at, updated_at)
-    VALUES (?, ?, ?, 'standard', 'draft', ?, ?, ?)
-  `).run(reportId, reportTitle, runId, JSON.stringify(content), now, now);
+    INSERT INTO test_reports (report_id, title, run_id, template, status, content, generated_by, created_at, updated_at)
+    VALUES (?, ?, ?, 'standard', 'draft', ?, ?, ?, ?)
+  `).run(reportId, reportTitle, runId, JSON.stringify(content), generatedBy || null, now, now);
 
   return {
     ok: true,

@@ -98,12 +98,14 @@ export function compilePlaybook({ steps, target, db }) {
         // Variables resolved at runtime by commandTemplateRenderer + targetAdapters
         const RUNTIME_RESOLVABLE = new Set([
           'host', 'port', 'base_url', 'target_url', 'login_url',
+          'admin_url', 'api_base_url', 'signup_url', 'reset_password_url',
           'dvwa_login_url', 'sqli_url', 'dvwa_sqli_url', 'dvwa_cookie',
           'wordlist_small', 'wordlist_small_users', 'wordlist_small_passwords',
           'nuclei_template_dir', 'evidence_dir', 'domain', 'scheme',
           'target_class', 'username', 'password', 'smb_port',
           'winrm_port', 'aws_region', 'aws_profile', 's3_bucket',
-          'ad_domain',
+          'ad_domain', 'auth_method', 'auth_endpoint', 'content_type',
+          'graphql_endpoint', 'api_base_path',
         ]);
         // Filter out <target>, runtime-resolvable {{var}}, and cross-step evidence refs ({{stepN_...}})
         // which will be resolved at execution time

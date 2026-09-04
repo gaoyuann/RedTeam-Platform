@@ -123,7 +123,7 @@
     "local_ip",
     "web_url"
   ],
-  "baselineGroup": "windows-exploitation",
+  "baselineGroup": "data-exfiltration",
   "expectedOutputPolicy": "may_be_empty_if_no_match",
   "emptyOutputExplanation": "全自动凭据发现链取决于靶机配置：(1) 空会话 RID 枚举是否被 AD 限制（WinSvr2019 默认限制匿名 SAMR）；(2) 是否存在 UF_DONT_REQUIRE_PREAUTH 用户用于 AS-REP roasting；(3) 枚举到的用户是否使用常见实验密码。若所有技术均被防御，无有效凭据则无法触发真正的强制认证。可设置 HEXSTRIKE_WIN_USERNAME / HEXSTRIKE_WIN_PASSWORD 环境变量提供已知凭据跳过发现阶段。",
   "applicableTargetType": [
@@ -132,5 +132,6 @@
   ],
   "teachingObjective": "演示完整红队攻击链：空会话侦察 (T1087.002) → 域用户枚举 → AS-REP roasting (T1558.004) → 密码喷洒 (T1110.002) → 强制认证 (T1557.001) → NTLMv2 哈希捕获 (T1040)。全程无需预配置凭据，展示真实红队从零开始获取凭据的完整方法论。",
   "target_class": "windows_ad",
-  "disableAutoInsert": true
+  "disableAutoInsert": true,
+  "baseline_group": "data-exfiltration"
 }

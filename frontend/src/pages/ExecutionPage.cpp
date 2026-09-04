@@ -1,7 +1,9 @@
 #include "ExecutionPage.h"
 #include "../Theme.h"
 #include "../ApiClient.h"
+#include "../CortexPanel.h"
 #include <QScrollArea>
+#include <QSplitter>
 #include <QFrame>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -90,7 +92,7 @@ void ExecutionPage::setupUI() {
   auto *runLabel = new QLabel("执行记录"); runLabel->setStyleSheet(Theme::SectionStyle);
   tab1Layout->addWidget(runLabel);
   m_runTable = new QTableWidget(0, 5);
-  m_runTable->setHorizontalHeaderLabels({"执行ID", "预案", "目标", "状态", "创建时间"});
+  m_runTable->setHorizontalHeaderLabels({"执行编号", "预案", "目标", "状态", "创建时间"});
   m_runTable->setAlternatingRowColors(true);
   m_runTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_runTable->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -106,20 +108,31 @@ void ExecutionPage::setupUI() {
 
   m_tabWidget->addTab(tab1, QStringLiteral("执行记录"));
 
-  // ── Tab 2: 执行详情 ────────────────────────────────────────────────
+  // ── Tab 2: 执行详情 (左右分栏: Cortex + 步骤/证据) ─────────────────
   auto *tab2 = new QWidget;
-  auto *tab2Scroll = new QScrollArea;
-  tab2Scroll->setWidgetResizable(true);
-  tab2Scroll->setFrameShape(QFrame::NoFrame);
-  auto *tab2Inner = new QWidget;
-  auto *tab2Layout = new QVBoxLayout(tab2Inner);
-  tab2Layout->setContentsMargins(8, 8, 8, 8);
+  auto *tab2Layout = new QHBoxLayout(tab2);
+  tab2Layout->setContentsMargins(0, 0, 0, 0);
+  tab2Layout->setSpacing(0);
 
-  // ── Status + Step details ─────────────────────────────────────────
+  // ── Left: Cortex decision panel ────────────────────────────────────
+  m_cortexPanel = new CortexPanel(m_api);
+
+  // ── Right: Step details + Evidence ─────────────────────────────────
+  auto *rightWidget = new QWidget;
+  auto *rightScroll = new QScrollArea;
+  rightScroll->setWidgetResizable(true);
+  rightScroll->setFrameShape(QFrame::NoFrame);
+  auto *rightInner = new QWidget;
+  auto *rightLayout = new QVBoxLayout(rightInner);
+  rightLayout->setContentsMargins(8, 8, 8, 8);
+
+  // Status
   m_statusLabel = new QLabel;
-  tab2Layout->addWidget(m_statusLabel);
+  rightLayout->addWidget(m_statusLabel);
+
+  // Step table
   auto *stepLabel = new QLabel("步骤执行详情"); stepLabel->setStyleSheet(Theme::SectionStyle);
-  tab2Layout->addWidget(stepLabel);
+  rightLayout->addWidget(stepLabel);
   m_stepTable = new QTableWidget(0, 7);
   m_stepTable->setHorizontalHeaderLabels({"步骤", "工具", "参数", "成功", "输出摘要", "载荷", "推理"});
   m_stepTable->setAlternatingRowColors(true);
@@ -133,13 +146,13 @@ void ExecutionPage::setupUI() {
   m_stepTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
   m_stepTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
   m_stepTable->horizontalHeader()->setSectionResizeMode(6, QHeaderView::ResizeToContents);
-  tab2Layout->addWidget(m_stepTable, 1);
+  rightLayout->addWidget(m_stepTable, 1);
 
-  // ── Evidence display ─────────────────────────────────────────────
+  // Evidence
   m_evidenceLabel = new QLabel;
-  tab2Layout->addWidget(m_evidenceLabel);
+  rightLayout->addWidget(m_evidenceLabel);
   auto *evLabel = new QLabel("攻击证据"); evLabel->setStyleSheet(Theme::SectionStyle);
-  tab2Layout->addWidget(evLabel);
+  rightLayout->addWidget(evLabel);
   m_evidenceTable = new QTableWidget(0, 5);
   m_evidenceTable->setHorizontalHeaderLabels({"步骤", "类型", "数据摘要", "MITRE命中", "建议"});
   m_evidenceTable->setAlternatingRowColors(true);
@@ -151,52 +164,26 @@ void ExecutionPage::setupUI() {
   m_evidenceTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
   m_evidenceTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
   m_evidenceTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
-  tab2Layout->addWidget(m_evidenceTable, 1);
+  rightLayout->addWidget(m_evidenceTable, 1);
 
   m_evidenceDetail = new QTextEdit;
   m_evidenceDetail->setReadOnly(true);
   m_evidenceDetail->setPlaceholderText("点击证据行查看详情");
-  tab2Layout->addWidget(m_evidenceDetail, 1);
+  rightLayout->addWidget(m_evidenceDetail, 1);
 
-  // ── ReAct reasoning panel ────────────────────────────────────────
-  m_reactPanel = new QWidget;
-  auto *reactL = new QVBoxLayout(m_reactPanel);
-  reactL->setContentsMargins(0, 0, 0, 0);
-  m_engineLabel = new QLabel;
-  m_engineLabel->setStyleSheet("font-weight: bold; color: #2196F3; padding: 4px;");
-  reactL->addWidget(m_engineLabel);
-  auto *reactSectionLabel = new QLabel("ReAct 推理过程");
-  reactSectionLabel->setStyleSheet(Theme::SectionStyle);
-  reactL->addWidget(reactSectionLabel);
-  m_reactThoughtView = new QTextEdit;
-  m_reactThoughtView->setReadOnly(true);
-  m_reactThoughtView->setPlaceholderText("执行使用 ReAct 引擎时，此处显示 LLM 推理过程...");
-  m_reactThoughtView->setMaximumHeight(200);
-  reactL->addWidget(m_reactThoughtView, 1);
-  m_reactPanel->hide();  // shown only when ReAct data exists
-  tab2Layout->addWidget(m_reactPanel);
+  rightScroll->setWidget(rightInner);
+  auto *rightOuterLayout = new QVBoxLayout(rightWidget);
+  rightOuterLayout->setContentsMargins(0, 0, 0, 0);
+  rightOuterLayout->addWidget(rightScroll);
 
-  // ── Payload info panel ───────────────────────────────────────────
-  m_payloadPanel = new QWidget;
-  auto *payloadL = new QVBoxLayout(m_payloadPanel);
-  payloadL->setContentsMargins(0, 0, 0, 0);
-  m_payloadLabel = new QLabel;
-  m_payloadLabel->setStyleSheet("font-weight: bold; color: #FF9800; padding: 4px;");
-  payloadL->addWidget(m_payloadLabel);
-  auto *payloadSectionLabel = new QLabel("载荷信息");
-  payloadSectionLabel->setStyleSheet(Theme::SectionStyle);
-  payloadL->addWidget(payloadSectionLabel);
-  m_payloadDetailView = new QTextEdit;
-  m_payloadDetailView->setReadOnly(true);
-  m_payloadDetailView->setPlaceholderText("步骤绑定载荷时，此处显示载荷详情（命令、绕过变体、防御建议）...");
-  m_payloadDetailView->setMaximumHeight(200);
-  payloadL->addWidget(m_payloadDetailView, 1);
-  m_payloadPanel->hide();  // shown only when payload data exists
-  tab2Layout->addWidget(m_payloadPanel);
-
-  tab2Scroll->setWidget(tab2Inner);
-  auto *tab2OuterLayout = new QVBoxLayout(tab2);
-  tab2OuterLayout->addWidget(tab2Scroll);
+  // ── Splitter: Cortex (left) | Details (right) ──────────────────────
+  auto *splitter = new QSplitter(Qt::Horizontal);
+  splitter->addWidget(m_cortexPanel);
+  splitter->addWidget(rightWidget);
+  splitter->setStretchFactor(0, 2);  // Cortex: 40%
+  splitter->setStretchFactor(1, 3);  // Details: 60%
+  splitter->setSizes({380, 570});
+  tab2Layout->addWidget(splitter);
 
   m_tabWidget->addTab(tab2, QStringLiteral("执行详情"));
 
@@ -291,9 +278,9 @@ void ExecutionPage::loadPlaybooksByGroup(const QStringList &groups) {
 void ExecutionPage::onAttackCategoryChanged(int id) {
   switch (id) {
     case 0: loadPlaybooksByGroup(QStringList()); break;
-    case 1: loadPlaybooksByGroup({"brute", "credential", "brute_force"}); break;
-    case 2: loadPlaybooksByGroup({"web-vuln-scan", "exploit", "vuln_scan"}); break;
-    case 3: loadPlaybooksByGroup({"windows-exploitation", "internal-network-exploitation", "impact-demonstration"}); break;
+    case 1: loadPlaybooksByGroup({"data-exfiltration", "credential-access"}); break;
+    case 2: loadPlaybooksByGroup({"tampering-deception"}); break;
+    case 3: loadPlaybooksByGroup({"device-control", "internal-network-exploitation", "impact-demonstration"}); break;
   }
 }
 
@@ -301,7 +288,15 @@ void ExecutionPage::onAttackCategoryChanged(int id) {
 void ExecutionPage::onExecute() {
   QString playbookId = m_playbookCombo->currentData().toString();
   QString target = m_targetInput->text().trimmed();
-  if (playbookId.isEmpty() || target.isEmpty()) return;
+  if (playbookId.isEmpty() || target.isEmpty()) {
+    m_statusLabel->setText("请选择预案并填写目标地址后再执行。");
+    m_statusLabel->setStyleSheet(Theme::StatusWarningStyle);
+    m_tabWidget->setCurrentIndex(1);
+    return;
+  }
+
+  m_execBtn->setEnabled(false);
+  m_execBtn->setText("创建中...");
 
   // Save to history
   {
@@ -321,15 +316,42 @@ void ExecutionPage::onExecute() {
   body["playbook_id"] = playbookId;
   body["target"] = target;
   m_api->post("/api/runs", body, 5000, [this, playbookId](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
+    if (res["status"].toString() != "ok") {
+      m_execBtn->setEnabled(true);
+      m_execBtn->setText("执行");
+      m_statusLabel->setText("创建执行任务失败：" + res["error"].toObject()["message"].toString());
+      m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
+      m_tabWidget->setCurrentIndex(1);
+      return;
+    }
     QString runId = res["data"].toObject()["run_id"].toString();
+    if (runId.isEmpty()) {
+      m_execBtn->setEnabled(true);
+      m_execBtn->setText("执行");
+      m_statusLabel->setText("创建执行任务失败：服务端未返回执行编号。");
+      m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
+      return;
+    }
 
     QJsonObject empty;
-    m_api->post("/api/runs/" + runId + "/execute", empty, 5000, [this, runId, playbookId](const QJsonObject &) {
+    m_api->post("/api/runs/" + runId + "/execute", empty, 5000, [this, runId, playbookId](const QJsonObject &execRes) {
+      m_execBtn->setEnabled(true);
+      m_execBtn->setText("执行");
+      if (execRes["status"].toString() != "ok") {
+        m_statusLabel->setText("启动执行失败：" + execRes["error"].toObject()["message"].toString());
+        m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
+        m_tabWidget->setCurrentIndex(1);
+        onRefreshRuns();
+        return;
+      }
       m_targetInput->clear();
       // Track this run for real-time polling + auto-highlight
       m_runningRunId = runId;
       m_runningPlaybookId = playbookId;
+      // Clear Cortex for new execution
+      m_cortexPanel->clearMessages();
+      m_injectedReactSteps.clear();
+      m_injectedPayloadSteps.clear();
       m_pollTimer->start();
       // Immediately load this run's details (don't wait for full refresh)
       loadRunDetails(runId);
@@ -346,6 +368,8 @@ void ExecutionPage::onRefreshRuns() {
   m_api->get("/api/runs", 5000, [this](const QJsonObject &res) {
     if (res["status"].toString() != "ok") return;
     auto arr = res["data"].toArray();
+    const bool sortingEnabled = m_runTable->isSortingEnabled();
+    m_runTable->setSortingEnabled(false);
     m_runTable->setRowCount(arr.size());
     int highlightRow = -1;
     for (int i = 0; i < arr.size(); i++) {
@@ -375,6 +399,7 @@ void ExecutionPage::onRefreshRuns() {
     }
     m_runTable->resizeColumnsToContents();
     m_runTable->horizontalHeader()->setStretchLastSection(true);
+    m_runTable->setSortingEnabled(sortingEnabled);
 
     // Auto-select and show details for the running run
     if (highlightRow >= 0) {
@@ -397,8 +422,15 @@ void ExecutionPage::onRunClicked(int row, int) {
 
 // ── Load run details by ID (shared by onRunClicked and onExecute) ────
 void ExecutionPage::loadRunDetails(const QString &runId) {
+  if (runId != m_loadedRunId) {
+    m_cortexPanel->clearMessages();
+    m_injectedReactSteps.clear();
+    m_injectedPayloadSteps.clear();
+    m_loadedRunId = runId;
+  }
+
   m_api->get("/api/runs/" + runId, 5000, [this, runId](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
+    if (runId != m_loadedRunId || res["status"].toString() != "ok") return;
     auto d = res["data"].toObject();
 
     // ── Status line with engine type ────────────────────────────────
@@ -558,65 +590,114 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
       m_evidenceDetail->setText(evidence[0].toObject()["evidence_data"].toString().left(2000));
     }
 
-    // ── ReAct reasoning panel ───────────────────────────────────────
-    if (hasReactThoughts || engineType == "react") {
-      m_reactPanel->show();
-      m_engineLabel->setText(QString("🧠 引擎: %1").arg(engineType.isEmpty() ? "mechanical" : engineType));
-      if (!stopReason.isEmpty()) {
-        m_engineLabel->setText(m_engineLabel->text() + " | 停止: " + stopReason);
-      }
-      if (reactLines.isEmpty()) {
-        m_reactThoughtView->setText("ReAct 引擎已启用，但本次执行未产生推理记录。\n（可能所有步骤均直接执行，无需 LLM 介入）");
-      } else {
-        m_reactThoughtView->setText(reactLines.join("\n"));
-      }
-    } else {
-      m_reactPanel->hide();
-    }
+    // ── Cortex panel: ReAct thoughts + Payload cards ──────────────────
+    // Update engine info in Cortex header
+    m_cortexPanel->setEngineInfo(engineType.isEmpty() ? QStringLiteral("mechanical") : engineType);
 
-    // ── Payload info panel ──────────────────────────────────────────
-    if (hasPayloadBindings) {
-      m_payloadPanel->show();
-      m_payloadLabel->setText(QString("📦 载荷绑定: %1 个步骤").arg(payloadLines.size()));
-      m_payloadDetailView->setText(payloadLines.join("\n"));
+    // Inject ReAct thoughts as structured cards (only new ones)
+    for (int i = 0; i < steps.size(); i++) {
+      auto s = steps[i].toObject();
+      int stepIdx = s["step_index"].toInt();
+      QString thought = s["react_thought"].toString();
+      if (thought.isEmpty()) continue;
 
-      // Fetch detailed payload info for each bound payload
-      // (async, best-effort — enrich the display after initial render)
-      for (int i = 0; i < steps.size(); i++) {
-        auto s = steps[i].toObject();
-        int stepIdx = s["step_index"].toInt();
-        if (evidenceByStep.contains(stepIdx)) {
-          auto evObj = evidenceByStep.value(stepIdx);
-          QString evDataStr = evObj["evidence_data"].toString();
-          QJsonDocument evDoc = QJsonDocument::fromJson(evDataStr.toUtf8());
-          if (evDoc.isObject()) {
-            QString pId = evDoc.object()["payload_id"].toString();
-            if (!pId.isEmpty()) {
-              m_api->get("/api/payloads/" + pId, 5000,
-                [this, stepIdx, pId](const QJsonObject &pRes) {
-                  if (pRes["status"].toString() != "ok") return;
-                  auto pData = pRes["data"].toObject();
-                  auto payloadData = pData["payload_data"].toObject();
-                  QString primary = payloadData["primary_content"].toString();
-                  int bypassCount = payloadData["bypass_variants"].toArray().size();
-                  int execCount = payloadData["all_executions"].toArray().size();
+      QString stepKey = QStringLiteral("react_%1").arg(stepIdx);
+      if (m_injectedReactSteps.contains(stepKey)) continue;
+      m_injectedReactSteps.insert(stepKey);
 
-                  // Append details to existing text
-                  QString current = m_payloadDetailView->toPlainText();
-                  QString detail = QString("\n  └ 步骤 %1 载荷详情 [%2]:\n"
-                                          "     命令: %3\n"
-                                          "     执行步骤: %4 | 绕过变体: %5")
-                      .arg(stepIdx).arg(pId)
-                      .arg(primary.left(150))
-                      .arg(execCount).arg(bypassCount);
-                  m_payloadDetailView->setText(current + detail);
-                });
-            }
-          }
+      // Parse action
+      QString actionStr;
+      QString actionJson = s["react_action"].toString();
+      if (!actionJson.isEmpty()) {
+        QJsonDocument actDoc = QJsonDocument::fromJson(actionJson.toUtf8());
+        if (actDoc.isObject()) {
+          actionStr = actDoc.object()["type"].toString();
         }
       }
-    } else {
-      m_payloadPanel->hide();
+      if (actionStr.isEmpty()) actionStr = QStringLiteral("continue");
+
+      // Map action to Chinese label
+      QString actionLabel;
+      if (actionStr == QStringLiteral("insert")) actionLabel = QStringLiteral("🔀 插入");
+      else if (actionStr == QStringLiteral("adjust")) actionLabel = QStringLiteral("🔧 调整");
+      else if (actionStr == QStringLiteral("parallel")) actionLabel = QStringLiteral("⚡ 并行");
+      else if (actionStr == QStringLiteral("stop")) actionLabel = QStringLiteral("🛑 终止");
+      else actionLabel = QStringLiteral("▶ 继续");
+
+      // Extract observation from step notes (first line of output)
+      QString observation = s["notes"].toString().left(200);
+
+      m_cortexPanel->addReactThought(observation, thought, actionLabel);
+    }
+
+    // Inject payload cards (only new ones, fetch details from API)
+    for (int i = 0; i < steps.size(); i++) {
+      auto s = steps[i].toObject();
+      int stepIdx = s["step_index"].toInt();
+
+      // Check evidence for payload_id
+      if (!evidenceByStep.contains(stepIdx)) continue;
+      auto evObj = evidenceByStep.value(stepIdx);
+      QString evDataStr = evObj["evidence_data"].toString();
+      QJsonDocument evDoc = QJsonDocument::fromJson(evDataStr.toUtf8());
+      if (!evDoc.isObject()) continue;
+
+      QString pId = evDoc.object()["payload_id"].toString();
+      if (pId.isEmpty()) continue;
+
+      QString stepKey = QStringLiteral("payload_%1_%2").arg(stepIdx).arg(pId);
+      if (m_injectedPayloadSteps.contains(stepKey)) continue;
+      m_injectedPayloadSteps.insert(stepKey);
+
+      // Fetch payload details and inject as card
+      m_api->get("/api/payloads/" + pId, 5000,
+        [this, pId, runId](const QJsonObject &pRes) {
+          if (runId != m_loadedRunId || pRes["status"].toString() != "ok") return;
+          auto pData = pRes["data"].toObject();
+          auto payloadData = pData["payload_data"].toObject();
+
+          // Build payload context text (same format as backend buildPayloadContext)
+          QString name = pData["name"].toObject()["zh"].toString();
+          if (name.isEmpty()) name = pData["name"].toString();
+          if (name.isEmpty()) name = pId;
+
+          QStringList contextLines;
+          QString principle = pData["description"].toObject()["zh"].toString();
+          if (principle.isEmpty()) principle = pData["description"].toString();
+          if (!principle.isEmpty()) contextLines << QStringLiteral("【载荷原理】") + principle;
+
+          QString defense = payloadData["defense"].toObject()["zh"].toString();
+          if (defense.isEmpty()) defense = payloadData["defense"].toString();
+          if (!defense.isEmpty()) contextLines << QStringLiteral("【防御手段】") + defense;
+
+          auto bypasses = payloadData["bypass_variants"].toArray();
+          if (bypasses.size() > 0) {
+            QStringList bypassLines;
+            for (const auto &b : bypasses) {
+              auto bo = b.toObject();
+              bypassLines << QStringLiteral("  - %1: %2")
+                .arg(bo["title"].toString())
+                .arg(bo["command"].toString().left(120));
+            }
+            contextLines << QStringLiteral("【绕过变体(WAF/EDR Bypass)】\n") + bypassLines.join("\n");
+          }
+
+          auto opsec = payloadData["opsec_tips"].toArray();
+          if (opsec.size() > 0) {
+            QStringList opsecLines;
+            for (const auto &tip : opsec) {
+              if (tip.isObject()) {
+                opsecLines << QStringLiteral("  - ") + (tip.toObject()["zh"].toString().isEmpty()
+                  ? tip.toObject()["en"].toString() : tip.toObject()["zh"].toString());
+              } else {
+                opsecLines << QStringLiteral("  - ") + tip.toString();
+              }
+            }
+            contextLines << QStringLiteral("【OPSEC建议】\n") + opsecLines.join("\n");
+          }
+
+          m_cortexPanel->addPayloadCard(name, contextLines.join("\n\n"));
+        });
     }
   });
 }
@@ -628,20 +709,21 @@ void ExecutionPage::onPollRunning() {
     return;
   }
 
-  m_api->get("/api/runs/" + m_runningRunId, 5000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
-    if (m_runningRunId.isEmpty()) return;
+  const QString runId = m_runningRunId;
+  m_api->get("/api/runs/" + runId, 5000, [this, runId](const QJsonObject &res) {
+    if (res["status"].toString() != "ok" || m_runningRunId != runId) return;
     auto d = res["data"].toObject();
     QString status = d["status"].toString();
 
     // Full reload of run details to keep step table, evidence, etc. in sync
-    loadRunDetails(m_runningRunId);
+    loadRunDetails(runId);
 
     // Update status label with progress
     auto steps = d["steps"].toArray();
     int done = 0, total = steps.size();
     for (const auto &s : steps) {
-      if (s.toObject()["success"].toInt() == 1 || s.toObject()["success"].toInt() == 0) done++;
+      const QJsonValue success = s.toObject()["success"];
+      if (success.isBool() || success.isDouble()) done++;
     }
     QString statusCn;
     if (status == "RUNNING") statusCn = "运行中";
@@ -655,7 +737,7 @@ void ExecutionPage::onPollRunning() {
     QString pbName = d["playbook_name"].toString();
     if (pbName.isEmpty()) pbName = d["playbook_id"].toString();
     m_statusLabel->setText(QString("执行: %1 | 预案: %2 | 状态: %3 (%4/%5步)")
-        .arg(m_runningRunId, pbName, statusCn)
+        .arg(runId, pbName, statusCn)
         .arg(done).arg(total));
     m_statusLabel->setStyleSheet(Theme::StatusInfoStyle);
 

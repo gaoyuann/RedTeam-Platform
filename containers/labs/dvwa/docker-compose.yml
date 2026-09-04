@@ -1,0 +1,12 @@
+version: '3.8'
+services:
+  dvwa:
+    image: vulnerables/web-dvwa:latest
+    ports:
+      - "127.0.0.1:8080:80"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/login.php"]
+      interval: 0s
+      timeout: 10s
+      retries: 30

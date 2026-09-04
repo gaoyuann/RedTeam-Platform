@@ -67,6 +67,8 @@ const SCAN_TOOL_MAP = {
   brute_force: 'hydra',
   ad_scan: 'netexec',        // Active Directory domain enumeration
   cloud_scan: 'cloudmapper', // Cloud security audit
+  // app_discovery and api_fuzz are handled specially (dual-step)
+  auth_audit: 'nuclei',      // Nuclei with auth templates
 };
 
 // ── Build tool arguments from scan parameters ─────────────────────────
@@ -131,8 +133,8 @@ function buildArgs(scanType, target, parameters = {}) {
             bruteUrl += path.slice(1);
           }
         } else if (!bruteUrl.includes('.php') && !bruteUrl.includes('.html') && !bruteUrl.includes('/login')) {
-          // Default: try /login.php if no path specified
-          bruteUrl += '/login.php';
+          // Default: try common login paths (generic, not DVWA-specific)
+          bruteUrl += '/login';
         }
         args.push('/usr/local/bin/web-brute.py');
         args.push(bruteUrl);
@@ -172,6 +174,49 @@ function buildArgs(scanType, target, parameters = {}) {
       args.push('--json');  // JSON output for parsing
       if (parameters.account_id) args.push('--account', parameters.account_id);
       if (parameters.region) args.push('--region', parameters.region);
+      break;
+
+    // ── Application target scan types ────────────────────────────────
+
+    case 'app_discovery_whatweb': // whatweb — technology fingerprinting
+      args.push(target);
+      args.push('--no-errors');   // suppress error output
+      break;
+
+    case 'app_discovery_httpx': // httpx — HTTP probe
+      args.push('-u', target);
+      args.push('-sc');           // show status code
+      args.push('-title');        // show page title
+      args.push('-tech-detect'); // technology detection
+      args.push('-sr');           // save response
+      break;
+
+    case 'api_fuzz_arjun': // arjun — URL parameter discovery
+      args.push('-u', target);
+      args.push('-t', String(threads || 5));  // threads
+      args.push('--passive');                  // passive + active discovery
+      break;
+
+    case 'api_fuzz_ffuf': // ffuf — API endpoint fuzzing
+      // Use FUZZ keyword in URL path; default to /api/FUZZ
+      const ffufWordlist = parameters.wordlist || '/usr/share/wordlists/dirb/common.txt';
+      const ffufUrl = target.endsWith('/') ? `${target}api/FUZZ` : `${target}/api/FUZZ`;
+      args.push('-u', ffufUrl);
+      args.push('-w', ffufWordlist);
+      args.push('-mc', '200,201,204,301,302,307,401,403');
+      args.push('-ac');          // auto-calibrate filtering
+      if (threads) args.push('-t', String(threads));
+      break;
+
+    case 'auth_audit': // nuclei — authentication security templates
+      args.push('-no-color');
+      args.push('-u', target);
+      args.push('-t', '/root/nuclei-templates/technologies/');
+      args.push('-t', '/root/nuclei-templates/vulnerabilities/generic/');
+      // Include auth-related templates if they exist
+      args.push('-include-templates', '/root/nuclei-templates/vulnerabilities/');
+      args.push('-severity', 'low,medium,high,critical');
+      if (parameters.auth_template) args.push('-t', parameters.auth_template);
       break;
   }
 
@@ -427,6 +472,174 @@ function parseResults(scanType, stdout) {
       }
       break;
     }
+
+    // ── Application target scan type parsers ─────────────────────────
+
+    case 'app_discovery_whatweb': {
+      // Parse whatweb output: "URL [Title] ..."
+      // Lines: "http://host.domain.com [200 OK] Apache[2.4.41], PHP[7.4], HTML5"
+      const whatwebLine = /^(\S+)\s+(.+)$/;
+      for (const line of lines) {
+        const match = line.match(whatwebLine);
+        if (!match) continue;
+        const [, url, techStr] = match;
+        // Extract individual technologies: "Apache[2.4.41]" or just "PHP"
+        const techs = [];
+        const techPattern = /([A-Za-z0-9_/.-]+)(?:\[([^\]]*)\])?/g;
+        let techMatch;
+        while ((techMatch = techPattern.exec(techStr)) !== null) {
+          const name = techMatch[1].trim();
+          const version = techMatch[2] || '';
+          if (name && name !== url) {
+            techs.push({ name, version });
+          }
+        }
+        if (techs.length > 0) {
+          results.push({
+            result_type: 'technology_detection',
+            result_data: { url, technologies: techs, raw: techStr },
+            severity: 'info',
+            source_tool: 'whatweb',
+          });
+        }
+      }
+      break;
+    }
+
+    case 'app_discovery_httpx': {
+      // Parse httpx output:
+      // "http://host.domain.com [200] [Page Title] [Apache/PHP]"
+      // or JSON output if -json flag used
+      for (const line of lines) {
+        // Try JSON first
+        try {
+          const json = JSON.parse(line);
+          if (json.url) {
+            results.push({
+              result_type: 'http_probe',
+              result_data: {
+                url: json.url,
+                status_code: json.status_code || json['status-code'],
+                title: json.title,
+                technologies: json.tech || json.technologies,
+                content_length: json.content_length || json['content-length'],
+                webserver: json.webserver,
+              },
+              severity: 'info',
+              source_tool: 'httpx',
+            });
+          }
+          continue;
+        } catch { /* not JSON, try text parsing */ }
+
+        // Text format: URL [status] [title] [technologies]
+        const textMatch = line.match(/^(\S+)\s+\[(\d+)\]\s+\[([^\]]*)\]\s+\[([^\]]*)\]/);
+        if (textMatch) {
+          const [, url, statusCode, title, technologies] = textMatch;
+          results.push({
+            result_type: 'http_probe',
+            result_data: { url, status_code: parseInt(statusCode), title, technologies: technologies || '' },
+            severity: 'info',
+            source_tool: 'httpx',
+          });
+        }
+      }
+      break;
+    }
+
+    case 'api_fuzz_arjun': {
+      // Parse arjun output for discovered parameters
+      // arjun shows: [+] Parameter: id found in URL query
+      //              [+] Parameter: token found in POST body
+      const paramPattern = /\[\+\]\s*Parameter:\s*(\S+)\s+found\s+in\s+(.+)/i;
+      for (const line of lines) {
+        const match = line.match(paramPattern);
+        if (match) {
+          const [, paramName, location] = match;
+          results.push({
+            result_type: 'api_parameter',
+            result_data: { parameter: paramName, location: location.trim() },
+            severity: 'low',
+            source_tool: 'arjun',
+          });
+        }
+      }
+      break;
+    }
+
+    case 'api_fuzz_ffuf': {
+      // Parse ffuf JSON output lines (when using -json flag)
+      // Otherwise parse text lines: "200 123 http://host/api/FUZZ"
+      for (const line of lines) {
+        // Try JSON format first
+        try {
+          const json = JSON.parse(line);
+          if (json.url) {
+            results.push({
+              result_type: 'api_endpoint',
+              result_data: {
+                url: json.url,
+                status_code: json.status || json.status_code,
+                length: json.length || json.content_length,
+                words: json.words,
+              },
+              severity: 'info',
+              source_tool: 'ffuf',
+            });
+          }
+          continue;
+        } catch { /* not JSON */ }
+
+        // Text format: status_code size url
+        const textMatch = line.match(/^(\d+)\s+(\d+)\s+(\S+)/);
+        if (textMatch) {
+          const [, statusCode, size, url] = textMatch;
+          results.push({
+            result_type: 'api_endpoint',
+            result_data: { url, status_code: parseInt(statusCode), length: parseInt(size) },
+            severity: 'info',
+            source_tool: 'ffuf',
+          });
+        }
+      }
+      break;
+    }
+
+    case 'auth_audit': {
+      // Parse nuclei auth template output (same JSON-lines format as vuln_scan)
+      for (const line of lines) {
+        try {
+          const finding = JSON.parse(line);
+          if (finding.type === 'finding' || finding.templateID) {
+            results.push({
+              result_type: 'auth_finding',
+              result_data: {
+                template_id: finding.templateID || finding.template_id || '',
+                template_name: finding.info?.name || finding.name || '',
+                severity: finding.info?.severity || finding.severity || 'info',
+                host: finding.host || finding.matched || '',
+                type: finding.type || '',
+                extracted: finding.extracted || finding.matcher_name || '',
+              },
+              severity: finding.info?.severity || finding.severity || 'info',
+              source_tool: 'nuclei',
+            });
+          }
+        } catch {
+          // Non-JSON line — try text format: "[template] http://host"
+          const textMatch = line.match(/\[([^\]]+)\]\s+(https?:\/\/\S+)/);
+          if (textMatch) {
+            results.push({
+              result_type: 'auth_finding',
+              result_data: { template: textMatch[1], host: textMatch[2] },
+              severity: 'info',
+              source_tool: 'nuclei',
+            });
+          }
+        }
+      }
+      break;
+    }
   }
 
   if (results.length === 0 && stdout.length > 0) {
@@ -550,6 +763,46 @@ export async function executeScan(scanTaskId) {
           console.warn(`[Scan] pacu failed: ${err.message}`);
         }
       }
+
+    // ── Application target scan types ─────────────────────────────────
+    } else if (task.scan_type === 'app_discovery') {
+      // ── Dual-step: whatweb (tech fingerprint) + httpx (HTTP probe) ──
+      console.log(`[Scan] app_discovery step 1/2: whatweb for ${task.target}`);
+      try {
+        totalResults += await runAndStore('app_discovery_whatweb', 'whatweb', task.target, parameters, 120_000);
+      } catch (err) {
+        console.warn(`[Scan] whatweb failed: ${err.message}`);
+      }
+
+      console.log(`[Scan] app_discovery step 2/2: httpx for ${task.target}`);
+      try {
+        totalResults += await runAndStore('app_discovery_httpx', 'httpx', task.target, parameters, 120_000);
+      } catch (err) {
+        console.warn(`[Scan] httpx failed: ${err.message}`);
+      }
+
+    } else if (task.scan_type === 'api_fuzz') {
+      // ── Dual-step: arjun (param discovery) + ffuf (endpoint fuzzing) ──
+      console.log(`[Scan] api_fuzz step 1/2: arjun for ${task.target}`);
+      try {
+        totalResults += await runAndStore('api_fuzz_arjun', 'arjun', task.target, parameters, timeoutMs);
+      } catch (err) {
+        console.warn(`[Scan] arjun failed: ${err.message}`);
+      }
+
+      console.log(`[Scan] api_fuzz step 2/2: ffuf for ${task.target}`);
+      try {
+        totalResults += await runAndStore('api_fuzz_ffuf', 'ffuf', task.target, parameters, timeoutMs);
+      } catch (err) {
+        console.warn(`[Scan] ffuf failed: ${err.message}`);
+      }
+
+    } else if (task.scan_type === 'auth_audit') {
+      // ── Single-step: nuclei with auth/vuln templates ──
+      console.log(`[Scan] auth_audit: nuclei for ${task.target}`);
+      await ensureNucleiTemplates();
+      totalResults = await runAndStore('auth_audit', 'nuclei', task.target, parameters, timeoutMs);
+
     } else {
       // ── Single-tool scan types ──
       const toolId = SCAN_TOOL_MAP[task.scan_type];

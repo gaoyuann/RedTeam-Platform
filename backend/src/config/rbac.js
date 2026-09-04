@@ -24,4 +24,8 @@ export const RBAC = {
   'kg':            { read: ['admin', 'teacher', 'operator', 'viewer', 'student'], write: [] },
   'payloads':      { read: ['admin', 'teacher', 'operator', 'viewer', 'student'], write: ['admin', 'teacher', 'operator', 'student'] },
   'users':         { read: ['admin'],                                  write: ['admin'] },
+  'campaign':      { read: ['admin', 'teacher', 'operator', 'viewer', 'student'], write: ['admin', 'teacher', 'operator', 'student'] },
+  'capture-tasks': { read: ['admin', 'teacher', 'operator', 'viewer', 'student'], write: ['admin', 'teacher', 'operator', 'student'] },
+  'labs':          { read: ['admin', 'teacher', 'operator', 'viewer', 'student'], write: ['admin', 'teacher', 'operator'] },
+  'pipelines':     { read: ['admin', 'teacher', 'operator', 'viewer', 'student'], write: ['admin', 'teacher', 'operator', 'student'] },
 };
