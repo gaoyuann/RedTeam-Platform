@@ -1,0 +1,14 @@
+[Unit]
+Description=RedTeam Client Auto-Update Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/RedTeam-Platform/scripts/auto-update-client.sh
+Restart=always
+RestartSec=10
+StandardOutput=append:%h/RedTeam-Platform/update.log
+StandardError=append:%h/RedTeam-Platform/update.log
+
+[Install]
+WantedBy=default.target
