@@ -78,10 +78,18 @@ FlowPage::FlowPage(ApiClient *api, const QString &role,
   }
   setupUI();
 
-  // Auto-refresh flow list every 5s
+  // Auto-refresh every 5s: flow list + workbench detail (if visible).
+  // The workbench detail poll is a fallback for WS events, which may not
+  // always arrive promptly — without it the user has to exit and re-enter
+  // to see pipeline progress.
   auto *timer = new QTimer(this);
   timer->setInterval(5000);
-  connect(timer, &QTimer::timeout, this, &FlowPage::refreshFlows);
+  connect(timer, &QTimer::timeout, this, [this]() {
+    refreshFlows();
+    if (m_stack->currentIndex() == 1 && !m_selectedPipelineId.isEmpty()) {
+      loadFlowDetail(m_selectedPipelineId);
+    }
+  });
   timer->start();
   refreshFlows();
 }
@@ -403,6 +411,10 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
 {
   m_api->get(QStringLiteral("/api/pipelines/%1").arg(pipelineId), 5000,
     [this, pipelineId](const QJsonObject &res) {
+    // Stale-response guard: if the user switched to a different flow while
+    // this GET was in flight, skip the update to avoid overwriting the UI
+    // with the wrong flow's data.
+    if (pipelineId != m_selectedPipelineId) return;
     if (res["status"].toString() != "ok") return;
 
     auto p = res["data"].toObject();
@@ -504,6 +516,20 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
         m_stepStatuses[i]->setText(QStringLiteral("待开始"));
         m_stepStatuses[i]->setStyleSheet("font-size:11px; color:#94a3b8; background:transparent;");
         m_stepSummaries[i]->setText("");
+      }
+    }
+
+    // Refresh the embedded scan tab while the scan phase is active, so it
+    // picks up new tasks / results (loadFlowDetail is called by the 5s poll
+    // timer and WS events, not just on entry).
+    for (int i = 0; i < steps.size(); i++) {
+      auto step = steps[i].toObject();
+      if (step["step_type"].toString() == "scan") {
+        QString sStatus = step["status"].toString();
+        if (sStatus == "running" || sStatus == "completed") {
+          m_scanTab->onRefreshTasks();
+          break;
+        }
       }
     }
 
