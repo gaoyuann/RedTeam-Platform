@@ -211,7 +211,7 @@ void FlowPage::setupWorkbenchView()
   topLayout->addSpacing(8);
 
   // Approve button (visible only when awaiting_approval)
-  m_approveBtn = new QPushButton(QStringLiteral("批准并执行"), topBar);
+  m_approveBtn = new QPushButton(QStringLiteral("选择预案并执行"), topBar);
   m_approveBtn->setStyleSheet(
     "QPushButton { background:#2563eb; color:#ffffff; border:1px solid #1d4ed8; "
     "border-radius:8px; padding:7px 16px; font-size:13px; font-weight:600; }"
@@ -430,6 +430,7 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     // selection or yank the sub-tab on every status tick.
     QString runId = p["run_id"].toString();
     QString playbookId = p["generated_playbook_id"].toString();
+    m_generatedPlaybookId = playbookId;
     if (!playbookId.isEmpty() && playbookId != m_lastLoadedPlaybookId) {
       m_lastLoadedPlaybookId = playbookId;
       m_execTab->selectPlaybook(playbookId, target);
@@ -697,17 +698,73 @@ void FlowPage::onApproveFlow()
 {
   if (m_selectedPipelineId.isEmpty()) return;
   QString pid = m_selectedPipelineId;
-  m_approveBtn->setEnabled(false);
-  m_approveBtn->setText(QStringLiteral("审批中..."));
 
-  m_api->post(QStringLiteral("/api/pipelines/%1/approve").arg(pid),
-              QJsonObject{}, 10000, [this, pid](const QJsonObject &res) {
-    m_approveBtn->setEnabled(true);
-    m_approveBtn->setText(QStringLiteral("批准并执行"));
-    if (res["status"].toString() == "ok") {
-      refreshFlows();
-      loadFlowDetail(pid);
+  m_approveBtn->setEnabled(false);
+  m_approveBtn->setText(QStringLiteral("加载预案..."));
+
+  // Fetch playbooks for the selection dialog
+  m_api->get("/api/playbooks?includeGenerated=true", 5000, [this, pid](const QJsonObject &res) {
+    if (res["status"].toString() != "ok") {
+      m_approveBtn->setEnabled(true);
+      m_approveBtn->setText(QStringLiteral("选择预案并执行"));
+      return;
     }
+    auto playbooks = res["data"].toArray();
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(QStringLiteral("审批执行"));
+    dlg.setMinimumWidth(500);
+    auto *l = new QVBoxLayout(&dlg);
+    l->setSpacing(12);
+    l->setContentsMargins(20, 20, 20, 20);
+
+    l->addWidget(new QLabel(m_targetLabel->text()));
+    l->addWidget(new QLabel(QStringLiteral("选择攻击预案:")));
+
+    auto *combo = new QComboBox(&dlg);
+    int defaultIndex = 0;
+    for (int i = 0; i < playbooks.size(); i++) {
+      auto pb = playbooks[i].toObject();
+      QString pbId = pb["playbook_id"].toString();
+      QString name = pb["name"].toString();
+      QString label = name + " [" + pbId + "]";
+      if (pbId == m_generatedPlaybookId) {
+        label = QStringLiteral("★ ") + label + QStringLiteral("  (AI生成)");
+        defaultIndex = i;
+      }
+      combo->addItem(label, pbId);
+    }
+    if (combo->count() > 0) combo->setCurrentIndex(defaultIndex);
+    l->addWidget(combo);
+
+    auto *btns = new QDialogButtonBox(
+      QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    btns->button(QDialogButtonBox::Ok)->setText(QStringLiteral("批准并执行"));
+    connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    l->addWidget(btns);
+
+    if (dlg.exec() != QDialog::Accepted) {
+      m_approveBtn->setEnabled(true);
+      m_approveBtn->setText(QStringLiteral("选择预案并执行"));
+      return;
+    }
+
+    QString selectedPlaybookId = combo->currentData().toString();
+
+    m_approveBtn->setText(QStringLiteral("审批中..."));
+
+    QJsonObject body;
+    body["playbook_id"] = selectedPlaybookId;
+    m_api->post(QStringLiteral("/api/pipelines/%1/approve").arg(pid),
+                body, 10000, [this, pid](const QJsonObject &approveRes) {
+      m_approveBtn->setEnabled(true);
+      m_approveBtn->setText(QStringLiteral("选择预案并执行"));
+      if (approveRes["status"].toString() == "ok") {
+        refreshFlows();
+        loadFlowDetail(pid);
+      }
+    });
   });
 }
 
