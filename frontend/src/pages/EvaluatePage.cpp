@@ -29,6 +29,49 @@ EvaluatePage::EvaluatePage(ApiClient *api, const QString &role, const QString &u
   onLoadCaptureTasks();
 }
 
+void EvaluatePage::setTarget(const QString &target) {
+  // TODO: 按 pipeline run 过滤 — EvaluatePage 按 run_id 工作，暂无 target 输入框
+  (void)target;
+}
+
+void EvaluatePage::showRun(const QString &runId) {
+  if (runId.isEmpty()) return;
+  // Populate the run combo, then select the target run (unlike onLoadRuns
+  // which auto-selects index 0).  Used by FlowPage when a pipeline completes.
+  m_api->get("/api/runs", 5000, [this, runId](const QJsonObject &res) {
+    if (res["status"].toString() != "ok") return;
+    m_runCombo->clear();
+    auto arr = res["data"].toArray();
+    int targetIndex = -1;
+    for (int i = 0; i < arr.size(); i++) {
+      auto r = arr[i].toObject();
+      QString status = r["status"].toString();
+      if (status == "COMPLETED") status = "已完成";
+      else if (status == "RUNNING") status = "运行中";
+      else if (status == "PENDING") status = "待执行";
+      else if (status == "FAILED") status = "失败";
+      QString label = QString("%1 | %2 | %3")
+          .arg(r["run_id"].toString(),
+               r["playbook_id"].toString(),
+               status);
+      QString rid = r["run_id"].toString();
+      m_runCombo->addItem(label, rid);
+      if (rid == runId) targetIndex = i;
+    }
+    // Select the pipeline's run and trigger grading
+    if (targetIndex >= 0) {
+      m_runCombo->setCurrentIndex(targetIndex);
+      m_tabs->setCurrentIndex(0);  // 切到"执行评分"子页
+      onGradeRun();
+    }
+  });
+}
+
+void EvaluatePage::showReports() {
+  m_tabs->setCurrentIndex(1);  // 切到"测试报告"子页
+  onRefreshReports();
+}
+
 void EvaluatePage::setupUI() {
   setStyleSheet(Theme::PageStyle);
 

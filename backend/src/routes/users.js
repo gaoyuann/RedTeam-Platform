@@ -235,7 +235,7 @@ export default function (db) {
     }
 
     // Validate: each key must have read/write arrays of role strings
-    const validRoles = ['admin', 'teacher', 'operator', 'student', 'viewer'];
+    const validRoles = ['admin', 'user'];
     for (const [prefix, rules] of Object.entries(permissions)) {
       if (!rules || typeof rules !== 'object') {
         return res.status(400).json({ status: 'error', error: { message: `Invalid rules for ${prefix}` } });

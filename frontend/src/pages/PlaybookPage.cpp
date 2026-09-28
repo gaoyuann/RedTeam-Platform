@@ -1,4 +1,6 @@
 #include "PlaybookPage.h"
+#include "KnowledgeGraphPage.h"
+#include "PayloadPage.h"
 #include "../ApiClient.h"
 #include <QHBoxLayout>
 #include <QVBoxLayout>
@@ -18,7 +20,7 @@
 #include <QPointer>
 
 PlaybookPage::PlaybookPage(ApiClient *api, const QString &role, const QString &username, QWidget *parent)
-    : QWidget(parent), m_api(api) {
+    : QWidget(parent), m_api(api), m_role(role), m_username(username) {
   setupUI();
   onLoadList();
 }
@@ -26,7 +28,15 @@ PlaybookPage::PlaybookPage(ApiClient *api, const QString &role, const QString &u
 void PlaybookPage::setupUI() {
   setStyleSheet(Theme::PageStyle);
 
-  auto *mainLayout = new QVBoxLayout(this);
+  auto *outerLayout = new QVBoxLayout(this);
+  outerLayout->setContentsMargins(0, 0, 0, 0);
+  outerLayout->setSpacing(0);
+
+  m_tabs = new QTabWidget(this);
+
+  // ── Tab 0: Playbook 库 ───────────────────────────────────────────
+  m_playbookTab = new QWidget(m_tabs);
+  auto *mainLayout = new QVBoxLayout(m_playbookTab);
 
   // Left: list
   auto *left = new QVBoxLayout;
@@ -98,7 +108,7 @@ void PlaybookPage::setupUI() {
   auto *rightW = new QWidget;
   rightW->setLayout(right);
 
-  auto *splitter = new QSplitter(Qt::Horizontal, this);
+  auto *splitter = new QSplitter(Qt::Horizontal, m_playbookTab);
   splitter->addWidget(leftW);
   splitter->addWidget(rightW);
   splitter->setStretchFactor(0, 2);
@@ -130,6 +140,18 @@ void PlaybookPage::setupUI() {
     });
     menu.exec(m_listTable->viewport()->mapToGlobal(pos));
   });
+
+  m_tabs->addTab(m_playbookTab, QStringLiteral("Playbook 库"));
+
+  // ── Tab 1: 知识图谱 ──────────────────────────────────────────────
+  m_kgTab = new KnowledgeGraphPage(m_api, m_tabs);
+  m_tabs->addTab(m_kgTab, QStringLiteral("知识图谱"));
+
+  // ── Tab 2: 载荷样本库 ────────────────────────────────────────────
+  m_payloadTab = new PayloadPage(m_api, m_role, m_username, m_tabs);
+  m_tabs->addTab(m_payloadTab, QStringLiteral("载荷样本库"));
+
+  outerLayout->addWidget(m_tabs);
 }
 
 // ── Formatting helpers ─────────────────────────────────────────────────

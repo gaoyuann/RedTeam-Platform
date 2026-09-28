@@ -16,6 +16,7 @@ class ApiClient;
 class ExecutionPage;
 class ScanPage;
 class PlaybookPage;
+class DongleLockPage;
 
 class SimpleMainWindow : public QMainWindow {
     Q_OBJECT
@@ -45,6 +46,10 @@ private:
     void advanceStage();
     void checkBothScansDone();
     void startExecution();
+
+    // 加密锁运行时心跳与锁屏
+    void verifyDongleHeartbeat();
+    void setDongleLocked(bool locked, const QString &errorMessage = QString());
 
     // Stage management
     enum Stage {
@@ -132,4 +137,10 @@ private:
         QStringLiteral("攻击执行"),
         QStringLiteral("测试评估")
     };
+
+    // 加密锁运行时锁
+    DongleLockPage *m_dongleLockPage = nullptr;
+    QTimer *m_dongleTimer = nullptr;
+    bool m_dongleLocked = false;
+    int m_pageBeforeDongleLock = 0;
 };

@@ -303,13 +303,17 @@ export async function runPreflightChecks({ playbookId, target, db }) {
                '';
     }
 
+    // LLM availability is a WARNING, not a hard block — the ReAct engine
+    // gracefully degrades to 'continue' fallback when no LLM key is set,
+    // so execution can proceed (matching old RedTeam-Edu behavior where
+    // callLLM never rejected and always resolved a fallback action).
     const ok = !!apiKey;
     checks.push({
       name: 'llm_available',
-      passed: ok,
+      passed: true,  // always pass — LLM is optional, not required
       message: ok
         ? 'LLM API key is configured (system_config or environment variable)'
-        : 'No LLM API key found. Set in system_config (category=llm) or via LLM_API_KEY/OPENAI_API_KEY/DEEPSEEK_API_KEY env var',
+        : 'WARNING: No LLM API key found. ReAct will use continue-fallback (no AI reasoning). Set key in system_config (category=llm) or via LLM_API_KEY/OPENAI_API_KEY/DEEPSEEK_API_KEY env var',
     });
   }
 

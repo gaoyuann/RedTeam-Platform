@@ -154,6 +154,7 @@ void WsClient::onTextMessageReceived(const QString &message)
   if (event == "run:created")       emit runCreated(data);
   if (event == "run:started")       emit runStarted(data);
   if (event == "run:step")          emit runStepComplete(data);
+  if (event == "run:react")         emit runReact(data);
   if (event == "run:complete")      emit runCompleted(data);
   if (event == "container:status")  emit containerStatus(data);
 

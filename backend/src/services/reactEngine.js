@@ -16,13 +16,18 @@
  */
 
 import { callLlmReact } from './llmClient.js';
-import { buildKGContextForStep } from './knowledgeEnricher.js';
+import { buildKGContextForStep, enrichTechnique } from './knowledgeEnricher.js';
 import { serializeEvidenceHistory, serializeCurrentPlan } from './evidenceSerializer.js';
 import { buildInsertionWarning, validateInsertion } from './reactRuntimeGuard.js';
 import { IMAGE_MAP } from '../tools/toolRunner.js';
 
 const MAX_REACT_CALLS = 30;  // Safety: max LLM calls per run
 const MAX_THOUGHT_LEN = 500; // Truncate LLM thought for display
+
+// Actions that always trigger self-critique reflection (high-impact decisions)
+const HIGH_RISK_ACTIONS = ['stop', 'pivot'];
+// Tools that are high-risk to insert (exploitation vs scanning)
+const HIGH_RISK_TOOLS = new Set(['sqlmap', 'hydra', 'metasploit', 'john', 'hashcat', 'msfconsole']);
 
 // ── Clean LLM output: strip English boilerplate, keep Chinese ──────────
 // Ported from old system's cleanThoughtText (playbookRuntime.js L423-501)
@@ -259,14 +264,14 @@ function parseAction(llmResponse) {
 
 function buildReactPrompt({ stepIndex, toolId, stepName, stepResult,
                              evidenceHistory, remainingSteps, target, targetClass,
-                             kgContext, reactCallCount, guardWarning, ruleMatchContext,
+                             kgContext, detectedTechContext, appContext, reactCallCount, guardWarning, ruleMatchContext,
                              payloadContext, failedToolsHint, currentFailHint, insertHint,
                              explorationMode }) {
   // When in exploration mode, use the exploration prompt instead
   if (explorationMode) {
     return buildExplorationPrompt({ stepIndex, toolId, stepName, stepResult,
       evidenceHistory, remainingSteps, target, targetClass,
-      kgContext, reactCallCount, guardWarning, ruleMatchContext,
+      kgContext, detectedTechContext, appContext, reactCallCount, guardWarning, ruleMatchContext,
       payloadContext, failedToolsHint, currentFailHint, insertHint });
   }
 
@@ -299,7 +304,7 @@ function buildReactPrompt({ stepIndex, toolId, stepName, stepResult,
   - 工具输出包含连接错误（如 DNS 解析失败、unable to connect、connection refused） → 必须使用 adjust 修正目标地址
   - 剩余步骤全部是已执行过且无发现的同类重复步骤 → 必须使用 stop 终止
 
-${kgContext ? `## KG 知识上下文\n${kgContext}\n` : ''}${payloadContext ? `## 载荷攻防知识\n${payloadContext}\n` : ''}
+${kgContext ? `## KG 知识上下文\n${kgContext}\n` : ''}${detectedTechContext ? `${detectedTechContext}\n` : ''}${appContext ? `## 应用风险上下文\n${appContext}\n` : ''}${payloadContext ? `## 载荷攻防知识\n${payloadContext}\n` : ''}
 证据历史：
 ${evidenceText}
 
@@ -323,7 +328,7 @@ Action: 使用以下 XML 格式之一：
 
 function buildExplorationPrompt({ stepIndex, toolId, stepName, stepResult,
                                     evidenceHistory, remainingSteps, target, targetClass,
-                                    kgContext, reactCallCount, guardWarning, ruleMatchContext,
+                                    kgContext, detectedTechContext, appContext, reactCallCount, guardWarning, ruleMatchContext,
                                     payloadContext, failedToolsHint, currentFailHint, insertHint }) {
   const success = stepResult.success ? '成功' : '失败';
   const output = (stepResult.stdout || stepResult.stderr || '').slice(0, 500);
@@ -358,7 +363,7 @@ function buildExplorationPrompt({ stepIndex, toolId, stepName, stepResult,
   - 连续 2 次失败 → 必须使用 pivot 切换攻击方向，禁止反复重试
   - 未发现任何攻击面 → 使用 continue 推进至下一步探测
 
-${kgContext ? `## KG 知识上下文\n${kgContext}\n` : ''}${payloadContext ? `## 载荷攻防知识\n${payloadContext}\n` : ''}
+${kgContext ? `## KG 知识上下文\n${kgContext}\n` : ''}${detectedTechContext ? `${detectedTechContext}\n` : ''}${appContext ? `## 应用风险上下文\n${appContext}\n` : ''}${payloadContext ? `## 载荷攻防知识\n${payloadContext}\n` : ''}
 证据历史：
 ${evidenceText}
 
@@ -471,6 +476,56 @@ function buildAllInsertHints({ evidenceHistory, stepResult, remainingSteps, targ
   return hints.join('\n\n');
 }
 
+// ── Multi-round reflection (self-critique) ─────────────────────────────────
+
+/**
+ * Build a concise reflection prompt for self-critique.
+ * Only asks for a yes/no safety check — minimal token overhead.
+ */
+function buildReflectionPrompt({ stepIndex, toolId, proposedDecision, evidenceHistory, target }) {
+  // Last evidence line only (keep prompt small)
+  const lastEvidence = (evidenceHistory || []).slice(-1).map(ev =>
+    `${ev.toolId}: ${ev.success ? '✓' : '✗'} ${ev.output?.slice(0, 80) || ''}`
+  ).join('') || '无';
+
+  const action = proposedDecision.action;
+  const tool = proposedDecision.toolId || '';
+  const reason = proposedDecision.reason || '';
+
+  return `审查以下渗透测试行动是否安全（一句话回答）：
+行动: ${action}${tool ? ` tool=${tool}` : ''}${reason ? ` reason=${reason}` : ''}
+最近证据: ${lastEvidence}
+目标: ${target || '未知'}
+
+如果安全，输出 <verdict>confirm</verdict>
+如果需要重新考虑，输出 <verdict>reconsider</verdict> 并给出 <action type="..." /> 替代方案`;
+}
+
+/**
+ * Parse the LLM's reflection response.
+ * Returns { confirmed: boolean, alternative: decision|null }
+ */
+function parseReflection(llmResponse) {
+  const verdictMatch = llmResponse.match(/<verdict>\s*(\w+)\s*<\/verdict>/i);
+  if (!verdictMatch) {
+    return { confirmed: true, alternative: null };
+  }
+
+  const verdict = verdictMatch[1].toLowerCase();
+  if (verdict !== 'reconsider') {
+    return { confirmed: true, alternative: null };
+  }
+
+  // Extract alternative action from the response
+  const altDecision = parseAction(llmResponse);
+  if (altDecision.action === 'continue' && !llmResponse.includes('<action')) {
+    // No alternative action found in reconsider response — fall back to confirm
+    return { confirmed: true, alternative: null };
+  }
+
+  return { confirmed: false, alternative: altDecision };
+}
+
 // ── Main entry: ReAct decision after each step ────────────────────────
 
 /**
@@ -502,7 +557,7 @@ export async function reactDecide(params) {
     evidenceHistory, remainingSteps, target, targetClass,
     aiConfig, reactCallCount = 0, guardState, ruleMatchContext,
     payloadContext, failedToolCounts = [], totalSteps = 0, completedSteps = 0,
-    explorationMode = false,
+    explorationMode = false, detectedTechniques = [], appContext = '',
   } = params;
 
   // Safety: if ReAct called too many times, auto-continue
@@ -513,6 +568,30 @@ export async function reactDecide(params) {
 
   // Build KG context for this tool
   const kgContext = buildKGContextForStep(toolId);
+
+  // Build detected-technique context from mapping detector results
+  let detectedTechContext = '';
+  if (detectedTechniques && detectedTechniques.length > 0) {
+    const techLines = ['## 检测到的 ATT&CK 技术'];
+    for (const dt of detectedTechniques.slice(0, 5)) {
+      const enriched = enrichTechnique(dt.techniqueId);
+      if (enriched) {
+        techLines.push(`**${dt.techniqueId} ${enriched.technique_name}** (${enriched.tactic || '未分类'}) [置信度: ${dt.confidence}]`);
+        if (enriched.teaching_note) {
+          techLines.push(`  教学注解: ${enriched.teaching_note}`);
+        }
+        if (enriched.related_tools && enriched.related_tools.length > 0) {
+          techLines.push(`  关联工具: ${enriched.related_tools.slice(0, 5).join(', ')}`);
+        }
+        if (enriched.mitigations && enriched.mitigations.length > 0) {
+          techLines.push(`  缓解措施: ${enriched.mitigations.slice(0, 2).map(m => m.name).join(', ')}`);
+        }
+      }
+    }
+    if (techLines.length > 1) {
+      detectedTechContext = techLines.join('\n');
+    }
+  }
 
   // Build Guard warning for insertion limits
   let guardWarning = '';
@@ -543,7 +622,7 @@ export async function reactDecide(params) {
   const prompt = buildReactPrompt({
     stepIndex, toolId, stepName, stepResult,
     evidenceHistory, remainingSteps, target, targetClass,
-    kgContext, reactCallCount, guardWarning, ruleMatchContext,
+    kgContext, detectedTechContext, appContext, reactCallCount, guardWarning, ruleMatchContext,
     payloadContext, failedToolsHint, currentFailHint, insertHint,
     explorationMode,
   });
@@ -556,7 +635,8 @@ export async function reactDecide(params) {
   const decision = parseAction(rawResponse);
 
   // ── Stop safety valve (from old system) ──────────────────────────────
-  // Prevent premature stop when >70% steps remain (unless all remaining tools blacklisted)
+  // Prevent premature stop when >70% steps remain (unless all remaining
+  // tools blacklisted, or 5+ consecutive empty/failed results).
   if (decision.action === 'stop') {
     const remainingCount = totalSteps - completedSteps - 1; // exclude current
     const remainingRatio = totalSteps > 0 ? remainingCount / totalSteps : 0;
@@ -565,7 +645,19 @@ export async function reactDecide(params) {
     const allRemainingBlacklisted = remainingStepTools.length > 0 &&
       remainingStepTools.every(t => failedToolsList.includes(t));
 
-    if (remainingRatio > 0.7 && totalSteps > 2 && !allRemainingBlacklisted) {
+    // Count consecutive empty/failed results from the end of evidence history
+    let emptyStreak = 0;
+    for (let i = evidenceHistory.length - 1; i >= 0; i--) {
+      const ev = evidenceHistory[i];
+      if (!ev.success || !ev.output || ev.output.trim().length === 0) {
+        emptyStreak++;
+      } else {
+        break;
+      }
+    }
+    const allowStopByEmptyStreak = emptyStreak >= 5;
+
+    if (remainingRatio > 0.7 && totalSteps > 2 && !allRemainingBlacklisted && !allowStopByEmptyStreak) {
       console.log(`[ReAct] 🛑 stop 被安全阀拦截: 剩余步骤比例=${remainingRatio.toFixed(2)} (${remainingCount}/${totalSteps}), 强制转为 continue`);
       return { action: 'continue', thought: `stop 被安全阀拦截（剩余 ${remainingCount}/${totalSteps} 步骤），强制继续` };
     }
@@ -573,9 +665,40 @@ export async function reactDecide(params) {
     if (allRemainingBlacklisted) {
       console.log(`[ReAct] 🛑 stop 安全阀黑名单豁免: 剩余 ${remainingCount} 个步骤的工具全部在黑名单中 [${remainingStepTools.join(', ')}]，允许 stop`);
     }
+    if (allowStopByEmptyStreak) {
+      console.log(`[ReAct] 🛑 stop 安全阀空结果豁免: 连续 ${emptyStreak} 次空/失败结果，允许 stop`);
+    }
   }
 
   console.log(`[ReAct] Step ${stepIndex}: action=${decision.action}, thought="${decision.thought?.slice(0, 80)}"`);
+
+  // ── Multi-round reflection (self-critique) ──────────────────────────
+  // Only for high-risk decisions: stop (abandoning run), pivot (changing
+  // direction), or insert of exploitation tools (sqlmap, hydra, etc.).
+  // Low-risk actions (continue, adjust, insert of scanning tools) skip
+  // reflection to avoid doubling LLM calls for common operations.
+  const isHighRisk = HIGH_RISK_ACTIONS.includes(decision.action)
+    || (decision.action === 'insert' && decision.toolId && HIGH_RISK_TOOLS.has(decision.toolId));
+  if (isHighRisk && reactCallCount < MAX_REACT_CALLS - 1) {
+    try {
+      const reflectionPrompt = buildReflectionPrompt({
+        stepIndex, toolId, proposedDecision: decision,
+        evidenceHistory, target,
+      });
+
+      console.log(`[ReAct] 🪞 Step ${stepIndex}: self-critique for action="${decision.action}"${decision.toolId ? ` tool="${decision.toolId}"` : ''}`);
+      const reflectionResponse = await callLlmReact(reflectionPrompt, aiConfig || {});
+      const reflection = parseReflection(reflectionResponse);
+
+      if (!reflection.confirmed && reflection.alternative) {
+        console.log(`[ReAct] 🪞 Step ${stepIndex}: self-critique reconsidered ${decision.action} → ${reflection.alternative.action}`);
+        return reflection.alternative;
+      }
+    } catch (e) {
+      // Reflection failed — proceed with original decision (no overhead beyond the try)
+      console.warn(`[ReAct] Self-critique failed, using original decision: ${e.message}`);
+    }
+  }
 
   return decision;
 }

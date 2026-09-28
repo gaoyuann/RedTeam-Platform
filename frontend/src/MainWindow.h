@@ -10,12 +10,11 @@
 
 class ApiClient;
 class LoginDialog;
-class DashboardPage;
-class CampaignPage;
-class ScanPage;
-class ExecutionPage;
+class FlowPage;
 class WsClient;
 class ToastOverlay;
+class DongleLockPage;
+class QTimer;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -38,6 +37,10 @@ private:
     void setupUI();
     void setupWebSocket();
 
+    // 加密锁运行时心跳与锁屏
+    void verifyDongleHeartbeat();
+    void setDongleLocked(bool locked, const QString &errorMessage = QString());
+
     // Keep toast overlay positioned in top-right on resize
     void resizeEvent(QResizeEvent *event) override;
 
@@ -52,15 +55,18 @@ private:
     QString m_username;
 
     // Dashboard + WebSocket + Toast
-    DashboardPage *m_dashboardPage = nullptr;
-    CampaignPage *m_campaignPage = nullptr;
-    ScanPage *m_scanPage = nullptr;
-    ExecutionPage *m_executionPage = nullptr;
+    FlowPage *m_flowPage = nullptr;
     WsClient *m_ws = nullptr;
     ToastOverlay *m_toastOverlay = nullptr;
 
     // Module names (built dynamically, first item is 总览大屏 for admin)
     QStringList m_modules;
+
+    // 加密锁运行时锁
+    DongleLockPage *m_dongleLockPage = nullptr;
+    QTimer *m_dongleTimer = nullptr;
+    bool m_dongleLocked = false;
+    int m_pageBeforeDongleLock = 0;
 };
 
 #endif // MAINWINDOW_H

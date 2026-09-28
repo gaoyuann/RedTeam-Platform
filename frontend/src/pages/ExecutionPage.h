@@ -24,8 +24,16 @@ public:
   /// Select a playbook by ID and pre-fill the target, for cross-page navigation
   void selectPlaybook(const QString &playbookId, const QString &target);
 
+  /// Pre-fill the target input (used when embedded in FlowPage workbench)
+  void setTarget(const QString &target);
+
+  /// Load and display a specific run by ID (used by FlowPage workbench
+  /// when a pipeline's execute step produces a run).
+  void showRun(const QString &runId);
+
 public slots:
   void onRefreshRuns();
+  void onRunReact(const QJsonObject &data);  // run:react — real-time AI reasoning
 
 private slots:
   void onRunClicked(int row, int col);

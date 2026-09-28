@@ -31,8 +31,7 @@ export default function up(db) {
       'INSERT OR IGNORE INTO users (username, password, role, display_name) VALUES (?, ?, ?, ?)'
     );
     insertUser.run('admin', 'admin', 'admin', '系统管理员');
-    insertUser.run('teacher', '123', 'teacher', '教师');
-    insertUser.run('student', '123456', 'student', '学生');
-    console.log('[Migration 007] Seeded default users: admin/admin, teacher/123, student/123456');
+    insertUser.run('user', 'user', 'user', '普通用户');
+    console.log('[Migration 007] Seeded default users: admin/admin, user/user');
   }
 }

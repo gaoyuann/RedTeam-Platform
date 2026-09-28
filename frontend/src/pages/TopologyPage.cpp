@@ -611,6 +611,11 @@ TopologyPage::TopologyPage(ApiClient *api, const QString &role, const QString &u
     }
 }
 
+void TopologyPage::setTarget(const QString &target)
+{
+    m_targetInput->setText(target);
+}
+
 // ── UI Construction ────────────────────────────────────────────────────────
 
 void TopologyPage::setupUI() {

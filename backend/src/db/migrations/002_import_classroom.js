@@ -47,7 +47,9 @@ export default function up(db) {
   const tx = db.transaction(() => {
     let count = 0;
     for (const u of raw.users || []) {
-      insertUser.run(u.username, u.password, u.role, u.username);
+      // Only 'admin' and 'user' roles are valid; convert all others to 'user'
+      const role = (u.role === 'admin') ? 'admin' : 'user';
+      insertUser.run(u.username, u.password, role, u.username);
       count++;
     }
     console.log(`[Migration 002] Imported ${count} users`);

@@ -35,6 +35,7 @@ signals:
   void runCreated(const QJsonObject &data);       // run:created
   void runStarted(const QJsonObject &data);       // run:started
   void runStepComplete(const QJsonObject &data);  // run:step  (step finished)
+  void runReact(const QJsonObject &data);         // run:react (AI reasoning)
   void runCompleted(const QJsonObject &data);     // run:complete
   void containerStatus(const QJsonObject &data);  // container:status
 

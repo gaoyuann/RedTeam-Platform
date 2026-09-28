@@ -466,7 +466,7 @@ async function runPipelineExecution(db, pipeline, playbookId, analysisData) {
     const runId = `run_${randomUUID().slice(0, 12)}`;
     const now = new Date().toISOString();
     const userSub = pipeline.created_by || 'pipeline';
-    const userRole = 'student'; // pipelines run with student-level privileges
+    const userRole = 'user'; // pipelines run with user-level privileges
 
     const planData = {
       _pipeline_source: pipelineId,
@@ -606,6 +606,33 @@ export async function runPipeline(pipelineId) {
       return { ok: false, pipeline_id: pipelineId, status: 'failed', error: generateResult.error };
     }
 
+    // ── Approval gate ─────────────────────────────────────────────────
+    // After generating the playbook, optionally pause for human approval
+    // before proceeding to the execute step.
+    const requireApproval = pipelineConfig.require_approval !== false; // default: true
+    if (requireApproval) {
+      const pausedResult = {
+        scan_task_ids: scanResult.scanTaskIds,
+        analysis: {
+          tech_stack: analysisResult.data?.tech_stack,
+          attack_surface_count: Array.isArray(analysisResult.data?.attack_surface) ? analysisResult.data.attack_surface.length : 0,
+          risk_count: Array.isArray(analysisResult.data?.risk_assessment) ? analysisResult.data.risk_assessment.length : 0,
+          strategy_count: Array.isArray(analysisResult.data?.recommended_strategy) ? analysisResult.data.recommended_strategy.length : 0,
+        },
+        playbook: {
+          id: generateResult.playbookId,
+          name: generateResult.name,
+          method: generateResult.method,
+        },
+        paused_at: 'generate',
+        paused_at_time: new Date().toISOString(),
+      };
+      updateStatus(db, pipelineId, 'awaiting_approval', { result: pausedResult });
+      runningPipelines.delete(pipelineId);
+      pipelineLog(pipelineId, '等待人工确认后执行（require_approval=true）');
+      return { ok: true, pipeline_id: pipelineId, status: 'awaiting_approval' };
+    }
+
     // ── Step 3: Execute ─────────────────────────────────────────────────
     pipelineLog(pipelineId, '=== 步骤 3: 执行 ===');
     const executeResult = await runPipelineExecution(db, pipeline, generateResult.playbookId, analysisResult.data);
@@ -662,7 +689,9 @@ export function cancelPipeline(pipelineId) {
   const db = getDb();
   const pipeline = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(pipelineId);
   if (!pipeline) return { ok: false, error: 'Pipeline not found' };
-  if (pipeline.status !== 'running') return { ok: false, error: `Pipeline is "${pipeline.status}", not running` };
+  if (!['running', 'awaiting_approval'].includes(pipeline.status)) {
+    return { ok: false, error: `Pipeline is "${pipeline.status}", not running or awaiting_approval` };
+  }
 
   // Remove from running set — step functions check this to abort
   runningPipelines.delete(pipelineId);
@@ -678,6 +707,75 @@ export function cancelPipeline(pipelineId) {
   broadcastPipelineEvent(WS_PIPELINE_STATUS, { pipeline_id: pipelineId, status: 'cancelled' });
 
   return { ok: true };
+}
+
+// ── Resume after human approval ───────────────────────────────────────────
+
+/**
+ * Resume a pipeline from the execute step after human approval.
+ * The pipeline must be in 'awaiting_approval' status.
+ *
+ * @param {string} pipelineId
+ * @returns {Promise<{ok: boolean, pipeline_id?: string, status?: string, error?: string}>}
+ */
+export async function resumePipelineAfterApproval(pipelineId) {
+  const db = getDb();
+  const pipeline = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(pipelineId);
+  if (!pipeline) return { ok: false, error: `Pipeline ${pipelineId} not found` };
+  if (pipeline.status !== 'awaiting_approval') {
+    return { ok: false, error: `Pipeline status is "${pipeline.status}", expected "awaiting_approval"` };
+  }
+
+  // Parse analysis result and config
+  let analysisData = {};
+  try { analysisData = JSON.parse(pipeline.analysis_result || '{}'); } catch {}
+
+  const playbookId = pipeline.generated_playbook_id;
+  if (!playbookId) {
+    failPipeline(db, pipelineId, '无法恢复：未找到已生成的 Playbook ID');
+    return { ok: false, error: 'No generated_playbook_id found' };
+  }
+
+  // Mark as running again
+  runningPipelines.add(pipelineId);
+  updateStatus(db, pipelineId, 'running', { error_message: null });
+  pipelineLog(pipelineId, '人工审批通过，恢复执行');
+
+  try {
+    // ── Step 3: Execute ─────────────────────────────────────────────────
+    pipelineLog(pipelineId, '=== 步骤 3: 执行（审批后恢复）===');
+    const executeResult = await runPipelineExecution(db, pipeline, playbookId, analysisData);
+
+    if (!executeResult.ok) {
+      if (executeResult.cancelled) {
+        updateStatus(db, pipelineId, 'cancelled', { result: { stopped_at: 'execute' } });
+      } else {
+        failPipeline(db, pipelineId, `执行阶段失败: ${executeResult.error}`);
+      }
+      return { ok: false, pipeline_id: pipelineId, status: 'failed', error: executeResult.error };
+    }
+
+    // ── Completed ───────────────────────────────────────────────────────
+    let prevResult = {};
+    try { prevResult = JSON.parse(pipeline.result || '{}'); } catch {}
+
+    const finalResult = {
+      ...prevResult,
+      execution: executeResult.skipped
+        ? { skipped: true }
+        : { run_id: executeResult.runId, status: executeResult.status },
+      pipeline_completed_at: new Date().toISOString(),
+    };
+
+    updateStatus(db, pipelineId, 'completed', { result: finalResult });
+    runningPipelines.delete(pipelineId);
+    pipelineLog(pipelineId, '流水线全部完成（审批后）');
+    return { ok: true, pipeline_id: pipelineId, status: 'completed' };
+  } catch (err) {
+    failPipeline(db, pipelineId, `流水线恢复执行异常: ${err.message}`);
+    pipelineLog(pipelineId, `流水线恢复执行异常: ${err.message}`, 'error');
+    return { ok: false, pipeline_id: pipelineId, status: 'failed', error: err.message };
+  }
 }
 
 // ── Status check ──────────────────────────────────────────────────────────
@@ -702,6 +800,7 @@ export function runningPipelineCount() {
 export default {
   runPipeline,
   cancelPipeline,
+  resumePipelineAfterApproval,
   isPipelineRunning,
   runningPipelineCount,
 };
