@@ -39,7 +39,7 @@ while true; do
         log "编译成功，重启前端"
 
         # 3. 重启前端
-        pkill -f 'RedTeam-Platform' 2>/dev/null || true
+        pkill -f 'build/frontend/RedTeam-Platform' 2>/dev/null || true
         sleep 1
         nohup "$SCRIPT_DIR/start-app.sh" >>"$LOG" 2>&1 &
         log "前端已重启 (PID $!)"

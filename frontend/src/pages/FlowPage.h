@@ -125,6 +125,7 @@ private:
   QString m_lastLoadedRunId;
   QString m_lastLoadedPlaybookId;
   QString m_lastLoadedEvalRunId;
+  QString m_generatedPlaybookId;  // cached from loadFlowDetail for the approve dialog
 };
 
 #endif // FLOWPAGE_H

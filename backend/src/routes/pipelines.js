@@ -318,6 +318,15 @@ export default function (db) {
       return res.status(400).json({ status: 'error', error: { message: `只有待确认状态的流水线可以审批，当前状态: ${statusCn(pipeline.status)}` } });
     }
 
+    // 用户可选择执行哪个 playbook（覆盖 AI 生成的）
+    const selectedPlaybookId = req.body?.playbook_id;
+    if (selectedPlaybookId && selectedPlaybookId !== pipeline.generated_playbook_id) {
+      db.prepare("UPDATE pipelines SET generated_playbook_id = ?, updated_at = datetime('now') WHERE pipeline_id = ?")
+        .run(selectedPlaybookId, req.params.id);
+      auditLog(db, 'pipeline_playbook_override', req.params.id, req.user.role, pipeline.target,
+        { from: pipeline.generated_playbook_id, to: selectedPlaybookId });
+    }
+
     auditLog(db, 'pipeline_approve', req.params.id, req.user.role, pipeline.target, { from: 'awaiting_approval', to: 'running' });
 
     // Fire-and-forget: resume pipeline from execute step
