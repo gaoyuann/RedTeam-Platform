@@ -5,7 +5,7 @@ export default function up(db) {
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
       username      TEXT    NOT NULL UNIQUE,
       password      TEXT    NOT NULL,
-      role          TEXT    NOT NULL CHECK (role IN ('admin','teacher','student','operator','viewer')),
+      role          TEXT    NOT NULL CHECK (role IN ('admin','user')),
       display_name  TEXT,
       is_active     INTEGER NOT NULL DEFAULT 1,
       created_at    TEXT    NOT NULL DEFAULT (datetime('now')),

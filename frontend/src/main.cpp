@@ -3,7 +3,9 @@
 #include "SplashDialog.h"
 #include "LoginDialog.h"
 #include "ApiClient.h"
+#include "services/dongle/DongleService.h"
 #include <QApplication>
+#include <QMessageBox>
 #include <QProcess>
 #include <QFontDatabase>
 #include <QDir>
@@ -268,6 +270,16 @@ int main(int argc, char *argv[])
     // This avoids all the dangling-pointer issues of signal-based window swapping.
 
     while (true) {
+        // ── 加密锁校验闸 ───────────────────────────────────────────────
+        // 策略未启用时 verifyPolicy 直接返回 true，零影响。
+        // 启用且未通过则弹错误框并退出，与 pentagi-v3 行为一致。
+        QString dongleError;
+        if (!DongleService::verifyPolicy(DongleService::policyDir(), &dongleError)) {
+            QMessageBox::critical(nullptr, QStringLiteral("加密锁校验失败"),
+                dongleError + QStringLiteral("\n\n请插入已注册的加密锁，或在管理端校验页面停用策略。"));
+            return 0;
+        }
+
         LoginDialog login(&api);
         if (login.exec() != QDialog::Accepted) {
             return 0;
@@ -278,7 +290,7 @@ int main(int argc, char *argv[])
 
         // Create the appropriate window type for this role
         QMainWindow *window = nullptr;
-        if (role == "admin" || role == "teacher") {
+        if (role == "admin") {
             window = new MainWindow(&api, role, username);
         } else {
             window = new SimpleMainWindow(&api, role, username);

@@ -5,15 +5,13 @@
 #include "ToastOverlay.h"
 #include "LiveActivityPanel.h"
 #include "pages/BasePage.h"
-#include "pages/DashboardPage.h"
-#include "pages/DeployConfigPage.h"
+#include "pages/FlowPage.h"
 #include "pages/PlaybookPage.h"
-#include "pages/TopologyPage.h"
 #include "pages/ScanPage.h"
 #include "pages/ExecutionPage.h"
-#include "pages/CampaignPage.h"
-#include "pages/EvaluatePage.h"
 #include "pages/SystemPage.h"
+#include "pages/DongleLockPage.h"
+#include "services/dongle/DongleService.h"
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QLabel>
@@ -22,15 +20,13 @@
 #include <QApplication>
 #include <QFrame>
 #include <QResizeEvent>
+#include <QTimer>
 
 namespace {
 QString displayRole(const QString &role)
 {
     if (role == QStringLiteral("admin")) return QStringLiteral("管理员");
-    if (role == QStringLiteral("teacher")) return QStringLiteral("教师");
-    if (role == QStringLiteral("student")) return QStringLiteral("学生");
-    if (role == QStringLiteral("operator")) return QStringLiteral("操作员");
-    if (role == QStringLiteral("viewer")) return QStringLiteral("观察者");
+    if (role == QStringLiteral("user")) return QStringLiteral("普通用户");
     return role;
 }
 }
@@ -43,6 +39,12 @@ MainWindow::MainWindow(ApiClient *api, const QString &role, const QString &usern
 {
     setupUI();
     setupWebSocket();
+
+    // 加密锁运行时心跳：每 5s 校验一次策略，失败则锁屏，恢复则回到原页面。
+    m_dongleTimer = new QTimer(this);
+    m_dongleTimer->setInterval(5000);
+    connect(m_dongleTimer, &QTimer::timeout, this, &MainWindow::verifyDongleHeartbeat);
+    m_dongleTimer->start();
 }
 
 void MainWindow::setupUI()
@@ -56,14 +58,10 @@ void MainWindow::setupUI()
     auto *mainLayout = new QHBoxLayout(centralWidget);
 
     // Left: navigation — 总览大屏 as first item
+    // Note: "资源部署配置" moved to SystemPage sub-tab (P2 optimization)
     m_modules = QStringList({
-        QStringLiteral("总览大屏"),
-        QStringLiteral("渗透测试资源部署配置"),
-        QStringLiteral("漏洞利用想定与预案"),
-        QStringLiteral("网络拓扑探测与绘制"),
-        QStringLiteral("脆弱性扫描"),
-        QStringLiteral("漏洞攻击测试"),
-        QStringLiteral("测试评估"),
+        QStringLiteral("测试任务"),
+        QStringLiteral("预案与知识库"),
         QStringLiteral("系统管理")
     });
 
@@ -98,41 +96,20 @@ void MainWindow::setupUI()
     // Right: stacked pages
     m_stackWidget = new QStackedWidget(this);
 
-    // Page 0: Dashboard (总览大屏)
-    m_dashboardPage = new DashboardPage(m_api, m_role, m_username, this);
-    m_stackWidget->addWidget(m_dashboardPage);
+    // Page 0: FlowPage (测试任务 — PentAGI-style flow list + workbench)
+    m_flowPage = new FlowPage(m_api, m_role, m_username, this);
+    m_stackWidget->addWidget(m_flowPage);
 
-    // Page 1: Deploy config
-    m_stackWidget->addWidget(new DeployConfigPage(m_api, m_role, m_username, this));
-
-    // Page 2: Playbook
+    // Page 1: Playbook (was page 2 before deploy config removal)
     auto *playbookPage = new PlaybookPage(m_api, m_role, m_username, this);
     m_stackWidget->addWidget(playbookPage);
 
-    // Page 3: Topology
-    m_stackWidget->addWidget(new TopologyPage(m_api, m_role, m_username, this));
-
-    // Page 4: Scan (scan→auto-generate→inline-execute workflow)
-    m_scanPage = new ScanPage(m_api, m_role, m_username, this);
-    m_stackWidget->addWidget(m_scanPage);
-
-    // Page 5: 漏洞攻击测试 (Tab: 快速执行 + 攻击战役)
-    auto *page5 = new QWidget;
-    auto *page5Layout = new QVBoxLayout(page5);
-    page5Layout->setContentsMargins(0, 0, 0, 0);
-    auto *tab5 = new QTabWidget;
-    m_executionPage = new ExecutionPage(m_api, m_role, m_username, this);
-    tab5->addTab(m_executionPage, QStringLiteral("快速执行"));
-    m_campaignPage = new CampaignPage(m_api, m_role, m_username, this);
-    tab5->addTab(m_campaignPage, QStringLiteral("攻击战役"));
-    page5Layout->addWidget(tab5);
-    m_stackWidget->addWidget(page5);
-
-    // Page 6: Evaluate
-    m_stackWidget->addWidget(new EvaluatePage(m_api, m_role, m_username, this));
-
-    // Page 7: System
+    // Page 2: System (includes 资源部署 as sub-tab)
     m_stackWidget->addWidget(new SystemPage(m_api, m_role, m_username, this));
+
+    // 加密锁锁屏页（不占导航行，仅在校验失败时显示）
+    m_dongleLockPage = new DongleLockPage(this);
+    m_stackWidget->addWidget(m_dongleLockPage);
 
     sidebarLayout->addWidget(m_navList, 1);
     auto *sidebarFooter = new QLabel(QStringLiteral("安全态势 · 实时联动"), sidebar);
@@ -182,19 +159,11 @@ void MainWindow::setupUI()
     // Logout button
     connect(m_logoutBtn, &QPushButton::clicked, this, &MainWindow::onLogout);
 
-    // Cross-page navigation: ScanPage → ExecutionPage (index 5, 快速执行 tab)
-    connect(m_scanPage, &ScanPage::playbookNavigateRequested, this, [this, tab5](const QString &id, const QString &target) {
-        switchToPage(5);  // 漏洞攻击测试 is index 5
-        tab5->setCurrentIndex(0);  // 切到"快速执行"Tab
-        m_executionPage->selectPlaybook(id, target);
-    });
-
-    // Cross-page navigation: PlaybookPage → ExecutionPage
+    // Cross-page navigation: PlaybookPage → FlowPage workbench (攻击 Tab)
     connect(playbookPage, &PlaybookPage::executeRequested, this,
-        [this, tab5](const QString &id) {
-            switchToPage(5);
-            tab5->setCurrentIndex(0);  // 切到"快速执行"Tab
-            m_executionPage->selectPlaybook(id, QString());
+        [this](const QString &id) {
+            switchToPage(0);  // 测试任务
+            m_flowPage->jumpToExecution(id, QString());
         });
 }
 
@@ -205,37 +174,60 @@ void MainWindow::setupWebSocket()
     m_ws = new WsClient(m_api, this);
     m_ws->connectToServer();
 
-    // Wire to DashboardPage's activity panel + refresh stats on events
-    if (m_dashboardPage) {
-        auto *dashPanel = m_dashboardPage->activityPanel();
-        if (dashPanel) {
-            connect(m_ws, &WsClient::scanCreated, dashPanel, &LiveActivityPanel::onScanCreated);
-            connect(m_ws, &WsClient::scanStarted, dashPanel, &LiveActivityPanel::onScanStarted);
-            connect(m_ws, &WsClient::scanCompleted, dashPanel, &LiveActivityPanel::onScanCompleted);
-            connect(m_ws, &WsClient::runCreated, dashPanel, &LiveActivityPanel::onRunCreated);
-            connect(m_ws, &WsClient::runStarted, dashPanel, &LiveActivityPanel::onRunStarted);
-            connect(m_ws, &WsClient::runStepComplete, dashPanel, &LiveActivityPanel::onRunStepComplete);
-            connect(m_ws, &WsClient::runCompleted, dashPanel, &LiveActivityPanel::onRunCompleted);
+    // Wire to FlowPage's activity panel + refresh flows on events
+    if (m_flowPage) {
+        auto *flowPanel = m_flowPage->activityPanel();
+        if (flowPanel) {
+            connect(m_ws, &WsClient::scanCreated, flowPanel, &LiveActivityPanel::onScanCreated);
+            connect(m_ws, &WsClient::scanStarted, flowPanel, &LiveActivityPanel::onScanStarted);
+            connect(m_ws, &WsClient::scanCompleted, flowPanel, &LiveActivityPanel::onScanCompleted);
+            connect(m_ws, &WsClient::runCreated, flowPanel, &LiveActivityPanel::onRunCreated);
+            connect(m_ws, &WsClient::runStarted, flowPanel, &LiveActivityPanel::onRunStarted);
+            connect(m_ws, &WsClient::runStepComplete, flowPanel, &LiveActivityPanel::onRunStepComplete);
+            connect(m_ws, &WsClient::runCompleted, flowPanel, &LiveActivityPanel::onRunCompleted);
+            // Pipeline events → LiveActivityPanel
+            connect(m_ws, &WsClient::pipelineCreated, flowPanel, &LiveActivityPanel::onPipelineCreated);
+            connect(m_ws, &WsClient::pipelineStatus, flowPanel, &LiveActivityPanel::onPipelineStatus);
+            connect(m_ws, &WsClient::pipelineStep, flowPanel, &LiveActivityPanel::onPipelineStep);
         }
-        // Refresh dashboard stats table when key events arrive
-        connect(m_ws, &WsClient::scanCreated, m_dashboardPage, &DashboardPage::refreshStats);
-        connect(m_ws, &WsClient::scanCompleted, m_dashboardPage, &DashboardPage::refreshStats);
-        connect(m_ws, &WsClient::runCreated, m_dashboardPage, &DashboardPage::refreshStats);
-        connect(m_ws, &WsClient::runCompleted, m_dashboardPage, &DashboardPage::refreshStats);
+        // Pipeline events → FlowPage real-time updates
+        connect(m_ws, &WsClient::pipelineCreated, m_flowPage, &FlowPage::onPipelineCreated);
+        connect(m_ws, &WsClient::pipelineStatus, m_flowPage, &FlowPage::onPipelineStatus);
+        connect(m_ws, &WsClient::pipelineStep, m_flowPage, &FlowPage::onPipelineStep);
+        connect(m_ws, &WsClient::pipelineLog, m_flowPage, &FlowPage::onPipelineLog);
+        // Scan/run events also refresh flow list (pipeline creates scans/runs internally)
+        connect(m_ws, &WsClient::scanCompleted, m_flowPage, &FlowPage::refreshFlows);
+        connect(m_ws, &WsClient::runCompleted, m_flowPage, &FlowPage::refreshFlows);
+        // AI ReAct thoughts → reasoning panel
+        connect(m_ws, &WsClient::runReact, m_flowPage,
+            [this](const QJsonObject &data) {
+                if (!m_flowPage) return;
+                QString thought = data["thought"].toString();
+                if (!thought.isEmpty())
+                    m_flowPage->appendThought(thought);
+            });
     }
 
-    if (m_campaignPage) {
-        auto refreshCampaign = [this](const QJsonObject &) {
-            m_campaignPage->refresh();
-        };
-        connect(m_ws, &WsClient::campaignStarted, this, refreshCampaign);
-        connect(m_ws, &WsClient::campaignPaused, this, refreshCampaign);
-        connect(m_ws, &WsClient::campaignAborted, this, refreshCampaign);
-        connect(m_ws, &WsClient::campaignCompleted, this, refreshCampaign);
-        connect(m_ws, &WsClient::phaseStarted, this, refreshCampaign);
-        connect(m_ws, &WsClient::phaseCompleted, this, refreshCampaign);
-        connect(m_ws, &WsClient::phaseSkipped, this, refreshCampaign);
+    // Wire WebSocket to FlowPage's embedded stage-tab pages
+    if (m_flowPage) {
+        auto *embScan = m_flowPage->scanTab();
+        if (embScan) {
+            connect(m_ws, &WsClient::scanCreated, embScan, &ScanPage::onRefreshTasks);
+            connect(m_ws, &WsClient::scanCompleted, embScan, &ScanPage::onRefreshTasks);
+            // Embedded scan "推荐执行" → switch to attack tab within the workbench
+            connect(embScan, &ScanPage::playbookNavigateRequested, this,
+                [this](const QString &id, const QString &target) {
+                    m_flowPage->switchToStageTab(2);  // 2 = 漏洞攻击
+                    m_flowPage->execTab()->selectPlaybook(id, target);
+                });
+        }
+        auto *embExec = m_flowPage->execTab();
+        if (embExec) {
+            connect(m_ws, &WsClient::runReact, embExec, &ExecutionPage::onRunReact);
+            connect(m_ws, &WsClient::runCompleted, embExec, &ExecutionPage::onRefreshRuns);
+        }
     }
+
 
     // Wire to ToastOverlay
     connect(m_ws, &WsClient::scanCompleted, m_toastOverlay, &ToastOverlay::onScanCompleted);
@@ -265,6 +257,7 @@ void MainWindow::resizeEvent(QResizeEvent *event)
 }
 
 void MainWindow::switchToPage(int index) {
+    if (m_dongleLocked) return;
     if (index >= 0 && index < m_modules.size()) {
         m_navList->setCurrentRow(index);
     }
@@ -272,6 +265,7 @@ void MainWindow::switchToPage(int index) {
 
 void MainWindow::onModuleChanged(int row)
 {
+    if (m_dongleLocked) return;
     if (row >= 0 && row < m_stackWidget->count()) {
         m_stackWidget->setCurrentIndex(row);
         // Trigger page refresh if it's a BasePage subclass
@@ -288,12 +282,51 @@ void MainWindow::onModuleChanged(int row)
                 }
             }
         }
-        if (row == 4 && m_scanPage) {
-            m_scanPage->onRefreshTasks();
-        } else if (row == 5 && m_executionPage) {
-            m_executionPage->onRefreshRuns();
+        if (row == 0 && m_flowPage) {
+            m_flowPage->refreshFlows();
         }
     }
+}
+
+void MainWindow::verifyDongleHeartbeat() {
+    QString error;
+    const bool valid = DongleService::verifyPolicy(DongleService::policyDir(), &error);
+    if (!valid) {
+        setDongleLocked(true, error);
+    } else if (m_dongleLocked) {
+        setDongleLocked(false);
+    }
+}
+
+void MainWindow::setDongleLocked(bool locked, const QString &errorMessage) {
+    if (locked == m_dongleLocked && locked) {
+        if (m_dongleLockPage) {
+            m_dongleLockPage->setErrorMessage(errorMessage);
+        }
+        return;
+    }
+
+    if (locked) {
+        const int current = m_stackWidget ? m_stackWidget->currentIndex() : -1;
+        if (current >= 0 && m_dongleLockPage && m_stackWidget->widget(current) != m_dongleLockPage) {
+            m_pageBeforeDongleLock = current;
+        }
+        m_dongleLocked = true;
+        if (m_dongleLockPage && m_stackWidget) {
+            m_dongleLockPage->setErrorMessage(errorMessage);
+            m_stackWidget->setCurrentWidget(m_dongleLockPage);
+        }
+        if (m_navList) {
+            m_navList->setEnabled(false);
+        }
+        return;
+    }
+
+    m_dongleLocked = false;
+    if (m_navList) {
+        m_navList->setEnabled(true);
+    }
+    switchToPage(m_pageBeforeDongleLock);
 }
 
 void MainWindow::onLogout()

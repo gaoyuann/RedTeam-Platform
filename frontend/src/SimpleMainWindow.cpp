@@ -7,6 +7,8 @@
 #include "pages/EvaluatePage.h"
 #include "pages/PayloadPage.h"
 #include "pages/PlaybookPage.h"
+#include "pages/DongleLockPage.h"
+#include "services/dongle/DongleService.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
@@ -57,6 +59,12 @@ SimpleMainWindow::SimpleMainWindow(ApiClient *api, const QString &role,
 {
   setupUI();
   loadHistory();
+
+  // 加密锁运行时心跳：每 5s 校验一次策略，失败则锁屏，恢复则回到原页面。
+  m_dongleTimer = new QTimer(this);
+  m_dongleTimer->setInterval(5000);
+  connect(m_dongleTimer, &QTimer::timeout, this, &SimpleMainWindow::verifyDongleHeartbeat);
+  m_dongleTimer->start();
 }
 
 void SimpleMainWindow::setupUI()
@@ -104,6 +112,10 @@ void SimpleMainWindow::setupUI()
   // Page 5: Evaluate (测试评估)
   m_stackWidget->addWidget(new EvaluatePage(m_api, m_role, m_username, this));
 
+  // 加密锁锁屏页（不占导航行，仅在校验失败时显示）
+  m_dongleLockPage = new DongleLockPage(this);
+  m_stackWidget->addWidget(m_dongleLockPage);
+
   // Cross-page navigation: ScanPage → ExecutionPage (select playbook)
   connect(m_scanPage, &ScanPage::playbookNavigateRequested, this, [this](const QString &playbookId) {
     m_executionPage->selectPlaybook(playbookId, QString());
@@ -140,10 +152,7 @@ void SimpleMainWindow::setupUI()
   // User info label
   QString roleLabel = m_role;
   if (m_role == "admin") roleLabel = "管理员";
-  else if (m_role == "teacher") roleLabel = "教师";
-  else if (m_role == "student") roleLabel = "学生";
-  else if (m_role == "operator") roleLabel = "操作员";
-  else if (m_role == "viewer") roleLabel = "观察者";
+  else if (m_role == "user") roleLabel = "普通用户";
   auto *userLabel = new QLabel(
     QString("%1 [%2]").arg(m_username, roleLabel), this);
   userLabel->setStyleSheet("color: #a0aec0; padding: 0 10px; font-size: 13px;");
@@ -481,8 +490,55 @@ void SimpleMainWindow::setupQuickTestPage(QWidget *page)
 
 void SimpleMainWindow::onModuleChanged(int row)
 {
+  if (m_dongleLocked) return;
   if (row >= 0 && row < m_stackWidget->count()) {
     m_stackWidget->setCurrentIndex(row);
+  }
+}
+
+void SimpleMainWindow::verifyDongleHeartbeat()
+{
+  QString error;
+  const bool valid = DongleService::verifyPolicy(DongleService::policyDir(), &error);
+  if (!valid) {
+    setDongleLocked(true, error);
+  } else if (m_dongleLocked) {
+    setDongleLocked(false);
+  }
+}
+
+void SimpleMainWindow::setDongleLocked(bool locked, const QString &errorMessage)
+{
+  if (locked == m_dongleLocked && locked) {
+    if (m_dongleLockPage) {
+      m_dongleLockPage->setErrorMessage(errorMessage);
+    }
+    return;
+  }
+
+  if (locked) {
+    const int current = m_stackWidget ? m_stackWidget->currentIndex() : -1;
+    if (current >= 0 && m_dongleLockPage && m_stackWidget->widget(current) != m_dongleLockPage) {
+      m_pageBeforeDongleLock = current;
+    }
+    m_dongleLocked = true;
+    if (m_dongleLockPage && m_stackWidget) {
+      m_dongleLockPage->setErrorMessage(errorMessage);
+      m_stackWidget->setCurrentWidget(m_dongleLockPage);
+    }
+    if (m_navList) {
+      m_navList->setEnabled(false);
+    }
+    return;
+  }
+
+  m_dongleLocked = false;
+  if (m_navList) {
+    m_navList->setEnabled(true);
+  }
+  if (m_pageBeforeDongleLock >= 0 && m_pageBeforeDongleLock < m_stackWidget->count()) {
+    m_stackWidget->setCurrentIndex(m_pageBeforeDongleLock);
+    m_navList->setCurrentRow(m_pageBeforeDongleLock);
   }
 }
 

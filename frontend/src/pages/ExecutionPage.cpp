@@ -230,6 +230,10 @@ void ExecutionPage::loadPlaybooks() {
 }
 
 // ── Select playbook by ID (cross-page navigation) ────────────────────
+void ExecutionPage::setTarget(const QString &target) {
+  m_targetInput->setText(target);
+}
+
 void ExecutionPage::selectPlaybook(const QString &playbookId, const QString &target) {
   // Pre-fill target
   m_targetInput->setText(target);
@@ -260,6 +264,22 @@ void ExecutionPage::selectPlaybook(const QString &playbookId, const QString &tar
         }
       }
     });
+}
+
+// ── Show a specific run (public, used by FlowPage workbench) ──────────
+void ExecutionPage::showRun(const QString &runId)
+{
+  if (runId.isEmpty()) return;
+  // Track as the running run so the poll timer keeps the step table, evidence,
+  // and status label live.  onPollRunning stops automatically at a terminal
+  // state, so a completed run costs at most one extra GET.
+  m_runningRunId = runId;
+  if (!m_pollTimer->isActive()) m_pollTimer->start();
+  // Refresh the run table so the target run appears, then load its details
+  onRefreshRuns();
+  loadRunDetails(runId);
+  // Switch to the detail tab so step progress / evidence / Cortex are visible
+  m_tabWidget->setCurrentIndex(1);
 }
 
 // ── Load playbooks filtered by baseline_group ───────────────────────
@@ -410,6 +430,39 @@ void ExecutionPage::onRefreshRuns() {
   });
 }
 
+// ── Real-time ReAct reasoning from WebSocket (run:react) ─────────────
+void ExecutionPage::onRunReact(const QJsonObject &data) {
+  QString runId = data["run_id"].toString();
+  // Only display if this is the currently loaded/running run
+  if (runId != m_loadedRunId && runId != m_runningRunId) return;
+
+  int stepIdx = data["step_index"].toInt();
+  QString stepKey = QStringLiteral("react_%1").arg(stepIdx);
+  if (m_injectedReactSteps.contains(stepKey)) return;  // dedup
+  m_injectedReactSteps.insert(stepKey);
+
+  QString thought = data["thought"].toString();
+  if (thought.isEmpty()) return;
+
+  // Parse action
+  QString actionStr = data["action"].toString();
+  if (actionStr.isEmpty()) actionStr = QStringLiteral("continue");
+
+  // Map action to Chinese label
+  QString actionLabel;
+  if (actionStr == QStringLiteral("insert")) actionLabel = QStringLiteral("🔀 插入");
+  else if (actionStr == QStringLiteral("adjust")) actionLabel = QStringLiteral("🔧 调整");
+  else if (actionStr == QStringLiteral("parallel")) actionLabel = QStringLiteral("⚡ 并行");
+  else if (actionStr == QStringLiteral("pivot")) actionLabel = QStringLiteral("🔄 转向");
+  else if (actionStr == QStringLiteral("stop")) actionLabel = QStringLiteral("🛑 终止");
+  else actionLabel = QStringLiteral("▶ 继续");
+
+  // Observation = tool_id + step info
+  QString observation = QStringLiteral("Step %1 [%2]").arg(stepIdx).arg(data["tool_id"].toString());
+
+  m_cortexPanel->addReactThought(observation, thought, actionLabel);
+}
+
 // ── Run clicked: load steps + evidence ──────────────────────────────
 void ExecutionPage::onRunClicked(int row, int) {
   auto *runItem = m_runTable->item(row, 0);
@@ -437,6 +490,13 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
     QString engineType = d["engine_type"].toString();
     QString stopReason = d["stop_reason"].toString();
     QString statusVal = d["status"].toString();
+    // If this run is still running, ensure polling is active for live updates.
+    // This covers onRunClicked (user clicking a running run in the list) —
+    // without this, the detail page would freeze at the initial snapshot.
+    if (statusVal == "RUNNING" || statusVal == "PENDING") {
+      m_runningRunId = runId;
+      if (!m_pollTimer->isActive()) m_pollTimer->start();
+    }
     if (statusVal == "RUNNING") statusVal = "运行中";
     else if (statusVal == "PENDING") statusVal = "待执行";
     else if (statusVal == "COMPLETED") statusVal = "已完成";

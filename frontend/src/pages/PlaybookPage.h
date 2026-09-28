@@ -9,9 +9,12 @@
 #include <QPushButton>
 #include <QDialog>
 #include <QTextEdit>
+#include <QTabWidget>
 #include <functional>
 
 class ApiClient;
+class KnowledgeGraphPage;
+class PayloadPage;
 
 class PlaybookPage : public QWidget {
   Q_OBJECT
@@ -39,6 +42,15 @@ private:
   static QString formatBaselineGroup(const QString &s);
 
   ApiClient *m_api;
+  QString m_role;
+  QString m_username;
+
+  // Sub-tab container (Playbook 库 / 知识图谱 / 载荷样本库)
+  QTabWidget *m_tabs;
+  QWidget *m_playbookTab;
+  KnowledgeGraphPage *m_kgTab;
+  PayloadPage *m_payloadTab;
+
   QComboBox *m_groupFilter;
   QCheckBox *m_showGenerated;
   QTableWidget *m_listTable;

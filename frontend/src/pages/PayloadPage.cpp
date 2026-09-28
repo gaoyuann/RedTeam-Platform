@@ -186,8 +186,8 @@ void PayloadPage::setupUI() {
   splitter->setStretchFactor(1, 2);
   mainLayout->addWidget(splitter);
 
-  // Hide AI generate for non-admin/teacher
-  if (m_role != "admin" && m_role != "teacher") {
+  // Hide AI generate for non-admin
+  if (m_role != "admin") {
     m_aiGenBtn->hide();
   }
 }

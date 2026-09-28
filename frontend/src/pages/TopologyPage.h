@@ -33,6 +33,9 @@ class TopologyPage : public QWidget {
 public:
     explicit TopologyPage(ApiClient *api, const QString &role = "", const QString &username = "", QWidget *parent = nullptr);
 
+    /// Pre-fill the target input (used when embedded in FlowPage workbench)
+    void setTarget(const QString &target);
+
 private slots:
     void onRefreshScans();
     void onScanClicked(int row, int col);

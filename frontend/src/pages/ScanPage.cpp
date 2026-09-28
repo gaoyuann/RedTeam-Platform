@@ -343,6 +343,14 @@ ScanPage::ScanPage(ApiClient *api, const QString &role, const QString &username,
   onRefreshTasks();
 }
 
+void ScanPage::setTarget(const QString &target)
+{
+  m_portTargetInput->setText(target);
+  m_vulnTargetInput->setText(target);
+  m_webTargetInput->setText(target);
+  m_bruteTargetInput->setText(target);
+}
+
 void ScanPage::setupUI() {
   setStyleSheet(Theme::PageStyle);
 

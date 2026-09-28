@@ -49,6 +49,7 @@ function auditLog(db, type, pipelineId, userRole, target, reasons) {
 function statusCn(s) {
   const map = {
     created: '已创建', running: '运行中', paused: '已暂停',
+    awaiting_approval: '待确认',
     completed: '已完成', failed: '失败', cancelled: '已取消',
     pending: '待执行', skipped: '已跳过',
   };
@@ -136,7 +137,7 @@ export default function (db) {
         const parsed = typeof config === 'string' ? JSON.parse(config) : config;
         // Only allow known config keys
         const sanitized = {};
-        const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters'];
+        const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval'];
         for (const key of allowedKeys) {
           if (parsed[key] !== undefined) sanitized[key] = parsed[key];
         }
@@ -189,7 +190,13 @@ export default function (db) {
       try {
         const parsed = typeof config === 'string' ? JSON.parse(config) : config;
         if (typeof parsed === 'object' && parsed !== null) {
-          configStr = JSON.stringify(parsed);
+          // Only allow known config keys (same whitelist as create)
+          const sanitized = {};
+          const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval'];
+          for (const key of allowedKeys) {
+            if (parsed[key] !== undefined) sanitized[key] = parsed[key];
+          }
+          configStr = JSON.stringify(sanitized);
         }
       } catch {}
       sets.push('config = ?');
@@ -219,8 +226,8 @@ export default function (db) {
     if (!canModifyPipeline(req, pipeline)) {
       return res.status(403).json({ status: 'error', error: { message: '没有权限删除此流水线' } });
     }
-    if (pipeline.status === 'running') {
-      return res.status(400).json({ status: 'error', error: { message: '运行中的流水线不能删除，请先取消' } });
+    if (['running', 'awaiting_approval'].includes(pipeline.status)) {
+      return res.status(400).json({ status: 'error', error: { message: '运行中或待确认的流水线不能删除，请先取消' } });
     }
 
     db.prepare('DELETE FROM pipelines WHERE pipeline_id = ?').run(req.params.id);
@@ -272,24 +279,23 @@ export default function (db) {
   });
 
   // Cancel running pipeline
-  router.post('/:id/cancel', (req, res) => {
+  router.post('/:id/cancel', async (req, res) => {
     const pipeline = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(req.params.id);
     if (!pipeline) return res.status(404).json({ status: 'error', error: { message: '流水线不存在' } });
     if (!canModifyPipeline(req, pipeline)) {
       return res.status(403).json({ status: 'error', error: { message: '没有权限取消此流水线' } });
     }
-    if (pipeline.status !== 'running') {
-      return res.status(400).json({ status: 'error', error: { message: '只有运行中的流水线可以取消' } });
+    if (!['running', 'awaiting_approval'].includes(pipeline.status)) {
+      return res.status(400).json({ status: 'error', error: { message: '只有运行中或待确认的流水线可以取消' } });
     }
 
-    // Import and call cancelPipeline from the engine
+    // Call cancelPipeline from the engine
     try {
-      import('../services/pipelineEngine.js').then(({ cancelPipeline }) => {
-        const result = cancelPipeline(req.params.id);
-        if (!result.ok) {
-          console.error(`[PipelineEngine] Cancel failed for ${req.params.id}: ${result.error}`);
-        }
-      });
+      const { cancelPipeline } = await import('../services/pipelineEngine.js');
+      const result = cancelPipeline(req.params.id);
+      if (!result.ok) {
+        console.error(`[PipelineEngine] Cancel failed for ${req.params.id}: ${result.error}`);
+      }
     } catch (err) {
       console.error('[PipelineEngine] Failed to import engine for cancel:', err.message);
     }
@@ -299,6 +305,35 @@ export default function (db) {
     const row = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(req.params.id);
     row.status_cn = statusCn(row.status);
     res.json({ status: 'ok', data: row });
+  });
+
+  // Approve a pipeline awaiting human approval (resume from execute step)
+  router.post('/:id/approve', async (req, res) => {
+    const pipeline = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(req.params.id);
+    if (!pipeline) return res.status(404).json({ status: 'error', error: { message: '流水线不存在' } });
+    if (!canModifyPipeline(req, pipeline)) {
+      return res.status(403).json({ status: 'error', error: { message: '没有权限审批此流水线' } });
+    }
+    if (pipeline.status !== 'awaiting_approval') {
+      return res.status(400).json({ status: 'error', error: { message: `只有待确认状态的流水线可以审批，当前状态: ${statusCn(pipeline.status)}` } });
+    }
+
+    auditLog(db, 'pipeline_approve', req.params.id, req.user.role, pipeline.target, { from: 'awaiting_approval', to: 'running' });
+
+    // Fire-and-forget: resume pipeline from execute step
+    // (resumePipelineAfterApproval will set status to 'running' and execute)
+    try {
+      const { resumePipelineAfterApproval } = await import('../services/pipelineEngine.js');
+      resumePipelineAfterApproval(req.params.id).catch(err => {
+        console.error(`[PipelineEngine] Resume after approval failed for ${req.params.id}:`, err.message);
+      });
+    } catch (err) {
+      console.error('[PipelineEngine] Failed to import engine for resume:', err.message);
+    }
+
+    const row = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(req.params.id);
+    row.status_cn = statusCn(row.status);
+    res.status(202).json({ status: 'ok', data: row });
   });
 
   // ── Pipeline steps sub-routes ──────────────────────────────────────────

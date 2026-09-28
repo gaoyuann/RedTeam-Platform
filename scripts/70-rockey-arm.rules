@@ -1,0 +1,4 @@
+# Feitian ROCKEY ARM (USB vendor 096e) access for desktop users.
+# The vendor Linux SDK opens the USB device node directly and also uses hidraw.
+SUBSYSTEM=="usb", ATTR{idVendor}=="096e", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="hidraw", KERNEL=="hidraw*", ATTRS{idVendor}=="096e", MODE="0660", GROUP="plugdev", TAG+="uaccess"

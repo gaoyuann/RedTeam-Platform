@@ -28,6 +28,10 @@ public slots:
   void onRunStarted(const QJsonObject &data);
   void onRunStepComplete(const QJsonObject &data);
   void onRunCompleted(const QJsonObject &data);
+  // Pipeline events
+  void onPipelineCreated(const QJsonObject &data);
+  void onPipelineStatus(const QJsonObject &data);
+  void onPipelineStep(const QJsonObject &data);
   void onToggleCollapse();
 
 private:

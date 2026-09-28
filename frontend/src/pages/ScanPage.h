@@ -17,6 +17,9 @@ class ScanPage : public QWidget {
 public:
   explicit ScanPage(ApiClient *api, const QString &role = "", const QString &username = "", QWidget *parent = nullptr);
 
+  /// Pre-fill all 4 target inputs (used when embedded in FlowPage workbench)
+  void setTarget(const QString &target);
+
 signals:
   void playbookNavigateRequested(const QString &playbookId, const QString &target = "");
 

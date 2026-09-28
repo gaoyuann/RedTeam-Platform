@@ -186,6 +186,78 @@ void LiveActivityPanel::onRunCompleted(const QJsonObject &data)
   }
 }
 
+// ── Pipeline events ────────────────────────────────────────────────────
+
+void LiveActivityPanel::onPipelineCreated(const QJsonObject &data)
+{
+  QString user = formatUser(data);
+  QString target = data["target"].toString();
+  addEvent("📋",
+    QString("%1 任务创建 → %2").arg(user, target),
+    "#2563eb");
+}
+
+void LiveActivityPanel::onPipelineStatus(const QJsonObject &data)
+{
+  QString status = data["status"].toString();
+  QString id = data["pipeline_id"].toString();
+  id = id.left(16);
+
+  if (status == "awaiting_approval") {
+    addEvent("⏸",
+      QString("任务 %1... 待人工确认").arg(id),
+      "#8b5cf6");
+  } else if (status == "running") {
+    addEvent("▶️",
+      QString("任务 %1... 恢复执行").arg(id),
+      "#2563eb");
+  } else if (status == "completed") {
+    addEvent("✅",
+      QString("任务 %1... 全部完成").arg(id),
+      "#22c55e");
+  } else if (status == "failed") {
+    addEvent("❌",
+      QString("任务 %1... 失败").arg(id),
+      "#ef4444");
+  } else if (status == "cancelled") {
+    addEvent("⊘",
+      QString("任务 %1... 已取消").arg(id),
+      "#94a3b8");
+  }
+}
+
+void LiveActivityPanel::onPipelineStep(const QJsonObject &data)
+{
+  QString stepType = data["step_type"].toString();
+  QString status = data["status"].toString();
+  QString id = data["pipeline_id"].toString();
+  id = id.left(16);
+
+  static const QHash<QString, QString> stepIcons = {
+    {"scan", "🔍"}, {"analyze", "🧠"}, {"generate", "📋"}, {"execute", "⚡"},
+  };
+  static const QHash<QString, QString> stepNames = {
+    {"scan", "扫描"}, {"analyze", "分析"}, {"generate", "生成"}, {"execute", "执行"},
+  };
+
+  QString icon = stepIcons.value(stepType, "•");
+  QString name = stepNames.value(stepType, stepType);
+
+  if (status == "completed") {
+    addEvent(icon,
+      QString("任务 %1... %2 完成").arg(id, name),
+      "#22c55e");
+  } else if (status == "running") {
+    addEvent(icon,
+      QString("任务 %1... %2 进行中").arg(id, name),
+      "#2563eb");
+  } else if (status == "failed") {
+    addEvent("⚠️",
+      QString("任务 %1... %2 失败").arg(id, name),
+      "#ef4444");
+  }
+}
+
 // ── Private helpers ────────────────────────────────────────────────────
 
 void LiveActivityPanel::addEvent(const QString &icon, const QString &text, const QString &color)
@@ -214,7 +286,9 @@ QString LiveActivityPanel::formatUser(const QJsonObject &data) const
 {
   QString username = data["username"].toString();
   QString userId = data["userId"].toString();
+  QString user = data["user"].toString();
   if (!username.isEmpty()) return QStringLiteral("[%1]").arg(username);
+  if (!user.isEmpty()) return QStringLiteral("[%1]").arg(user);
   if (!userId.isEmpty()) return QStringLiteral("[%1]").arg(userId.left(8));
   return QStringLiteral("[系统]");
 }

@@ -21,6 +21,16 @@ class EvaluatePage : public QWidget {
 public:
   explicit EvaluatePage(ApiClient *api, const QString &role = "", const QString &username = "", QWidget *parent = nullptr);
 
+  /// Set the target context (EvaluatePage works by run_id, so this is a no-op for now)
+  void setTarget(const QString &target);
+
+  /// Load a specific run by ID, trigger grading, and switch to the grade tab.
+  /// Used by FlowPage workbench when a pipeline completes.
+  void showRun(const QString &runId);
+
+  /// Switch to the reports sub-tab and refresh the report list.
+  void showReports();
+
 private slots:
   void onLoadRuns();
   void onGradeRun();

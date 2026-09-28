@@ -1,6 +1,7 @@
 import { getDb } from '../db/connection.js';
 import { runTool } from '../tools/toolRunner.js';
 import { reactDecide, isReactEngine, determineEngineType } from './reactEngine.js';
+import { buildAppContextForStep } from './knowledgeEnricher.js';
 import { validateInsertion, recordBlock, getTelemetry } from './reactRuntimeGuard.js';
 import { applyBlueTeamPreExec, applyBlueTeamPostProcess } from './interventionGuards.js';
 import { extractEvidence, evalAllRules } from './rulesEngine.js';
@@ -240,11 +241,13 @@ export async function executeRun(runId) {
   // B5.3: Inject pipeline analysis results into ReAct initial evidence
   // When a run originates from a pipeline, plan_data may contain _pipeline_analysis
   // which provides scan analysis context so ReAct doesn't start "blind"
-  if (engineType === 'react' && run.plan_data) {
+  let pipelineAnalysis = null;
+  if (run.plan_data) {
     try {
       const planData = typeof run.plan_data === 'string' ? JSON.parse(run.plan_data) : run.plan_data;
       if (planData._pipeline_analysis) {
         const analysis = planData._pipeline_analysis;
+        pipelineAnalysis = analysis;  // Store for ReAct appContext enrichment
         const summaryParts = [];
         if (analysis.tech_stack?.length) summaryParts.push(`Tech stack: ${analysis.tech_stack.join(', ')}`);
         if (analysis.attack_surface?.length) {
@@ -348,6 +351,7 @@ export async function executeRun(runId) {
         step.payload_data ? { id: step.payload_data.id, name: step.payload_data.name } : null);
 
       // ── Detect candidate tool-to-technique mappings ──────────────────
+      let detectedTechniques = [];
       if (result.success) {
         try {
           const { candidates } = detectMappings({ toolId: step.tool_id, stdout: result.stdout, success: true });
@@ -361,6 +365,12 @@ export async function executeRun(runId) {
               }
             });
             mappingInsert(candidates);
+            // Capture detected technique IDs for ReAct prompt enrichment
+            detectedTechniques = candidates.map(c => ({
+              techniqueId: c.techniqueId,
+              confidence: c.confidence,
+              signal: c.signal,
+            }));
           }
         } catch (e) {
           console.warn(`[executionEngine] Mapping detection failed: ${e.message}`);
@@ -385,23 +395,23 @@ export async function executeRun(runId) {
         completedSteps++;
       } else {
         failedSteps++;
-        // Track failed tool counts for ReAct blacklist
-        if (engineType === 'react') {
-          const existing = failedToolCounts.find(f => f.toolId === step.tool_id);
-          if (existing) { existing.count++; } else { failedToolCounts.push({ toolId: step.tool_id, count: 1 }); }
-        }
-        // In mechanical mode, non-optional step failure aborts immediately.
-        // In react mode, we let ReAct analyze the failure and decide
-        // (continue / adjust / insert / stop) — don't preempt the AI.
-        if (!step.optional && engineType !== 'react') {
+        // Track failed tool counts for ReAct blacklist (always track —
+        // even without LLM, the blacklist is useful for reporting)
+        const existing = failedToolCounts.find(f => f.toolId === step.tool_id);
+        if (existing) { existing.count++; } else { failedToolCounts.push({ toolId: step.tool_id, count: 1 }); }
+        // In mechanical mode (no LLM), abort on non-optional step failures.
+        // In ReAct mode, let the LLM decide whether to continue or stop.
+        if (engineType === 'mechanical' && !step.optional) {
           aborted = true;
+          stopReason = `非可选步骤失败: ${step.tool_id}`;
+          console.log(`[executionEngine] Mechanical mode: aborting due to non-optional step failure (${step.tool_id})`);
         }
       }
 
       // ── WebSocket broadcast: step completed ──────────────────────────
       const ws = getWsManager();
+      const runInfo = ws ? db.prepare('SELECT user_sub FROM execution_runs WHERE run_id = ?').get(runId) : null;
       if (ws) {
-        const runInfo = db.prepare('SELECT user_sub FROM execution_runs WHERE run_id = ?').get(runId);
         ws.broadcast('run:step', {
           run_id: runId,
           step_index: step.step_index,
@@ -418,10 +428,11 @@ export async function executeRun(runId) {
       }
 
       // ── ReAct: LLM-in-the-loop analysis ────────────────────────────
-      // Run on EVERY step (including failed ones and the last step) so
-      // the AI can analyze results and decide next action. The only
-      // exception is when a prior ReAct call already decided to stop.
-      if (engineType === 'react' && !aborted) {
+      // Only run when LLM is available (engineType === 'react').
+      // In mechanical mode, the abort logic above already handles failures
+      // (non-optional → abort, optional → continue), so ReAct is unnecessary
+      // and would waste time building prompts just to get a 'continue' fallback.
+      if (!aborted && engineType === 'react') {
         // Accumulate evidence
         evidenceHistory.push({
           stepIndex: step.step_index,
@@ -450,6 +461,16 @@ export async function executeRun(runId) {
           ruleMatchContext = `本次步骤触发了 ${matchLines.length} 条规则匹配：\n${matchLines.join('\n')}`;
         }
 
+        // Build app context from pipeline analysis (OWASP + tech stack)
+        let appContext = '';
+        if (pipelineAnalysis) {
+          try {
+            appContext = buildAppContextForStep(step.tool_id, pipelineAnalysis);
+          } catch (e) {
+            console.warn('[executionEngine] buildAppContextForStep failed:', e.message);
+          }
+        }
+
         // Call ReAct engine
         const decision = await reactDecide({
           runId,
@@ -468,6 +489,8 @@ export async function executeRun(runId) {
           failedToolCounts,
           totalSteps: mutableSteps.length,
           completedSteps,
+          detectedTechniques,
+          appContext,
         });
 
         reactCallCount++;
@@ -481,6 +504,26 @@ export async function executeRun(runId) {
           thought: decision.thought,
           action: decision.action,
         });
+
+        // ── WebSocket broadcast: ReAct reasoning (real-time) ──────────
+        // Push the AI's thought + action to the frontend so the user can
+        // see the reasoning chain as it happens, not just after completion.
+        if (ws) {
+          ws.broadcast('run:react', {
+            run_id: runId,
+            step_index: step.step_index,
+            tool_id: step.tool_id,
+            thought: decision.thought,
+            action: decision.action,
+            reason: decision.reason || null,
+            react_call_count: reactCallCount,
+            completed_steps: completedSteps,
+            failed_steps: failedSteps,
+            total_steps: mutableSteps.length,
+            userId: runInfo?.user_sub || null,
+            username: runInfo?.user_sub || null,
+          });
+        }
 
         // Handle action
         switch (decision.action) {
@@ -637,24 +680,18 @@ export async function executeRun(runId) {
       });
     }
 
-    // Persist ReAct state
-    if (engineType === 'react') {
-      db.prepare(`
-        UPDATE execution_runs SET status = ?, final_summary = ?, stop_reason = ?,
-          evidence_history = ?, react_thoughts = ?, updated_at = datetime('now')
-        WHERE run_id = ?
-      `).run(
-        finalStatus, summary, stopReason,
-        JSON.stringify(evidenceHistory),
-        JSON.stringify(reactThoughts),
-        runId
-      );
-    } else {
-      db.prepare(`
-        UPDATE execution_runs SET status = ?, final_summary = ?, updated_at = datetime('now')
-        WHERE run_id = ?
-      `).run(finalStatus, summary, runId);
-    }
+    // Persist ReAct state (always — evidence history and thoughts are
+    // valuable for reporting even in mechanical mode)
+    db.prepare(`
+      UPDATE execution_runs SET status = ?, final_summary = ?, stop_reason = ?,
+        evidence_history = ?, react_thoughts = ?, updated_at = datetime('now')
+      WHERE run_id = ?
+    `).run(
+      finalStatus, summary, stopReason,
+      JSON.stringify(evidenceHistory),
+      JSON.stringify(reactThoughts),
+      runId
+    );
 
     return { ok: true, runId, status: finalStatus, completed: completedSteps, failed: failedSteps, engineType, stopReason };
 
