@@ -126,15 +126,45 @@ void ExecutionPage::setupUI() {
   auto *rightLayout = new QVBoxLayout(rightInner);
   rightLayout->setContentsMargins(8, 8, 8, 8);
 
-  // Status
+  // Status + stop button row
+  auto *statusRow = new QHBoxLayout;
+  statusRow->setSpacing(8);
   m_statusLabel = new QLabel;
-  rightLayout->addWidget(m_statusLabel);
+  statusRow->addWidget(m_statusLabel, 1);
+
+  m_stopBtn = new QPushButton(QStringLiteral("🛑 停止执行"));
+  m_stopBtn->setFixedSize(110, 32);
+  m_stopBtn->setCursor(Qt::PointingHandCursor);
+  m_stopBtn->setStyleSheet(
+    "QPushButton { background: #ef4444; color: #ffffff; border: none; "
+    "border-radius: 6px; font-size: 12px; font-weight: bold; }"
+    "QPushButton:hover { background: #dc2626; }"
+    "QPushButton:pressed { background: #b91c1c; }"
+    "QPushButton:disabled { background: #fca5a5; color: #fef2f2; }");
+  m_stopBtn->setEnabled(false);  // disabled until a running run is loaded
+  statusRow->addWidget(m_stopBtn);
+  rightLayout->addLayout(statusRow);
+
+  connect(m_stopBtn, &QPushButton::clicked, this, [this]() {
+    if (m_runningRunId.isEmpty()) return;
+    m_stopBtn->setEnabled(false);
+    m_stopBtn->setText("停止中...");
+    m_api->post("/api/runs/" + m_runningRunId + "/abort", {}, 5000,
+      [this](const QJsonObject &res) {
+        if (res["status"].toString() == "ok") {
+          m_stopBtn->setText(QStringLiteral("🛑 已中止"));
+        } else {
+          m_stopBtn->setEnabled(true);
+          m_stopBtn->setText(QStringLiteral("🛑 停止执行"));
+        }
+      });
+  });
 
   // Step table
   auto *stepLabel = new QLabel("步骤执行详情"); stepLabel->setStyleSheet(Theme::SectionStyle);
   rightLayout->addWidget(stepLabel);
-  m_stepTable = new QTableWidget(0, 7);
-  m_stepTable->setHorizontalHeaderLabels({"步骤", "工具", "参数", "成功", "输出摘要", "载荷", "推理"});
+  m_stepTable = new QTableWidget(0, 8);
+  m_stepTable->setHorizontalHeaderLabels({"步骤", "工具", "参数", "成功", "来源", "输出摘要", "载荷", "推理"});
   m_stepTable->setAlternatingRowColors(true);
   m_stepTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_stepTable->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -143,9 +173,10 @@ void ExecutionPage::setupUI() {
   m_stepTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
   m_stepTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
   m_stepTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
-  m_stepTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
-  m_stepTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
+  m_stepTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+  m_stepTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
   m_stepTable->horizontalHeader()->setSectionResizeMode(6, QHeaderView::ResizeToContents);
+  m_stepTable->horizontalHeader()->setSectionResizeMode(7, QHeaderView::ResizeToContents);
   rightLayout->addWidget(m_stepTable, 1);
 
   // Evidence
@@ -460,7 +491,14 @@ void ExecutionPage::onRunReact(const QJsonObject &data) {
   // Observation = tool_id + step info
   QString observation = QStringLiteral("Step %1 [%2]").arg(stepIdx).arg(data["tool_id"].toString());
 
-  m_cortexPanel->addReactThought(observation, thought, actionLabel);
+  // Determine if this step was dynamically inserted by ReAct
+  bool isDynamic = (m_lastReactAction == QStringLiteral("insert") ||
+                    m_lastReactAction == QStringLiteral("parallel") ||
+                    m_lastReactAction == QStringLiteral("pivot"));
+
+  m_cortexPanel->addReactThought(observation, thought, actionLabel, {},
+                                  stepIdx, data["tool_id"].toString(), isDynamic);
+  m_lastReactAction = actionStr;
 }
 
 // ── Run clicked: load steps + evidence ──────────────────────────────
@@ -479,6 +517,7 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
     m_cortexPanel->clearMessages();
     m_injectedReactSteps.clear();
     m_injectedPayloadSteps.clear();
+    m_lastReactAction.clear();
     m_loadedRunId = runId;
   }
 
@@ -524,13 +563,14 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
       evidenceByStep.insert(stepIdx, e);
     }
 
-    // ── Steps (7 columns: 步骤/工具/参数/成功/输出摘要/载荷/推理) ──
+    // ── Steps (8 columns: 步骤/工具/参数/成功/来源/输出摘要/载荷/推理) ──
     auto steps = d["steps"].toArray();
     m_stepTable->setRowCount(steps.size());
     bool hasReactThoughts = false;
     bool hasPayloadBindings = false;
     QStringList reactLines;
     QStringList payloadLines;
+    QString prevActionType;  // track previous step's react_action to detect dynamic inserts
 
     for (int i = 0; i < steps.size(); i++) {
       auto s = steps[i].toObject();
@@ -539,9 +579,23 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
       m_stepTable->setItem(i, 1, new QTableWidgetItem(s["tool_id"].toString()));
       m_stepTable->setItem(i, 2, new QTableWidgetItem(s["args"].toString().left(200)));
       m_stepTable->setItem(i, 3, new QTableWidgetItem(s["success"].toInt() ? "✓ 成功" : "✗ 失败"));
-      m_stepTable->setItem(i, 4, new QTableWidgetItem(s["notes"].toString().left(500)));
 
-      // Column 5: Payload — extract from evidence_data JSON, or show tool+args as fallback
+      // Column 4: 来源 — mark dynamic steps inserted by ReAct
+      bool isDynamic = (prevActionType == QStringLiteral("insert") ||
+                        prevActionType == QStringLiteral("parallel") ||
+                        prevActionType == QStringLiteral("pivot"));
+      auto *sourceItem = new QTableWidgetItem(isDynamic ? QStringLiteral("AI 插入") : QStringLiteral("预案"));
+      if (isDynamic) {
+        sourceItem->setForeground(QColor("#7c3aed"));
+        QFont f = sourceItem->font(); f.setBold(true); sourceItem->setFont(f);
+      } else {
+        sourceItem->setForeground(QColor("#64748b"));
+      }
+      m_stepTable->setItem(i, 4, sourceItem);
+
+      m_stepTable->setItem(i, 5, new QTableWidgetItem(s["notes"].toString().left(500)));
+
+      // Column 6: Payload — extract from evidence_data JSON, or show tool+args as fallback
       QString payloadDisplay = "-";
       if (evidenceByStep.contains(stepIdx)) {
         auto evObj = evidenceByStep.value(stepIdx);
@@ -590,13 +644,13 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
               .arg(stepIdx).arg(toolId).arg(toolId).arg(argsStr.left(80));
         }
       }
-      m_stepTable->setItem(i, 5, new QTableWidgetItem(payloadDisplay));
+      m_stepTable->setItem(i, 6, new QTableWidgetItem(payloadDisplay));
 
-      // Column 6: ReAct thought summary, or step description as fallback
+      // Column 7: ReAct thought summary, or step description as fallback
       QString thought = s["react_thought"].toString();
       if (!thought.isEmpty()) {
         hasReactThoughts = true;
-        m_stepTable->setItem(i, 6, new QTableWidgetItem(thought.left(100) + (thought.length() > 100 ? "..." : "")));
+        m_stepTable->setItem(i, 7, new QTableWidgetItem(thought.left(100) + (thought.length() > 100 ? "..." : "")));
         // Build detailed ReAct view
         reactLines << QString("━━ 步骤 %1 [%2] ━━").arg(stepIdx).arg(s["tool_id"].toString());
         reactLines << "  💭 思考: " + thought;
@@ -611,13 +665,26 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
         if (stepDesc.isEmpty()) stepDesc = s["notes"].toString().left(100);
         if (!stepDesc.isEmpty()) {
           hasReactThoughts = true;
-          m_stepTable->setItem(i, 6, new QTableWidgetItem(stepDesc.left(100) + (stepDesc.length() > 100 ? "..." : "")));
+          m_stepTable->setItem(i, 7, new QTableWidgetItem(stepDesc.left(100) + (stepDesc.length() > 100 ? "..." : "")));
           reactLines << QString("━━ 步骤 %1 [%2] ━━").arg(stepIdx).arg(s["tool_id"].toString());
           reactLines << "  📋 " + stepDesc.left(300);
           reactLines << "";
         } else {
-          m_stepTable->setItem(i, 6, new QTableWidgetItem("-"));
+          m_stepTable->setItem(i, 7, new QTableWidgetItem("-"));
         }
+      }
+
+      // Track this step's action type for next iteration's dynamic detection
+      QString actionJson = s["react_action"].toString();
+      if (!actionJson.isEmpty()) {
+        QJsonDocument actDoc = QJsonDocument::fromJson(actionJson.toUtf8());
+        if (actDoc.isObject()) {
+          prevActionType = actDoc.object()["type"].toString();
+        } else {
+          prevActionType.clear();
+        }
+      } else {
+        prevActionType.clear();
       }
     }
     m_stepTable->resizeColumnsToContents();
@@ -651,21 +718,44 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
     }
 
     // ── Cortex panel: ReAct thoughts + Payload cards ──────────────────
-    // Update engine info in Cortex header
+    // Update engine info and status in Cortex header
     m_cortexPanel->setEngineInfo(engineType.isEmpty() ? QStringLiteral("mechanical") : engineType);
+    m_cortexPanel->setStatus(statusVal);
+    // Stop button: always visible, but only enabled for active runs
+    {
+      bool canStop = (statusVal == "RUNNING" || statusVal == "PENDING");
+      m_stopBtn->setEnabled(canStop);
+      if (canStop)
+        m_stopBtn->setText(QStringLiteral("🛑 停止执行"));
+      else if (statusVal == "ABORTED")
+        m_stopBtn->setText(QStringLiteral("🛑 已中止"));
+      else if (statusVal == "COMPLETED")
+        m_stopBtn->setText(QStringLiteral("✓ 已完成"));
+      else if (statusVal == "FAILED")
+        m_stopBtn->setText(QStringLiteral("✗ 已失败"));
+      else
+        m_stopBtn->setText(QStringLiteral("🛑 停止执行"));
+    }
 
     // Inject ReAct thoughts as structured cards (only new ones)
+    QString cortexPrevAction;  // track for dynamic step detection
     for (int i = 0; i < steps.size(); i++) {
       auto s = steps[i].toObject();
       int stepIdx = s["step_index"].toInt();
       QString thought = s["react_thought"].toString();
-      if (thought.isEmpty()) continue;
+      if (thought.isEmpty()) {
+        // Still track action for dynamic detection even if no thought
+        QString aj = s["react_action"].toString();
+        if (!aj.isEmpty()) {
+          QJsonDocument ad = QJsonDocument::fromJson(aj.toUtf8());
+          if (ad.isObject()) cortexPrevAction = ad.object()["type"].toString();
+        }
+        continue;
+      }
 
       QString stepKey = QStringLiteral("react_%1").arg(stepIdx);
-      if (m_injectedReactSteps.contains(stepKey)) continue;
-      m_injectedReactSteps.insert(stepKey);
 
-      // Parse action
+      // Parse action (needed for both dynamic detection and display)
       QString actionStr;
       QString actionJson = s["react_action"].toString();
       if (!actionJson.isEmpty()) {
@@ -675,6 +765,13 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
         }
       }
       if (actionStr.isEmpty()) actionStr = QStringLiteral("continue");
+
+      // Skip if already injected, but still update cortexPrevAction for dynamic detection
+      if (m_injectedReactSteps.contains(stepKey)) {
+        cortexPrevAction = actionStr;
+        continue;
+      }
+      m_injectedReactSteps.insert(stepKey);
 
       // Map action to Chinese label
       QString actionLabel;
@@ -687,7 +784,14 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
       // Extract observation from step notes (first line of output)
       QString observation = s["notes"].toString().left(200);
 
-      m_cortexPanel->addReactThought(observation, thought, actionLabel);
+      // Determine if this step was dynamically inserted
+      bool isDynamic = (cortexPrevAction == QStringLiteral("insert") ||
+                        cortexPrevAction == QStringLiteral("parallel") ||
+                        cortexPrevAction == QStringLiteral("pivot"));
+
+      m_cortexPanel->addReactThought(observation, thought, actionLabel, {},
+                                      stepIdx, s["tool_id"].toString(), isDynamic);
+      cortexPrevAction = actionStr;
     }
 
     // Inject payload cards (only new ones, fetch details from API)
@@ -711,7 +815,7 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
 
       // Fetch payload details and inject as card
       m_api->get("/api/payloads/" + pId, 5000,
-        [this, pId, runId](const QJsonObject &pRes) {
+        [this, pId, runId, stepIdx](const QJsonObject &pRes) {
           if (runId != m_loadedRunId || pRes["status"].toString() != "ok") return;
           auto pData = pRes["data"].toObject();
           auto payloadData = pData["payload_data"].toObject();
@@ -756,7 +860,7 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
             contextLines << QStringLiteral("【OPSEC建议】\n") + opsecLines.join("\n");
           }
 
-          m_cortexPanel->addPayloadCard(name, contextLines.join("\n\n"));
+          m_cortexPanel->addPayloadCard(name, contextLines.join("\n\n"), {}, stepIdx);
         });
     }
   });
@@ -777,6 +881,23 @@ void ExecutionPage::onPollRunning() {
 
     // Full reload of run details to keep step table, evidence, etc. in sync
     loadRunDetails(runId);
+
+    // Update Cortex status dot in real-time
+    m_cortexPanel->setStatus(status);
+
+    // Stop button: always visible, enabled only for active runs
+    {
+      bool canStop = (status == "RUNNING" || status == "PENDING");
+      m_stopBtn->setEnabled(canStop);
+      if (canStop)
+        m_stopBtn->setText(QStringLiteral("🛑 停止执行"));
+      else if (status == "ABORTED")
+        m_stopBtn->setText(QStringLiteral("🛑 已中止"));
+      else if (status == "COMPLETED")
+        m_stopBtn->setText(QStringLiteral("✓ 已完成"));
+      else if (status == "FAILED")
+        m_stopBtn->setText(QStringLiteral("✗ 已失败"));
+    }
 
     // Update status label with progress
     auto steps = d["steps"].toArray();

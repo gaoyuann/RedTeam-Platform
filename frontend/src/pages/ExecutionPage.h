@@ -55,6 +55,7 @@ private:
   QTableWidget *m_runTable;
   QTableWidget *m_stepTable;
   QLabel *m_statusLabel;
+  QPushButton *m_stopBtn;
 
   // Attack category filter
   QRadioButton *m_catAll;
@@ -72,6 +73,7 @@ private:
   CortexPanel *m_cortexPanel;
   QSet<QString> m_injectedPayloadSteps;  // track which steps already injected payload cards
   QSet<QString> m_injectedReactSteps;    // track which steps already injected react thoughts
+  QString m_lastReactAction;             // track previous step's react action for dynamic detection
 
   // Real-time polling for running executions
   QString m_runningRunId;       // currently running run (auto-highlighted)

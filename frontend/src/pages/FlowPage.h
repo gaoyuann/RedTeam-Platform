@@ -13,8 +13,6 @@ class ApiClient;
 class LiveActivityPanel;
 class QAction;
 class QTabWidget;
-class QSplitter;
-class QTextBrowser;
 class TopologyPage;
 class ScanPage;
 class ExecutionPage;
@@ -45,9 +43,6 @@ public:
   /// jump straight to the attack tab with a playbook pre-selected.
   /// Used when PlaybookPage::executeRequested fires.
   void jumpToExecution(const QString &playbookId, const QString &target);
-
-  /// Append an AI ReAct thought to the reasoning panel (wired from runReact WS event)
-  void appendThought(const QString &text);
 
 public slots:
   void refreshFlows();
@@ -111,8 +106,6 @@ private:
 
   // Stage tabs (拓扑/扫描/攻击/评估) embedded in the workbench
   QTabWidget *m_stageTabs;
-  QSplitter *m_contentSplitter;       // left-right splitter: AI reasoning | stage tabs
-  QTextBrowser *m_reasoningPanel;     // left-column AI reasoning stream
   TopologyPage *m_topoTab;
   ScanPage *m_scanTab;
   ExecutionPage *m_execTab;
