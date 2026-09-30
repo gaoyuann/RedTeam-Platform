@@ -114,4 +114,5 @@ private:
   // Polling
   QTimer *m_pollTimer;
   QStringList m_runningTaskIds;   // track all RUNNING task IDs for polling
+  int m_pollErrorCount = 0;       // consecutive poll failures (stop after threshold)
 };

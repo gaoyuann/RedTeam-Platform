@@ -7,7 +7,6 @@
 #include <QPushButton>
 #include <QRadioButton>
 #include <QButtonGroup>
-#include <QTextEdit>
 #include <QTimer>
 #include <QJsonArray>
 #include <QTabWidget>
@@ -46,6 +45,7 @@ private:
   void loadPlaybooks();
   void loadPlaybooksByGroup(const QStringList &groups);
   void loadRunDetails(const QString &runId);
+  void showCellDetail(const QString &title, const QString &content);
 
   ApiClient *m_api;
   QTabWidget *m_tabWidget;
@@ -67,7 +67,6 @@ private:
   // Evidence display
   QLabel *m_evidenceLabel;
   QTableWidget *m_evidenceTable;
-  QTextEdit *m_evidenceDetail;
 
   // Cortex decision panel (replaces m_reactPanel + m_payloadPanel)
   CortexPanel *m_cortexPanel;
@@ -80,6 +79,7 @@ private:
   QString m_runningPlaybookId;  // playbook of the running run
   QString m_loadedRunId;        // run currently rendered in the detail tab
   QTimer *m_pollTimer;          // polls every 2s while a run is RUNNING
+  int m_pollErrorCount = 0;     // consecutive poll failures (stop after threshold)
 
   // Cached playbook data
   QJsonArray m_allPlaybooks;

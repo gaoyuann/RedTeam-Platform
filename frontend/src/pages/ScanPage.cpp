@@ -1407,7 +1407,15 @@ void ScanPage::onPollStatus() {
   }
 
   m_api->get("/api/scan-tasks", 5000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
+    if (res["status"].toString() != "ok") {
+      // API error — tolerate transient failures, then stop polling to avoid spin
+      if (++m_pollErrorCount >= 10) {
+        m_pollTimer->stop();
+        m_runningTaskIds.clear();
+      }
+      return;
+    }
+    m_pollErrorCount = 0;
     auto arr = res["data"].toArray();
 
     QStringList stillRunning;

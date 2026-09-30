@@ -87,7 +87,7 @@ function countCategoryInserts(state, category, actionTypes = ['insert', 'paralle
 function countTotalInserts(state) {
   return (state.steps || []).filter(s => {
     const sid = s.step_id || s.id || '';
-    return sid.startsWith('react_insert_') || sid.startsWith('react_parallel_');
+    return sid.startsWith('react_insert_') || sid.startsWith('react_parallel_') || sid.startsWith('react_pivot_');
   }).length;
 }
 

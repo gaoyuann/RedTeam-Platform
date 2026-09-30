@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { matchPlaybooks } from '../services/playbookMatcher.js';
 import { generatePlaybook } from '../services/playbookGenerator.js';
-import { executeScan } from '../services/scanExecutor.js';
+import { executeScan, requestScanAbort } from '../services/scanExecutor.js';
 import { getWsManager } from '../services/wsManager.js';
 import { resolveTargetProfile } from '../services/targetProfileResolver.js';
 
@@ -144,6 +144,19 @@ export default function (db) {
       source_tool || null, new Date().toISOString()
     );
     res.status(201).json({ status: 'ok', data: { added: true } });
+  });
+
+  // ── Abort a running scan ─────────────────────────────────────────────
+  router.post('/:scanTaskId/abort', (req, res) => {
+    const task = db.prepare('SELECT status FROM scan_tasks WHERE scan_task_id = ?').get(req.params.scanTaskId);
+    if (!task) return res.status(404).json({ status: 'error', error: { message: 'Scan task not found' } });
+    if (task.status !== 'RUNNING' && task.status !== 'PENDING') {
+      return res.status(400).json({ status: 'error', error: { message: `Scan is ${task.status}, cannot abort` } });
+    }
+    requestScanAbort(req.params.scanTaskId);
+    db.prepare("UPDATE scan_tasks SET status = 'CANCELLED', error_message = '操作员手动中止' WHERE scan_task_id = ?")
+      .run(req.params.scanTaskId);
+    res.json({ status: 'ok', data: { aborted: true } });
   });
 
   return router;
