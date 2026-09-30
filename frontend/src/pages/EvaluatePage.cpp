@@ -600,9 +600,10 @@ void EvaluatePage::onDeleteReport() {
 
 void EvaluatePage::onExportReport() {
   if (m_selectedReportId.isEmpty()) return;
+  const QString reportId = m_selectedReportId;  // 快照：避免异步下载期间切换报告导致缓存错位
 
   QString format = m_formatCombo->currentText().toLower();
-  QString url = QString("/api/reports/%1/export?format=%2").arg(m_selectedReportId, format);
+  QString url = QString("/api/reports/%1/export?format=%2").arg(reportId, format);
 
   // Determine file filter and default extension
   QString filter;
@@ -618,14 +619,14 @@ void EvaluatePage::onExportReport() {
     defaultExt = ".html";
   }
 
-  QString defaultName = QString("report_%1%2").arg(m_selectedReportId, defaultExt);
+  QString defaultName = QString("report_%1%2").arg(reportId, defaultExt);
   QString savePath = QFileDialog::getSaveFileName(this, "保存报告", defaultName, filter);
   if (savePath.isEmpty()) return;
 
   m_exportBtn->setEnabled(false);
   m_exportBtn->setText("导出中...");
 
-  m_api->download(url, 30000, [this, savePath](bool ok, const QByteArray &data, const QString &) {
+  m_api->download(url, 30000, [this, savePath, format, reportId](bool ok, const QByteArray &data, const QString &) {
     m_exportBtn->setEnabled(true);
     m_exportBtn->setText("导出报告");
 
@@ -642,7 +643,12 @@ void EvaluatePage::onExportReport() {
     file.write(data);
     file.close();
 
-    m_lastExportPath = savePath;
+    // 仅当用户未在下载期间切换报告时才更新缓存，否则丢弃以免缓存指向错误的报告
+    if (m_selectedReportId == reportId) {
+      m_lastExportPath = savePath;
+      m_lastExportFormat = format;
+      m_lastExportReportId = reportId;
+    }
     QMessageBox::information(this, "导出成功", QString("报告已保存至：\n%1").arg(savePath));
   });
 }
@@ -651,22 +657,24 @@ void EvaluatePage::onExportReport() {
 
 void EvaluatePage::onOpenInWps() {
   if (m_selectedReportId.isEmpty()) return;
+  const QString reportId = m_selectedReportId;  // 快照：避免异步下载期间切换报告导致缓存错位
 
   // Use the format selected in the combo box
   QString format = m_formatCombo->currentText().toLower();
 
-  // Re-export if: no previous export, file deleted, or format changed
+  // Re-export if: no previous export, file deleted, format changed, or selected report changed
   bool needExport = m_lastExportPath.isEmpty()
     || !QFileInfo::exists(m_lastExportPath)
-    || m_lastExportFormat != format;
+    || m_lastExportFormat != format
+    || m_lastExportReportId != reportId;
 
   if (needExport) {
-    QString url = QString("/api/reports/%1/export?format=%2").arg(m_selectedReportId, format);
+    QString url = QString("/api/reports/%1/export?format=%2").arg(reportId, format);
 
     m_openWpsBtn->setEnabled(false);
     m_openWpsBtn->setText("导出中...");
 
-    m_api->download(url, 30000, [this, format](bool ok, const QByteArray &data, const QString &filename) {
+    m_api->download(url, 30000, [this, format, reportId](bool ok, const QByteArray &data, const QString &filename) {
       m_openWpsBtn->setEnabled(true);
       m_openWpsBtn->setText("在 WPS 中打开");
 
@@ -674,6 +682,9 @@ void EvaluatePage::onOpenInWps() {
         QMessageBox::warning(this, "导出失败", "无法下载报告文件。");
         return;
       }
+
+      // 下载期间用户切换了报告：不写缓存、不打开，交给当前选中报告的状态
+      if (m_selectedReportId != reportId) return;
 
       // Save to temp location (sanitize filename to prevent path traversal)
       QString tempDir = QDir::tempPath();
@@ -689,6 +700,7 @@ void EvaluatePage::onOpenInWps() {
       file.close();
       m_lastExportPath = savePath;
       m_lastExportFormat = format;
+      m_lastExportReportId = reportId;
 
       // Now open in WPS
       openFileInWps(savePath);
@@ -771,12 +783,16 @@ void EvaluatePage::onPreviewReport() {
   }
 
   if (m_selectedReportId.isEmpty()) return;
+  const QString reportId = m_selectedReportId;  // 快照：加载期间切换报告则丢弃过期结果
 
   m_previewBtn->setEnabled(false);
   m_previewBtn->setText("加载中...");
 
-  QString url = QString("/api/reports/%1/export?format=html").arg(m_selectedReportId);
-  m_api->download(url, 15000, [this](bool ok, const QByteArray &data, const QString &) {
+  QString url = QString("/api/reports/%1/export?format=html").arg(reportId);
+  m_api->download(url, 15000, [this, reportId](bool ok, const QByteArray &data, const QString &) {
+    // 用户在加载期间切换了报告，丢弃这次过期结果，不触碰 UI（由当前选中报告的决定生效）
+    if (m_selectedReportId != reportId) return;
+
     m_previewBtn->setEnabled(true);
 
     if (!ok || data.isEmpty()) {
