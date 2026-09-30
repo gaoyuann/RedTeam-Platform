@@ -2,50 +2,15 @@
 #include "Theme.h"
 #include "ApiClient.h"
 #include <QHBoxLayout>
-#include <QFormLayout>
 #include <QScrollBar>
 #include <QTimer>
 #include <QDateTime>
-#include <QRegularExpression>
+#include <QPushButton>
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 static QString nowTime() {
   return QTime::currentTime().toString(QStringLiteral("HH:mm:ss"));
-}
-
-static QLabel *makeAvatar(const QString &emoji, const QString &bgColor,
-                           const QString &borderColor, QWidget *parent = nullptr) {
-  auto *lbl = new QLabel(emoji, parent);
-  lbl->setFixedSize(32, 32);
-  lbl->setAlignment(Qt::AlignCenter);
-  lbl->setStyleSheet(
-    QStringLiteral("font-size: 16px; background: %1; border: 1px solid %2; border-radius: 8px;")
-      .arg(bgColor, borderColor));
-  return lbl;
-}
-
-static QLabel *makeTag(const QString &text, const QString &bgColor,
-                        const QString &textColor, QWidget *parent = nullptr) {
-  auto *lbl = new QLabel(text, parent);
-  lbl->setStyleSheet(
-    QStringLiteral("font-size: 10px; font-weight: bold; color: %2; "
-                   "background: %1; border-radius: 4px; padding: 2px 6px;")
-      .arg(bgColor, textColor));
-  return lbl;
-}
-
-static QTextEdit *makeBody(const QString &text, const QString &bgColor,
-                            const QString &borderColor, QWidget *parent = nullptr) {
-  auto *te = new QTextEdit(parent);
-  te->setReadOnly(true);
-  te->setPlainText(text);
-  te->setMaximumHeight(180);
-  te->setStyleSheet(
-    QStringLiteral("QTextEdit { background: %1; border: 1px solid %2; border-radius: 8px; "
-                   "padding: 8px; font-size: 12px; color: #334155; }")
-      .arg(bgColor, borderColor));
-  return te;
 }
 
 // ── Constructor ──────────────────────────────────────────────────────────
@@ -67,22 +32,22 @@ void CortexPanel::setupUI() {
   headerFrame->setStyleSheet(
     "QFrame { background: #ffffff; border-bottom: 1px solid #dbe5f0; }");
   auto *headerL = new QHBoxLayout(headerFrame);
-  headerL->setContentsMargins(12, 8, 12, 8);
+  headerL->setContentsMargins(12, 6, 12, 6);
 
-  auto *titleLbl = new QLabel(QStringLiteral("🧠 决策核心"));
-  titleLbl->setStyleSheet("font-size: 14px; font-weight: bold; color: #1a2a3a;");
+  auto *titleLbl = new QLabel(QStringLiteral("决策核心"));
+  titleLbl->setStyleSheet("font-size: 13px; font-weight: bold; color: #1a2a3a;");
   headerL->addWidget(titleLbl);
 
   headerL->addStretch();
 
-  m_engineLabel = new QLabel(QStringLiteral("引擎: 机械"));
+  m_engineLabel = new QLabel(QStringLiteral("引擎: 未配置"));
   m_engineLabel->setStyleSheet(
     "font-size: 10px; color: #64748b; background: #f1f5f9; "
     "border: 1px solid #e2e8f0; border-radius: 4px; padding: 2px 8px;");
   headerL->addWidget(m_engineLabel);
 
   m_statusDot = new QLabel(QStringLiteral("●"));
-  m_statusDot->setStyleSheet("font-size: 12px; color: #22c55e;");
+  m_statusDot->setStyleSheet("font-size: 12px; color: #94a3b8;");
   headerL->addWidget(m_statusDot);
 
   mainLayout->addWidget(headerFrame);
@@ -91,7 +56,7 @@ void CortexPanel::setupUI() {
   m_msgContainer = new QWidget;
   m_msgLayout = new QVBoxLayout(m_msgContainer);
   m_msgLayout->setContentsMargins(8, 8, 8, 8);
-  m_msgLayout->setSpacing(8);
+  m_msgLayout->setSpacing(6);
   m_msgLayout->addStretch();  // push messages up
 
   m_scrollArea = new QScrollArea;
@@ -100,70 +65,47 @@ void CortexPanel::setupUI() {
   m_scrollArea->setWidget(m_msgContainer);
   m_scrollArea->setStyleSheet("QScrollArea { background: #f8fafc; }");
   mainLayout->addWidget(m_scrollArea, 1);
-
-  // ── Input area ────────────────────────────────────────────────────────
-  auto *inputFrame = new QFrame;
-  inputFrame->setStyleSheet(
-    "QFrame { background: #ffffff; border-top: 1px solid #dbe5f0; }");
-  auto *inputL = new QHBoxLayout(inputFrame);
-  inputL->setContentsMargins(8, 6, 8, 6);
-
-  m_input = new QLineEdit;
-  m_input->setPlaceholderText(QStringLiteral("输入指令..."));
-  m_input->setStyleSheet(
-    "QLineEdit { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; "
-    "padding: 8px 12px; font-size: 12px; }"
-    "QLineEdit:focus { border: 1px solid #60a5fa; }");
-  inputL->addWidget(m_input, 1);
-
-  m_sendBtn = new QPushButton(QStringLiteral("发送"));
-  m_sendBtn->setProperty("primary", true);
-  m_sendBtn->setFixedWidth(64);
-  inputL->addWidget(m_sendBtn);
-
-  mainLayout->addWidget(inputFrame);
-
-  // ── Signals ───────────────────────────────────────────────────────────
-  connect(m_sendBtn, &QPushButton::clicked, this, [this]() {
-    QString text = m_input->text().trimmed();
-    if (text.isEmpty()) return;
-    addMessage(Role::User, text, nowTime());
-    emit userMessageSent(text);
-    m_input->clear();
-  });
-  connect(m_input, &QLineEdit::returnPressed, m_sendBtn, &QPushButton::click);
 }
 
 // ── Public API ───────────────────────────────────────────────────────────
 
-void CortexPanel::addMessage(Role role, const QString &text, const QString &timestamp) {
-  QString ts = timestamp.isEmpty() ? nowTime() : timestamp;
-
-  if (role == Role::ReactThought) {
-    // Fallback: unstructured react thought
-    auto *w = createReactWidget(QString(), text, QString(), ts);
-    m_msgLayout->insertWidget(m_msgLayout->count() - 1, w);
-  } else if (role == Role::Payload) {
-    auto *w = createPayloadWidget(QString(), text, ts);
-    m_msgLayout->insertWidget(m_msgLayout->count() - 1, w);
-  } else {
-    auto *w = createMessageWidget(role, text, ts);
-    m_msgLayout->insertWidget(m_msgLayout->count() - 1, w);
-  }
-  scrollToBottom();
-}
-
 void CortexPanel::addReactThought(const QString &observation, const QString &thought,
-                                    const QString &action, const QString &timestamp) {
+                                    const QString &action, const QString &timestamp,
+                                    int stepIndex, const QString &toolId, bool isDynamic) {
   QString ts = timestamp.isEmpty() ? nowTime() : timestamp;
+
+  // Insert step separator if this step hasn't been seen before
+  if (stepIndex >= 0 && !m_stepHeadersAdded.contains(stepIndex)) {
+    m_stepHeadersAdded.insert(stepIndex);
+    auto *sep = createStepSeparator(stepIndex, toolId, isDynamic);
+    m_msgLayout->insertWidget(m_msgLayout->count() - 1, sep);
+  }
+
   auto *w = createReactWidget(observation, thought, action, ts);
   m_msgLayout->insertWidget(m_msgLayout->count() - 1, w);
   scrollToBottom();
 }
 
 void CortexPanel::addPayloadCard(const QString &payloadName, const QString &payloadContext,
-                                   const QString &timestamp) {
+                                   const QString &timestamp, int stepIndex) {
   QString ts = timestamp.isEmpty() ? nowTime() : timestamp;
+
+  // Insert payload section separator before the first payload card
+  if (!m_payloadSectionAdded) {
+    m_payloadSectionAdded = true;
+    auto *sepFrame = new QFrame;
+    sepFrame->setStyleSheet(
+      "QFrame { background: #fffbeb; border: none; border-left: 3px solid #f59e0b; "
+      "border-radius: 0 4px 4px 0; }");
+    auto *sepL = new QHBoxLayout(sepFrame);
+    sepL->setContentsMargins(10, 4, 10, 4);
+    auto *sepLbl = new QLabel(QStringLiteral("⚡ 载荷知识"));
+    sepLbl->setStyleSheet("font-size: 11px; font-weight: bold; color: #92400e;");
+    sepL->addWidget(sepLbl);
+    sepL->addStretch();
+    m_msgLayout->insertWidget(m_msgLayout->count() - 1, sepFrame);
+  }
+
   auto *w = createPayloadWidget(payloadName, payloadContext, ts);
   m_msgLayout->insertWidget(m_msgLayout->count() - 1, w);
   scrollToBottom();
@@ -176,109 +118,96 @@ void CortexPanel::clearMessages() {
     if (item->widget()) item->widget()->deleteLater();
     delete item;
   }
-}
-
-void CortexPanel::setAutoMode(bool autoMode) {
-  m_autoMode = autoMode;
-  m_input->setEnabled(!autoMode);
-  m_sendBtn->setEnabled(!autoMode);
-  m_input->setPlaceholderText(autoMode
-    ? QStringLiteral("自动驾驶中，输入已锁定...")
-    : QStringLiteral("输入指令..."));
+  m_stepHeadersAdded.clear();
+  m_payloadSectionAdded = false;
 }
 
 void CortexPanel::setEngineInfo(const QString &engineType, const QString &modelName) {
-  QString engine = engineType.isEmpty() ? QStringLiteral("机械") : engineType;
-  if (engine == QStringLiteral("mechanical")) engine = QStringLiteral("固定流程");
-  else if (engine == QStringLiteral("react")) engine = QStringLiteral("推理决策");
-  else if (engine == QStringLiteral("ai")) engine = QStringLiteral("智能决策");
-  if (!modelName.isEmpty()) {
-    m_engineLabel->setText(QStringLiteral("引擎: %1 | %2").arg(engine, modelName));
+  QString engine = engineType.isEmpty() ? QStringLiteral("mechanical") : engineType;
+  QString label;
+  QString color = QStringLiteral("#64748b");  // gray default
+
+  if (engine == QStringLiteral("mechanical")) {
+    label = QStringLiteral("固定流程（未配置 LLM）");
+    color = QStringLiteral("#b45309");  // amber — indicates missing config
+  } else if (engine == QStringLiteral("react")) {
+    label = QStringLiteral("推理决策");
+    color = QStringLiteral("#166534");  // green — LLM active
+  } else if (engine == QStringLiteral("ai")) {
+    label = QStringLiteral("智能决策");
+    color = QStringLiteral("#166534");
   } else {
-    m_engineLabel->setText(QStringLiteral("引擎: %1").arg(engine));
+    label = engine;
   }
+
+  if (!modelName.isEmpty()) {
+    m_engineLabel->setText(QStringLiteral("引擎: %1 | %2").arg(label, modelName));
+  } else {
+    m_engineLabel->setText(QStringLiteral("引擎: %1").arg(label));
+  }
+  m_engineLabel->setStyleSheet(
+    QStringLiteral("font-size: 10px; color: %1; background: #f1f5f9; "
+                   "border: 1px solid #e2e8f0; border-radius: 4px; padding: 2px 8px;")
+      .arg(color));
 }
 
-// ── Message widget factories ─────────────────────────────────────────────
+void CortexPanel::setStatus(const QString &status) {
+  QString color;
+  QString s = status.toLower();
+  if (s == QStringLiteral("running") || s == QStringLiteral("执行中"))
+    color = QStringLiteral("#3b82f6");   // blue — active
+  else if (s == QStringLiteral("completed") || s == QStringLiteral("已完成"))
+    color = QStringLiteral("#22c55e");   // green — done
+  else if (s == QStringLiteral("failed") || s == QStringLiteral("失败"))
+    color = QStringLiteral("#ef4444");   // red — error
+  else if (s == QStringLiteral("aborted") || s == QStringLiteral("已中止"))
+    color = QStringLiteral("#f59e0b");   // amber — stopped
+  else
+    color = QStringLiteral("#94a3b8");   // gray — idle/pending
 
-QWidget *CortexPanel::createMessageWidget(Role role, const QString &text, const QString &timestamp) {
-  auto *w = new QWidget;
-  auto *h = new QHBoxLayout(w);
-  h->setContentsMargins(0, 0, 0, 0);
-  h->setSpacing(8);
+  m_statusDot->setStyleSheet(QStringLiteral("font-size: 12px; color: %1;").arg(color));
+}
 
-  if (role == Role::User) {
-    // Right-aligned
-    h->addStretch();
-    auto *col = new QVBoxLayout;
-    auto *meta = new QHBoxLayout;
-    meta->addWidget(makeTag(QStringLiteral("操作员"), QStringLiteral("#eff6ff"), QStringLiteral("#1d4ed8")));
-    auto *timeLbl = new QLabel(timestamp);
-    timeLbl->setStyleSheet("font-size: 9px; color: #94a3b8;");
-    meta->addWidget(timeLbl);
-    meta->addStretch();
-    col->addLayout(meta);
-    auto *body = makeBody(text, QStringLiteral("#eff6ff"), QStringLiteral("#bfdbfe"));
-    body->setAlignment(Qt::AlignRight);
-    col->addWidget(body);
-    h->addLayout(col);
-    auto *avatar = makeAvatar(QStringLiteral("👤"), QStringLiteral("#eff6ff"), QStringLiteral("#bfdbfe"));
-    h->addWidget(avatar);
-  } else {
-    // Model — left-aligned, try TTP rendering
-    auto *avatar = makeAvatar(QStringLiteral("🤖"), QStringLiteral("#f1f5f9"), QStringLiteral("#e2e8f0"));
-    h->addWidget(avatar);
-    auto *col = new QVBoxLayout;
-    auto *meta = new QHBoxLayout;
-    meta->addWidget(makeTag(QStringLiteral("智能系统"), QStringLiteral("#f1f5f9"), QStringLiteral("#475569")));
-    auto *timeLbl = new QLabel(timestamp);
-    timeLbl->setStyleSheet("font-size: 9px; color: #94a3b8;");
-    meta->addWidget(timeLbl);
-    meta->addStretch();
-    col->addLayout(meta);
+// ── Widget factories ─────────────────────────────────────────────────────
 
-    // Check if TTP format
-    if (text.contains(QStringLiteral("**战术**")) || text.contains(QStringLiteral("**技术**"))) {
-      col->addWidget(createTtpWidget(text, timestamp));
-    } else {
-      col->addWidget(makeBody(text, QStringLiteral("#ffffff"), QStringLiteral("#e2e8f0")));
-    }
-    h->addLayout(col);
-    h->addStretch();
+QWidget *CortexPanel::createStepSeparator(int stepIndex, const QString &toolId, bool isDynamic) {
+  auto *frame = new QFrame;
+  frame->setStyleSheet(
+    "QFrame { background: #f1f5f9; border: none; border-left: 3px solid #3b82f6; "
+    "border-radius: 0 4px 4px 0; }");
+  auto *l = new QHBoxLayout(frame);
+  l->setContentsMargins(10, 4, 10, 4);
+  l->setSpacing(6);
+
+  auto *lbl = new QLabel(QStringLiteral("步骤 %1: %2").arg(stepIndex).arg(toolId));
+  lbl->setStyleSheet("font-size: 11px; font-weight: bold; color: #1e40af;");
+  l->addWidget(lbl);
+
+  if (isDynamic) {
+    auto *dynTag = new QLabel(QStringLiteral("🔀 AI 动态插入"));
+    dynTag->setStyleSheet(
+      "font-size: 9px; font-weight: bold; color: #92400e; "
+      "background: #fffbeb; border: 1px solid #fcd34d; border-radius: 4px; padding: 1px 6px;");
+    l->addWidget(dynTag);
   }
 
-  return w;
+  l->addStretch();
+  return frame;
 }
 
 QWidget *CortexPanel::createReactWidget(const QString &observation, const QString &thought,
                                           const QString &action, const QString &timestamp) {
-  auto *w = new QWidget;
-  auto *h = new QHBoxLayout(w);
-  h->setContentsMargins(0, 0, 0, 0);
-  h->setSpacing(8);
-
-  auto *avatar = makeAvatar(QStringLiteral("🧠"), QStringLiteral("#eff6ff"), QStringLiteral("#bfdbfe"));
-  h->addWidget(avatar);
-
-  auto *col = new QVBoxLayout;
-  col->setSpacing(4);
-
-  // Meta line
-  auto *meta = new QHBoxLayout;
-  meta->addWidget(makeTag(QStringLiteral("ISST 思考"), QStringLiteral("#eff6ff"), QStringLiteral("#1d4ed8")));
-  auto *timeLbl = new QLabel(timestamp);
-  timeLbl->setStyleSheet("font-size: 9px; color: #94a3b8;");
-  meta->addWidget(timeLbl);
-  meta->addStretch();
-  col->addLayout(meta);
-
-  // Card frame
   auto *card = new QFrame;
   card->setStyleSheet(
-    "QFrame { background: #ffffff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 8px; }");
+    "QFrame { background: #ffffff; border: 1px solid #bfdbfe; border-radius: 8px; }");
   auto *cardL = new QVBoxLayout(card);
   cardL->setContentsMargins(10, 8, 10, 8);
   cardL->setSpacing(6);
+
+  // Timestamp
+  auto *timeLbl = new QLabel(timestamp);
+  timeLbl->setStyleSheet("font-size: 9px; color: #94a3b8;");
+  cardL->addWidget(timeLbl);
 
   // Observation — warning style
   if (!observation.isEmpty()) {
@@ -290,18 +219,10 @@ QWidget *CortexPanel::createReactWidget(const QString &observation, const QStrin
     cardL->addWidget(obsLbl);
   }
 
-  // Thought — info style
+  // Thought — info style, collapsible
   if (!thought.isEmpty()) {
-    auto *thoughtLbl = new QLabel(QStringLiteral("💭 分析: ") + thought);
-    thoughtLbl->setWordWrap(true);
-    thoughtLbl->setStyleSheet(
-      "font-size: 12px; color: #1e40af; background: #eff6ff; "
-      "border-left: 3px solid #3b82f6; padding: 4px 8px; border-radius: 0 4px 4px 0;");
-    // Limit display height for long thoughts
-    if (thought.length() > 200) {
-      thoughtLbl->setMaximumHeight(80);
-    }
-    cardL->addWidget(thoughtLbl);
+    QString key = QStringLiteral("thought_%1").arg(m_widgetCounter++);
+    cardL->addWidget(createCollapsibleText(thought, 150, key));
   }
 
   // Action — badge
@@ -334,40 +255,11 @@ QWidget *CortexPanel::createReactWidget(const QString &observation, const QStrin
     cardL->addWidget(actionLbl);
   }
 
-  col->addWidget(card);
-  h->addLayout(col);
-  h->addStretch();
-
-  return w;
+  return card;
 }
 
 QWidget *CortexPanel::createPayloadWidget(const QString &name, const QString &context,
                                             const QString &timestamp) {
-  auto *w = new QWidget;
-  auto *h = new QHBoxLayout(w);
-  h->setContentsMargins(0, 0, 0, 0);
-  h->setSpacing(8);
-
-  auto *avatar = makeAvatar(QStringLiteral("⚡"), QStringLiteral("#fffbeb"), QStringLiteral("#fcd34d"));
-  h->addWidget(avatar);
-
-  auto *col = new QVBoxLayout;
-  col->setSpacing(4);
-
-  // Meta line
-  auto *meta = new QHBoxLayout;
-  meta->addWidget(makeTag(QStringLiteral("载荷知识"), QStringLiteral("#fffbeb"), QStringLiteral("#b45309")));
-  if (!name.isEmpty()) {
-    auto *nameTag = makeTag(name, QStringLiteral("#fef3c7"), QStringLiteral("#92400e"));
-    meta->addWidget(nameTag);
-  }
-  auto *timeLbl = new QLabel(timestamp);
-  timeLbl->setStyleSheet("font-size: 9px; color: #94a3b8;");
-  meta->addWidget(timeLbl);
-  meta->addStretch();
-  col->addLayout(meta);
-
-  // Card — warning/amber style
   auto *card = new QFrame;
   card->setStyleSheet(
     "QFrame { background: #fffbeb; border: 1px solid #fcd34d; border-radius: 8px; }");
@@ -375,85 +267,82 @@ QWidget *CortexPanel::createPayloadWidget(const QString &name, const QString &co
   cardL->setContentsMargins(10, 8, 10, 8);
   cardL->setSpacing(4);
 
-  // Parse context into sections
+  // Header line: name + timestamp
+  auto *headerL = new QHBoxLayout;
+  if (!name.isEmpty()) {
+    auto *nameLbl = new QLabel(QStringLiteral("⚡ ") + name);
+    nameLbl->setStyleSheet("font-size: 12px; font-weight: bold; color: #92400e;");
+    headerL->addWidget(nameLbl);
+  }
+  auto *timeLbl = new QLabel(timestamp);
+  timeLbl->setStyleSheet("font-size: 9px; color: #b45309;");
+  headerL->addStretch();
+  headerL->addWidget(timeLbl);
+  cardL->addLayout(headerL);
+
+  // Context body — collapsible
   QString displayText = context;
   if (displayText.isEmpty() && !name.isEmpty()) {
     displayText = name;
   }
+  if (!displayText.isEmpty()) {
+    QString key = QStringLiteral("payload_%1").arg(m_widgetCounter++);
+    cardL->addWidget(createCollapsibleText(displayText, 200, key));
+  }
 
-  // Render structured sections if present
-  auto *body = new QTextEdit;
-  body->setReadOnly(true);
-  body->setPlainText(displayText);
-  body->setMaximumHeight(160);
-  body->setStyleSheet(
-    "QTextEdit { background: transparent; border: none; font-size: 11px; "
-    "color: #78350f; padding: 0; }");
-  cardL->addWidget(body);
-
-  col->addWidget(card);
-  h->addLayout(col);
-  h->addStretch();
-
-  return w;
+  return card;
 }
 
-QWidget *CortexPanel::createTtpWidget(const QString &text, const QString &/*timestamp*/) {
-  // Parse TTP format: **战术**: xxx, **技术**: xxx, **指令**: xxx, **分析**: xxx
+QWidget *CortexPanel::createCollapsibleText(const QString &text, int collapseThreshold, const QString &key) {
   auto *w = new QWidget;
   auto *l = new QVBoxLayout(w);
   l->setContentsMargins(0, 0, 0, 0);
-  l->setSpacing(4);
+  l->setSpacing(2);
 
-  const auto lines = text.split('\n');
-  for (const auto &line : lines) {
-    if (line.trimmed().isEmpty()) continue;
+  bool isLong = text.length() > collapseThreshold;
+  bool expanded = m_expandedTexts.contains(key);
 
-    if (line.contains(QStringLiteral("**战术**"))) {
-      auto *h = new QHBoxLayout;
-      h->addWidget(makeTag(QStringLiteral("战术"), QStringLiteral("#eff6ff"), QStringLiteral("#1d4ed8")));
-      QString content = line;
-      content.remove(QRegularExpression(QStringLiteral("\\*\\*战术\\*\\*[:：]?\\s*")));
-      auto *lbl = new QLabel(content.trimmed());
-      lbl->setStyleSheet("font-size: 12px; font-weight: bold; color: #1e40af;");
-      h->addWidget(lbl);
-      h->addStretch();
-      l->addLayout(h);
-    } else if (line.contains(QStringLiteral("**技术**"))) {
-      auto *h = new QHBoxLayout;
-      h->addWidget(makeTag(QStringLiteral("技术"), QStringLiteral("#faf5ff"), QStringLiteral("#7c3aed")));
-      QString content = line;
-      content.remove(QRegularExpression(QStringLiteral("\\*\\*技术\\*\\*[:：]?\\s*")));
-      auto *lbl = new QLabel(content.trimmed());
-      lbl->setStyleSheet("font-size: 12px; font-family: monospace; color: #6b21a8;");
-      h->addWidget(lbl);
-      h->addStretch();
-      l->addLayout(h);
-    } else if (line.contains(QStringLiteral("**指令**"))) {
-      QString content = line;
-      content.remove(QRegularExpression(QStringLiteral("\\*\\*指令\\*\\*[:：]?\\s*")));
-      auto *lbl = new QLabel(QStringLiteral("$ ") + content.trimmed());
-      lbl->setStyleSheet(
-        "font-size: 11px; font-family: monospace; color: #166534; "
-        "background: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; padding: 6px 10px;");
-      lbl->setWordWrap(true);
-      l->addWidget(lbl);
-    } else if (line.contains(QStringLiteral("**分析**"))) {
-      QString content = line;
-      content.remove(QRegularExpression(QStringLiteral("\\*\\*分析\\*\\*[:：]?\\s*")));
-      auto *lbl = new QLabel(content.trimmed());
-      lbl->setWordWrap(true);
-      lbl->setStyleSheet(
-        "font-size: 12px; color: #1e40af; background: #eff6ff; "
-        "border-left: 3px solid #3b82f6; padding: 4px 8px; border-radius: 0 4px 4px 0;");
-      l->addWidget(lbl);
-    } else {
-      auto *lbl = new QLabel(line);
-      lbl->setWordWrap(true);
-      lbl->setStyleSheet("font-size: 12px; color: #334155;");
-      l->addWidget(lbl);
-    }
+  if (!isLong) {
+    // Short text — plain label, no toggle
+    auto *lbl = new QLabel(text);
+    lbl->setWordWrap(true);
+    lbl->setStyleSheet(
+      "font-size: 12px; color: #1e40af; background: #eff6ff; "
+      "border-left: 3px solid #3b82f6; padding: 4px 8px; border-radius: 0 4px 4px 0;");
+    l->addWidget(lbl);
+    return w;
   }
+
+  // Long text — collapsible
+  QString displayText = expanded ? text : text.left(collapseThreshold) + QStringLiteral("...");
+
+  auto *lbl = new QLabel(displayText);
+  lbl->setWordWrap(true);
+  lbl->setStyleSheet(
+    "font-size: 12px; color: #1e40af; background: #eff6ff; "
+    "border-left: 3px solid #3b82f6; padding: 4px 8px; border-radius: 0 4px 4px 0;");
+  l->addWidget(lbl);
+
+  auto *toggleBtn = new QPushButton(expanded ? QStringLiteral("收起 ▴") : QStringLiteral("展开 ▾"));
+  toggleBtn->setStyleSheet(
+    "QPushButton { font-size: 10px; color: #3b82f6; background: transparent; "
+    "border: none; padding: 0; text-align: left; }"
+    "QPushButton:hover { color: #1d4ed8; text-decoration: underline; }");
+  l->addWidget(toggleBtn);
+
+  connect(toggleBtn, &QPushButton::clicked, this, [this, key, lbl, toggleBtn, text, collapseThreshold]() {
+    if (m_expandedTexts.contains(key)) {
+      // Collapse
+      m_expandedTexts.remove(key);
+      lbl->setText(text.left(collapseThreshold) + QStringLiteral("..."));
+      toggleBtn->setText(QStringLiteral("展开 ▾"));
+    } else {
+      // Expand
+      m_expandedTexts.insert(key);
+      lbl->setText(text);
+      toggleBtn->setText(QStringLiteral("收起 ▴"));
+    }
+  });
 
   return w;
 }

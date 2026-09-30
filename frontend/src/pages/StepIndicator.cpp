@@ -136,31 +136,30 @@ void StepIndicator::paintEvent(QPaintEvent * /*event*/)
   const int nameY   = circleY + kRadius + 6;   // display name below
 
   // ---------- 1. arrows between nodes ----------
-  QColor arrowColor("#cbd5e0");
-  p.setPen(QPen(arrowColor, 2));
-  p.setBrush(arrowColor);
+  // No horizontal connector line — just a prominent chevron arrow centered
+  // between the two nodes so the flow direction stays clear.
+  QColor arrowColor("#4a5568");
+  QPen arrowPen(arrowColor, 3);
+  arrowPen.setCapStyle(Qt::RoundCap);
+  arrowPen.setJoinStyle(Qt::RoundJoin);
+  p.setPen(arrowPen);
+  p.setBrush(Qt::NoBrush);
 
   for (int i = 0; i < count - 1; ++i) {
     const int cx1 = gap + i * (kDiameter + gap) + kRadius;
     const int cx2 = gap + (i + 1) * (kDiameter + gap) + kRadius;
 
-    const int lineX1 = cx1 + kRadius + 2;   // leave a tiny gap from the circle
-    const int lineX2 = cx2 - kRadius - 2;
-
-    if (lineX2 <= lineX1)
+    if (cx2 - cx1 < 2 * kDiameter)
       continue;   // too narrow, skip arrow
 
-    // Line
-    p.drawLine(lineX1, circleY, lineX2, circleY);
+    const int midX  = (cx1 + cx2) / 2;
+    const int aSize = 9;   // chevron half-size
 
-    // Arrowhead (triangle pointing right)
-    const int aSize = 6;   // arrow head length
-    QPainterPath arrowPath;
-    arrowPath.moveTo(lineX2 + 1, circleY);            // tip
-    arrowPath.lineTo(lineX2 - aSize + 1, circleY - 4); // top
-    arrowPath.lineTo(lineX2 - aSize + 1, circleY + 4); // bottom
-    arrowPath.closeSubpath();
-    p.drawPath(arrowPath);
+    QPainterPath chevron;
+    chevron.moveTo(midX - aSize, circleY - aSize);   // top-left
+    chevron.lineTo(midX,           circleY);          // right tip
+    chevron.lineTo(midX - aSize, circleY + aSize);   // bottom-left
+    p.drawPath(chevron);
   }
 
   // ---------- 2. nodes ----------
