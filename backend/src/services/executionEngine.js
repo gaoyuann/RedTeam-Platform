@@ -325,8 +325,9 @@ export async function executeRun(runId) {
     const mutableSteps = [...runnableSteps];
 
     // Global run deadline — prevents runaway execution from hanging forever.
-    // Default 4h, configurable via RUN_TIMEOUT_MS env var.
-    const RUN_DEADLINE_MS = parseInt(process.env.RUN_TIMEOUT_MS || (4 * 60 * 60 * 1000), 10);
+    // Default 4h, configurable via RUN_TIMEOUT_MS env var (min 1 minute).
+    const _parsedDeadline = parseInt(process.env.RUN_TIMEOUT_MS || '', 10);
+    const RUN_DEADLINE_MS = _parsedDeadline >= 60_000 ? _parsedDeadline : (4 * 60 * 60 * 1000);
     const runStartTime = Date.now();
 
     for (let i = 0; i < mutableSteps.length; i++) {
