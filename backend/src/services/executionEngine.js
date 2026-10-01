@@ -21,6 +21,37 @@ export function requestAbort(runId) {
   abortFlags.set(runId, true);
 }
 
+// Race a tool promise against an external abort signal so that operator-initiated
+// abort is honoured even while a tool is mid-execution (not just between steps).
+// The underlying tool process is left to exit via its own SIGKILL fallback.
+function raceWithAbort(toolPromise, runId) {
+  return new Promise((resolve) => {
+    let done = false;
+    const interval = setInterval(() => {
+      if (abortFlags.get(runId)) {
+        if (!done) {
+          done = true;
+          clearInterval(interval);
+          resolve({ success: false, exitCode: -2, stdout: '', stderr: '操作员手动中止', executionMode: 'aborted' });
+        }
+      }
+    }, 500);
+    toolPromise.then((r) => {
+      if (!done) {
+        done = true;
+        clearInterval(interval);
+        resolve(r);
+      }
+    }).catch((err) => {
+      if (!done) {
+        done = true;
+        clearInterval(interval);
+        resolve({ success: false, exitCode: -1, stdout: '', stderr: err.message, executionMode: 'error' });
+      }
+    });
+  });
+}
+
 const MAX_OUTPUT_LENGTH = 4096;
 
 // Track running executions to prevent duplicates
@@ -245,6 +276,8 @@ export async function executeRun(runId) {
   let failedSteps = 0;
   let aborted = false;
   let stopReason = null;
+  let manualAbort = false;   // operator-initiated abort (vs ReAct "stop" / timeout)
+  let timeoutAbort = false;  // global run deadline exceeded
 
   // ReAct state (only used when engineType === 'react')
   const evidenceHistory = [];
@@ -291,14 +324,30 @@ export async function executeRun(runId) {
     // Use mutable steps array (ReAct may insert new steps)
     const mutableSteps = [...runnableSteps];
 
+    // Global run deadline — prevents runaway execution from hanging forever.
+    // Default 4h, configurable via RUN_TIMEOUT_MS env var (min 1 minute).
+    const _parsedDeadline = parseInt(process.env.RUN_TIMEOUT_MS || '', 10);
+    const RUN_DEADLINE_MS = _parsedDeadline >= 60_000 ? _parsedDeadline : (4 * 60 * 60 * 1000);
+    const runStartTime = Date.now();
+
     for (let i = 0; i < mutableSteps.length; i++) {
       if (aborted) break;
 
       // Check for external abort request (POST /api/runs/:runId/abort)
       if (abortFlags.get(runId)) {
         aborted = true;
+        manualAbort = true;
         stopReason = '操作员手动中止';
         console.log(`[executionEngine] Run ${runId} aborted by operator`);
+        break;
+      }
+
+      // Global run deadline — stop runaway executions
+      if (Date.now() - runStartTime > RUN_DEADLINE_MS) {
+        aborted = true;
+        timeoutAbort = true;
+        stopReason = `运行超时（${Math.round(RUN_DEADLINE_MS / 60000)}分钟）`;
+        console.warn(`[executionEngine] Run ${runId} exceeded deadline (${RUN_DEADLINE_MS}ms), aborting`);
         break;
       }
 
@@ -352,7 +401,7 @@ export async function executeRun(runId) {
 
         // Execute tool
         try {
-          result = await runTool(step.tool_id, args, { timeout: 300 });
+          result = await raceWithAbort(runTool(step.tool_id, args, { timeout: 300_000 }), runId);
         } catch (err) {
           result = { success: false, exitCode: -1, stdout: '', stderr: err.message, executionMode: 'error' };
         }
@@ -712,14 +761,19 @@ export async function executeRun(runId) {
     }
 
     // Update run status
-    // - Aborted by ReAct "stop" (has stopReason) → COMPLETED (LLM decided to stop)
-    // - Aborted by user/manual (no stopReason) → FAILED
+    // - Manual abort (operator) → ABORTED
+    // - Timeout (global deadline) → FAILED
+    // - ReAct "stop" (LLM decided) → COMPLETED
     // - Not aborted but non-optional steps failed → FAILED
     // - Not aborted, no non-optional failures → COMPLETED
     const hasNonOptionalFailure = failedNonOptionalSteps.size > 0;
-    const finalStatus = aborted
-      ? (stopReason ? 'COMPLETED' : 'FAILED')
-      : (hasNonOptionalFailure ? 'FAILED' : 'COMPLETED');
+    const finalStatus = manualAbort
+      ? 'ABORTED'
+      : timeoutAbort
+        ? 'FAILED'
+        : aborted  // ReAct "stop" — LLM decided to terminate
+          ? 'COMPLETED'
+          : (hasNonOptionalFailure ? 'FAILED' : 'COMPLETED');
     const summary = JSON.stringify({
       total: mutableSteps.length,
       completed: completedSteps,

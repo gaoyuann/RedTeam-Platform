@@ -56,7 +56,7 @@ void CortexPanel::setupUI() {
   m_msgContainer = new QWidget;
   m_msgLayout = new QVBoxLayout(m_msgContainer);
   m_msgLayout->setContentsMargins(8, 8, 8, 8);
-  m_msgLayout->setSpacing(6);
+  m_msgLayout->setSpacing(12);
   m_msgLayout->addStretch();  // push messages up
 
   m_scrollArea = new QScrollArea;
@@ -100,7 +100,7 @@ void CortexPanel::addPayloadCard(const QString &payloadName, const QString &payl
     auto *sepL = new QHBoxLayout(sepFrame);
     sepL->setContentsMargins(10, 4, 10, 4);
     auto *sepLbl = new QLabel(QStringLiteral("⚡ 载荷知识"));
-    sepLbl->setStyleSheet("font-size: 11px; font-weight: bold; color: #92400e;");
+    sepLbl->setStyleSheet("font-size: 12px; font-weight: bold; color: #92400e;");
     sepL->addWidget(sepLbl);
     sepL->addStretch();
     m_msgLayout->insertWidget(m_msgLayout->count() - 1, sepFrame);
@@ -180,13 +180,13 @@ QWidget *CortexPanel::createStepSeparator(int stepIndex, const QString &toolId, 
   l->setSpacing(6);
 
   auto *lbl = new QLabel(QStringLiteral("步骤 %1: %2").arg(stepIndex).arg(toolId));
-  lbl->setStyleSheet("font-size: 11px; font-weight: bold; color: #1e40af;");
+  lbl->setStyleSheet("font-size: 12px; font-weight: bold; color: #1e40af;");
   l->addWidget(lbl);
 
   if (isDynamic) {
     auto *dynTag = new QLabel(QStringLiteral("🔀 AI 动态插入"));
     dynTag->setStyleSheet(
-      "font-size: 9px; font-weight: bold; color: #92400e; "
+      "font-size: 10px; font-weight: bold; color: #92400e; "
       "background: #fffbeb; border: 1px solid #fcd34d; border-radius: 4px; padding: 1px 6px;");
     l->addWidget(dynTag);
   }
@@ -201,12 +201,12 @@ QWidget *CortexPanel::createReactWidget(const QString &observation, const QStrin
   card->setStyleSheet(
     "QFrame { background: #ffffff; border: 1px solid #bfdbfe; border-radius: 8px; }");
   auto *cardL = new QVBoxLayout(card);
-  cardL->setContentsMargins(10, 8, 10, 8);
-  cardL->setSpacing(6);
+  cardL->setContentsMargins(12, 10, 12, 10);
+  cardL->setSpacing(8);
 
   // Timestamp
   auto *timeLbl = new QLabel(timestamp);
-  timeLbl->setStyleSheet("font-size: 9px; color: #94a3b8;");
+  timeLbl->setStyleSheet("font-size: 10px; color: #94a3b8;");
   cardL->addWidget(timeLbl);
 
   // Observation — warning style
@@ -214,8 +214,8 @@ QWidget *CortexPanel::createReactWidget(const QString &observation, const QStrin
     auto *obsLbl = new QLabel(QStringLiteral("🔍 发现: ") + observation);
     obsLbl->setWordWrap(true);
     obsLbl->setStyleSheet(
-      "font-size: 12px; color: #92400e; background: #fffbeb; "
-      "border-left: 3px solid #f59e0b; padding: 4px 8px; border-radius: 0 4px 4px 0;");
+      "font-size: 13px; color: #92400e; background: #fffbeb; "
+      "border-left: 3px solid #f59e0b; padding: 5px 8px; border-radius: 0 4px 4px 0;");
     cardL->addWidget(obsLbl);
   }
 
@@ -249,8 +249,8 @@ QWidget *CortexPanel::createReactWidget(const QString &observation, const QStrin
 
     auto *actionLbl = new QLabel(icon + QStringLiteral(" 动作: ") + actionText);
     actionLbl->setStyleSheet(
-      QStringLiteral("font-size: 11px; font-weight: bold; color: %3; "
-                     "background: %1; border: 1px solid %2; border-radius: 6px; padding: 4px 10px;")
+      QStringLiteral("font-size: 12px; font-weight: bold; color: %3; "
+                     "background: %1; border: 1px solid %2; border-radius: 6px; padding: 5px 10px;")
         .arg(actionBg, actionBorder, actionFg));
     cardL->addWidget(actionLbl);
   }
@@ -264,18 +264,18 @@ QWidget *CortexPanel::createPayloadWidget(const QString &name, const QString &co
   card->setStyleSheet(
     "QFrame { background: #fffbeb; border: 1px solid #fcd34d; border-radius: 8px; }");
   auto *cardL = new QVBoxLayout(card);
-  cardL->setContentsMargins(10, 8, 10, 8);
-  cardL->setSpacing(4);
+  cardL->setContentsMargins(12, 10, 12, 10);
+  cardL->setSpacing(8);
 
   // Header line: name + timestamp
   auto *headerL = new QHBoxLayout;
   if (!name.isEmpty()) {
     auto *nameLbl = new QLabel(QStringLiteral("⚡ ") + name);
-    nameLbl->setStyleSheet("font-size: 12px; font-weight: bold; color: #92400e;");
+    nameLbl->setStyleSheet("font-size: 13px; font-weight: bold; color: #92400e;");
     headerL->addWidget(nameLbl);
   }
   auto *timeLbl = new QLabel(timestamp);
-  timeLbl->setStyleSheet("font-size: 9px; color: #b45309;");
+  timeLbl->setStyleSheet("font-size: 10px; color: #b45309;");
   headerL->addStretch();
   headerL->addWidget(timeLbl);
   cardL->addLayout(headerL);
@@ -307,8 +307,8 @@ QWidget *CortexPanel::createCollapsibleText(const QString &text, int collapseThr
     auto *lbl = new QLabel(text);
     lbl->setWordWrap(true);
     lbl->setStyleSheet(
-      "font-size: 12px; color: #1e40af; background: #eff6ff; "
-      "border-left: 3px solid #3b82f6; padding: 4px 8px; border-radius: 0 4px 4px 0;");
+      "font-size: 13px; color: #1e40af; background: #eff6ff; "
+      "border-left: 3px solid #3b82f6; padding: 5px 8px; border-radius: 0 4px 4px 0;");
     l->addWidget(lbl);
     return w;
   }
@@ -319,13 +319,13 @@ QWidget *CortexPanel::createCollapsibleText(const QString &text, int collapseThr
   auto *lbl = new QLabel(displayText);
   lbl->setWordWrap(true);
   lbl->setStyleSheet(
-    "font-size: 12px; color: #1e40af; background: #eff6ff; "
-    "border-left: 3px solid #3b82f6; padding: 4px 8px; border-radius: 0 4px 4px 0;");
+    "font-size: 13px; color: #1e40af; background: #eff6ff; "
+    "border-left: 3px solid #3b82f6; padding: 5px 8px; border-radius: 0 4px 4px 0;");
   l->addWidget(lbl);
 
   auto *toggleBtn = new QPushButton(expanded ? QStringLiteral("收起 ▴") : QStringLiteral("展开 ▾"));
   toggleBtn->setStyleSheet(
-    "QPushButton { font-size: 10px; color: #3b82f6; background: transparent; "
+    "QPushButton { font-size: 11px; color: #3b82f6; background: transparent; "
     "border: none; padding: 0; text-align: left; }"
     "QPushButton:hover { color: #1d4ed8; text-decoration: underline; }");
   l->addWidget(toggleBtn);

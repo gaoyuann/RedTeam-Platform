@@ -94,17 +94,40 @@ function runDirect(bin, args, options = {}) {
     let outputBytes = 0;
     const maxBytes = maxOutputKB * 1024;
     let killed = false;
+    let settled = false;
+    let sigkillTimer = null;
+
+    function settle(result) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(hardTimer);
+      if (sigkillTimer) clearTimeout(sigkillTimer);
+      resolve(result);
+    }
+
+    // Send SIGTERM, then SIGKILL 5s later if the process ignores it.
+    function forceKill() {
+      if (killed) return;
+      killed = true;
+      try { child.kill('SIGTERM'); } catch {}
+      sigkillTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 5000);
+    }
 
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (d) => { stdout += d; outputBytes += Buffer.byteLength(d); if (outputBytes > maxBytes && !killed) { killed = true; child.kill('SIGTERM'); } });
-    child.stderr.on('data', (d) => { stderr += d; outputBytes += Buffer.byteLength(d); if (outputBytes > maxBytes && !killed) { killed = true; child.kill('SIGTERM'); } });
+    child.stdout.on('data', (d) => { stdout += d; outputBytes += Buffer.byteLength(d); if (outputBytes > maxBytes) forceKill(); });
+    child.stderr.on('data', (d) => { stderr += d; outputBytes += Buffer.byteLength(d); if (outputBytes > maxBytes) forceKill(); });
 
-    const timer = setTimeout(() => { if (!killed) { killed = true; child.kill('SIGTERM'); } }, timeout);
+    const timer = setTimeout(forceKill, timeout);
+    // Hard resolve: if close never fires (zombie / D-state / SIGKILL ignored),
+    // resolve anyway so the caller never hangs forever.
+    const hardTimer = setTimeout(() => {
+      settle({ success: false, exitCode: -1, stdout: stdout.trim(), stderr: (stderr || 'Tool hard timeout — process did not exit').trim(), executionMode: 'host' });
+    }, timeout + 15_000);
 
     child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve({
+      settle({
         success: code === 0 || stdout.length > 0,
         exitCode: code,
         stdout: stdout.trim(),
@@ -114,8 +137,7 @@ function runDirect(bin, args, options = {}) {
     });
 
     child.on('error', (err) => {
-      clearTimeout(timer);
-      resolve({ success: false, exitCode: -1, stdout: '', stderr: err.message, executionMode: 'host' });
+      settle({ success: false, exitCode: -1, stdout: '', stderr: err.message, executionMode: 'host' });
     });
   });
 }
@@ -142,21 +164,44 @@ function runInContainer(engine, image, bin, args, options = {}) {
     let outputBytes = 0;
     const maxBytes = maxOutputKB * 1024;
     let killed = false;
+    let settled = false;
+    let sigkillTimer = null;
+
+    function settle(result) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(hardTimer);
+      if (sigkillTimer) clearTimeout(sigkillTimer);
+      resolve(result);
+    }
+
+    // Send SIGTERM, then SIGKILL 5s later if the process ignores it.
+    function forceKill() {
+      if (killed) return;
+      killed = true;
+      try { child.kill('SIGTERM'); } catch {}
+      sigkillTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 5000);
+    }
 
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (d) => { stdout += d; outputBytes += Buffer.byteLength(d); if (outputBytes > maxBytes && !killed) { killed = true; child.kill('SIGTERM'); } });
-    child.stderr.on('data', (d) => { stderr += d; outputBytes += Buffer.byteLength(d); if (outputBytes > maxBytes && !killed) { killed = true; child.kill('SIGTERM'); } });
+    child.stdout.on('data', (d) => { stdout += d; outputBytes += Buffer.byteLength(d); if (outputBytes > maxBytes) forceKill(); });
+    child.stderr.on('data', (d) => { stderr += d; outputBytes += Buffer.byteLength(d); if (outputBytes > maxBytes) forceKill(); });
 
-    const timer = setTimeout(() => { if (!killed) { killed = true; child.kill('SIGTERM'); } }, timeout);
+    const timer = setTimeout(forceKill, timeout);
+    // Hard resolve: if close never fires (zombie / D-state / SIGKILL ignored),
+    // resolve anyway so the caller never hangs forever.
+    const hardTimer = setTimeout(() => {
+      settle({ success: false, exitCode: -1, stdout: stdout.trim(), stderr: (stderr || 'Tool hard timeout — process did not exit').trim(), executionMode: engine });
+    }, timeout + 15_000);
 
     child.on('close', (code) => {
-      clearTimeout(timer);
       // For SSH/exploit tools, exit code is the authoritative success indicator
       // (stdout may contain progress messages even on failure)
       const isExploitTool = ['ssh-exec', 'evil-winrm', 'netexec'].includes(options.toolId);
       const success = isExploitTool ? code === 0 : (code === 0 || stdout.length > 0);
-      resolve({
+      settle({
         success,
         exitCode: code,
         stdout: stdout.trim(),
@@ -166,8 +211,7 @@ function runInContainer(engine, image, bin, args, options = {}) {
     });
 
     child.on('error', (err) => {
-      clearTimeout(timer);
-      resolve({ success: false, exitCode: -1, stdout: '', stderr: err.message, executionMode: engine });
+      settle({ success: false, exitCode: -1, stdout: '', stderr: err.message, executionMode: engine });
     });
   });
 }

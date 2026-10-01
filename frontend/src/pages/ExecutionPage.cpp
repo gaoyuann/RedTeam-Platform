@@ -17,6 +17,25 @@
 #include <QMenu>
 #include <QApplication>
 #include <QClipboard>
+#include <QDialog>
+#include <QTextEdit>
+
+// ── Helper: create a table item with truncated display text and the full
+//    text stored in Qt::UserRole for double-click expansion. ─────────────
+static QTableWidgetItem *truncItem(const QString &full, int maxChars) {
+  QString display = full.length() > maxChars ? full.left(maxChars) + QStringLiteral("…") : full;
+  auto *item = new QTableWidgetItem(display);
+  item->setData(Qt::UserRole, full);  // always store full text for popup
+  return item;
+}
+
+// ── Helper: wrap text as an HTML tooltip with a max width so long content
+//    wraps instead of stretching across the screen. ──────────────────────
+static QString wrapToolTip(const QString &text) {
+  if (text.isEmpty()) return {};
+  return QStringLiteral("<div style=\"max-width: 500px; white-space: pre-wrap;\">") +
+         text.toHtmlEscaped() + QStringLiteral("</div>");
+}
 
 ExecutionPage::ExecutionPage(ApiClient *api, const QString &role, const QString &username, QWidget *parent)
     : QWidget(parent), m_api(api) {
@@ -142,6 +161,7 @@ void ExecutionPage::setupUI() {
     "QPushButton:pressed { background: #b91c1c; }"
     "QPushButton:disabled { background: #fca5a5; color: #fef2f2; }");
   m_stopBtn->setEnabled(false);  // disabled until a running run is loaded
+  m_stopBtn->setToolTip(QStringLiteral("点击中止当前执行\n当前步骤完成后不再执行后续步骤"));
   statusRow->addWidget(m_stopBtn);
   rightLayout->addLayout(statusRow);
 
@@ -168,7 +188,8 @@ void ExecutionPage::setupUI() {
   m_stepTable->setAlternatingRowColors(true);
   m_stepTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_stepTable->setContextMenuPolicy(Qt::CustomContextMenu);
-  m_stepTable->setWordWrap(true);
+  m_stepTable->setWordWrap(false);
+  m_stepTable->setTextElideMode(Qt::ElideRight);
   m_stepTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
   m_stepTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
   m_stepTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
@@ -188,7 +209,8 @@ void ExecutionPage::setupUI() {
   m_evidenceTable->setHorizontalHeaderLabels({"步骤", "类型", "数据摘要", "MITRE命中", "建议"});
   m_evidenceTable->setAlternatingRowColors(true);
   m_evidenceTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-  m_evidenceTable->setWordWrap(true);
+  m_evidenceTable->setWordWrap(false);
+  m_evidenceTable->setTextElideMode(Qt::ElideRight);
   m_evidenceTable->setContextMenuPolicy(Qt::CustomContextMenu);
   m_evidenceTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
   m_evidenceTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
@@ -196,11 +218,6 @@ void ExecutionPage::setupUI() {
   m_evidenceTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
   m_evidenceTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
   rightLayout->addWidget(m_evidenceTable, 1);
-
-  m_evidenceDetail = new QTextEdit;
-  m_evidenceDetail->setReadOnly(true);
-  m_evidenceDetail->setPlaceholderText("点击证据行查看详情");
-  rightLayout->addWidget(m_evidenceDetail, 1);
 
   rightScroll->setWidget(rightInner);
   auto *rightOuterLayout = new QVBoxLayout(rightWidget);
@@ -247,6 +264,26 @@ void ExecutionPage::setupUI() {
       QApplication::clipboard()->setText(item->text());
     });
     menu.exec(m_evidenceTable->viewport()->mapToGlobal(pos));
+  });
+
+  // ── Double-click to expand truncated cells in a popup ───────────────
+  connect(m_stepTable, &QTableWidget::cellDoubleClicked, this, [this](int row, int col) {
+    auto *item = m_stepTable->item(row, col);
+    if (!item) return;
+    QString full = item->data(Qt::UserRole).toString();
+    if (full.isEmpty()) full = item->text();
+    if (full.isEmpty() || full == QStringLiteral("-")) return;
+    QString colTitle = m_stepTable->horizontalHeaderItem(col)->text();
+    showCellDetail(QStringLiteral("步骤 %1 — %2").arg(row + 1).arg(colTitle), full);
+  });
+  connect(m_evidenceTable, &QTableWidget::cellDoubleClicked, this, [this](int row, int col) {
+    auto *item = m_evidenceTable->item(row, col);
+    if (!item) return;
+    QString full = item->data(Qt::UserRole).toString();
+    if (full.isEmpty()) full = item->text();
+    if (full.isEmpty() || full == QStringLiteral("-")) return;
+    QString colTitle = m_evidenceTable->horizontalHeaderItem(col)->text();
+    showCellDetail(QStringLiteral("证据 %1 — %2").arg(row + 1).arg(colTitle), full);
   });
 }
 
@@ -566,10 +603,6 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
     // ── Steps (8 columns: 步骤/工具/参数/成功/来源/输出摘要/载荷/推理) ──
     auto steps = d["steps"].toArray();
     m_stepTable->setRowCount(steps.size());
-    bool hasReactThoughts = false;
-    bool hasPayloadBindings = false;
-    QStringList reactLines;
-    QStringList payloadLines;
     QString prevActionType;  // track previous step's react_action to detect dynamic inserts
 
     for (int i = 0; i < steps.size(); i++) {
@@ -577,7 +610,7 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
       int stepIdx = s["step_index"].toInt();
       m_stepTable->setItem(i, 0, new QTableWidgetItem(QString::number(stepIdx)));
       m_stepTable->setItem(i, 1, new QTableWidgetItem(s["tool_id"].toString()));
-      m_stepTable->setItem(i, 2, new QTableWidgetItem(s["args"].toString().left(200)));
+      m_stepTable->setItem(i, 2, truncItem(s["args"].toString(), 40));
       m_stepTable->setItem(i, 3, new QTableWidgetItem(s["success"].toInt() ? "✓ 成功" : "✗ 失败"));
 
       // Column 4: 来源 — mark dynamic steps inserted by ReAct
@@ -593,84 +626,44 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
       }
       m_stepTable->setItem(i, 4, sourceItem);
 
-      m_stepTable->setItem(i, 5, new QTableWidgetItem(s["notes"].toString().left(500)));
+      {
+        QString notesFull = s["notes"].toString();
+        auto *notesItem = truncItem(notesFull, 60);
+        notesItem->setToolTip(wrapToolTip(notesFull));
+        m_stepTable->setItem(i, 5, notesItem);
+      }
 
-      // Column 6: Payload — extract from evidence_data JSON, or show tool+args as fallback
-      QString payloadDisplay = "-";
+      // Column 6: Payload — only show when a real payload binding exists
+      // in evidence_data; otherwise show "—" (the command is already in 参数).
+      QString payloadDisplay = QStringLiteral("—");
       if (evidenceByStep.contains(stepIdx)) {
         auto evObj = evidenceByStep.value(stepIdx);
-        QString evDataStr = evObj["evidence_data"].toString();
-        if (evDataStr.isEmpty()) {
-          // evidence_data might already be a QJsonObject
-          auto evData = evObj["evidence_data"].toObject();
+        QJsonDocument evDoc = QJsonDocument::fromJson(evObj["evidence_data"].toString().toUtf8());
+        if (evDoc.isObject()) {
+          auto evData = evDoc.object();
           if (evData.contains("payload_id")) {
             payloadDisplay = evData["payload_name"].toString();
             if (payloadDisplay.isEmpty()) payloadDisplay = evData["payload_id"].toString();
-            hasPayloadBindings = true;
-            payloadLines << QString("步骤 %1 [%2] → 载荷: %3 (%4)")
-                .arg(stepIdx).arg(s["tool_id"].toString())
-                .arg(evData["payload_name"].toString())
-                .arg(evData["payload_id"].toString());
-          }
-        } else {
-          // Parse JSON string
-          QJsonDocument evDoc = QJsonDocument::fromJson(evDataStr.toUtf8());
-          if (evDoc.isObject()) {
-            auto evData = evDoc.object();
-            if (evData.contains("payload_id")) {
-              payloadDisplay = evData["payload_name"].toString();
-              if (payloadDisplay.isEmpty()) payloadDisplay = evData["payload_id"].toString();
-              hasPayloadBindings = true;
-              payloadLines << QString("步骤 %1 [%2] → 载荷: %3 (%4)")
-                  .arg(stepIdx).arg(s["tool_id"].toString())
-                  .arg(evData["payload_name"].toString())
-                  .arg(evData["payload_id"].toString());
-            }
           }
         }
       }
-      // Fallback: show tool + truncated args as payload info
-      if (payloadDisplay == "-") {
-        QString toolId = s["tool_id"].toString();
-        QString argsStr = s["args"].toString();
-        if (!toolId.isEmpty()) {
-          payloadDisplay = toolId;
-          if (!argsStr.isEmpty()) {
-            payloadDisplay += " " + argsStr.left(30);
-            if (argsStr.length() > 30) payloadDisplay += "...";
-          }
-          hasPayloadBindings = true;
-          payloadLines << QString("步骤 %1 [%2] → 命令: %3 %4")
-              .arg(stepIdx).arg(toolId).arg(toolId).arg(argsStr.left(80));
-        }
-      }
-      m_stepTable->setItem(i, 6, new QTableWidgetItem(payloadDisplay));
+      auto *payloadItem = new QTableWidgetItem(payloadDisplay);
+      if (payloadDisplay == QStringLiteral("—"))
+        payloadItem->setForeground(QColor("#94a3b8"));  // muted gray for no payload
+      m_stepTable->setItem(i, 6, payloadItem);
 
       // Column 7: ReAct thought summary, or step description as fallback
       QString thought = s["react_thought"].toString();
       if (!thought.isEmpty()) {
-        hasReactThoughts = true;
-        m_stepTable->setItem(i, 7, new QTableWidgetItem(thought.left(100) + (thought.length() > 100 ? "..." : "")));
-        // Build detailed ReAct view
-        reactLines << QString("━━ 步骤 %1 [%2] ━━").arg(stepIdx).arg(s["tool_id"].toString());
-        reactLines << "  💭 思考: " + thought;
-        QString action = s["react_action"].toString();
-        if (!action.isEmpty()) {
-          reactLines << "  🎯 动作: " + action.left(300);
-        }
-        reactLines << "";
+        m_stepTable->setItem(i, 7, truncItem(thought, 40));
       } else {
         // Fallback: show step description as "reasoning"
         QString stepDesc = s["description"].toString();
-        if (stepDesc.isEmpty()) stepDesc = s["notes"].toString().left(100);
+        if (stepDesc.isEmpty()) stepDesc = s["notes"].toString();
         if (!stepDesc.isEmpty()) {
-          hasReactThoughts = true;
-          m_stepTable->setItem(i, 7, new QTableWidgetItem(stepDesc.left(100) + (stepDesc.length() > 100 ? "..." : "")));
-          reactLines << QString("━━ 步骤 %1 [%2] ━━").arg(stepIdx).arg(s["tool_id"].toString());
-          reactLines << "  📋 " + stepDesc.left(300);
-          reactLines << "";
+          m_stepTable->setItem(i, 7, truncItem(stepDesc, 40));
         } else {
-          m_stepTable->setItem(i, 7, new QTableWidgetItem("-"));
+          m_stepTable->setItem(i, 7, new QTableWidgetItem("—"));
         }
       }
 
@@ -697,41 +690,99 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
       auto e = evidence[i].toObject();
       m_evidenceTable->setItem(i, 0, new QTableWidgetItem(QString::number(e["step_index"].toInt())));
       m_evidenceTable->setItem(i, 1, new QTableWidgetItem(e["evidence_type"].toString()));
-      m_evidenceTable->setItem(i, 2, new QTableWidgetItem(e["evidence_data"].toString().left(200)));
-      m_evidenceTable->setItem(i, 3, new QTableWidgetItem(e["mitre_hits"].toString().left(150)));
-      m_evidenceTable->setItem(i, 4, new QTableWidgetItem(e["recommendations"].toString().left(200)));
+
+      // 数据摘要: parse evidence_data JSON → readable summary; full JSON in UserRole
+      QString evDataRaw = e["evidence_data"].toString();
+      QString evSummary;
+      QString evFull = evDataRaw;
+      QJsonDocument evDoc = QJsonDocument::fromJson(evDataRaw.toUtf8());
+      if (evDoc.isObject()) {
+        auto evObj = evDoc.object();
+        evSummary = evObj["summary"].toString();
+        if (evSummary.isEmpty()) {
+          QStringList parts;
+          if (evObj.contains("success"))
+            parts << (evObj["success"].toBool() ? QStringLiteral("成功") : QStringLiteral("失败"));
+          if (evObj.contains("payload_name"))
+            parts << QStringLiteral("载荷: ") + evObj["payload_name"].toString();
+          evSummary = parts.join(QStringLiteral(" | "));
+        }
+        evFull = QString::fromUtf8(QJsonDocument(evObj).toJson(QJsonDocument::Indented));
+      }
+      if (evSummary.isEmpty()) evSummary = QStringLiteral("(无摘要)");
+      auto *evItem = new QTableWidgetItem(evSummary.length() > 50 ? evSummary.left(50) + QStringLiteral("…") : evSummary);
+      evItem->setData(Qt::UserRole, evFull);
+      evItem->setToolTip(wrapToolTip(evFull));
+      m_evidenceTable->setItem(i, 2, evItem);
+
+      // MITRE命中: parse array → "T1110, T1046"; full "ID — name" list in UserRole
+      QString mitreRaw = e["mitre_hits"].toString();
+      QString mitreDisplay;
+      QString mitreFull;
+      QJsonDocument mitreDoc = QJsonDocument::fromJson(mitreRaw.toUtf8());
+      if (mitreDoc.isArray()) {
+        QStringList ids, fullLines;
+        for (const auto &m : mitreDoc.array()) {
+          if (m.isString()) {
+            ids << m.toString();
+            fullLines << m.toString();
+          } else if (m.isObject()) {
+            auto mo = m.toObject();
+            QString id = mo["id"].toString();
+            ids << id;
+            fullLines << id + (mo.contains("name") ? QStringLiteral(" — ") + mo["name"].toString() : QString());
+          }
+        }
+        mitreDisplay = ids.join(QStringLiteral(", "));
+        mitreFull = fullLines.join(QStringLiteral("\n"));
+      }
+      if (mitreDisplay.isEmpty()) mitreDisplay = QStringLiteral("—");
+      auto *mitreItem = new QTableWidgetItem(mitreDisplay.length() > 30 ? mitreDisplay.left(30) + QStringLiteral("…") : mitreDisplay);
+      mitreItem->setData(Qt::UserRole, mitreFull.isEmpty() ? mitreDisplay : mitreFull);
+      m_evidenceTable->setItem(i, 3, mitreItem);
+
+      // 建议: parse array → joined strings; full bullet list in UserRole
+      QString recRaw = e["recommendations"].toString();
+      QString recDisplay;
+      QString recFull;
+      QJsonDocument recDoc = QJsonDocument::fromJson(recRaw.toUtf8());
+      if (recDoc.isArray()) {
+        QStringList recs, fullRecs;
+        for (const auto &r : recDoc.array()) {
+          if (r.isString()) {
+            recs << r.toString();
+            fullRecs << QStringLiteral("• ") + r.toString();
+          }
+        }
+        recDisplay = recs.join(QStringLiteral("; "));
+        recFull = fullRecs.join(QStringLiteral("\n"));
+      }
+      if (recDisplay.isEmpty()) recDisplay = QStringLiteral("—");
+      auto *recItem = new QTableWidgetItem(recDisplay.length() > 40 ? recDisplay.left(40) + QStringLiteral("…") : recDisplay);
+      recItem->setData(Qt::UserRole, recFull.isEmpty() ? recDisplay : recFull);
+      m_evidenceTable->setItem(i, 4, recItem);
     }
     m_evidenceTable->resizeColumnsToContents();
     m_evidenceTable->horizontalHeader()->setStretchLastSection(true);
-
-    // If evidence is empty, show summary from final_summary
-    if (evidence.isEmpty()) {
-      QString summary = d["final_summary"].toString();
-      if (!summary.isEmpty()) {
-        m_evidenceDetail->setText("执行摘要: " + summary);
-      } else {
-        m_evidenceDetail->clear();
-      }
-    } else {
-      // Show first evidence detail
-      m_evidenceDetail->setText(evidence[0].toObject()["evidence_data"].toString().left(2000));
-    }
 
     // ── Cortex panel: ReAct thoughts + Payload cards ──────────────────
     // Update engine info and status in Cortex header
     m_cortexPanel->setEngineInfo(engineType.isEmpty() ? QStringLiteral("mechanical") : engineType);
     m_cortexPanel->setStatus(statusVal);
-    // Stop button: always visible, but only enabled for active runs
+    // Stop button: always visible, but only enabled for active runs.
+    // NOTE: statusVal has been converted to Chinese above (e.g. "运行中"),
+    // so use the original raw status from the API for button logic.
     {
-      bool canStop = (statusVal == "RUNNING" || statusVal == "PENDING");
+      QString rawStatus = d["status"].toString();
+      bool canStop = (rawStatus == "RUNNING" || rawStatus == "PENDING");
       m_stopBtn->setEnabled(canStop);
       if (canStop)
         m_stopBtn->setText(QStringLiteral("🛑 停止执行"));
-      else if (statusVal == "ABORTED")
+      else if (rawStatus == "ABORTED")
         m_stopBtn->setText(QStringLiteral("🛑 已中止"));
-      else if (statusVal == "COMPLETED")
+      else if (rawStatus == "COMPLETED")
         m_stopBtn->setText(QStringLiteral("✓ 已完成"));
-      else if (statusVal == "FAILED")
+      else if (rawStatus == "FAILED")
         m_stopBtn->setText(QStringLiteral("✗ 已失败"));
       else
         m_stopBtn->setText(QStringLiteral("🛑 停止执行"));
@@ -875,7 +926,19 @@ void ExecutionPage::onPollRunning() {
 
   const QString runId = m_runningRunId;
   m_api->get("/api/runs/" + runId, 5000, [this, runId](const QJsonObject &res) {
-    if (res["status"].toString() != "ok" || m_runningRunId != runId) return;
+    if (m_runningRunId != runId) return;
+    if (res["status"].toString() != "ok") {
+      // API error — tolerate transient failures, then stop polling to avoid spin
+      if (++m_pollErrorCount >= 10) {
+        m_pollTimer->stop();
+        m_runningRunId.clear();
+        m_runningPlaybookId.clear();
+        m_statusLabel->setText(QStringLiteral("轮询失败：无法获取执行状态（已连续失败 10 次）"));
+        m_stopBtn->setEnabled(false);
+      }
+      return;
+    }
+    m_pollErrorCount = 0;
     auto d = res["data"].toObject();
     QString status = d["status"].toString();
 
@@ -931,4 +994,31 @@ void ExecutionPage::onPollRunning() {
       onRefreshRuns();
     }
   });
+}
+
+// ── Popup dialog for expanded cell content (double-click) ──────────────
+void ExecutionPage::showCellDetail(const QString &title, const QString &content) {
+  if (content.isEmpty()) return;
+  auto *dlg = new QDialog(this);
+  dlg->setWindowTitle(title);
+  dlg->setMinimumSize(600, 400);
+  auto *l = new QVBoxLayout(dlg);
+  l->setContentsMargins(12, 12, 12, 12);
+  auto *te = new QTextEdit(dlg);
+  te->setPlainText(content);
+  te->setReadOnly(true);
+  te->setStyleSheet("QTextEdit { font-size: 13px; font-family: 'Monospace'; "
+                    "background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; }");
+  l->addWidget(te);
+  auto *btn = new QPushButton(QStringLiteral("关闭"), dlg);
+  btn->setProperty("primary", true);
+  btn->setFixedWidth(100);
+  auto *btnL = new QHBoxLayout;
+  btnL->addStretch();
+  btnL->addWidget(btn);
+  btnL->addStretch();
+  l->addLayout(btnL);
+  connect(btn, &QPushButton::clicked, dlg, &QDialog::accept);
+  dlg->exec();
+  dlg->deleteLater();
 }

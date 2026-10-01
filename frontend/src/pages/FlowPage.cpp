@@ -252,7 +252,7 @@ void FlowPage::setupWorkbenchView()
 
   // 4-step progress row
   auto *progressFrame = new QFrame(m_workbenchView);
-  progressFrame->setStyleSheet("background:#f8fbff; border-bottom:1px solid #dbe3ef;");
+  progressFrame->setStyleSheet("background:#f8fbff;");
   auto *progressLayout = new QHBoxLayout(progressFrame);
   progressLayout->setContentsMargins(24, 16, 24, 16);
   progressLayout->setSpacing(8);
@@ -280,7 +280,7 @@ void FlowPage::setupWorkbenchView()
     if (i < 3) {
       auto *arrow = new QLabel("→", progressFrame);
       arrow->setAlignment(Qt::AlignCenter);
-      arrow->setStyleSheet("font-size:20px; color:#cbd5e1; background:transparent;");
+      arrow->setStyleSheet("font-size:26px; color:#475569; font-weight:700; background:transparent;");
       progressLayout->addWidget(arrow);
     }
   }
