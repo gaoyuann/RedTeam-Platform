@@ -286,15 +286,16 @@ function buildReactPrompt({ stepIndex, toolId, stepName, stepResult,
 ⚠️ 重要：每次输出必须严格包含 Observation、Thought、Action 三段，不可省略任何一段。Thought 控制在 150 字以内。使用中文输出，避免英文推理过程。
 
 【核心原则】
-1. Playbook 锚定：严格推进当前 Playbook 的执行队列。可基于证据做出决策，但不能跳脱主线自行编造攻击步骤。
+1. Playbook 主线：推进当前 Playbook 的执行队列。可基于工具真实输出插入补充侦察/验证步骤（如发现新端口→插入扫描、发现登录表单→插入认证测试），但不得跳过或替换 Playbook 预置的核心攻击步骤。
 2. 工具沙箱【绝对红线】：禁止在你的决策中拼接 &&, ||, |, >, ;, \` 等 Shell 拼接符，禁止在自主推荐或插入步骤时调用 cat, echo, ping, bash 等系统命令。Playbook 预置步骤中已授权的命令与工具属于授信范围，必须正常推进执行，严禁拦截或终止。
 3. 证据驱动：必须依赖工具的真实输出。禁止利用 LLM 先验知识盲猜（如 DVWA 默认密码）。所有漏洞验证必须走标准扫描流程。
 4. 失败处理【关键】：如果当前步骤失败，你必须：(a) 用 adjust 修改参数重试；(b) 用 continue 跳过（如果该步骤结果非关键）；(c) 用 stop 终止（如果所有剩余步骤工具都在黑名单中）。
 
-【5 种 Action — 根据证据选择最合适的】
+【6 种 Action — 根据证据选择最合适的】
   continue — 步骤成功完成且有有效发现，按计划继续执行下一步
   adjust   — 修改后续步骤参数，或用新参数重试当前失败步骤
   insert   — 证据显示计划有空白，插入新工具步骤（禁止插入已列入黑名单的工具）
+  pivot    — 当前攻击路径连续失败或已充分探索，切换到全新的攻击方向
   parallel — 多个独立扫描任务可并行执行以提高效率
   stop     — 所有计划步骤执行完毕，或目标不可达，或所有剩余步骤工具都失败。必须提供 reason。
 
@@ -303,6 +304,7 @@ function buildReactPrompt({ stepIndex, toolId, stepName, stepResult,
   - 连续 3 个及以上同类工具步骤均无有效发现 → 必须使用 adjust 更换参数/目标，或 stop 终止无效循环
   - 工具输出包含连接错误（如 DNS 解析失败、unable to connect、connection refused） → 必须使用 adjust 修正目标地址
   - 剩余步骤全部是已执行过且无发现的同类重复步骤 → 必须使用 stop 终止
+  - 规则引擎给出强制插入提示（🚨 强制规则） → 必须使用 insert 插入对应工具，禁止使用 continue 跳过
 
 ${kgContext ? `## KG 知识上下文\n${kgContext}\n` : ''}${detectedTechContext ? `${detectedTechContext}\n` : ''}${appContext ? `## 应用风险上下文\n${appContext}\n` : ''}${payloadContext ? `## 载荷攻防知识\n${payloadContext}\n` : ''}
 证据历史：
@@ -318,6 +320,7 @@ Action: 使用以下 XML 格式之一：
   <action type="continue" toolId="xxx" args='["arg1", "arg2"]' />
   <action type="adjust" toolId="xxx" newArgs='["new1", "new2"]' stepIndex="当前步骤索引" />
   <action type="insert" toolId="xxx" args='["arg1", "arg2"]' position="after" />
+  <action type="pivot" toolId="xxx" args='["arg1", "arg2"]' />
   <action type="parallel" tools='[{"toolId":"gobuster","args":["-m","dir","-u","http://target:8080","-w","config/wordlists/common_dirs.txt"]}]' />
   <action type="stop" reason="总结原因" finalSummary="最终报告文本" />
 
@@ -427,7 +430,7 @@ function buildAllInsertHints({ evidenceHistory, stepResult, remainingSteps, targ
 
     if (hasApiPath && !toolInPlan('arjun')) {
       const targetUrl = buildTargetUrl();
-      hints.push(`\n\n📌 建议规则 [规则2]：检测到 API 路径，建议使用 arjun 进行参数发现：\n<action type="insert" toolId="arjun" args='["-u", "${targetUrl}", "--passive"]' position="after" />`);
+      hints.push(`\n\n🚨 强制规则 [规则2]：检测到 API 路径，你必须使用 insert Action 插入 arjun 进行参数发现：\n<action type="insert" toolId="arjun" args='["-u", "${targetUrl}", "--passive"]' position="after" />\n这是强制要求，不允许使用 continue。`);
     }
   }
 
@@ -438,7 +441,7 @@ function buildAllInsertHints({ evidenceHistory, stepResult, remainingSteps, targ
 
     if (hasLoginForm && !toolInPlan('hydra')) {
       const targetUrl = buildTargetUrl();
-      hints.push(`\n\n📌 建议规则 [规则3]：检测到登录表单，建议使用 hydra 进行认证测试：\n<action type="insert" toolId="hydra" args='["-l", "admin", "-P", "config/wordlists/common_passwords.txt", "${targetUrl}", "http-post-form", "/login:user=^USER^&pass=^PASS^:F=incorrect"]' position="after" />`);
+      hints.push(`\n\n🚨 强制规则 [规则3]：检测到登录表单，你必须使用 insert Action 插入 hydra 进行认证测试：\n<action type="insert" toolId="hydra" args='["-l", "admin", "-P", "config/wordlists/common_passwords.txt", "${targetUrl}", "http-post-form", "/login:user=^USER^&pass=^PASS^:F=incorrect"]' position="after" />\n这是强制要求，不允许使用 continue。`);
     }
   }
 
@@ -459,7 +462,7 @@ function buildAllInsertHints({ evidenceHistory, stepResult, remainingSteps, targ
       || /\b(actuator|heapdump|threaddump)\b/i.test(currentOutput);
 
     if (hasActuator && !toolInPlan('curl') && !toolInPlan('wget')) {
-      hints.push(`\n\n📌 建议规则 [规则5]：检测到 Actuator/敏感端点，建议使用 curl 进行信息泄露检测。`);
+      hints.push(`\n\n🚨 强制规则 [规则5]：检测到 Actuator/敏感端点，你必须使用 insert Action 插入 curl 进行信息泄露检测：\n<action type="insert" toolId="curl" args='["-s", "${targetUrl}/actuator/env"]' position="after" />\n这是强制要求，不允许使用 continue。`);
     }
   }
 
@@ -469,7 +472,7 @@ function buildAllInsertHints({ evidenceHistory, stepResult, remainingSteps, targ
       || /\b(eyJ[A-Za-z0-9-_]+\.eyJ[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+|jwt|JWT|Bearer)\b/i.test(currentOutput);
 
     if (hasJwt && !toolInPlan('jwt_tool') && !toolInPlan('jwt-cracker')) {
-      hints.push(`\n\n📌 建议规则 [规则6]：检测到 JWT Token，建议使用 jwt_tool 进行 JWT 攻击测试。`);
+      hints.push(`\n\n🚨 强制规则 [规则6]：检测到 JWT Token，你必须使用 insert Action 插入 jwt_tool 进行 JWT 攻击测试：\n<action type="insert" toolId="jwt_tool" args='["-t", "<从证据中提取的JWT>", "-C", "config/wordlists/common_secrets.txt"]' position="after" />\n这是强制要求，不允许使用 continue。`);
     }
   }
 

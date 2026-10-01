@@ -198,14 +198,6 @@ void MainWindow::setupWebSocket()
         // Scan/run events also refresh flow list (pipeline creates scans/runs internally)
         connect(m_ws, &WsClient::scanCompleted, m_flowPage, &FlowPage::refreshFlows);
         connect(m_ws, &WsClient::runCompleted, m_flowPage, &FlowPage::refreshFlows);
-        // AI ReAct thoughts → reasoning panel
-        connect(m_ws, &WsClient::runReact, m_flowPage,
-            [this](const QJsonObject &data) {
-                if (!m_flowPage) return;
-                QString thought = data["thought"].toString();
-                if (!thought.isEmpty())
-                    m_flowPage->appendThought(thought);
-            });
     }
 
     // Wire WebSocket to FlowPage's embedded stage-tab pages

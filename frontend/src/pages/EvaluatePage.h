@@ -92,6 +92,7 @@ private:
   QString m_selectedReportId;
   QString m_lastExportPath;
   QString m_lastExportFormat;
+  QString m_lastExportReportId;  // 上次导出的报告 ID，用于检测选中报告是否切换
   bool m_previewMode;  // true = HTML preview, false = JSON source
 
   // Evidence tab

@@ -65,8 +65,6 @@ FlowPage::FlowPage(ApiClient *api, const QString &role,
     , m_stepIndicator(nullptr)
     , m_activityPanel(nullptr)
     , m_stageTabs(nullptr)
-    , m_contentSplitter(nullptr)
-    , m_reasoningPanel(nullptr)
     , m_topoTab(nullptr)
     , m_scanTab(nullptr)
     , m_execTab(nullptr)
@@ -251,7 +249,7 @@ void FlowPage::setupWorkbenchView()
 
   // 4-step progress — StepIndicator 自绘（节点+连线+状态，摘要显示在节点名下方）
   auto *progressFrame = new QFrame(m_workbenchView);
-  progressFrame->setStyleSheet("background:#f8fbff; border-bottom:1px solid #dbe3ef;");
+  progressFrame->setStyleSheet("background:#f8fbff;");
   auto *progressLayout = new QHBoxLayout(progressFrame);
   progressLayout->setContentsMargins(24, 8, 24, 4);
   m_stepIndicator = new StepIndicator(progressFrame);
@@ -603,7 +601,6 @@ void FlowPage::onFlowDoubleClicked(int row)
   QString pid = flowIdAtRow(row);
   if (pid.isEmpty()) return;
   m_selectedPipelineId = pid;
-  if (m_reasoningPanel) m_reasoningPanel->clear();
   m_lastLoadedRunId.clear();
   m_lastLoadedPlaybookId.clear();
   m_lastLoadedEvalRunId.clear();
@@ -627,7 +624,6 @@ void FlowPage::onFlowContextMenu(const QPoint &pos)
   auto *menu = new QMenu(this);
   menu->addAction(QStringLiteral("打开"), [this, pid]() {
     m_selectedPipelineId = pid;
-    if (m_reasoningPanel) m_reasoningPanel->clear();
     m_lastLoadedRunId.clear();
     m_lastLoadedPlaybookId.clear();
     m_lastLoadedEvalRunId.clear();
@@ -836,22 +832,7 @@ void FlowPage::onPipelineLog(const QJsonObject &data)
   QString pid = data["pipeline_id"].toString();
   if (pid != m_selectedPipelineId) return;
   if (m_stack->currentIndex() != 1) return;
-  if (!m_reasoningPanel) return;
-
-  QString msg = data["message"].toString();
-  QString level = data["level"].toString();
-  qint64 ts = data["timestamp"].toVariant().toLongLong();
-  QString timeStr = ts > 0
-    ? QDateTime::fromMSecsSinceEpoch(ts).toString("HH:mm:ss")
-    : QDateTime::currentDateTime().toString("HH:mm:ss");
-
-  QString color = "#64748b";  // info
-  if (level == "warn")  color = "#d97706";
-  if (level == "error") color = "#dc2626";
-  m_reasoningPanel->append(
-    QString("<span style='color:#94a3b8;font-size:11px;'>[%1]</span> "
-            "<span style='color:%2;'>%3</span>")
-      .arg(timeStr, color, msg.toHtmlEscaped()));
+  // Pipeline logs are handled by LiveActivityPanel; nothing to do here.
 }
 
 LiveActivityPanel *FlowPage::activityPanel() const
@@ -902,21 +883,4 @@ void FlowPage::jumpToExecution(const QString &playbookId, const QString &target)
   // Pre-select the playbook
   if (!playbookId.isEmpty())
     m_execTab->selectPlaybook(playbookId, target);
-
-  // Clear reasoning panel
-  if (m_reasoningPanel) m_reasoningPanel->clear();
-}
-
-void FlowPage::appendThought(const QString &text)
-{
-  if (!m_reasoningPanel || text.isEmpty()) return;
-  // Only append when the workbench is visible — run:react events lack
-  // pipeline_id, so we can't filter by pipeline.  This guard at least
-  // prevents appending thoughts when nobody is looking at the panel.
-  if (m_stack->currentIndex() != 1) return;
-  QString timeStr = QDateTime::currentDateTime().toString("HH:mm:ss");
-  m_reasoningPanel->append(
-    QString("<span style='color:#94a3b8;font-size:11px;'>[%1]</span> "
-            "<i style='color:#7c3aed;'>%2</i>")
-      .arg(timeStr, text.toHtmlEscaped()));
 }

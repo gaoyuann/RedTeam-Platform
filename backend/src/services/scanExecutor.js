@@ -14,6 +14,44 @@ const MAX_OUTPUT_LENGTH = 8192;
 // Track running scans to prevent duplicates
 const runningScans = new Set();
 
+// ── Module-level abort flags ───────────────────────────────────────────
+// Allows external API (POST /api/scan-tasks/:scanTaskId/abort) to cancel a running scan.
+const scanAbortFlags = new Map();
+
+export function requestScanAbort(scanTaskId) {
+  scanAbortFlags.set(scanTaskId, true);
+}
+
+// Race a tool promise against an abort signal so operator abort is honoured
+// even while a scan tool is mid-execution.
+function raceScanWithAbort(toolPromise, scanTaskId) {
+  return new Promise((resolve) => {
+    let done = false;
+    const interval = setInterval(() => {
+      if (scanAbortFlags.get(scanTaskId)) {
+        if (!done) {
+          done = true;
+          clearInterval(interval);
+          resolve({ success: false, exitCode: -2, stdout: '', stderr: '扫描被操作员中止', executionMode: 'aborted' });
+        }
+      }
+    }, 500);
+    toolPromise.then((r) => {
+      if (!done) {
+        done = true;
+        clearInterval(interval);
+        resolve(r);
+      }
+    }).catch((err) => {
+      if (!done) {
+        done = true;
+        clearInterval(interval);
+        resolve({ success: false, exitCode: -1, stdout: '', stderr: err.message, executionMode: 'error' });
+      }
+    });
+  });
+}
+
 // ── Ensure nuclei templates are available ──────────────────────────────
 let nucleiTemplatesChecked = false;
 
@@ -695,8 +733,10 @@ export async function executeScan(scanTaskId) {
     `);
 
     async function runAndStore(scanType, toolId, target, params, timeout) {
+      if (scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');
       const args = buildArgs(scanType, target, params);
-      const result = await runTool(toolId, args, { timeout });
+      const result = await raceScanWithAbort(runTool(toolId, args, { timeout }), scanTaskId);
+      if (result.executionMode === 'aborted') throw new Error('扫描被操作员中止');
       const output = (result.stdout || '') + (result.stderr ? '\n' + result.stderr : '');
       const results = parseResults(scanType, output);
       for (const r of results) {
@@ -826,20 +866,23 @@ export async function executeScan(scanTaskId) {
     return { ok: true, scanTaskId, status: 'COMPLETED', resultsCount: totalResults };
 
   } catch (err) {
+    const isAbort = scanAbortFlags.get(scanTaskId);
+    const finalStatus = isAbort ? 'CANCELLED' : 'FAILED';
     const completedAt = new Date().toISOString();
-    db.prepare("UPDATE scan_tasks SET status = 'FAILED', completed_at = ?, error_message = ? WHERE scan_task_id = ?")
-      .run(completedAt, err.message, scanTaskId);
-    // WebSocket: notify scan failed (include operator info)
+    db.prepare("UPDATE scan_tasks SET status = ?, completed_at = ?, error_message = ? WHERE scan_task_id = ?")
+      .run(finalStatus, completedAt, err.message, scanTaskId);
+    // WebSocket: notify scan failed/cancelled (include operator info)
     const ws = getWsManager();
     const taskInfo = db.prepare('SELECT created_by FROM scan_tasks WHERE scan_task_id = ?').get(scanTaskId);
     if (ws) ws.broadcast('scan:completed', {
-      scanTaskId, status: 'FAILED', error: err.message,
+      scanTaskId, status: finalStatus, error: err.message,
       userId: taskInfo?.created_by || null,
       username: taskInfo?.created_by || null,
     });
 
     return { ok: false, error: err.message };
   } finally {
+    scanAbortFlags.delete(scanTaskId);
     runningScans.delete(scanTaskId);
   }
 }

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
-import { executeRun } from '../services/executionEngine.js';
+import { executeRun, requestAbort } from '../services/executionEngine.js';
 import { computeGrade } from '../services/gradingEngine.js';
 import { buildAttackGraph, buildAttackGraphSummary } from '../services/graphBuilder.js';
 import { inferNextActions } from '../services/pathPlanner.js';
@@ -216,6 +216,19 @@ export default function (db) {
       role: req.user?.role || null,
     });
     res.status(202).json({ status: 'ok', data: { run_id: req.params.runId, message: 'Execution started' } });
+  });
+
+  // ── Abort a running execution ─────────────────────────────────────────
+  router.post('/:runId/abort', (req, res) => {
+    const run = db.prepare('SELECT status FROM execution_runs WHERE run_id = ?').get(req.params.runId);
+    if (!run) return res.status(404).json({ status: 'error', error: { message: 'Run not found' } });
+    if (run.status !== 'RUNNING' && run.status !== 'PENDING') {
+      return res.status(400).json({ status: 'error', error: { message: `Run is ${run.status}, cannot abort` } });
+    }
+    requestAbort(req.params.runId);
+    db.prepare("UPDATE execution_runs SET status = 'ABORTED', stop_reason = '操作员手动中止', updated_at = datetime('now') WHERE run_id = ?")
+      .run(req.params.runId);
+    res.json({ status: 'ok', data: { aborted: true } });
   });
 
   // ── Preflight Check (without starting execution) ───────────────────────

@@ -47,9 +47,6 @@ public:
   /// Used when PlaybookPage::executeRequested fires.
   void jumpToExecution(const QString &playbookId, const QString &target);
 
-  /// Append an AI ReAct thought to the reasoning panel (wired from runReact WS event)
-  void appendThought(const QString &text);
-
 public slots:
   void refreshFlows();
   void onPipelineCreated(const QJsonObject &data);
@@ -106,11 +103,11 @@ private:
   QAction *m_reportAction;
   StepIndicator *m_stepIndicator;   // pipeline 四阶段进度（自绘节点+连线+摘要）
   LiveActivityPanel *m_activityPanel;
+  QSplitter *m_contentSplitter;     // left-right splitter: AI reasoning | stage tabs
+  QTextBrowser *m_reasoningPanel;   // left-column AI reasoning stream
 
   // Stage tabs (拓扑/扫描/攻击/评估) embedded in the workbench
   QTabWidget *m_stageTabs;
-  QSplitter *m_contentSplitter;       // left-right splitter: AI reasoning | stage tabs
-  QTextBrowser *m_reasoningPanel;     // left-column AI reasoning stream
   TopologyPage *m_topoTab;
   ScanPage *m_scanTab;
   ExecutionPage *m_execTab;

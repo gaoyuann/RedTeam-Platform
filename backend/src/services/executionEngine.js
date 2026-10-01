@@ -13,6 +13,45 @@ import { buildContextForTarget } from './targetAdapters/index.js';
 import { renderCommand } from './commandTemplateRenderer.js';
 import { getWsManager } from './wsManager.js';
 
+// ── Module-level abort flags ───────────────────────────────────────────
+// Allows external API (POST /api/runs/:runId/abort) to cancel a running execution.
+const abortFlags = new Map();
+
+export function requestAbort(runId) {
+  abortFlags.set(runId, true);
+}
+
+// Race a tool promise against an external abort signal so that operator-initiated
+// abort is honoured even while a tool is mid-execution (not just between steps).
+// The underlying tool process is left to exit via its own SIGKILL fallback.
+function raceWithAbort(toolPromise, runId) {
+  return new Promise((resolve) => {
+    let done = false;
+    const interval = setInterval(() => {
+      if (abortFlags.get(runId)) {
+        if (!done) {
+          done = true;
+          clearInterval(interval);
+          resolve({ success: false, exitCode: -2, stdout: '', stderr: '操作员手动中止', executionMode: 'aborted' });
+        }
+      }
+    }, 500);
+    toolPromise.then((r) => {
+      if (!done) {
+        done = true;
+        clearInterval(interval);
+        resolve(r);
+      }
+    }).catch((err) => {
+      if (!done) {
+        done = true;
+        clearInterval(interval);
+        resolve({ success: false, exitCode: -1, stdout: '', stderr: err.message, executionMode: 'error' });
+      }
+    });
+  });
+}
+
 const MAX_OUTPUT_LENGTH = 4096;
 
 // Track running executions to prevent duplicates
@@ -134,6 +173,10 @@ export async function executeRun(runId) {
 
   // Determine engine type: use stored value, or auto-detect
   let engineType = run.engine_type;
+  // 'playbook' is a legacy alias for 'mechanical' from migration 001.
+  // Migration 017 converts existing data, but the column default remains
+  // 'playbook' (SQLite can't change defaults via ALTER). Keep this compat
+  // check as a safety net for runs created before the code update.
   if (!engineType || engineType === 'mechanical' || engineType === 'playbook') {
     // Auto-detect: if LLM is available, upgrade to react
     engineType = determineEngineType(db);
@@ -233,6 +276,8 @@ export async function executeRun(runId) {
   let failedSteps = 0;
   let aborted = false;
   let stopReason = null;
+  let manualAbort = false;   // operator-initiated abort (vs ReAct "stop" / timeout)
+  let timeoutAbort = false;  // global run deadline exceeded
 
   // ReAct state (only used when engineType === 'react')
   const evidenceHistory = [];
@@ -272,13 +317,39 @@ export async function executeRun(runId) {
   }
   const reactThoughts = [];
   const failedToolCounts = [];  // [{ toolId, count }] — blacklist for 3+ failures
+  const stepRetryCount = new Map();  // stepIndex → retry count (max 2 per step)
+  const failedNonOptionalSteps = new Set();  // step_index values of non-optional failures
 
   try {
     // Use mutable steps array (ReAct may insert new steps)
     const mutableSteps = [...runnableSteps];
 
+    // Global run deadline — prevents runaway execution from hanging forever.
+    // Default 4h, configurable via RUN_TIMEOUT_MS env var (min 1 minute).
+    const _parsedDeadline = parseInt(process.env.RUN_TIMEOUT_MS || '', 10);
+    const RUN_DEADLINE_MS = _parsedDeadline >= 60_000 ? _parsedDeadline : (4 * 60 * 60 * 1000);
+    const runStartTime = Date.now();
+
     for (let i = 0; i < mutableSteps.length; i++) {
       if (aborted) break;
+
+      // Check for external abort request (POST /api/runs/:runId/abort)
+      if (abortFlags.get(runId)) {
+        aborted = true;
+        manualAbort = true;
+        stopReason = '操作员手动中止';
+        console.log(`[executionEngine] Run ${runId} aborted by operator`);
+        break;
+      }
+
+      // Global run deadline — stop runaway executions
+      if (Date.now() - runStartTime > RUN_DEADLINE_MS) {
+        aborted = true;
+        timeoutAbort = true;
+        stopReason = `运行超时（${Math.round(RUN_DEADLINE_MS / 60000)}分钟）`;
+        console.warn(`[executionEngine] Run ${runId} exceeded deadline (${RUN_DEADLINE_MS}ms), aborting`);
+        break;
+      }
 
       const step = mutableSteps[i];
 
@@ -330,14 +401,17 @@ export async function executeRun(runId) {
 
         // Execute tool
         try {
-          result = await runTool(step.tool_id, args, { timeout: 300 });
+          result = await raceWithAbort(runTool(step.tool_id, args, { timeout: 300_000 }), runId);
         } catch (err) {
           result = { success: false, exitCode: -1, stdout: '', stderr: err.message, executionMode: 'error' };
         }
       }
 
       // Record step result
+      // (DELETE first to handle retry case — adjust action may re-execute a step)
       const output = (result.stdout || result.stderr || '').slice(0, MAX_OUTPUT_LENGTH);
+      db.prepare('DELETE FROM execution_steps WHERE run_id = ? AND step_index = ?')
+        .run(runId, step.step_index);
       db.prepare(`
         INSERT INTO execution_steps (run_id, step_index, tool_id, args, success, exit_code, notes)
         VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -399,6 +473,8 @@ export async function executeRun(runId) {
         // even without LLM, the blacklist is useful for reporting)
         const existing = failedToolCounts.find(f => f.toolId === step.tool_id);
         if (existing) { existing.count++; } else { failedToolCounts.push({ toolId: step.tool_id, count: 1 }); }
+        // Track non-optional failures for final status determination
+        if (!step.optional) failedNonOptionalSteps.add(step.step_index);
         // In mechanical mode (no LLM), abort on non-optional step failures.
         // In ReAct mode, let the LLM decide whether to continue or stop.
         if (engineType === 'mechanical' && !step.optional) {
@@ -472,6 +548,11 @@ export async function executeRun(runId) {
         }
 
         // Call ReAct engine
+        // Dynamic explorationMode: first half of steps uses exploration mode
+        // (encourages insert/pivot for attack surface discovery), second half
+        // uses auto-pilot (focuses on completing the playbook).
+        const explorationMode = completedSteps < mutableSteps.length * 0.5;
+
         const decision = await reactDecide({
           runId,
           stepIndex: step.step_index,
@@ -491,6 +572,7 @@ export async function executeRun(runId) {
           completedSteps,
           detectedTechniques,
           appContext,
+          explorationMode,
         });
 
         reactCallCount++;
@@ -533,16 +615,42 @@ export async function executeRun(runId) {
             console.log(`[ReAct] Run stopped: ${stopReason}`);
             break;
 
-          case 'adjust':
-            if (decision.newArgs && typeof decision.stepIndex === 'number') {
-              // Find and modify the target step
-              const targetStep = mutableSteps.find(s => s.step_index === decision.stepIndex);
-              if (targetStep) {
-                targetStep.args_template = JSON.stringify(decision.newArgs);
-                console.log(`[ReAct] Adjusted step ${decision.stepIndex}: ${JSON.stringify(decision.newArgs)}`);
+          case 'adjust': {
+            // Default to current step if stepIndex not provided by LLM
+            const adjustTargetIdx = typeof decision.stepIndex === 'number'
+              ? decision.stepIndex
+              : step.step_index;
+            const targetStep = mutableSteps.find(s => s.step_index === adjustTargetIdx);
+
+            if (!targetStep) {
+              console.warn(`[ReAct] adjust: step ${adjustTargetIdx} not found, skipping`);
+              break;
+            }
+
+            // Apply new args if provided; otherwise keep existing (simple retry)
+            if (decision.newArgs) {
+              targetStep.args_template = JSON.stringify(decision.newArgs);
+            }
+
+            // If target is the current step → re-execute (retry)
+            if (adjustTargetIdx === step.step_index) {
+              const retries = (stepRetryCount.get(adjustTargetIdx) || 0) + 1;
+              stepRetryCount.set(adjustTargetIdx, retries);
+              if (retries <= 2) {
+                // Undo the counter from this attempt so re-execution re-counts
+                if (result.success) completedSteps--; else failedSteps--;
+                failedNonOptionalSteps.delete(adjustTargetIdx);  // clear this step's failure, re-eval on retry
+                i--;  // loop will i++ and re-execute this step
+                console.log(`[ReAct] Retrying step ${adjustTargetIdx} (attempt ${retries}/2)${decision.newArgs ? ' with adjusted args' : ''}`);
+              } else {
+                console.warn(`[ReAct] Step ${adjustTargetIdx} retry limit (2) reached, continuing`);
               }
+            } else {
+              // Adjusting a future step — just modify args, no retry needed
+              console.log(`[ReAct] Adjusted future step ${adjustTargetIdx}: ${decision.newArgs ? JSON.stringify(decision.newArgs) : 'keep existing args'}`);
             }
             break;
+          }
 
           case 'insert':
             if (decision.toolId && decision.args) {
@@ -653,12 +761,25 @@ export async function executeRun(runId) {
     }
 
     // Update run status
-    const finalStatus = aborted ? (stopReason ? 'COMPLETED' : 'FAILED') : 'COMPLETED';
+    // - Manual abort (operator) → ABORTED
+    // - Timeout (global deadline) → FAILED
+    // - ReAct "stop" (LLM decided) → COMPLETED
+    // - Not aborted but non-optional steps failed → FAILED
+    // - Not aborted, no non-optional failures → COMPLETED
+    const hasNonOptionalFailure = failedNonOptionalSteps.size > 0;
+    const finalStatus = manualAbort
+      ? 'ABORTED'
+      : timeoutAbort
+        ? 'FAILED'
+        : aborted  // ReAct "stop" — LLM decided to terminate
+          ? 'COMPLETED'
+          : (hasNonOptionalFailure ? 'FAILED' : 'COMPLETED');
     const summary = JSON.stringify({
       total: mutableSteps.length,
       completed: completedSteps,
       failed: failedSteps,
       aborted,
+      hasNonOptionalFailure,
       stopReason,
       engineType,
       reactCallCount,
@@ -704,6 +825,7 @@ export async function executeRun(runId) {
     return { ok: false, error: err.message };
   } finally {
     runningRuns.delete(runId);
+    abortFlags.delete(runId);
   }
 }
 
