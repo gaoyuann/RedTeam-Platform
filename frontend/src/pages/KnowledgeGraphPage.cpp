@@ -1,5 +1,6 @@
 #include "KnowledgeGraphPage.h"
 #include "../Theme.h"
+#include "../UiUtil.h"
 #include "../ApiClient.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -184,25 +185,42 @@ void KnowledgeGraphPage::setupStatsTab(QWidget *parent) {
   cardsH->addStretch();
   l->addLayout(cardsH);
 
-  // Node type distribution
+  // 两张分布表并排铺满行宽，不再上下堆叠留白
+  auto *distH = new QHBoxLayout;
+
+  auto *ntW = new QWidget;
+  auto *ntL = new QVBoxLayout(ntW);
+  ntL->setContentsMargins(0, 0, 0, 0);
   auto *ntLabel = new QLabel("节点类型分布"); ntLabel->setStyleSheet(Theme::SectionStyle);
-  l->addWidget(ntLabel);
+  ntL->addWidget(ntLabel);
   m_nodeTypeTable = new QTableWidget(0, 3);
+  UiUtil::EmptyHint::attach(m_nodeTypeTable, QStringLiteral("暂无节点统计"));
   m_nodeTypeTable->setHorizontalHeaderLabels({"类型", "数量", "占比"});
   m_nodeTypeTable->setAlternatingRowColors(true);
   m_nodeTypeTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_nodeTypeTable->setSortingEnabled(true);
-  l->addWidget(m_nodeTypeTable, 1);
+  m_nodeTypeTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+  m_nodeTypeTable->verticalHeader()->setDefaultSectionSize(36);
+  ntL->addWidget(m_nodeTypeTable, 1);
+  distH->addWidget(ntW, 1);
 
-  // Edge type distribution
+  auto *etW = new QWidget;
+  auto *etL = new QVBoxLayout(etW);
+  etL->setContentsMargins(0, 0, 0, 0);
   auto *etLabel = new QLabel("边类型分布"); etLabel->setStyleSheet(Theme::SectionStyle);
-  l->addWidget(etLabel);
+  etL->addWidget(etLabel);
   m_edgeTypeTable = new QTableWidget(0, 2);
+  UiUtil::EmptyHint::attach(m_edgeTypeTable, QStringLiteral("暂无关系统计"));
   m_edgeTypeTable->setHorizontalHeaderLabels({"类型", "数量"});
   m_edgeTypeTable->setAlternatingRowColors(true);
   m_edgeTypeTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_edgeTypeTable->setSortingEnabled(true);
-  l->addWidget(m_edgeTypeTable, 1);
+  m_edgeTypeTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+  m_edgeTypeTable->verticalHeader()->setDefaultSectionSize(36);
+  etL->addWidget(m_edgeTypeTable, 1);
+  distH->addWidget(etW, 1);
+
+  l->addLayout(distH, 1);
 }
 
 void KnowledgeGraphPage::setupGraphTab(QWidget *parent) {
@@ -323,6 +341,7 @@ void KnowledgeGraphPage::setupMappingsTab(QWidget *parent) {
   l->addLayout(filterH);
 
   m_mappingTable = new QTableWidget(0, 4);
+  UiUtil::EmptyHint::attach(m_mappingTable, QStringLiteral("暂无映射记录"));
   m_mappingTable->setHorizontalHeaderLabels({"工具名称", "技术编号", "技术名称", "置信度"});
   m_mappingTable->setAlternatingRowColors(true);
   m_mappingTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -366,6 +385,7 @@ void KnowledgeGraphPage::setupNodesTab(QWidget *parent) {
   l->addLayout(filterH);
 
   m_searchTable = new QTableWidget(0, 4);
+  UiUtil::EmptyHint::attach(m_searchTable, QStringLiteral("暂无搜索结果"));
   m_searchTable->setHorizontalHeaderLabels({"名称", "类型", "来源", "风险"});
   m_searchTable->setAlternatingRowColors(true);
   m_searchTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -408,7 +428,8 @@ void KnowledgeGraphPage::loadStats() {
     m_edgeCountLabel->setText(QString("边: %1").arg(d["edge_count"].toInt()));
     m_versionLabel->setText(QString("版本：%1").arg(d["kg_version"].toString()));
 
-    // Node type distribution
+    // 排序开启时逐行 setItem 会边填边重排，后两列 item 落错行 → 数字错位/丢失
+    m_nodeTypeTable->setSortingEnabled(false);
     auto ntc = d["node_type_counts"].toObject();
     m_nodeTypeTable->setRowCount(ntc.size());
     int i = 0;
@@ -419,10 +440,11 @@ void KnowledgeGraphPage::loadStats() {
       m_nodeTypeTable->setItem(i, 1, new QTableWidgetItem(QString::number(count)));
       m_nodeTypeTable->setItem(i, 2, new QTableWidgetItem(QString("%1%").arg(pct, 0, 'f', 1)));
     }
+    m_nodeTypeTable->setSortingEnabled(true);
     m_nodeTypeTable->resizeColumnsToContents();
-    m_nodeTypeTable->horizontalHeader()->setStretchLastSection(true);
 
     // Edge type distribution
+    m_edgeTypeTable->setSortingEnabled(false);
     auto etc = d["edge_type_counts"].toObject();
     m_edgeTypeTable->setRowCount(etc.size());
     i = 0;
@@ -430,8 +452,8 @@ void KnowledgeGraphPage::loadStats() {
       m_edgeTypeTable->setItem(i, 0, new QTableWidgetItem(edgeTypeLabel(it.key())));
       m_edgeTypeTable->setItem(i, 1, new QTableWidgetItem(QString::number(it.value().toInt())));
     }
+    m_edgeTypeTable->setSortingEnabled(true);
     m_edgeTypeTable->resizeColumnsToContents();
-    m_edgeTypeTable->horizontalHeader()->setStretchLastSection(true);
   });
 }
 
@@ -448,6 +470,7 @@ void KnowledgeGraphPage::setupTacticTreeTab(QWidget *parent) {
 
   // Left: tactic→technique tree
   m_tacticTree = new QTreeWidget;
+  UiUtil::EmptyHint::attach(m_tacticTree, QStringLiteral("暂无战术技术数据"));
   m_tacticTree->setHeaderLabels(QStringList{QStringLiteral("名称"), QStringLiteral("ID")});
   m_tacticTree->setColumnWidth(0, 280);
   m_tacticTree->setColumnWidth(1, 100);

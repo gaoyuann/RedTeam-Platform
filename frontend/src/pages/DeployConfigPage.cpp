@@ -7,6 +7,7 @@
 #include <QScrollArea>
 #include <QFrame>
 #include "../Theme.h"
+#include "../UiUtil.h"
 #include <QMenu>
 #include <QApplication>
 #include <QClipboard>
@@ -40,15 +41,40 @@ void DeployConfigPage::setupUI() {
   layout->addLayout(platH);
   connect(m_checkBtn, &QPushButton::clicked, this, &DeployConfigPage::onCheckBackend);
 
-  auto *platInfoH = new QHBoxLayout;
-  m_versionLabel = new QLabel("版本: -");
-  m_dbSizeLabel = new QLabel("数据库: -");
-  m_dbTablesLabel = new QLabel("表行数: -");
-  platInfoH->addWidget(m_versionLabel);
-  platInfoH->addWidget(m_dbSizeLabel);
-  platInfoH->addWidget(m_dbTablesLabel);
-  platInfoH->addStretch();
-  layout->addLayout(platInfoH);
+  // 平台状态数据行：三个指标块（启动/运行/数据库）+ 表行数芯片网格。
+  // 原先三个 QLabel 挤一行，表行数 wordWrap 成大块文字，很乱
+  auto *statCard = new QFrame;
+  statCard->setProperty("softCard", true);
+  auto *statL = new QHBoxLayout(statCard);
+  statL->setContentsMargins(14, 8, 14, 8);
+  statL->setSpacing(36);
+  auto makeStat = [statL](const QString &caption) {
+    auto *box = new QVBoxLayout;
+    box->setSpacing(1);
+    auto *cap = new QLabel(caption);
+    cap->setStyleSheet("font-size:11px; color:#7f8c8d;");
+    auto *val = new QLabel("-");
+    val->setStyleSheet("font-size:14px; font-weight:600; color:#172033;");
+    box->addWidget(cap);
+    box->addWidget(val);
+    statL->addLayout(box);
+    return val;
+  };
+  m_versionLabel = makeStat("启动时间");
+  m_uptimeLabel = makeStat("运行时长");
+  m_dbSizeLabel = makeStat("数据库大小");
+  statL->addStretch();
+  layout->addWidget(statCard);
+
+  m_dbTablesCaption = new QLabel("数据库表行数 · 点击「检测后端连接」获取");
+  m_dbTablesCaption->setStyleSheet("font-size:12px; color:#7f8c8d;");
+  layout->addWidget(m_dbTablesCaption);
+  auto *tablesFlow = new QWidget;
+  m_dbTablesGrid = new QGridLayout(tablesFlow);
+  m_dbTablesGrid->setContentsMargins(0, 0, 0, 0);
+  m_dbTablesGrid->setHorizontalSpacing(8);
+  m_dbTablesGrid->setVerticalSpacing(6);
+  layout->addWidget(tablesFlow);
 
   // ── 2. LLM Config ─────────────────────────────────────────────────
   auto *llmLabel = new QLabel("大语言模型配置"); llmLabel->setStyleSheet(Theme::SectionStyle);
@@ -114,6 +140,7 @@ void DeployConfigPage::setupUI() {
   auto *imgLabel = new QLabel("容器镜像状态"); imgLabel->setStyleSheet(Theme::SectionStyle);
   layout->addWidget(imgLabel);
   m_imageTable = new QTableWidget(0, 3);
+  UiUtil::EmptyHint::attach(m_imageTable, QStringLiteral("暂无镜像 · 点击刷新获取"));
   m_imageTable->setHorizontalHeaderLabels({"镜像", "标签", "大小"});
   m_imageTable->setAlternatingRowColors(true);
   m_imageTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -122,12 +149,14 @@ void DeployConfigPage::setupUI() {
   m_imageTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
   m_imageTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
   m_imageTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
-  layout->addWidget(m_imageTable, 1);
+  // 不再参与视口高度均摊：高度随内容走（fitTableHeight），整页自然滚动
+  layout->addWidget(m_imageTable);
 
   // ── 5. Tool List (existing) ───────────────────────────────────────
   auto *toolLabel = new QLabel("工具列表"); toolLabel->setStyleSheet(Theme::SectionStyle);
   layout->addWidget(toolLabel);
   m_toolTable = new QTableWidget(0, 3);
+  UiUtil::EmptyHint::attach(m_toolTable, QStringLiteral("暂无工具"));
   m_toolTable->setHorizontalHeaderLabels({"工具编号", "镜像", "类型"});
   m_toolTable->setAlternatingRowColors(true);
   m_toolTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -136,12 +165,13 @@ void DeployConfigPage::setupUI() {
   m_toolTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
   m_toolTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
   m_toolTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
-  layout->addWidget(m_toolTable, 1);
+  layout->addWidget(m_toolTable);
 
   // ── 6. System Config (existing) ───────────────────────────────────
   auto *cfgLabel = new QLabel("系统配置"); cfgLabel->setStyleSheet(Theme::SectionStyle);
   layout->addWidget(cfgLabel);
   m_configTable = new QTableWidget(0, 3);
+  UiUtil::EmptyHint::attach(m_configTable, QStringLiteral("暂无配置项"));
   m_configTable->setHorizontalHeaderLabels({"配置项", "值", "类别"});
   m_configTable->setAlternatingRowColors(true);
   m_configTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -164,15 +194,20 @@ void DeployConfigPage::setupUI() {
   layout->addLayout(labHeaderH);
 
   m_labTable = new QTableWidget(0, 3);
+  UiUtil::EmptyHint::attach(m_labTable, QStringLiteral("暂无靶场环境"));
   m_labTable->setHorizontalHeaderLabels({"靶场名称", "状态", "操作"});
+  m_labTable->verticalHeader()->setDefaultSectionSize(44);
   m_labTable->setAlternatingRowColors(true);
   m_labTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_labTable->setSortingEnabled(true);
   m_labTable->setContextMenuPolicy(Qt::CustomContextMenu);
   m_labTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
   m_labTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-  m_labTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+  // 操作列固定宽：按钮是 setCellWidget，ResizeToContents 测不到会被压瘪
+  m_labTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Fixed);
+  m_labTable->setColumnWidth(2, 170);
   layout->addWidget(m_labTable);
+
 
   connect(m_labRefreshBtn, &QPushButton::clicked, this, &DeployConfigPage::loadLabList);
 
@@ -234,6 +269,14 @@ void DeployConfigPage::onRefresh() {
   loadLabList();
 }
 
+// 表格高度随内容走：行少收紧、行多在 cap 上限内滚动。
+// 四张表不再参与视口高度均摊，整页纵向自然滚动，互不挤压
+void DeployConfigPage::fitTableHeight(QTableWidget *t, int cap) {
+  const int h = t->horizontalHeader()->height() +
+                qMax(t->rowCount(), 1) * t->verticalHeader()->defaultSectionSize() + 10;
+  t->setFixedHeight(qBound(110, h, cap));
+}
+
 // ── Slot: Check backend (merged with loadPlatformStatus) ─────────────
 void DeployConfigPage::onCheckBackend() {
   m_checkBtn->setEnabled(false);
@@ -249,7 +292,8 @@ void DeployConfigPage::onCheckBackend() {
       QString uptimeStr = uptime > 3600 ? QString("%1h").arg(int(uptime / 3600))
                        : uptime > 60   ? QString("%1m").arg(int(uptime / 60))
                        :                  QString("%1s").arg(int(uptime));
-      m_versionLabel->setText(QString("启动时间: %1 | 运行: %2").arg(ts.left(19), uptimeStr));
+      m_versionLabel->setText(ts.left(19).replace('T', ' '));
+      m_uptimeLabel->setText(uptimeStr);
     } else {
       m_engineLabel->setText("未连接");
       m_engineLabel->setStyleSheet(Theme::StatusErrorStyle);
@@ -264,15 +308,34 @@ void DeployConfigPage::onCheckBackend() {
     QString sizeStr = size > 1048576 ? QString("%1 MB").arg(size / 1048576.0, 0, 'f', 1)
                    : size > 1024   ? QString("%1 KB").arg(size / 1024.0, 0, 'f', 0)
                    :                  QString("%1 B").arg(size);
-    m_dbSizeLabel->setText("数据库: " + sizeStr);
+    m_dbSizeLabel->setText(sizeStr);
 
+    // 表行数芯片网格重建：非 0 表高亮蓝色，空表灰色，按表名排序便于扫读
     auto tables = d["tableRowCounts"].toObject();
-    QStringList parts;
-    for (auto it = tables.begin(); it != tables.end(); ++it) {
-      parts << QString("%1:%2").arg(it.key(), QString::number(it.value().toInt()));
+    while (m_dbTablesGrid->count() > 0) {
+      auto *it = m_dbTablesGrid->takeAt(0);
+      if (it->widget()) it->widget()->deleteLater();
+      delete it;
     }
-    m_dbTablesLabel->setText("表行数: " + parts.join("  "));
-    m_dbTablesLabel->setWordWrap(true);
+    const QString chipZero =
+      "background:#f1f5f9; color:#94a3b8; border:1px solid #e2e8f0; "
+      "border-radius:7px; padding:3px 10px; font-size:12px;";
+    const QString chipData =
+      "background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; "
+      "border-radius:7px; padding:3px 10px; font-size:12px; font-weight:600;";
+    QStringList names = tables.keys();
+    names.sort();
+    const int cols = 5;
+    int nonZero = 0;
+    for (int i = 0; i < names.size(); i++) {
+      const int n = tables.value(names[i]).toInt();
+      if (n > 0) nonZero++;
+      auto *chip = new QLabel(QString("%1 · %2").arg(names[i], QString::number(n)));
+      chip->setStyleSheet(n > 0 ? chipData : chipZero);
+      m_dbTablesGrid->addWidget(chip, i / cols, i % cols);
+    }
+    m_dbTablesCaption->setText(QString("数据库表行数 · 共 %1 张表，%2 张有数据")
+                                 .arg(names.size()).arg(nonZero));
   });
 }
 
@@ -408,6 +471,8 @@ void DeployConfigPage::loadSandboxConfig() {
     auto imgs = d["images"].toArray();
     // Also get image sizes from the backend if available
     auto imgSizes = d["imageSizes"].toObject();
+    // 排序开启时逐行 setItem 会边填边重排，行错位（同 KG 统计/靶场表根因）
+    m_imageTable->setSortingEnabled(false);
     m_imageTable->setRowCount(imgs.size());
     for (int i = 0; i < imgs.size(); i++) {
       QString img = imgs[i].toString();
@@ -421,6 +486,8 @@ void DeployConfigPage::loadSandboxConfig() {
       if (sizeStr.isEmpty()) sizeStr = imgSizes[repo].toString();
       m_imageTable->setItem(i, 2, new QTableWidgetItem(sizeStr.isEmpty() ? "-" : sizeStr));
     }
+    m_imageTable->setSortingEnabled(true);
+    fitTableHeight(m_imageTable, 300);
   });
 }
 
@@ -462,6 +529,7 @@ void DeployConfigPage::loadToolList() {
   m_api->get("/api/tools/list", 5000, [this](const QJsonObject &res) {
     if (res["status"].toString() != "ok") return;
     auto arr = res["data"].toArray();
+    m_toolTable->setSortingEnabled(false);
     m_toolTable->setRowCount(arr.size());
     for (int i = 0; i < arr.size(); i++) {
       auto t = arr[i].toObject();
@@ -477,6 +545,8 @@ void DeployConfigPage::loadToolList() {
       m_toolTable->setItem(i, 1, new QTableWidgetItem(img));
       m_toolTable->setItem(i, 2, new QTableWidgetItem(t["virtual"].toBool() ? QStringLiteral("虚拟") : QStringLiteral("容器")));
     }
+    m_toolTable->setSortingEnabled(true);
+    fitTableHeight(m_toolTable, 300);
   });
 }
 
@@ -485,6 +555,7 @@ void DeployConfigPage::loadConfig() {
   m_api->get("/api/config", 5000, [this](const QJsonObject &res) {
     if (res["status"].toString() != "ok") return;
     auto arr = res["data"].toArray();
+    m_configTable->setSortingEnabled(false);
     m_configTable->setRowCount(arr.size());
     for (int i = 0; i < arr.size(); i++) {
       auto c = arr[i].toObject();
@@ -492,6 +563,8 @@ void DeployConfigPage::loadConfig() {
       m_configTable->setItem(i, 1, new QTableWidgetItem(c["config_value"].toString()));
       m_configTable->setItem(i, 2, new QTableWidgetItem(c["category"].toString()));
     }
+    m_configTable->setSortingEnabled(true);
+    fitTableHeight(m_configTable, 300);
   });
 }
 
@@ -500,6 +573,8 @@ void DeployConfigPage::loadLabList() {
   m_api->get("/api/labs", 5000, [this](const QJsonObject &res) {
     if (res["status"].toString() != "ok") return;
     auto data = res["data"].toArray();
+    // 排序开启时逐行 setItem 会边填边重排，行错位（状态/操作列空白的根因）
+    m_labTable->setSortingEnabled(false);
     m_labTable->setRowCount(data.size());
     for (int i = 0; i < data.size(); i++) {
       auto lab = data[i].toObject();
@@ -524,9 +599,14 @@ void DeployConfigPage::loadLabList() {
       auto *btnLayout = new QHBoxLayout(btnWidget);
       btnLayout->setContentsMargins(4, 2, 4, 2);
 
+      // 紧凑按钮：默认按钮 + 单元行高会被裁切
+      const QString compactBtnCss = "padding:3px 10px; font-size:12px; min-height:0px;";
       auto *startBtn = new QPushButton("启动");
       auto *stopBtn = new QPushButton("停止");
       auto *verifyBtn = new QPushButton("自检");
+      startBtn->setStyleSheet(compactBtnCss);
+      stopBtn->setStyleSheet(compactBtnCss);
+      verifyBtn->setStyleSheet(compactBtnCss);
 
       stopBtn->setProperty("danger", true);
       if (status == "running") {
@@ -544,6 +624,8 @@ void DeployConfigPage::loadLabList() {
       btnLayout->addWidget(verifyBtn);
       m_labTable->setCellWidget(i, 2, btnWidget);
     }
+    m_labTable->setSortingEnabled(true);
+    fitTableHeight(m_labTable, 380);
   });
 }
 

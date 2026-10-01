@@ -9,7 +9,9 @@
 #include <QPushButton>
 #include <QDialog>
 #include <QTextEdit>
+#include <QTextBrowser>
 #include <QTabWidget>
+#include <QSplitter>
 #include <functional>
 
 class ApiClient;
@@ -34,10 +36,16 @@ private slots:
   void onDeletePlaybook();
   void onNewPlaybook();
   void onGoExecute();
+  void onStepSelected();
+
+protected:
+  bool eventFilter(QObject *watched, QEvent *ev) override;
 
 private:
   void setupUI();
   void loadPlaybookDetail(const QString &id);
+  void fitDetailTreeHeight();
+  void compressListColumns();
   static QString formatDifficulty(const QString &s);
   static QString formatBaselineGroup(const QString &s);
 
@@ -53,9 +61,14 @@ private:
 
   QComboBox *m_groupFilter;
   QCheckBox *m_showGenerated;
+  QSplitter *m_splitter;
   QTableWidget *m_listTable;
   QTreeWidget *m_detailTree;
   QLabel *m_detailLabel;
+  QLabel *m_detailMeta;
+  QLabel *m_detailDesc;
+  QTextBrowser *m_stepDetail;   // 步骤详情卡片（描述/参数模板完整展示）
+  QPushButton *m_copyArgsBtn;
   QString m_selectedId;
 
   // Go to execute button
@@ -64,4 +77,5 @@ private:
 
   // New playbook
   QPushButton *m_newBtn;
+  bool m_compressPending = false;  // 防抖：一轮布局结束再压缩列宽
 };

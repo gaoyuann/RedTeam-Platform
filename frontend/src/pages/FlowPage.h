@@ -15,6 +15,7 @@ class QAction;
 class QTabWidget;
 class QSplitter;
 class QTextBrowser;
+class StepIndicator;
 class TopologyPage;
 class ScanPage;
 class ExecutionPage;
@@ -103,10 +104,7 @@ private:
   QAction *m_cancelAction;
   QAction *m_deleteAction;
   QAction *m_reportAction;
-  QLabel *m_stepIcons[4];
-  QLabel *m_stepNames[4];
-  QLabel *m_stepStatuses[4];
-  QLabel *m_stepSummaries[4];
+  StepIndicator *m_stepIndicator;   // pipeline 四阶段进度（自绘节点+连线+摘要）
   LiveActivityPanel *m_activityPanel;
 
   // Stage tabs (拓扑/扫描/攻击/评估) embedded in the workbench

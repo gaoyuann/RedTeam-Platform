@@ -1,5 +1,11 @@
 <RCC>
     <qresource prefix="/">
         <file alias="images/logo.png">logo.png</file>
+        <file alias="icons/checkbox_off.png">icons/checkbox_off.png</file>
+        <file alias="icons/checkbox_on.png">icons/checkbox_on.png</file>
+        <file alias="icons/checkbox_on_disabled.png">icons/checkbox_on_disabled.png</file>
+        <file alias="icons/checkbox_off_disabled.png">icons/checkbox_off_disabled.png</file>
+        <file alias="icons/radio_off.png">icons/radio_off.png</file>
+        <file alias="icons/radio_on.png">icons/radio_on.png</file>
     </qresource>
 </RCC>

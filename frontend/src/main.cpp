@@ -59,7 +59,7 @@ QTableWidget::item:selected, QTreeWidget::item:selected { background: #dbeafe; c
 
 QTabWidget::pane { border: 1px solid #dbe3ef; border-radius: 10px; background: #ffffff; padding: 8px; }
 QTabBar::tab {
-  background: transparent; color: #64748b; padding: 9px 16px; font-size: 14px;
+  background: transparent; color: #64748b; padding: 7px 13px; font-size: 14px;
   font-weight: 600; border-bottom: 2px solid transparent; margin-right: 4px;
 }
 QTabBar::tab:selected { color: #1d4ed8; border-bottom-color: #2563eb; }
@@ -100,6 +100,42 @@ QListWidget#navList {
 QListWidget#navList::item { padding: 12px 13px; border-radius: 8px; margin: 2px 0; }
 QListWidget#navList::item:selected { background: #2563eb; color: #ffffff; }
 QListWidget#navList::item:hover:!selected { background: #1d3655; color: #ffffff; }
+
+QMenu {
+  background: #ffffff; border: 1px solid #dbe3ef; border-radius: 8px; padding: 5px 3px;
+}
+QMenu::item { padding: 7px 22px; border-radius: 6px; font-size: 13px; }
+QMenu::item:selected { background: #dbeafe; color: #1e3a8a; }
+QMenu::separator { height: 1px; background: #e2e8f0; margin: 4px 8px; }
+
+/* 指示器尺寸只由 16x16 图片驱动 —— 不要再写 width/height：
+   Qt 5.15 下 QSS 硬设的指示器尺寸不计入 sizeHint，会导致
+   QCheckBox 文字被裁（权限管理页 读/写 重叠就是这么来的） */
+QCheckBox::indicator:unchecked { image: url(:/icons/checkbox_off.png); }
+QCheckBox::indicator:checked { image: url(:/icons/checkbox_on.png); }
+QCheckBox::indicator:checked:disabled { image: url(:/icons/checkbox_on_disabled.png); }
+QCheckBox::indicator:unchecked:disabled { image: url(:/icons/checkbox_off_disabled.png); }
+QRadioButton::indicator:unchecked { image: url(:/icons/radio_off.png); }
+QRadioButton::indicator:checked { image: url(:/icons/radio_on.png); }
+
+QToolTip {
+  background: #10243e; color: #e2e8f0; border: 1px solid #1d3655;
+  border-radius: 6px; padding: 5px 9px; font-size: 12px;
+}
+
+QTableWidget QHeaderView::section:vertical {
+  background: #fbfdff; color: #94a3b8; font-weight: 600;
+  border: none; border-right: 1px solid #edf2f7; padding: 6px 4px;
+}
+QTableCornerButton::section { background: #eef4fb; border: none; }
+
+QListWidget {
+  background: #ffffff; border: 1px solid #dbe3ef; border-radius: 10px;
+  font-size: 13px; outline: none; padding: 4px;
+}
+QListWidget::item { padding: 8px 10px; border-radius: 6px; }
+QListWidget::item:selected { background: #dbeafe; color: #1e3a8a; }
+QListWidget::item:hover:!selected { background: #f1f5f9; }
 )css";
 
 static void loadBundledFonts() {

@@ -12,6 +12,7 @@
 #include <QFrame>
 #include <QPainter>
 #include <QPixmap>
+#include <QGraphicsDropShadowEffect>
 
 // ── Painted icons for password visibility toggle ──────────────────────
 // SVG/QIcon::fromTheme often fails on Linux/WSL; draw with QPainter instead.
@@ -83,13 +84,7 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
 
   bool dark = isDarkMode();
 
-  // Background
-  setAttribute(Qt::WA_StyledBackground, true);
-  if (dark) {
-    setStyleSheet("QDialog { background: #0c1a30; }");
-  } else {
-    setStyleSheet("QDialog { background: #f5f7fa; }");
-  }
+  // 背景改为 paintEvent 绘制的品牌渐变（深海军蓝 + 柔光斑），不再用纯色样式表
 
   // Outer layout
   auto *outerLayout = new QVBoxLayout(this);
@@ -99,33 +94,43 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
   outerLayout->addStretch(5);
 
   // ── Central card ────────────────────────────────────────────────
+  // 注意：选择器必须限定 #loginCard —— 裸 QFrame 会级联到所有子 QLabel
+  // （QLabel 继承 QFrame），给副标题等描上意外的边框。
   auto *card = new QFrame;
+  card->setObjectName("loginCard");
   if (dark) {
     card->setStyleSheet(
-      "QFrame { background: #111d2e; border: 1px solid #1e3050; border-radius: 20px; }");
+      "QFrame#loginCard { background: #111d2e; border: 1px solid #1e3050; border-radius: 20px; }");
   } else {
     card->setStyleSheet(
-      "QFrame { background: #ffffff; border: 1px solid #dce1e8; border-radius: 20px; }");
+      "QFrame#loginCard { background: #ffffff; border: 1px solid #dce1e8; border-radius: 20px; }");
   }
   card->setFixedWidth(qMin(480, dlgW - 200));
   card->setMinimumHeight(400);
 
+  // 卡片投影 —— 在深色渐变底上形成悬浮层次
+  auto *cardShadow = new QGraphicsDropShadowEffect(card);
+  cardShadow->setBlurRadius(48);
+  cardShadow->setOffset(0, 12);
+  cardShadow->setColor(QColor(3, 10, 24, 180));
+  card->setGraphicsEffect(cardShadow);
+
   auto *cardLayout = new QVBoxLayout(card);
-  cardLayout->setContentsMargins(52, 48, 52, 40);
+  cardLayout->setContentsMargins(44, 42, 44, 36);
   cardLayout->setSpacing(14);
 
-  // Title
+  // Title（22px：窄字体环境下 13 字仍在 480 卡片内不裁切）
   auto *titleLabel = new QLabel("信息系统渗透智能化测试平台");
   titleLabel->setAlignment(Qt::AlignCenter);
   if (dark) {
-    titleLabel->setStyleSheet("color: #e2e8f0; font-size: 24px; font-weight: bold;");
+    titleLabel->setStyleSheet("color: #e2e8f0; font-size: 22px; font-weight: bold;");
   } else {
-    titleLabel->setStyleSheet("color: #1a2a3a; font-size: 24px; font-weight: bold;");
+    titleLabel->setStyleSheet("color: #1a2a3a; font-size: 22px; font-weight: bold;");
   }
   cardLayout->addWidget(titleLabel);
 
-  // Subtitle
-  auto *subLabel = new QLabel("RedTeam Platform v1.0");
+  // Subtitle（与 SplashDialog 的版本号保持一致）
+  auto *subLabel = new QLabel("RedTeam Platform · 版本 2.0.1");
   subLabel->setAlignment(Qt::AlignCenter);
   if (dark) {
     subLabel->setStyleSheet("color: #5a7a9a; font-size: 13px; margin-bottom: 4px;");
@@ -156,14 +161,14 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
   if (dark) {
     inputStyle =
       "QLineEdit { font-size: 15px; padding: 4px 14px; "
-      "background: #162236; color: #e2e8f0; border: 1px solid #2d4a6a; border-radius: 8px; }";
+      "background: #162236; color: #e2e8f0; border: 1px solid #2d4a6a; border-radius: 10px; }";
     inputFocusStyle =
       "QLineEdit:focus { border-color: #3a8fd6; background: #1a2a3a; }";
     labelStyle = "color: #a0aec0; font-size: 14px;";
   } else {
     inputStyle =
       "QLineEdit { font-size: 15px; padding: 4px 14px; "
-      "background: #ffffff; color: #1a2a3a; border: 1px solid #dce1e8; border-radius: 8px; }";
+      "background: #ffffff; color: #1a2a3a; border: 1px solid #dce1e8; border-radius: 10px; }";
     inputFocusStyle =
       "QLineEdit:focus { border-color: #2a7dd6; background: #f8fbff; }";
     labelStyle = "color: #4a5568; font-size: 14px;";
@@ -246,25 +251,28 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
   exitBtn->setAutoDefault(false);
   exitBtn->setDefault(false);
   exitBtn->setFixedSize(150, 46);
+  // 幽灵样式 —— 弱化次要操作
   if (dark) {
     exitBtn->setStyleSheet(
-      "QPushButton { background: #2d3748; color: #cbd5e0; border: none; border-radius: 8px; font-size: 15px; }"
-      "QPushButton:hover { background: #4a5568; }");
+      "QPushButton { background: transparent; color: #8899aa; border: 1px solid #2d4a6a; border-radius: 10px; font-size: 15px; }"
+      "QPushButton:hover { background: #1a2a3a; color: #cbd5e0; border-color: #3a8fd6; }");
   } else {
     exitBtn->setStyleSheet(
-      "QPushButton { background: #e8ecf0; color: #4a5568; border: none; border-radius: 8px; font-size: 15px; }"
-      "QPushButton:hover { background: #dce1e8; }");
+      "QPushButton { background: transparent; color: #64748b; border: 1px solid #cbd5e1; border-radius: 10px; font-size: 15px; }"
+      "QPushButton:hover { background: #f1f5f9; color: #334155; border-color: #94a3b8; }");
   }
 
   m_loginBtn = new QPushButton("登  录");
   m_loginBtn->setAutoDefault(true);
   m_loginBtn->setDefault(true);
   m_loginBtn->setFixedSize(150, 46);
-  // Primary blue button — same in both themes
+  // 品牌蓝渐变主按钮 —— 与全局 Primary #2563eb 同系
   m_loginBtn->setStyleSheet(
-    "QPushButton { background: #3a8fd6; color: #ffffff; border: none; border-radius: 8px; font-size: 15px; font-weight: bold; }"
-    "QPushButton:hover { background: #4da3e8; }"
-    "QPushButton:pressed { background: #2a7dd6; }");
+    "QPushButton { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #2f6ff2,stop:1 #1d4ed8); "
+    "color: #ffffff; border: none; border-radius: 10px; font-size: 16px; font-weight: bold; }"
+    "QPushButton:hover { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #3d7bf5,stop:1 #2563eb); }"
+    "QPushButton:pressed { background: #1e40af; }"
+    "QPushButton:disabled { background: #93b4ed; }");
 
   btnLayout->addStretch();
   btnLayout->addWidget(exitBtn);
@@ -298,6 +306,30 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
 
 QString LoginDialog::username() const { return m_username; }
 QString LoginDialog::role() const { return m_role; }
+
+void LoginDialog::paintEvent(QPaintEvent *)
+{
+  QPainter p(this);
+  p.setRenderHint(QPainter::Antialiasing);
+
+  // 深海军蓝竖向渐变 —— 与侧边栏 #10243e / 启动画面同色系
+  QLinearGradient bg(rect().topLeft(), rect().bottomLeft());
+  bg.setColorAt(0.0, QColor("#0c1a30"));
+  bg.setColorAt(0.55, QColor("#10243e"));
+  bg.setColorAt(1.0, QColor("#16324f"));
+  p.fillRect(rect(), bg);
+
+  // 两处品牌蓝柔光斑，打破大面积纯色的单调
+  QRadialGradient glow1(QPointF(width() * 0.84, height() * 0.14), width() * 0.32);
+  glow1.setColorAt(0.0, QColor(37, 99, 235, 44));
+  glow1.setColorAt(1.0, QColor(37, 99, 235, 0));
+  p.fillRect(rect(), glow1);
+
+  QRadialGradient glow2(QPointF(width() * 0.10, height() * 0.90), width() * 0.28);
+  glow2.setColorAt(0.0, QColor(91, 184, 255, 28));
+  glow2.setColorAt(1.0, QColor(91, 184, 255, 0));
+  p.fillRect(rect(), glow2);
+}
 
 void LoginDialog::onLogin(bool remember) {
   QString user = m_usernameEdit->text().trimmed();

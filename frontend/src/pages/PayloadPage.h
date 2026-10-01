@@ -1,5 +1,6 @@
 #pragma once
 #include <QWidget>
+#include <QFrame>
 #include <QTreeWidget>
 #include <QTableWidget>
 #include <QLabel>
@@ -38,6 +39,7 @@ private:
   void loadPayloadDetail(const QString &id);
   void showPayloadDetail(const QJsonObject &payload);
   void clearDetail();
+  static void fitEditHeight(QTextEdit *edit, int minH, int maxH);
 
   ApiClient *m_api;
   QString m_role;
@@ -57,6 +59,10 @@ private:
   QLabel *m_nameLabel;
   QLabel *m_categoryLabel;
   QLabel *m_descLabel;
+  QFrame *m_cmdCard;
+  QFrame *m_bypassCard;
+  QFrame *m_defCard;
+  QFrame *m_opsecCard;   // 内容为空的段落整卡隐藏
   QTextEdit *m_commandsEdit;
   QTextEdit *m_bypassEdit;
   QTextEdit *m_defenseEdit;

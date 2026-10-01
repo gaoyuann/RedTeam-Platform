@@ -1,6 +1,7 @@
 #pragma once
 #include <QWidget>
 #include <QLabel>
+#include <QGridLayout>
 #include <QTableWidget>
 #include <QPushButton>
 #include <QLineEdit>
@@ -31,13 +32,16 @@ private:
   void loadLabList();
   void onLabAction(const QString &action, const QString &name);
   void onLabVerify(const QString &name);
+  void fitTableHeight(QTableWidget *t, int cap);
 
   ApiClient *m_api;
 
   // Platform status
-  QLabel *m_versionLabel;
-  QLabel *m_dbSizeLabel;
-  QLabel *m_dbTablesLabel;
+  QLabel *m_versionLabel;       // 启动时间
+  QLabel *m_uptimeLabel;        // 运行时长
+  QLabel *m_dbSizeLabel;        // 数据库大小
+  QLabel *m_dbTablesCaption;
+  QGridLayout *m_dbTablesGrid;
 
   // Container images / tools / config (existing)
   QLabel *m_engineLabel;

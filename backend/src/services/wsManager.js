@@ -59,7 +59,7 @@ class WsManager {
 
     // Periodic cleanup: terminate unauthenticated connections after 10s
     this._cleanupInterval = setInterval(() => {
-      for (const [ws] of this.wss.clients) {
+      for (const ws of this.wss.clients) {
         if (!ws.isAlive) {
           ws.terminate();
         }

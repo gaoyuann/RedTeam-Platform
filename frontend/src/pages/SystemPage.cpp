@@ -3,6 +3,7 @@
 #include "DongleVerificationPage.h"
 #include "services/dongle/DongleService.h"
 #include "../Theme.h"
+#include "../UiUtil.h"
 #include "../ApiClient.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -48,6 +49,7 @@ void SystemPage::setupUI() {
   auto *userW = new QWidget;
   auto *userL = new QVBoxLayout(userW);
   m_userTable = new QTableWidget(0, 4);
+  UiUtil::EmptyHint::attach(m_userTable, QStringLiteral("暂无用户"));
   m_userTable->setHorizontalHeaderLabels({"用户名", "角色", "状态", "创建时间"});
   m_userTable->setAlternatingRowColors(true);
   m_userTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -97,12 +99,18 @@ void SystemPage::setupUI() {
     // Columns: 路由组 | admin R/W | user R/W
     // We use a custom layout: header row + data rows with checkboxes
     m_permTable = new QTableWidget(0, 3);
+    UiUtil::EmptyHint::attach(m_permTable, QStringLiteral("暂无权限记录"));
     m_permTable->setHorizontalHeaderLabels({"路由组", "管理员", "普通用户"});
     m_permTable->setAlternatingRowColors(true);
     m_permTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    // 行高固定留余量：CJK 走字体回退时度量偏高，默认行高会裁掉复选框文字底部
+    m_permTable->verticalHeader()->setDefaultSectionSize(38);
     m_permTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    // 权限列固定宽度：QHeaderView 的 ResizeToContents 不测量 setCellWidget
+    // 塞入的控件（按空文本算宽），会把列压到只剩表头宽，复选框文字被裁
     for (int c = 1; c <= 2; c++) {
-      m_permTable->horizontalHeader()->setSectionResizeMode(c, QHeaderView::ResizeToContents);
+      m_permTable->horizontalHeader()->setSectionResizeMode(c, QHeaderView::Fixed);
+      m_permTable->setColumnWidth(c, 116);
     }
     permL->addWidget(m_permTable, 1);
 
@@ -125,6 +133,7 @@ void SystemPage::setupUI() {
   cfgHint->setStyleSheet("color:#64748b; font-size:13px;");
   cfgL->addWidget(cfgHint);
   m_configTable = new QTableWidget(0, 3);
+  UiUtil::EmptyHint::attach(m_configTable, QStringLiteral("暂无配置项"));
   m_configTable->setHorizontalHeaderLabels({"配置项", "值", "类别"});
   m_configTable->setAlternatingRowColors(true);
   m_configTable->setSortingEnabled(true);
@@ -146,6 +155,7 @@ void SystemPage::setupUI() {
   auto *asgnLabel = new QLabel("任务管理"); asgnLabel->setStyleSheet(Theme::SectionStyle);
   asgnL->addWidget(asgnLabel);
   m_assignmentTable = new QTableWidget(0, 6);
+  UiUtil::EmptyHint::attach(m_assignmentTable, QStringLiteral("暂无任务分配"));
   m_assignmentTable->setHorizontalHeaderLabels({"任务编号", "班级", "标题", "预案", "截止时间", "创建时间"});
   m_assignmentTable->setAlternatingRowColors(true);
   m_assignmentTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -156,6 +166,7 @@ void SystemPage::setupUI() {
   auto *asgnSubLabel = new QLabel("提交记录"); asgnSubLabel->setStyleSheet(Theme::SectionStyle);
   asgnL->addWidget(asgnSubLabel);
   m_submissionTable = new QTableWidget(0, 6);
+  UiUtil::EmptyHint::attach(m_submissionTable, QStringLiteral("暂无提交记录"));
   m_submissionTable->setHorizontalHeaderLabels({"提交编号", "任务", "学生", "执行编号", "成绩", "提交时间"});
   m_submissionTable->setAlternatingRowColors(true);
   m_submissionTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -473,7 +484,7 @@ void SystemPage::onRefreshPermissions() {
         // Create a widget with read and write checkboxes.
         auto *widget = new QWidget;
         auto *layout = new QHBoxLayout(widget);
-        layout->setContentsMargins(4, 2, 4, 2);
+        layout->setContentsMargins(6, 4, 6, 4);
         layout->setSpacing(2);
         auto *readCb = new QCheckBox("读");
         auto *writeCb = new QCheckBox("写");
@@ -492,8 +503,7 @@ void SystemPage::onRefreshPermissions() {
         m_permTable->setCellWidget(i, j + 1, widget);
       }
     }
-    m_permTable->resizeColumnsToContents();
-    m_permTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    // 不再 resizeColumnsToContents：它不测量 cell widget，会把权限列压瘪
   });
 }
 

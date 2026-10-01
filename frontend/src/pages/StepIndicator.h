@@ -7,10 +7,11 @@
 // Each node shows status: pending/running/completed/skipped/failed
 
 struct PhaseStep {
-  QString phaseType;   // data-exfiltration / tampering-deception / device-control
+  QString phaseType;   // data-exfiltration / tampering-deception / pipeline step key
   QString displayName; // 中文显示名
   QString phaseId;     // phase_xxx
-  QString status;      // pending / running / completed / skipped / failed
+  QString status;      // pending / running / completed / skipped / failed / cancelled
+  QString summary;     // 可选：节点名下方一行补充说明（空则不绘制）
 };
 
 class StepIndicator : public QWidget {
