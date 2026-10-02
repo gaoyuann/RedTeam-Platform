@@ -167,58 +167,8 @@ export default function (db) {
     res.json({ status: 'ok', data: rows, meta: { total: rows.length } });
   });
 
-  // Get single user (admin only)
-  router.get('/:username', requireRole('admin'), (req, res) => {
-    const row = db.prepare('SELECT id, username, role, display_name, is_active, created_at, updated_at FROM users WHERE username = ?').get(req.params.username);
-    if (!row) return res.status(404).json({ status: 'error', error: { message: 'User not found' } });
-    res.json({ status: 'ok', data: row });
-  });
-
-  // Create user (admin only) — password is hashed with bcrypt
-  router.post('/', requireRole('admin'), async (req, res) => {
-    const { username, password, role, display_name } = req.body;
-    if (!username || !password || !role) {
-      return res.status(400).json({ status: 'error', error: { message: 'username, password, role are required' } });
-    }
-    try {
-      const hashedPassword = await hashPassword(password);
-      db.prepare('INSERT INTO users (username, password, role, display_name) VALUES (?, ?, ?, ?)').run(username, hashedPassword, role, display_name || username);
-      const user = db.prepare('SELECT id, username, role, display_name, is_active, created_at FROM users WHERE username = ?').get(username);
-      res.status(201).json({ status: 'ok', data: user });
-    } catch (err) {
-      if (err.message.includes('UNIQUE')) return res.status(409).json({ status: 'error', error: { message: 'Username already exists' } });
-      throw err;
-    }
-  });
-
-  // Update user (admin only)
-  router.put('/:username', requireRole('admin'), async (req, res) => {
-    const { password, role, display_name, is_active } = req.body;
-    const sets = [], params = [];
-    if (password !== undefined) {
-      sets.push('password = ?');
-      params.push(await hashPassword(password));
-    }
-    if (role !== undefined) { sets.push('role = ?'); params.push(role); }
-    if (display_name !== undefined) { sets.push('display_name = ?'); params.push(display_name); }
-    if (is_active !== undefined) { sets.push('is_active = ?'); params.push(is_active); }
-    if (sets.length === 0) return res.status(400).json({ status: 'error', error: { message: 'No fields to update' } });
-    sets.push("updated_at = datetime('now')");
-    params.push(req.params.username);
-    const result = db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE username = ?`).run(...params);
-    if (result.changes === 0) return res.status(404).json({ status: 'error', error: { message: 'User not found' } });
-    const user = db.prepare('SELECT id, username, role, display_name, is_active, created_at, updated_at FROM users WHERE username = ?').get(req.params.username);
-    res.json({ status: 'ok', data: user });
-  });
-
-  // Delete user (admin only)
-  router.delete('/:username', requireRole('admin'), (req, res) => {
-    const result = db.prepare('DELETE FROM users WHERE username = ?').run(req.params.username);
-    if (result.changes === 0) return res.status(404).json({ status: 'error', error: { message: 'User not found' } });
-    res.json({ status: 'ok', data: { deleted: true } });
-  });
-
   // ── Permissions (RBAC) management ──────────────────────────────────────
+  // Must be registered before the parameterized /:username routes
 
   // Get current RBAC configuration (admin only)
   router.get('/permissions', requireRole('admin'), (_req, res) => {
@@ -275,6 +225,57 @@ export default function (db) {
     }
 
     res.json({ status: 'ok', data: { updated: Object.keys(permissions).length, message: '权限配置已更新' } });
+  });
+
+  // Get single user (admin only)
+  router.get('/:username', requireRole('admin'), (req, res) => {
+    const row = db.prepare('SELECT id, username, role, display_name, is_active, created_at, updated_at FROM users WHERE username = ?').get(req.params.username);
+    if (!row) return res.status(404).json({ status: 'error', error: { message: 'User not found' } });
+    res.json({ status: 'ok', data: row });
+  });
+
+  // Create user (admin only) — password is hashed with bcrypt
+  router.post('/', requireRole('admin'), async (req, res) => {
+    const { username, password, role, display_name } = req.body;
+    if (!username || !password || !role) {
+      return res.status(400).json({ status: 'error', error: { message: 'username, password, role are required' } });
+    }
+    try {
+      const hashedPassword = await hashPassword(password);
+      db.prepare('INSERT INTO users (username, password, role, display_name) VALUES (?, ?, ?, ?)').run(username, hashedPassword, role, display_name || username);
+      const user = db.prepare('SELECT id, username, role, display_name, is_active, created_at FROM users WHERE username = ?').get(username);
+      res.status(201).json({ status: 'ok', data: user });
+    } catch (err) {
+      if (err.message.includes('UNIQUE')) return res.status(409).json({ status: 'error', error: { message: 'Username already exists' } });
+      throw err;
+    }
+  });
+
+  // Update user (admin only)
+  router.put('/:username', requireRole('admin'), async (req, res) => {
+    const { password, role, display_name, is_active } = req.body;
+    const sets = [], params = [];
+    if (password !== undefined) {
+      sets.push('password = ?');
+      params.push(await hashPassword(password));
+    }
+    if (role !== undefined) { sets.push('role = ?'); params.push(role); }
+    if (display_name !== undefined) { sets.push('display_name = ?'); params.push(display_name); }
+    if (is_active !== undefined) { sets.push('is_active = ?'); params.push(is_active); }
+    if (sets.length === 0) return res.status(400).json({ status: 'error', error: { message: 'No fields to update' } });
+    sets.push("updated_at = datetime('now')");
+    params.push(req.params.username);
+    const result = db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE username = ?`).run(...params);
+    if (result.changes === 0) return res.status(404).json({ status: 'error', error: { message: 'User not found' } });
+    const user = db.prepare('SELECT id, username, role, display_name, is_active, created_at, updated_at FROM users WHERE username = ?').get(req.params.username);
+    res.json({ status: 'ok', data: user });
+  });
+
+  // Delete user (admin only)
+  router.delete('/:username', requireRole('admin'), (req, res) => {
+    const result = db.prepare('DELETE FROM users WHERE username = ?').run(req.params.username);
+    if (result.changes === 0) return res.status(404).json({ status: 'error', error: { message: 'User not found' } });
+    res.json({ status: 'ok', data: { deleted: true } });
   });
 
   return router;

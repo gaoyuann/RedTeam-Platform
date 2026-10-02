@@ -1,6 +1,7 @@
 #include "ScanPage.h"
 #include "../ApiClient.h"
 #include "../Theme.h"
+#include "../UiUtil.h"
 #include <QSplitter>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -374,6 +375,7 @@ void ScanPage::setupUI() {
     h->addWidget(new QLabel("目标:"));
     m_portTargetInput = new QLineEdit;
     m_portTargetInput->setPlaceholderText("例: 192.168.1.1");
+    m_portTargetInput->setMinimumWidth(150);
     auto *completer = new QCompleter(history, this);
     completer->setCaseSensitivity(Qt::CaseInsensitive);
     m_portTargetInput->setCompleter(completer);
@@ -381,7 +383,7 @@ void ScanPage::setupUI() {
     h->addWidget(new QLabel("端口:"));
     m_portsInput = new QLineEdit;
     m_portsInput->setPlaceholderText("22,80");
-    m_portsInput->setMaximumWidth(120);
+    m_portsInput->setMaximumWidth(100);
     h->addWidget(m_portsInput);
     auto *btn = new QPushButton("创建扫描");
     btn->setProperty("primary", true);
@@ -398,6 +400,7 @@ void ScanPage::setupUI() {
     headerH->addStretch();
     layout->addLayout(headerH);
     m_portScanTable = new QTableWidget(0, 3);
+    UiUtil::EmptyHint::attach(m_portScanTable, QStringLiteral("暂无端口扫描任务"));
     m_portScanTable->setHorizontalHeaderLabels({"目标", "状态", "时间"});
     m_portScanTable->setAlternatingRowColors(true);
     m_portScanTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -441,6 +444,7 @@ void ScanPage::setupUI() {
     h->addWidget(new QLabel("目标:"));
     m_vulnTargetInput = new QLineEdit;
     m_vulnTargetInput->setPlaceholderText("例: 192.168.1.1");
+    m_vulnTargetInput->setMinimumWidth(150);
     auto *completer = new QCompleter(history, this);
     completer->setCaseSensitivity(Qt::CaseInsensitive);
     m_vulnTargetInput->setCompleter(completer);
@@ -459,6 +463,7 @@ void ScanPage::setupUI() {
     headerH->addStretch();
     layout->addLayout(headerH);
     m_vulnScanTable = new QTableWidget(0, 3);
+    UiUtil::EmptyHint::attach(m_vulnScanTable, QStringLiteral("暂无漏洞扫描任务"));
     m_vulnScanTable->setHorizontalHeaderLabels({"目标", "状态", "时间"});
     m_vulnScanTable->setAlternatingRowColors(true);
     m_vulnScanTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -499,6 +504,7 @@ void ScanPage::setupUI() {
     h->addWidget(new QLabel("目标:"));
     m_webTargetInput = new QLineEdit;
     m_webTargetInput->setPlaceholderText("例: http://target:8080");
+    m_webTargetInput->setMinimumWidth(150);
     auto *completer = new QCompleter(history, this);
     completer->setCaseSensitivity(Qt::CaseInsensitive);
     m_webTargetInput->setCompleter(completer);
@@ -522,6 +528,7 @@ void ScanPage::setupUI() {
     headerH->addStretch();
     layout->addLayout(headerH);
     m_webScanTable = new QTableWidget(0, 3);
+    UiUtil::EmptyHint::attach(m_webScanTable, QStringLiteral("暂无网站扫描任务"));
     m_webScanTable->setHorizontalHeaderLabels({"目标", "状态", "时间"});
     m_webScanTable->setAlternatingRowColors(true);
     m_webScanTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -562,6 +569,7 @@ void ScanPage::setupUI() {
     h->addWidget(new QLabel("目标:"));
     m_bruteTargetInput = new QLineEdit;
     m_bruteTargetInput->setPlaceholderText("例: 192.168.1.1");
+    m_bruteTargetInput->setMinimumWidth(150);
     auto *completer = new QCompleter(history, this);
     completer->setCaseSensitivity(Qt::CaseInsensitive);
     m_bruteTargetInput->setCompleter(completer);
@@ -606,6 +614,7 @@ void ScanPage::setupUI() {
     headerH->addStretch();
     layout->addLayout(headerH);
     m_bruteForceTable = new QTableWidget(0, 3);
+    UiUtil::EmptyHint::attach(m_bruteForceTable, QStringLiteral("暂无弱口令扫描任务"));
     m_bruteForceTable->setHorizontalHeaderLabels({"目标", "状态", "时间"});
     m_bruteForceTable->setAlternatingRowColors(true);
     m_bruteForceTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -666,6 +675,7 @@ void ScanPage::setupUI() {
   auto *resLabel = new QLabel("扫描结果"); resLabel->setStyleSheet(Theme::SectionStyle);
   right->addWidget(resLabel);
   m_resultTree = new QTreeWidget;
+  UiUtil::EmptyHint::attach(m_resultTree, QStringLiteral("扫描完成后在此展示结果"));
   m_resultTree->setHeaderLabels({"严重度", "数据", "工具"});
   m_resultTree->setAlternatingRowColors(true);
   m_resultTree->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -688,6 +698,7 @@ void ScanPage::setupUI() {
   auto *recLabel = new QLabel("推荐预案"); recLabel->setStyleSheet(Theme::SectionStyle);
   right->addWidget(recLabel);
   m_recTable = new QTableWidget(0, 4);
+  UiUtil::EmptyHint::attach(m_recTable, QStringLiteral("暂无推荐预案 · 先完成扫描"));
   m_recTable->setHorizontalHeaderLabels({"名称", "难度", "基线组", "匹配原因"});
   m_recTable->setAlternatingRowColors(true);
   m_recTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -728,6 +739,7 @@ void ScanPage::setupUI() {
   genPreviewLayout->addWidget(m_genPreviewTitle);
 
   m_genStepTable = new QTableWidget(0, 4);
+  UiUtil::EmptyHint::attach(m_genStepTable, QStringLiteral("生成预案后展示步骤"));
   m_genStepTable->setHorizontalHeaderLabels({"步骤", "工具", "目标参数", "描述"});
   m_genStepTable->setAlternatingRowColors(true);
   m_genStepTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -764,9 +776,9 @@ void ScanPage::setupUI() {
   auto *splitter = new QSplitter(Qt::Horizontal, this);
   splitter->addWidget(leftW);
   splitter->addWidget(rightW);
-  splitter->setStretchFactor(0, 2);
-  splitter->setStretchFactor(1, 3);
-  splitter->setSizes({400, 600});
+  splitter->setStretchFactor(0, 1);
+  splitter->setStretchFactor(1, 1);
+  splitter->setSizes({500, 500});
   mainLayout->addWidget(splitter);
 
   // ── Poll timer for running scans ──────────────────────────────────

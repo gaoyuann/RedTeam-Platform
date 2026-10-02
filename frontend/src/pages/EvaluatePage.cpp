@@ -1,6 +1,7 @@
 #include "EvaluatePage.h"
 #include "../ApiClient.h"
 #include "../Theme.h"
+#include "../UiUtil.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -104,6 +105,7 @@ void EvaluatePage::setupUI() {
   gradeL->addWidget(m_mitreLabel);
 
   m_stepTable = new QTableWidget(0, 5);
+  UiUtil::EmptyHint::attach(m_stepTable, QStringLiteral("选择评分记录后展示步骤得分"));
   m_stepTable->setHorizontalHeaderLabels({"步骤", "工具", "满分", "得分", "状态"});
   m_stepTable->setAlternatingRowColors(true);
   m_stepTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -124,6 +126,7 @@ void EvaluatePage::setupUI() {
   auto *rptL = new QVBoxLayout(rptW);
 
   m_reportTable = new QTableWidget(0, 5);
+  UiUtil::EmptyHint::attach(m_reportTable, QStringLiteral("暂无评分报告"));
   m_reportTable->setHorizontalHeaderLabels({"报告编号", "标题", "关联执行", "状态", "创建时间"});
   m_reportTable->setAlternatingRowColors(true);
   m_reportTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -199,6 +202,7 @@ void EvaluatePage::setupUI() {
           this, &EvaluatePage::onEvidenceRunSelected);
 
   m_evidenceTable = new QTableWidget(0, 5);
+  UiUtil::EmptyHint::attach(m_evidenceTable, QStringLiteral("暂无取证数据"));
   m_evidenceTable->setHorizontalHeaderLabels({"步骤", "类型", "数据摘要", "MITRE命中", "建议"});
   m_evidenceTable->setAlternatingRowColors(true);
   m_evidenceTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -239,6 +243,7 @@ void EvaluatePage::setupUI() {
   capLeftL->addLayout(capBtnH);
 
   m_captureTaskTable = new QTableWidget(0, 5);
+  UiUtil::EmptyHint::attach(m_captureTaskTable, QStringLiteral("暂无抓包任务"));
   m_captureTaskTable->setHorizontalHeaderLabels({"编号", "接口", "状态", "包数", "大小"});
   m_captureTaskTable->setAlternatingRowColors(true);
   m_captureTaskTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -327,6 +332,7 @@ void EvaluatePage::setupUI() {
   connect(m_runAnalysisBtn, &QPushButton::clicked, this, &EvaluatePage::onRunAnalysis);
 
   m_analysisResultTable = new QTableWidget(0, 4);
+  UiUtil::EmptyHint::attach(m_analysisResultTable, QStringLiteral("暂无流量分析结果"));
   m_analysisResultTable->setHorizontalHeaderLabels({"分析类型", "严重度", "摘要", "时间"});
   m_analysisResultTable->setAlternatingRowColors(true);
   m_analysisResultTable->setEditTriggers(QAbstractItemView::NoEditTriggers);

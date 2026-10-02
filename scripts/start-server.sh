@@ -32,6 +32,36 @@ if [ -z "${JWT_SECRET:-}" ]; then
   echo "WARNING: JWT_SECRET not set. Using insecure default. Set JWT_SECRET env var in production!"
 fi
 
+# ── Kill stale backend still holding the port (skipped trap on SIGKILL) ─
+port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; }
+port_pids() {
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -ti tcp:"$PORT" 2>/dev/null || true
+  elif command -v fuser >/dev/null 2>&1; then
+    fuser "$PORT"/tcp 2>/dev/null | tr -s ' ' '\n' | grep -v '^$' || true
+  else
+    ss -tlnp 2>/dev/null | grep "[:.]$PORT " | grep -oP 'pid=\K[0-9]+' | sort -u || true
+  fi
+}
+if port_busy; then
+  for p in $(port_pids); do
+    # Only kill node processes — never an unrelated service on the same port
+    if [ "$(cat "/proc/$p/comm" 2>/dev/null)" = "node" ]; then
+      echo "[clean] Killing stale backend (PID $p)..."
+      kill "$p" 2>/dev/null || true
+    fi
+  done
+  for _ in 1 2 3 4 5; do port_busy || break; sleep 1; done
+  for p in $(port_pids); do
+    [ "$(cat "/proc/$p/comm" 2>/dev/null)" = "node" ] && kill -9 "$p" 2>/dev/null || true
+  done
+  sleep 1
+  if port_busy; then
+    echo "ERROR: Port $PORT is occupied by another process — free it and retry."
+    exit 1
+  fi
+fi
+
 # ── Start backend ──────────────────────────────────────────────────────
 echo "[1/1] Starting Node.js backend..."
 cd "$BACKEND_DIR"

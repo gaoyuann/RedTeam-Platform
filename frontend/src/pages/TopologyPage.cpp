@@ -1,6 +1,7 @@
 #include "TopologyPage.h"
 #include "../ApiClient.h"
 #include "../Theme.h"
+#include "../UiUtil.h"
 
 #include <QApplication>
 #include <QComboBox>
@@ -779,6 +780,7 @@ void TopologyPage::setupUI() {
     leftLayout->addWidget(taskLabel);
 
     m_scanTaskTable = new QTableWidget(0, 4, leftPanel);
+    UiUtil::EmptyHint::attach(m_scanTaskTable, QStringLiteral("暂无扫描任务"));
     m_scanTaskTable->setHorizontalHeaderLabels({QStringLiteral("任务编号"),
                                                   QStringLiteral("目标"),
                                                   QStringLiteral("类型"),
@@ -805,6 +807,7 @@ void TopologyPage::setupUI() {
     leftLayout->addWidget(recentLabel);
 
     m_recentListWidget = new QListWidget(leftPanel);
+    UiUtil::EmptyHint::attach(m_recentListWidget, QStringLiteral("暂无历史记录"));
     m_recentListWidget->setMinimumHeight(80);
     m_recentListWidget->setMaximumHeight(160);
     leftLayout->addWidget(m_recentListWidget);
@@ -901,6 +904,7 @@ void TopologyPage::setupUI() {
     nodeListTitle->setStyleSheet(Theme::SectionStyle);
     rightLayout->addWidget(nodeListTitle);
     m_nodeListWidget = new QListWidget(rightPanel);
+    UiUtil::EmptyHint::attach(m_nodeListWidget, QStringLiteral("暂无节点 · 生成拓扑后显示"));
     m_nodeListWidget->setMinimumHeight(100);
     rightLayout->addWidget(m_nodeListWidget);
 
@@ -908,6 +912,7 @@ void TopologyPage::setupUI() {
     edgeListTitle->setStyleSheet(Theme::SectionStyle);
     rightLayout->addWidget(edgeListTitle);
     m_edgeListWidget = new QListWidget(rightPanel);
+    UiUtil::EmptyHint::attach(m_edgeListWidget, QStringLiteral("暂无连接 · 生成拓扑后显示"));
     m_edgeListWidget->setMinimumHeight(80);
     rightLayout->addWidget(m_edgeListWidget);
 

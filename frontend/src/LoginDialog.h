@@ -14,6 +14,9 @@ public:
   QString username() const;
   QString role() const;
 
+protected:
+  void paintEvent(QPaintEvent *event) override;
+
 private slots:
   void onLogin(bool remember);
 

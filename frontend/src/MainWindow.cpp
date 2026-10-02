@@ -60,9 +60,9 @@ void MainWindow::setupUI()
     // Left: navigation — 总览大屏 as first item
     // Note: "资源部署配置" moved to SystemPage sub-tab (P2 optimization)
     m_modules = QStringList({
-        QStringLiteral("测试任务"),
-        QStringLiteral("预案与知识库"),
-        QStringLiteral("系统管理")
+        QStringLiteral("📋 测试任务"),
+        QStringLiteral("📚 预案与知识库"),
+        QStringLiteral("⚙️ 系统管理")
     });
 
     auto *sidebar = new QFrame(centralWidget);

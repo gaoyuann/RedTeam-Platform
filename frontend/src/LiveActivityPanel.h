@@ -39,6 +39,10 @@ private:
   QString formatUser(const QJsonObject &data) const;
   QString nowTime() const;
 
+protected:
+  bool eventFilter(QObject *obj, QEvent *ev) override;
+
+private:
   QString m_role;
   QString m_username;
   bool m_compact = true;
@@ -51,6 +55,7 @@ private:
 
   // Event list
   QListWidget *m_eventList;
+  QLabel *m_emptyHint = nullptr;
 
   static constexpr int MAX_EVENTS = 50;
 };

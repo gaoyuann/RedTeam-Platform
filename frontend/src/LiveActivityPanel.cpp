@@ -4,6 +4,7 @@
 #include <QDateTime>
 #include <QScrollBar>
 #include <QListWidgetItem>
+#include <QEvent>
 
 // ── LiveActivityPanel ──────────────────────────────────────────────────
 
@@ -23,7 +24,8 @@ LiveActivityPanel::LiveActivityPanel(const QString &role, const QString &usernam
   headerFrame->setFixedHeight(32);
   headerFrame->setStyleSheet(
     "QFrame#activityHeader {"
-    "  background: #ffffff;"
+    "  background: #fbfdff;"
+    "  border-top: 1px solid #dbe3ef;"
     "  border-bottom: 1px solid #e2e8f0;"
     "}"
   );
@@ -73,6 +75,14 @@ LiveActivityPanel::LiveActivityPanel(const QString &role, const QString &usernam
   m_eventList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   m_eventList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
   mainLayout->addWidget(m_eventList, 1);
+
+  // ── 空状态提示（列表无事件时居中显示） ─────────────────────────────
+  m_emptyHint = new QLabel(QStringLiteral("暂无动态 · 扫描与攻击事件将实时显示在此"), m_eventList->viewport());
+  m_emptyHint->setAlignment(Qt::AlignCenter);
+  m_emptyHint->setStyleSheet("color: #b6c2d2; font-size: 12px; background: transparent;");
+  m_emptyHint->setAttribute(Qt::WA_TransparentForMouseEvents);
+  m_emptyHint->show();
+  m_eventList->viewport()->installEventFilter(this);
 
   setCompact(true);
 }
@@ -280,6 +290,15 @@ void LiveActivityPanel::addEvent(const QString &icon, const QString &text, const
 
   m_eventList->scrollToBottom();
   m_countLabel->setText(QString("%1 条").arg(m_eventList->count()));
+  if (m_emptyHint) m_emptyHint->setVisible(m_eventList->count() == 0);
+}
+
+bool LiveActivityPanel::eventFilter(QObject *obj, QEvent *ev)
+{
+  if (m_emptyHint && obj == m_eventList->viewport() && ev->type() == QEvent::Resize) {
+    m_emptyHint->setGeometry(static_cast<QWidget*>(obj)->rect());
+  }
+  return QWidget::eventFilter(obj, ev);
 }
 
 QString LiveActivityPanel::formatUser(const QJsonObject &data) const

@@ -1,11 +1,13 @@
 #include "FlowPage.h"
 #include "LiveActivityPanel.h"
+#include "StepIndicator.h"
 #include "TopologyPage.h"
 #include "ScanPage.h"
 #include "ExecutionPage.h"
 #include "EvaluatePage.h"
 #include "../ApiClient.h"
 #include "../Theme.h"
+#include "../UiUtil.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
@@ -36,7 +38,6 @@ static const QStringList STEP_NAMES = {
   QStringLiteral("扫描"), QStringLiteral("分析"),
   QStringLiteral("生成"), QStringLiteral("执行"),
 };
-static const QStringList STEP_ICONS = { "🔍", "🧠", "📋", "⚡" };
 
 // ── FlowPage ───────────────────────────────────────────────────────────
 
@@ -61,6 +62,7 @@ FlowPage::FlowPage(ApiClient *api, const QString &role,
     , m_cancelAction(nullptr)
     , m_deleteAction(nullptr)
     , m_reportAction(nullptr)
+    , m_stepIndicator(nullptr)
     , m_activityPanel(nullptr)
     , m_stageTabs(nullptr)
     , m_topoTab(nullptr)
@@ -68,12 +70,6 @@ FlowPage::FlowPage(ApiClient *api, const QString &role,
     , m_execTab(nullptr)
     , m_evalTab(nullptr)
 {
-  for (int i = 0; i < 4; i++) {
-    m_stepIcons[i] = nullptr;
-    m_stepNames[i] = nullptr;
-    m_stepStatuses[i] = nullptr;
-    m_stepSummaries[i] = nullptr;
-  }
   setupUI();
 
   // Auto-refresh every 5s: flow list + workbench detail (if visible).
@@ -158,6 +154,7 @@ void FlowPage::setupListView()
 
   // Flow table
   m_flowTable = new QTableWidget(0, 3, m_listView);
+  UiUtil::EmptyHint::attach(m_flowTable, QStringLiteral("暂无测试任务"));
   m_flowTable->setHorizontalHeaderLabels(
     { QStringLiteral("状态"), QStringLiteral("目标"),
       QStringLiteral("创建时间") });
@@ -250,40 +247,13 @@ void FlowPage::setupWorkbenchView()
 
   layout->addWidget(topBar);
 
-  // 4-step progress row
+  // 4-step progress — StepIndicator 自绘（节点+连线+状态，摘要显示在节点名下方）
   auto *progressFrame = new QFrame(m_workbenchView);
   progressFrame->setStyleSheet("background:#f8fbff;");
   auto *progressLayout = new QHBoxLayout(progressFrame);
-  progressLayout->setContentsMargins(24, 16, 24, 16);
-  progressLayout->setSpacing(8);
-  for (int i = 0; i < 4; i++) {
-    auto *stepBox = new QVBoxLayout;
-    stepBox->setSpacing(3);
-    m_stepIcons[i] = new QLabel(STEP_ICONS[i], progressFrame);
-    m_stepIcons[i]->setAlignment(Qt::AlignCenter);
-    m_stepIcons[i]->setStyleSheet("font-size:24px; background:transparent;");
-    m_stepNames[i] = new QLabel(STEP_NAMES[i], progressFrame);
-    m_stepNames[i]->setAlignment(Qt::AlignCenter);
-    m_stepNames[i]->setStyleSheet("font-size:13px; font-weight:600; color:#475569; background:transparent;");
-    m_stepStatuses[i] = new QLabel(QStringLiteral("待开始"), progressFrame);
-    m_stepStatuses[i]->setAlignment(Qt::AlignCenter);
-    m_stepStatuses[i]->setStyleSheet("font-size:11px; color:#94a3b8; background:transparent;");
-    m_stepSummaries[i] = new QLabel(progressFrame);
-    m_stepSummaries[i]->setAlignment(Qt::AlignCenter);
-    m_stepSummaries[i]->setStyleSheet("font-size:11px; color:#64748b; background:transparent;");
-    m_stepSummaries[i]->setWordWrap(true);
-    stepBox->addWidget(m_stepIcons[i]);
-    stepBox->addWidget(m_stepNames[i]);
-    stepBox->addWidget(m_stepStatuses[i]);
-    stepBox->addWidget(m_stepSummaries[i]);
-    progressLayout->addLayout(stepBox, 1);
-    if (i < 3) {
-      auto *arrow = new QLabel("→", progressFrame);
-      arrow->setAlignment(Qt::AlignCenter);
-      arrow->setStyleSheet("font-size:26px; color:#475569; font-weight:700; background:transparent;");
-      progressLayout->addWidget(arrow);
-    }
-  }
+  progressLayout->setContentsMargins(24, 8, 24, 4);
+  m_stepIndicator = new StepIndicator(progressFrame);
+  progressLayout->addWidget(m_stepIndicator, 1);
   layout->addWidget(progressFrame);
 
   // Stage tabs (拓扑/扫描/攻击/评估) — full width, starting from the left edge
@@ -305,7 +275,34 @@ void FlowPage::setupWorkbenchView()
   m_stageTabs->addTab(m_scanTab, QStringLiteral("脆弱性扫描"));
   m_stageTabs->addTab(m_execTab, QStringLiteral("漏洞攻击"));
   m_stageTabs->addTab(m_evalTab, QStringLiteral("测试评估"));
-  layout->addWidget(m_stageTabs, 1);
+
+  // AI 推理流（左）+ 阶段 Tab（右）— runReact/pipelineLog 事件写入推理流
+  m_contentSplitter = new QSplitter(Qt::Horizontal, m_workbenchView);
+  m_contentSplitter->setChildrenCollapsible(false);
+  auto *reasoningPane = new QWidget(m_contentSplitter);
+  auto *reasoningLayout = new QVBoxLayout(reasoningPane);
+  reasoningLayout->setContentsMargins(8, 8, 0, 8);
+  reasoningLayout->setSpacing(6);
+  auto *reasoningTitle = new QLabel(QStringLiteral("AI 推理流"), reasoningPane);
+  reasoningTitle->setStyleSheet("font-size:13px; font-weight:600; color:#475569; padding:2px 4px;");
+  m_reasoningPanel = new QTextBrowser(reasoningPane);
+  m_reasoningPanel->setStyleSheet(
+    "QTextBrowser { background:#ffffff; border:1px solid #dbe3ef; border-radius:8px; "
+    "padding:8px; font-size:12px; color:#334155; }");
+  m_reasoningPanel->setOpenExternalLinks(true);
+  reasoningLayout->addWidget(reasoningTitle);
+  reasoningLayout->addWidget(m_reasoningPanel, 1);
+  m_contentSplitter->addWidget(reasoningPane);
+  m_contentSplitter->addWidget(m_stageTabs);
+  m_contentSplitter->setStretchFactor(0, 0);
+  m_contentSplitter->setStretchFactor(1, 1);
+  m_contentSplitter->setSizes({240, 960});
+  layout->addWidget(m_contentSplitter, 1);
+
+  // 实时动态（底部，可折叠）— MainWindow 将 WS 事件接入 activityPanel()
+  m_activityPanel = new LiveActivityPanel(m_role, m_username, m_workbenchView);
+  m_activityPanel->setCompact(true);
+  layout->addWidget(m_activityPanel);
 
   m_stack->addWidget(m_workbenchView);
 }
@@ -429,10 +426,15 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     m_targetLabel->setText(QStringLiteral("目标: %1").arg(target));
     QColor sc = statusColor(status);
     m_statusLabel->setText(QStringLiteral(" %1 %2 ").arg(statusIcon(status), statusText(status)));
+    // Qt 的 8 位十六进制是 #AARRGGBB（alpha 在前），拼 #RRGGBBAA 会被误解析，须用 rgba()
+    auto rgba = [](const QColor &c, int a) {
+      return QString("rgba(%1,%2,%3,%4)").arg(c.red()).arg(c.green()).arg(c.blue())
+              .arg(a / 255.0, 0, 'f', 2);
+    };
     m_statusLabel->setStyleSheet(
       QString("font-size:12px; font-weight:700; color:%1; background:%2; "
               "padding:5px 14px; border-radius:11px; border:1px solid %3;")
-        .arg(sc.name(), sc.name() + "1a", sc.name() + "40"));
+        .arg(sc.name(), rgba(sc, 26), rgba(sc, 102)));
 
     // 从 pipeline 数据提取 run_id 和 playbook_id，自动加载到攻击 Tab.
     // Guard against repeated events: only drive selectPlaybook/showRun when
@@ -458,64 +460,44 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
       m_evalTab->showRun(runId);
     }
 
-    // Step progress
+    // Step progress → StepIndicator
     auto steps = p["steps"].toArray();
-    static const QStringList stepTypeLabels = {"scan", "analyze", "generate", "execute"};
+    QVector<PhaseStep> phaseSteps;
     for (int i = 0; i < 4; i++) {
+      PhaseStep ps;
+      ps.displayName = STEP_NAMES[i];
+      ps.phaseId = QStringLiteral("step_%1").arg(i + 1);
+      ps.status = QStringLiteral("pending");
       if (i < steps.size()) {
         auto step = steps[i].toObject();
-        QString sStatus = step["status"].toString();
-        QString sType = step["step_type"].toString();
-
-        static const QStringList statusLabels = {
-          "待运行", "执行中", "已完成", "失败", "跳过", "已取消"
-        };
-        static const QStringList statusColors = {
-          "#94a3b8", "#2563eb", "#22c55e", "#ef4444", "#94a3b8", "#94a3b8"
-        };
-        int statusIdx = 0;
-        if (sStatus == "pending") statusIdx = 0;
-        else if (sStatus == "running") statusIdx = 1;
-        else if (sStatus == "completed") statusIdx = 2;
-        else if (sStatus == "failed") statusIdx = 3;
-        else if (sStatus == "skipped") statusIdx = 4;
-        else if (sStatus == "cancelled") statusIdx = 5;
-
-        m_stepStatuses[i]->setText(statusLabels[statusIdx]);
-        m_stepStatuses[i]->setStyleSheet(
-          QString("font-size:11px; font-weight:bold; color:%1; background:transparent;")
-            .arg(statusColors[statusIdx]));
+        ps.phaseType = step["step_type"].toString();
+        ps.status = step["status"].toString();
 
         // Summary from output_data
-        QString summary;
         auto output = step["output_data"].toObject();
-        if (sStatus == "completed") {
-          if (sType == "scan") {
+        if (ps.status == "completed") {
+          if (ps.phaseType == "scan") {
             int totalResults = output["total_results"].toInt(0);
-            summary = QStringLiteral("发现 %1 条结果").arg(totalResults);
-          } else if (sType == "analyze") {
+            ps.summary = QStringLiteral("发现 %1 条结果").arg(totalResults);
+          } else if (ps.phaseType == "analyze") {
             auto attackSurface = output["attack_surface"].toArray();
-            summary = QStringLiteral("攻击面 %1 项").arg(attackSurface.size());
-          } else if (sType == "generate") {
+            ps.summary = QStringLiteral("攻击面 %1 项").arg(attackSurface.size());
+          } else if (ps.phaseType == "generate") {
             QString method = output["method"].toString();
             QString name = output["name"].toString();
-            summary = QStringLiteral("%1: %2").arg(
+            ps.summary = QStringLiteral("%1: %2").arg(
               method == "ai_generated" ? "AI生成" : "匹配", name);
-          } else if (sType == "execute") {
+          } else if (ps.phaseType == "execute") {
             QString runId = output["run_id"].toString();
-            summary = QStringLiteral("Run: %1").arg(runId.left(16));
+            ps.summary = QStringLiteral("Run: %1").arg(runId.left(16));
           }
-        } else if (sStatus == "failed") {
-          summary = step["error_message"].toString();
-          if (summary.length() > 40) summary = summary.left(40) + "...";
+        } else if (ps.status == "failed") {
+          ps.summary = step["error_message"].toString();
         }
-        m_stepSummaries[i]->setText(summary);
-      } else {
-        m_stepStatuses[i]->setText(QStringLiteral("待开始"));
-        m_stepStatuses[i]->setStyleSheet("font-size:11px; color:#94a3b8; background:transparent;");
-        m_stepSummaries[i]->setText("");
       }
+      phaseSteps.append(ps);
     }
+    m_stepIndicator->setPhases(phaseSteps);
 
     // Refresh the embedded scan tab while the scan phase is active, so it
     // picks up new tasks / results (loadFlowDetail is called by the 5s poll
@@ -830,6 +812,18 @@ void FlowPage::onPipelineStep(const QJsonObject &data)
         data["status"].toString() == "running") {
       m_stageTabs->setCurrentIndex(2);
     }
+    // Append to reasoning stream
+    QString stepType = data["step_type"].toString();
+    QString status = data["status"].toString();
+    QString timeStr = QDateTime::currentDateTime().toString("HH:mm:ss");
+    QString icon = (status == "completed") ? "✓" :
+                   (status == "failed")   ? "✗" :
+                   (status == "running")   ? "▶" : "○";
+    if (m_reasoningPanel)
+      m_reasoningPanel->append(
+        QString("<span style='color:#94a3b8;font-size:11px;'>[%1]</span> "
+                "<b>%2</b> 阶段 %3")
+          .arg(timeStr, icon, stepType.toHtmlEscaped()));
   }
 }
 

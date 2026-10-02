@@ -1,5 +1,6 @@
 #include "PayloadPage.h"
 #include "../Theme.h"
+#include "../UiUtil.h"
 #include "../ApiClient.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -14,6 +15,8 @@
 #include <QHeaderView>
 #include <QDialogButtonBox>
 #include <QMap>
+#include <QTimer>
+#include <QAbstractTextDocumentLayout>
 
 PayloadPage::PayloadPage(ApiClient *api, const QString &role,
                          const QString &username, QWidget *parent)
@@ -32,6 +35,7 @@ void PayloadPage::setupUI() {
   auto *leftWidget = new QWidget;
   auto *leftLayout = new QVBoxLayout(leftWidget);
   leftLayout->setContentsMargins(0, 0, 0, 0);
+  leftWidget->setMinimumWidth(340);  // splitter 再挤也不能把列表压到不可读
 
   // Filter bar
   auto *filterH = new QHBoxLayout;
@@ -60,6 +64,7 @@ void PayloadPage::setupUI() {
   leftLayout->addWidget(catLabel);
 
   m_categoryTree = new QTreeWidget;
+  UiUtil::EmptyHint::attach(m_categoryTree, QStringLiteral("无载荷分类"));
   m_categoryTree->setHeaderLabels({QStringLiteral("分类"), QStringLiteral("数量")});
   m_categoryTree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
   m_categoryTree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
@@ -73,14 +78,21 @@ void PayloadPage::setupUI() {
   leftLayout->addWidget(listLabel);
 
   m_payloadTable = new QTableWidget(0, 3);
+  m_payloadTable->setObjectName("payloadListTable");
+  UiUtil::EmptyHint::attach(m_payloadTable, QStringLiteral("暂无载荷"));
   m_payloadTable->setHorizontalHeaderLabels({
     QStringLiteral("名称"), QStringLiteral("分类"), QStringLiteral("类型")
   });
   m_payloadTable->setAlternatingRowColors(true);
   m_payloadTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_payloadTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+  m_payloadTable->setWordWrap(false);
+  m_payloadTable->setTextElideMode(Qt::ElideRight);
   m_payloadTable->setSortingEnabled(true);
   m_payloadTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+  // 分类/类型定宽（可拖动），宽度不够时名称列 Stretch 让位、超出则出横向滚动条
+  m_payloadTable->setColumnWidth(1, 110);
+  m_payloadTable->setColumnWidth(2, 64);
   leftLayout->addWidget(m_payloadTable, 1);
   connect(m_payloadTable, &QTableWidget::cellClicked, this, &PayloadPage::onPayloadClicked);
 
@@ -95,57 +107,49 @@ void PayloadPage::setupUI() {
   auto *detailContainer = new QWidget;
   auto *detailLayout = new QVBoxLayout(detailContainer);
 
-  // Name + category
+  // Name + category — 层次同 Playbook 概要卡片：标题/元信息/弱化描述
   m_nameLabel = new QLabel;
-  m_nameLabel->setStyleSheet("font-size: 16px; font-weight: bold;");
+  m_nameLabel->setStyleSheet("font-size:16px; font-weight:700; color:#172033;");
+  m_nameLabel->setWordWrap(true);
   detailLayout->addWidget(m_nameLabel);
 
   m_categoryLabel = new QLabel;
-  m_categoryLabel->setStyleSheet("color: #888;");
+  m_categoryLabel->setStyleSheet("font-size:12px; color:#7f8c8d;");
+  m_categoryLabel->setVisible(false);
   detailLayout->addWidget(m_categoryLabel);
 
   m_descLabel = new QLabel;
   m_descLabel->setWordWrap(true);
-  m_descLabel->setStyleSheet("margin: 8px 0;");
+  m_descLabel->setStyleSheet("font-size:13px; color:#51606f;");
+  // 长文本 QLabel 的 minimumSizeHint 会把 splitter 右栏撑宽挤瘪左栏，取消水平约束
+  m_descLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
   detailLayout->addWidget(m_descLabel);
 
-  // Commands
-  auto *cmdLabel = new QLabel(QStringLiteral("执行命令"));
-  cmdLabel->setStyleSheet(Theme::SectionStyle);
-  detailLayout->addWidget(cmdLabel);
-  m_commandsEdit = new QTextEdit;
-  m_commandsEdit->setReadOnly(true);
-  m_commandsEdit->setMaximumHeight(150);
-  m_commandsEdit->setStyleSheet("font-family: monospace; font-size: 12px;");
-  detailLayout->addWidget(m_commandsEdit);
-
-  // Bypass variants
-  auto *bypassLabel = new QLabel(QStringLiteral("绕过变体（WAF/EDR）"));
-  bypassLabel->setStyleSheet(Theme::SectionStyle);
-  detailLayout->addWidget(bypassLabel);
-  m_bypassEdit = new QTextEdit;
-  m_bypassEdit->setReadOnly(true);
-  m_bypassEdit->setMaximumHeight(120);
-  m_bypassEdit->setStyleSheet("font-family: monospace; font-size: 12px;");
-  detailLayout->addWidget(m_bypassEdit);
-
-  // Defense
-  auto *defLabel = new QLabel(QStringLiteral("防御方法"));
-  defLabel->setStyleSheet(Theme::SectionStyle);
-  detailLayout->addWidget(defLabel);
-  m_defenseEdit = new QTextEdit;
-  m_defenseEdit->setReadOnly(true);
-  m_defenseEdit->setMaximumHeight(80);
-  detailLayout->addWidget(m_defenseEdit);
-
-  // OPSEC tips
-  auto *opsecLabel = new QLabel(QStringLiteral("行动安全建议（OPSEC）"));
-  opsecLabel->setStyleSheet(Theme::SectionStyle);
-  detailLayout->addWidget(opsecLabel);
-  m_opsecEdit = new QTextEdit;
-  m_opsecEdit->setReadOnly(true);
-  m_opsecEdit->setMaximumHeight(80);
-  detailLayout->addWidget(m_opsecEdit);
+  // 四段内容各占一张 softCard：标题 + 无边框文本区；内容为空时整卡隐藏
+  auto makeCard = [](const QString &title, bool mono, QTextEdit **editBox, QFrame **cardBox) {
+    auto *card = new QFrame;
+    card->setProperty("softCard", true);
+    auto *l = new QVBoxLayout(card);
+    l->setContentsMargins(12, 8, 12, 8);
+    l->setSpacing(4);
+    auto *t = new QLabel(title);
+    t->setStyleSheet("font-weight:700; color:#172033;");
+    l->addWidget(t);
+    auto *e = new QTextEdit;
+    e->setReadOnly(true);
+    e->setFrameShape(QFrame::NoFrame);
+    e->setStyleSheet(mono
+      ? "QTextEdit{background:transparent; border:none; font-family:monospace; font-size:12px;}"
+      : "QTextEdit{background:transparent; border:none;}");
+    l->addWidget(e);
+    *editBox = e;
+    *cardBox = card;
+    return card;
+  };
+  detailLayout->addWidget(makeCard(QStringLiteral("执行命令"), true, &m_commandsEdit, &m_cmdCard));
+  detailLayout->addWidget(makeCard(QStringLiteral("绕过变体（WAF/EDR）"), true, &m_bypassEdit, &m_bypassCard));
+  detailLayout->addWidget(makeCard(QStringLiteral("防御方法"), false, &m_defenseEdit, &m_defCard));
+  detailLayout->addWidget(makeCard(QStringLiteral("行动安全建议（OPSEC）"), false, &m_opsecEdit, &m_opsecCard));
 
   detailLayout->addStretch();
 
@@ -287,6 +291,9 @@ void PayloadPage::loadPayloadList(const QString &category, const QString &type, 
     if (res["status"].toString() != "ok") return;
 
     const auto data = res["data"].toArray();
+    // 排序开启时逐行 setItem 会边填边重排，行错位/单元格丢失（分类/类型变空白、
+    // 点击行拿到错误 id），填充期间必须先关排序
+    m_payloadTable->setSortingEnabled(false);
     m_payloadTable->setRowCount(data.size());
 
     // Type label mapping
@@ -298,21 +305,29 @@ void PayloadPage::loadPayloadList(const QString &category, const QString &type, 
 
     for (int i = 0; i < data.size(); i++) {
       const auto p = data[i].toObject();
-      m_payloadTable->setItem(i, 0, new QTableWidgetItem(p["name"].toString()));
-      m_payloadTable->setItem(i, 1, new QTableWidgetItem(p["category"].toString()));
+      auto *nameItem = new QTableWidgetItem(p["name"].toString());
+      // Store payload ID in the first column's user data
+      nameItem->setData(Qt::UserRole, p["id"].toString());
+      nameItem->setToolTip(p["name"].toString());
+      m_payloadTable->setItem(i, 0, nameItem);
+      auto *catItem = new QTableWidgetItem(p["category"].toString());
+      catItem->setToolTip(p["category"].toString());
+      m_payloadTable->setItem(i, 1, catItem);
       QString typeStr = p["type"].toString();
       if (typeLabelMap.contains(typeStr)) typeStr = typeLabelMap[typeStr];
-      m_payloadTable->setItem(i, 2, new QTableWidgetItem(typeStr));
-      // Store payload ID in the first column's user data
-      m_payloadTable->item(i, 0)->setData(Qt::UserRole, p["id"].toString());
+      auto *typeItem = new QTableWidgetItem(typeStr);
+      typeItem->setToolTip(typeStr);
+      m_payloadTable->setItem(i, 2, typeItem);
     }
+    m_payloadTable->setSortingEnabled(true);
   });
 }
 
 void PayloadPage::onPayloadClicked(int row, int) {
   auto *item = m_payloadTable->item(row, 0);
   if (!item) return;
-  QString id = item->data(Qt::UserRole).toString();
+  const QString id = item->data(Qt::UserRole).toString();
+  if (id.isEmpty()) return;  // 错位/空行兜底，避免请求 /api/payloads/ 拿回列表数组
   loadPayloadDetail(id);
 }
 
@@ -328,6 +343,12 @@ void PayloadPage::loadPayloadDetail(const QString &id) {
 }
 
 void PayloadPage::showPayloadDetail(const QJsonObject &payload) {
+  // 详情接口异常时 data 可能不是对象（如空 id 命中列表数组，toObject 得空对象），
+  // 回退占位页而不是展示一片空白的详情
+  if (payload.isEmpty()) {
+    m_detailStack->setCurrentIndex(0);
+    return;
+  }
   m_detailStack->setCurrentIndex(1);
 
   // Helper: extract zh/en field, fallback to plain string
@@ -340,18 +361,24 @@ void PayloadPage::showPayloadDetail(const QJsonObject &payload) {
     return val.toString();
   };
 
+  static const QMap<QString, QString> kTypeNames = {
+    {QStringLiteral("web"), QStringLiteral("网站攻击")},
+    {QStringLiteral("intranet"), QStringLiteral("内网渗透")},
+    {QStringLiteral("tool"), QStringLiteral("工具命令")},
+    {QStringLiteral("ai_generated"), QStringLiteral("智能生成")}
+  };
+
   m_nameLabel->setText(extractI18n(payload, QStringLiteral("name")));
 
   const auto catVal = payload["category"];
   QString catDisplay = catVal.isObject()
     ? (catVal.toObject()["zh"].toString().isEmpty() ? catVal.toObject()["en"].toString() : catVal.toObject()["zh"].toString())
     : catVal.toString();
+  const QString typeDisp = kTypeNames.value(payload["_type"].toString(), payload["_type"].toString());
   m_categoryLabel->setText(
-    QStringLiteral("分类：%1 | 类型：%2 | 编号：%3")
-      .arg(catDisplay)
-      .arg(payload["_type"].toString())
-      .arg(payload["id"].toString())
+    QStringLiteral("分类：%1 · 类型：%2 · 编号：%3").arg(catDisplay, typeDisp, payload["id"].toString())
   );
+  m_categoryLabel->setVisible(true);
 
   m_descLabel->setText(extractI18n(payload, QStringLiteral("description")));
 
@@ -366,6 +393,7 @@ void PayloadPage::showPayloadDetail(const QJsonObject &payload) {
       .arg(exec["command"].toString());
   }
   m_commandsEdit->setText(cmdText);
+  m_cmdCard->setVisible(!cmdText.isEmpty());
   m_primaryCommand = payloadData["primary_content"].toString();
 
   // Bypass variants
@@ -378,11 +406,15 @@ void PayloadPage::showPayloadDetail(const QJsonObject &payload) {
       .arg(b["command"].toString())
       .arg(b["description"].toString());
   }
-  m_bypassEdit->setText(bypassText.isEmpty() ? QStringLiteral("无绕过变体") : bypassText);
+  m_bypassEdit->setText(bypassText);
+  m_bypassCard->setVisible(!bypassText.isEmpty());
 
   // Defense
   const auto defense = payloadData["defense"].toObject();
-  m_defenseEdit->setText(defense["zh"].toString().isEmpty() ? defense["en"].toString() : defense["zh"].toString());
+  const QString defText =
+    defense["zh"].toString().isEmpty() ? defense["en"].toString() : defense["zh"].toString();
+  m_defenseEdit->setText(defText);
+  m_defCard->setVisible(!defText.isEmpty());
 
   // OPSEC tips
   const auto opsec = payloadData["opsec_tips"].toArray();
@@ -394,7 +426,24 @@ void PayloadPage::showPayloadDetail(const QJsonObject &payload) {
       opsecText += QStringLiteral("• %1\n").arg(tip.toString());
     }
   }
-  m_opsecEdit->setText(opsecText.isEmpty() ? QStringLiteral("无行动安全建议") : opsecText);
+  m_opsecEdit->setText(opsecText);
+  m_opsecCard->setVisible(!opsecText.isEmpty());
+
+  // 布局定稿后按实际宽度算高度；首帧宽度可能未定稿，180ms 后再校正一次
+  auto refit = [this]() {
+    fitEditHeight(m_commandsEdit, 60, 340);
+    fitEditHeight(m_bypassEdit, 60, 300);
+    fitEditHeight(m_defenseEdit, 60, 220);
+    fitEditHeight(m_opsecEdit, 60, 220);
+  };
+  QTimer::singleShot(0, this, refit);
+  QTimer::singleShot(180, this, refit);
+}
+
+// 详情文本框高度随内容走：短内容收缩贴合文本，长内容上限内滚动
+void PayloadPage::fitEditHeight(QTextEdit *edit, int minH, int maxH) {
+  const int docH = qRound(edit->document()->documentLayout()->documentSize().height());
+  edit->setFixedHeight(qBound(minH, docH + 14, maxH));
 }
 
 void PayloadPage::clearDetail() {

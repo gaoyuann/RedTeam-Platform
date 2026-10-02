@@ -14,16 +14,18 @@ static QColor colorForStatus(const QString &status)
   if (status == "completed")  return QColor("#27ae60");
   if (status == "skipped")    return QColor("#b45309");
   if (status == "failed")     return QColor("#e74c3c");
+  if (status == "cancelled")  return QColor("#94a3b8");
   /* pending  */              return QColor("#a0aec0");
 }
 
 static QString iconForStatus(const QString &status)
 {
-  if (status == "running")    return QStringLiteral("\U0001F504");  // 🔄
-  if (status == "completed")  return QStringLiteral("✅");      // ✅
-  if (status == "skipped")    return QStringLiteral("⏭");      // ⏭
-  if (status == "failed")     return QStringLiteral("❌");      // ❌
-  /* pending  */              return QStringLiteral("⬜");      // ⬜
+  if (status == "running")    return QStringLiteral("▶");
+  if (status == "completed")  return QStringLiteral("✓");
+  if (status == "skipped")    return QStringLiteral("»");
+  if (status == "failed")     return QStringLiteral("✗");
+  if (status == "cancelled")  return QStringLiteral("⊘");
+  /* pending  */              return QStringLiteral("○");
 }
 
 // ---------------------------------------------------------------------------
@@ -34,7 +36,7 @@ StepIndicator::StepIndicator(QWidget *parent)
     : QWidget(parent)
 {
   setMouseTracking(true);
-  setMinimumHeight(80);
+  setMinimumHeight(104);
   setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
   // Default three campaign phases (in order)
@@ -69,12 +71,12 @@ QVector<PhaseStep> StepIndicator::phases() const
 
 QSize StepIndicator::minimumSizeHint() const
 {
-  return QSize(300, 80);
+  return QSize(300, 104);
 }
 
 QSize StepIndicator::sizeHint() const
 {
-  return QSize(600, 80);
+  return QSize(600, 104);
 }
 
 // ---------------------------------------------------------------------------
@@ -205,6 +207,20 @@ void StepIndicator::paintEvent(QPaintEvent * /*event*/)
       p.setFont(f);
       QRect nameRect(cx - kRadius - 8, nameY, kDiameter + 16, 18);
       p.drawText(nameRect, Qt::AlignCenter, ps.displayName);
+    }
+
+    // -- optional summary line under the name --
+    if (!ps.summary.isEmpty()) {
+      p.setPen(QColor("#94a3b8"));
+      QFont f = p.font();
+      f.setPixelSize(10);
+      p.setFont(f);
+      const int summaryY = nameY + 19;
+      const int summaryW = kDiameter + 88;
+      QString text = QFontMetrics(p.font()).elidedText(
+        ps.summary, Qt::ElideRight, summaryW);
+      QRect summaryRect(cx - summaryW / 2, summaryY, summaryW, 14);
+      p.drawText(summaryRect, Qt::AlignCenter, text);
     }
   }
 }

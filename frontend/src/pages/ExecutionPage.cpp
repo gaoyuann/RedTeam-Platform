@@ -1,5 +1,6 @@
 #include "ExecutionPage.h"
 #include "../Theme.h"
+#include "../UiUtil.h"
 #include "../ApiClient.h"
 #include "../CortexPanel.h"
 #include <QScrollArea>
@@ -93,6 +94,7 @@ void ExecutionPage::setupUI() {
   h1->addWidget(new QLabel("目标:"));
   m_targetInput = new QLineEdit;
   m_targetInput->setPlaceholderText("例: 192.168.1.1");
+  m_targetInput->setMinimumWidth(130);
   // Input history via QCompleter
   QSettings settings("RedTeam", "RedTeam-Platform");
   QStringList history = settings.value("history/targets").toStringList();
@@ -111,6 +113,7 @@ void ExecutionPage::setupUI() {
   auto *runLabel = new QLabel("执行记录"); runLabel->setStyleSheet(Theme::SectionStyle);
   tab1Layout->addWidget(runLabel);
   m_runTable = new QTableWidget(0, 5);
+  UiUtil::EmptyHint::attach(m_runTable, QStringLiteral("暂无攻击执行记录"));
   m_runTable->setHorizontalHeaderLabels({"执行编号", "预案", "目标", "状态", "创建时间"});
   m_runTable->setAlternatingRowColors(true);
   m_runTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -184,6 +187,7 @@ void ExecutionPage::setupUI() {
   auto *stepLabel = new QLabel("步骤执行详情"); stepLabel->setStyleSheet(Theme::SectionStyle);
   rightLayout->addWidget(stepLabel);
   m_stepTable = new QTableWidget(0, 8);
+  UiUtil::EmptyHint::attach(m_stepTable, QStringLiteral("选择执行记录后展示步骤"));
   m_stepTable->setHorizontalHeaderLabels({"步骤", "工具", "参数", "成功", "来源", "输出摘要", "载荷", "推理"});
   m_stepTable->setAlternatingRowColors(true);
   m_stepTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -206,6 +210,7 @@ void ExecutionPage::setupUI() {
   auto *evLabel = new QLabel("攻击证据"); evLabel->setStyleSheet(Theme::SectionStyle);
   rightLayout->addWidget(evLabel);
   m_evidenceTable = new QTableWidget(0, 5);
+  UiUtil::EmptyHint::attach(m_evidenceTable, QStringLiteral("暂无取证数据"));
   m_evidenceTable->setHorizontalHeaderLabels({"步骤", "类型", "数据摘要", "MITRE命中", "建议"});
   m_evidenceTable->setAlternatingRowColors(true);
   m_evidenceTable->setEditTriggers(QAbstractItemView::NoEditTriggers);

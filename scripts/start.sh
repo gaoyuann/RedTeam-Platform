@@ -30,7 +30,8 @@ else
   FONT_DIR=""
 fi
 
-HEALTH_URL="http://127.0.0.1:3002/api/health"
+BACKEND_PORT=3002
+HEALTH_URL="http://127.0.0.1:$BACKEND_PORT/api/health"
 MAX_WAIT=30
 
 echo "=== RedTeam Platform Start ==="
@@ -100,6 +101,48 @@ if [ -n "$QT_PLUGIN_DIR" ] && [ -d "$QT_PLUGIN_DIR" ]; then
   export QT_PLUGIN_PATH="$QT_PLUGIN_DIR"
   export QT_QPA_PLATFORM_PLUGIN_PATH="$QT_PLUGIN_DIR/platforms"
   echo "[env] QT_PLUGIN_PATH=$QT_PLUGIN_PATH"
+fi
+
+# ── 1b. Clean up leftovers from a previous run ────────────────────────
+# The EXIT trap only cleans up our own children; a previous run killed with
+# SIGKILL (or a closed terminal) leaves orphans behind. Kill stale frontend
+# instances first (exact /proc/exe match — pkill -f would misfire on linker
+# command lines), then whatever node process still holds the backend port.
+
+for d in /proc/[0-9]*; do
+  if [ "$(readlink "$d/exe" 2>/dev/null)" = "$FRONTEND_BIN" ]; then
+    echo "[clean] Stopping stale frontend (PID ${d#/proc/})..."
+    kill "${d#/proc/}" 2>/dev/null || true
+  fi
+done
+
+port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$BACKEND_PORT") 2>/dev/null; }
+port_pids() {
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -ti tcp:"$BACKEND_PORT" 2>/dev/null || true
+  elif command -v fuser >/dev/null 2>&1; then
+    fuser "$BACKEND_PORT"/tcp 2>/dev/null | tr -s ' ' '\n' | grep -v '^$' || true
+  else
+    ss -tlnp 2>/dev/null | grep "[:.]$BACKEND_PORT " | grep -oP 'pid=\K[0-9]+' | sort -u || true
+  fi
+}
+if port_busy; then
+  for p in $(port_pids); do
+    # Only kill node processes — never an unrelated service on the same port
+    if [ "$(cat "/proc/$p/comm" 2>/dev/null)" = "node" ]; then
+      echo "[clean] Killing stale backend (PID $p)..."
+      kill "$p" 2>/dev/null || true
+    fi
+  done
+  for _ in 1 2 3 4 5; do port_busy || break; sleep 1; done
+  for p in $(port_pids); do
+    [ "$(cat "/proc/$p/comm" 2>/dev/null)" = "node" ] && kill -9 "$p" 2>/dev/null || true
+  done
+  sleep 1
+  if port_busy; then
+    echo "ERROR: Port $BACKEND_PORT is occupied by another process — free it and retry."
+    exit 1
+  fi
 fi
 
 # ── 2. Start backend ──────────────────────────────────────────────────
