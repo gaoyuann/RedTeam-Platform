@@ -67,18 +67,17 @@ void MainWindow::setupUI()
 
     auto *sidebar = new QFrame(centralWidget);
     sidebar->setObjectName("sidebar");
-    sidebar->setFixedWidth(248);
+    sidebar->setFixedWidth(186);
     auto *sidebarLayout = new QVBoxLayout(sidebar);
-    sidebarLayout->setContentsMargins(16, 18, 16, 14);
+    sidebarLayout->setContentsMargins(10, 18, 10, 14);
     sidebarLayout->setSpacing(14);
 
-    auto *brandLabel = new QLabel(QStringLiteral("红队安全运营"), sidebar);
+    auto *brandLabel = new QLabel(QStringLiteral("信息系统渗透智能化测试平台"), sidebar);
     brandLabel->setObjectName("sidebarBrand");
+    brandLabel->setStyleSheet(QStringLiteral(
+        "color: #ffffff; font-size: 14px; font-weight: 800; letter-spacing: 0px;"));
+    brandLabel->setWordWrap(true);
     sidebarLayout->addWidget(brandLabel);
-
-    auto *brandSubtitle = new QLabel(QStringLiteral("信息系统安全测试平台"), sidebar);
-    brandSubtitle->setObjectName("sidebarSubtitle");
-    sidebarLayout->addWidget(brandSubtitle);
 
     auto *brandDivider = new QFrame(sidebar);
     brandDivider->setObjectName("sidebarDivider");
@@ -87,7 +86,6 @@ void MainWindow::setupUI()
 
     m_navList = new QListWidget(sidebar);
     m_navList->setObjectName("navList");
-    m_navList->setFixedWidth(220);
     for (const auto &name : m_modules) {
         m_navList->addItem(name);
     }

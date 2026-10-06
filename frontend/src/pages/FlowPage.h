@@ -102,9 +102,8 @@ private:
   QAction *m_deleteAction;
   QAction *m_reportAction;
   StepIndicator *m_stepIndicator;   // pipeline 四阶段进度（自绘节点+连线+摘要）
-  LiveActivityPanel *m_activityPanel;
-  QSplitter *m_contentSplitter;     // left-right splitter: AI reasoning | stage tabs
-  QTextBrowser *m_reasoningPanel;   // left-column AI reasoning stream
+  LiveActivityPanel *m_activityPanel = nullptr;       // 已移除（保留接口供 MainWindow 空检查）
+  QTextBrowser *m_reasoningPanel = nullptr;           // 已移除（保留空检查兼容 onPipelineStep）
 
   // Stage tabs (拓扑/扫描/攻击/评估) embedded in the workbench
   QTabWidget *m_stageTabs;

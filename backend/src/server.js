@@ -32,6 +32,7 @@ import campaignRoutes from './routes/campaigns.js';
 import labRoutes from './routes/labs.js';
 import pipelineRoutes from './routes/pipelines.js';
 import captureRoutes from './routes/captures.js';
+import { cleanupOrphanedPipelines } from './services/pipelineEngine.js';
 
 // ── Config ──────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -146,6 +147,10 @@ async function start() {
   const HOST = process.env.HOST || '0.0.0.0';
   const server = createServer(app);
   initWebSocket(server);
+
+  // Clean up pipelines/steps stuck 'running' from a crash/kill before this boot
+  cleanupOrphanedPipelines();
+
   server.listen(PORT, HOST, () => {
     console.log(`[Server] RedTeam Backend running on http://${HOST}:${PORT}`);
     console.log(`[Server] WebSocket available at ws://${HOST}:${PORT}/ws`);

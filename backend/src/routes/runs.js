@@ -206,7 +206,9 @@ export default function (db) {
     }
 
     // Fire and forget — execution happens in background
-    executeRun(req.params.runId).catch(() => {});
+    executeRun(req.params.runId).catch(err => {
+      console.error(`[runs] executeRun failed for ${req.params.runId}:`, err.message || err);
+    });
     // WebSocket: notify run started
     const ws = getWsManager();
     if (ws) ws.broadcast('run:started', {

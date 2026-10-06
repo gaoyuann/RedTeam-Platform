@@ -139,7 +139,7 @@ void StepIndicator::paintEvent(QPaintEvent * /*event*/)
 
   // ---------- 1. arrows between nodes ----------
   QColor arrowColor("#cbd5e0");
-  p.setPen(QPen(arrowColor, 2));
+  p.setPen(QPen(arrowColor, 3));
   p.setBrush(arrowColor);
 
   for (int i = 0; i < count - 1; ++i) {
@@ -156,11 +156,11 @@ void StepIndicator::paintEvent(QPaintEvent * /*event*/)
     p.drawLine(lineX1, circleY, lineX2, circleY);
 
     // Arrowhead (triangle pointing right)
-    const int aSize = 6;   // arrow head length
+    const int aSize = 4;   // arrow head length
     QPainterPath arrowPath;
     arrowPath.moveTo(lineX2 + 1, circleY);            // tip
-    arrowPath.lineTo(lineX2 - aSize + 1, circleY - 4); // top
-    arrowPath.lineTo(lineX2 - aSize + 1, circleY + 4); // bottom
+    arrowPath.lineTo(lineX2 - aSize + 1, circleY - 3); // top
+    arrowPath.lineTo(lineX2 - aSize + 1, circleY + 3); // bottom
     arrowPath.closeSubpath();
     p.drawPath(arrowPath);
   }

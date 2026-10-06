@@ -276,33 +276,8 @@ void FlowPage::setupWorkbenchView()
   m_stageTabs->addTab(m_execTab, QStringLiteral("漏洞攻击"));
   m_stageTabs->addTab(m_evalTab, QStringLiteral("测试评估"));
 
-  // AI 推理流（左）+ 阶段 Tab（右）— runReact/pipelineLog 事件写入推理流
-  m_contentSplitter = new QSplitter(Qt::Horizontal, m_workbenchView);
-  m_contentSplitter->setChildrenCollapsible(false);
-  auto *reasoningPane = new QWidget(m_contentSplitter);
-  auto *reasoningLayout = new QVBoxLayout(reasoningPane);
-  reasoningLayout->setContentsMargins(8, 8, 0, 8);
-  reasoningLayout->setSpacing(6);
-  auto *reasoningTitle = new QLabel(QStringLiteral("AI 推理流"), reasoningPane);
-  reasoningTitle->setStyleSheet("font-size:13px; font-weight:600; color:#475569; padding:2px 4px;");
-  m_reasoningPanel = new QTextBrowser(reasoningPane);
-  m_reasoningPanel->setStyleSheet(
-    "QTextBrowser { background:#ffffff; border:1px solid #dbe3ef; border-radius:8px; "
-    "padding:8px; font-size:12px; color:#334155; }");
-  m_reasoningPanel->setOpenExternalLinks(true);
-  reasoningLayout->addWidget(reasoningTitle);
-  reasoningLayout->addWidget(m_reasoningPanel, 1);
-  m_contentSplitter->addWidget(reasoningPane);
-  m_contentSplitter->addWidget(m_stageTabs);
-  m_contentSplitter->setStretchFactor(0, 0);
-  m_contentSplitter->setStretchFactor(1, 1);
-  m_contentSplitter->setSizes({240, 960});
-  layout->addWidget(m_contentSplitter, 1);
-
-  // 实时动态（底部，可折叠）— MainWindow 将 WS 事件接入 activityPanel()
-  m_activityPanel = new LiveActivityPanel(m_role, m_username, m_workbenchView);
-  m_activityPanel->setCompact(true);
-  layout->addWidget(m_activityPanel);
+  // 阶段 Tab 全宽展示（AI 推理流 / 实时动态面板已移除）
+  layout->addWidget(m_stageTabs, 1);
 
   m_stack->addWidget(m_workbenchView);
 }
@@ -433,7 +408,7 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     };
     m_statusLabel->setStyleSheet(
       QString("font-size:12px; font-weight:700; color:%1; background:%2; "
-              "padding:5px 14px; border-radius:11px; border:1px solid %3;")
+              "padding:3px 12px; border-radius:6px; border:1px solid %3;")
         .arg(sc.name(), rgba(sc, 26), rgba(sc, 102)));
 
     // 从 pipeline 数据提取 run_id 和 playbook_id，自动加载到攻击 Tab.
@@ -514,13 +489,17 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     }
 
     // execute 阶段运行中时自动切到攻击 Tab（不含 completed——完成后让用户
-    // 自行决定落点，避免打开已完成的流水线时永远到不了"测试评估"Tab）
-    for (int i = 0; i < steps.size(); i++) {
-      auto step = steps[i].toObject();
-      if (step["step_type"].toString() == "execute") {
-        QString sStatus = step["status"].toString();
-        if (sStatus == "running") {
-          m_stageTabs->setCurrentIndex(2);  // 漏洞攻击
+    // 自行决定落点，避免打开已完成的流水线时永远到不了"测试评估"Tab）。
+    // 仅在 pipeline 本身仍为 running 时才自动切 Tab，避免终态 pipeline 里
+    // 陈旧的 step "running" 状态导致每 5s 把用户拽回攻击 Tab。
+    if (status == "running") {
+      for (int i = 0; i < steps.size(); i++) {
+        auto step = steps[i].toObject();
+        if (step["step_type"].toString() == "execute") {
+          QString sStatus = step["status"].toString();
+          if (sStatus == "running") {
+            m_stageTabs->setCurrentIndex(2);  // 漏洞攻击
+          }
         }
       }
     }
