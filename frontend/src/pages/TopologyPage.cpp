@@ -27,6 +27,7 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPainter>
+#include <QPointer>
 #include <QPlainTextEdit>
 #include <QProgressDialog>
 #include <QPushButton>
@@ -536,6 +537,8 @@ QString scanStatusLabel(const QString &status) {
     if (status == QStringLiteral("RUNNING")) return QStringLiteral("运行中");
     if (status == QStringLiteral("PENDING")) return QStringLiteral("待执行");
     if (status == QStringLiteral("FAILED")) return QStringLiteral("失败");
+    if (status == QStringLiteral("CANCELLED")) return QStringLiteral("已取消");
+    if (status == QStringLiteral("ABORTED")) return QStringLiteral("已中止");
     return status;
 }
 
@@ -615,6 +618,10 @@ TopologyPage::TopologyPage(ApiClient *api, const QString &role, const QString &u
 void TopologyPage::setTarget(const QString &target)
 {
     m_targetInput->setText(target);
+}
+
+TopologyPage::~TopologyPage() {
+    if (m_progressDialog) qApp->restoreOverrideCursor();
 }
 
 // ── UI Construction ────────────────────────────────────────────────────────
@@ -747,8 +754,10 @@ void TopologyPage::setupUI() {
         body[QStringLiteral("target")] = target;
         body[QStringLiteral("scan_type")] = m_scanTypeCombo->currentData().toString();
         m_createScanBtn->setEnabled(false);
+        QPointer<TopologyPage> page(this);
         m_api->post(QStringLiteral("/api/scan-tasks"), body, 10000,
-                    [this, target](const QJsonObject &res) {
+                    [this, page, target](const QJsonObject &res) {
+                        if (!page) return;
                         m_createScanBtn->setEnabled(true);
                         if (res[QStringLiteral("status")].toString() == QStringLiteral("ok")) {
                             m_targetInput->clear();
@@ -765,6 +774,83 @@ void TopologyPage::setupUI() {
                             }
 
                             onRefreshScans();
+
+                            // 自动触发执行（仿 ScanPage 创建即执行），
+                            // 否则扫描永驻 PENDING，"生成拓扑"按钮无法启用。
+                            QString scanTaskId = record.scanTaskId;
+                            if (scanTaskId.isEmpty()) {
+                                setStatusMessage(QStringLiteral("创建扫描失败：服务端未返回任务编号。"), errorStatusStyle());
+                                return;
+                            }
+                            m_selectedScanTaskId = scanTaskId;
+                            m_generateBtn->setEnabled(false);
+                            QJsonObject emptyBody;
+                            m_api->post(QStringLiteral("/api/scan-tasks/") + scanTaskId + QStringLiteral("/execute"),
+                                        emptyBody, 5000,
+                                        [this, page, scanTaskId](const QJsonObject &executeRes) {
+                                            if (!page) return;
+                                            if (executeRes[QStringLiteral("status")].toString() != QStringLiteral("ok")) {
+                                                refreshScans(true);
+                                                QString error = executeRes[QStringLiteral("error")].toObject()[QStringLiteral("message")].toString();
+                                                setStatusMessage(QStringLiteral("启动扫描失败：%1")
+                                                    .arg(error.isEmpty() ? QStringLiteral("请检查服务端日志") : error), errorStatusStyle());
+                                                return;
+                                            }
+                                            onRefreshScans();
+                                            auto *pollScan = new QTimer(this);
+                                            pollScan->setInterval(3000);
+                                            QPointer<QTimer> timer(pollScan);
+                                            const QDateTime started = QDateTime::currentDateTimeUtc();
+                                            connect(pollScan, &QTimer::timeout, this, [this, page, scanTaskId, timer, started]() {
+                                                if (!page || !timer) return;
+                                                timer->stop();
+                                                m_api->get(QStringLiteral("/api/scan-tasks/") + scanTaskId, 5000,
+                                                    [this, page, scanTaskId, timer, started](const QJsonObject &result) {
+                                                        if (!page || !timer) return;
+                                                        auto finish = [timer]() {
+                                                            timer->stop();
+                                                            timer->deleteLater();
+                                                        };
+                                                        if (result[QStringLiteral("status")].toString() != QStringLiteral("ok")) {
+                                                            const QString code = result[QStringLiteral("error")].toObject()[QStringLiteral("code")].toString();
+                                                            int failures = timer->property("failures").toInt() + 1;
+                                                            timer->setProperty("failures", failures);
+                                                            if (code == QStringLiteral("404") || code == QString::number(QNetworkReply::ContentNotFoundError) || failures >= 10) {
+                                                                finish();
+                                                                refreshScans(true);
+                                                                if (m_selectedScanTaskId == scanTaskId)
+                                                                    setStatusMessage(QStringLiteral("扫描状态查询失败：任务不存在或连续请求失败，请手动刷新。"), errorStatusStyle());
+                                                            } else {
+                                                                timer->start();
+                                                            }
+                                                            return;
+                                                        }
+                                                        timer->setProperty("failures", 0);
+                                                        const QJsonObject task = result[QStringLiteral("data")].toObject();
+                                                        const QString status = task[QStringLiteral("status")].toString();
+                                                        if (status == QStringLiteral("COMPLETED")) {
+                                                            finish();
+                                                            refreshScans(true);
+                                                            if (m_selectedScanTaskId == scanTaskId) onGenerateTopology();
+                                                        } else if (status == QStringLiteral("FAILED") || status == QStringLiteral("CANCELLED") || status == QStringLiteral("ABORTED")) {
+                                                            finish();
+                                                            refreshScans(true);
+                                                            QString reason = task[QStringLiteral("error_message")].toString();
+                                                            if (m_selectedScanTaskId == scanTaskId)
+                                                                setStatusMessage(QStringLiteral("扫描%1：%2").arg(scanStatusLabel(status),
+                                                                    reason.isEmpty() ? QStringLiteral("请检查任务详情") : reason), errorStatusStyle());
+                                                        } else if (started.secsTo(QDateTime::currentDateTimeUtc()) >= 1800) {
+                                                            finish();
+                                                            refreshScans(true);
+                                                            if (m_selectedScanTaskId == scanTaskId)
+                                                                setStatusMessage(QStringLiteral("扫描状态轮询已超时，请手动刷新任务状态。"), errorStatusStyle());
+                                                        } else {
+                                                            timer->start();
+                                                        }
+                                                    });
+                                            });
+                                            pollScan->start();
+                                        });
                         } else {
                             setStatusMessage(QStringLiteral("创建扫描失败：%1")
                                                  .arg(res[QStringLiteral("error")].toObject()[QStringLiteral("message")].toString()),
@@ -1198,16 +1284,27 @@ void TopologyPage::onRemoveSelectedRecord() {
 // ── Scan Task Management ──────────────────────────────────────────────────
 
 void TopologyPage::onRefreshScans() {
+    refreshScans(false);
+}
+
+void TopologyPage::refreshScans(bool preserveStatus) {
+    QPointer<TopologyPage> page(this);
+    const int revision = ++m_scanRefreshRevision;
     m_api->get(QStringLiteral("/api/scan-tasks"), 5000,
-               [this](const QJsonObject &res) {
+               [this, page, preserveStatus, revision](const QJsonObject &res) {
+                   if (!page || revision != m_scanRefreshRevision) return;
                    if (res[QStringLiteral("status")].toString() != QStringLiteral("ok")) {
-                       setStatusMessage(QStringLiteral("获取扫描列表失败。"), errorStatusStyle());
+                       if (!preserveStatus)
+                           setStatusMessage(QStringLiteral("获取扫描列表失败。"), errorStatusStyle());
                        return;
                    }
                    auto arr = res[QStringLiteral("data")].toArray();
+                   QString selectedStatus;
                    m_scanTaskTable->setRowCount(arr.size());
                    for (int i = 0; i < arr.size(); ++i) {
                        auto t = arr[i].toObject();
+                       if (t[QStringLiteral("scan_task_id")].toString() == m_selectedScanTaskId)
+                           selectedStatus = t[QStringLiteral("status")].toString();
                        m_scanTaskTable->setItem(
                            i, 0,
                            new QTableWidgetItem(t[QStringLiteral("scan_task_id")].toString()));
@@ -1230,14 +1327,15 @@ void TopologyPage::onRefreshScans() {
                            new QTableWidgetItem(statusText));
                    }
                    m_scanTaskTable->resizeColumnsToContents();
+                   m_generateBtn->setEnabled(!m_progressDialog && selectedStatus == QStringLiteral("COMPLETED"));
 
                    // Update hero stat
-                   if (m_currentStatusValueLabel) {
+                   if (!preserveStatus && m_currentStatusValueLabel) {
                        m_currentStatusValueLabel->setText(QStringLiteral("%1 条扫描").arg(arr.size()));
                    }
 
-                   setStatusMessage(QStringLiteral("已刷新扫描任务列表，共 %1 条。").arg(arr.size()),
-                                    successStatusStyle());
+                   if (!preserveStatus)
+                       setStatusMessage(QStringLiteral("已刷新扫描任务列表，共 %1 条。").arg(arr.size()), successStatusStyle());
                });
 }
 
@@ -1258,7 +1356,7 @@ void TopologyPage::onScanClicked(int row, int col) {
     // Check status column for COMPLETED
     auto statusColItem = m_scanTaskTable->item(row, 3);
     if (statusColItem && statusColItem->text() == QStringLiteral("已完成")) {
-        m_generateBtn->setEnabled(true);
+        m_generateBtn->setEnabled(!m_progressDialog);
         if (m_currentStatusValueLabel) {
             m_currentStatusValueLabel->setText(QStringLiteral("已完成"));
         }
@@ -1282,6 +1380,7 @@ void TopologyPage::onScanClicked(int row, int col) {
 }
 
 void TopologyPage::onGenerateTopology() {
+    if (m_progressDialog) return;
     if (m_selectedScanTaskId.isEmpty()) {
         QMessageBox::information(this, QStringLiteral("提示"),
                                  QStringLiteral("请先选择一个已完成的扫描任务。"));
@@ -1289,9 +1388,6 @@ void TopologyPage::onGenerateTopology() {
     }
 
     // ── Progress dialog (heap-allocated, safe for async callback) ────
-    if (m_progressDialog) {
-        delete m_progressDialog;
-    }
     m_progressDialog = new QProgressDialog(QStringLiteral("正在通过智能模型生成拓扑结构..."),
                                             QString(), 0, 0, this);
     m_progressDialog->setWindowTitle(QStringLiteral("生成拓扑"));
@@ -1314,19 +1410,24 @@ void TopologyPage::onGenerateTopology() {
     }
 
     QJsonObject body;
-    body[QStringLiteral("scan_task_id")] = m_selectedScanTaskId;
+    const QString scanTaskId = m_selectedScanTaskId;
+    body[QStringLiteral("scan_task_id")] = scanTaskId;
+    QPointer<TopologyPage> page(this);
 
     m_api->post(QStringLiteral("/api/topology/generate-from-scan"), body, 120000,
-                [this](const QJsonObject &res) {
+                [this, page, scanTaskId](const QJsonObject &res) {
+                    if (!page) return;
                     // Close and clean up progress dialog
                     if (m_progressDialog) {
                         m_progressDialog->close();
                         delete m_progressDialog;
                         m_progressDialog = nullptr;
                     }
-                    m_generateBtn->setEnabled(true);
+                    m_generateBtn->setEnabled(false);
                     m_generateBtn->setText(QStringLiteral("生成拓扑"));
                     qApp->restoreOverrideCursor();
+                    refreshScans(true);
+                    if (scanTaskId != m_selectedScanTaskId) return;
 
                     if (res[QStringLiteral("status")].toString() != QStringLiteral("ok")) {
                         QString errMsg = res[QStringLiteral("error")].toObject()[QStringLiteral("message")].toString();
@@ -1345,7 +1446,7 @@ void TopologyPage::onGenerateTopology() {
                     TopologyDocument doc = TopologyDocument::fromJsonObject(topoObj);
 
                     // Fill in metadata
-                    doc.flowId = m_selectedScanTaskId;
+                    doc.flowId = scanTaskId;
                     if (doc.generatedAt.trimmed().isEmpty()) {
                         doc.generatedAt = QDateTime::currentDateTime().toString(Qt::ISODate);
                     }
@@ -1417,7 +1518,7 @@ void TopologyPage::onGenerateTopology() {
 
                     // Persist recent record
                     TopologyScanRecord record;
-                    record.scanTaskId = m_selectedScanTaskId;
+                    record.scanTaskId = scanTaskId;
                     record.target = m_currentTargetValueLabel ? m_currentTargetValueLabel->text() : QString();
                     record.createdAt = QDateTime::currentDateTime().toString(Qt::ISODate);
                     upsertRecentRecord(record);

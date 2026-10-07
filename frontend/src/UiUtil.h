@@ -4,6 +4,7 @@
 #include <QAbstractItemModel>
 #include <QEvent>
 #include <QLabel>
+#include <QPointer>
 
 // ── 纯视觉层小工具（不改数据流） ─────────────────────────────────────
 namespace UiUtil {
@@ -17,34 +18,35 @@ public:
   static void attach(QAbstractItemView *view, const QString &text)
   {
     if (!view || !view->model()) return;
-    auto *w = new EmptyHint(view);
-    w->m_view = view;
-    w->m_label = new QLabel(text, view->viewport());
-    w->m_label->setAlignment(Qt::AlignCenter);
-    w->m_label->setStyleSheet(
+    auto *label = new QLabel(text, view->viewport());
+    auto *hint = new EmptyHint(label);
+    hint->m_viewport = view->viewport();
+    hint->m_label = label;
+    label->setAlignment(Qt::AlignCenter);
+    label->setStyleSheet(
       "color:#b6c2d2; font-size:13px; background:transparent; padding:0 16px;");
-    w->m_label->setAttribute(Qt::WA_TransparentForMouseEvents);
-    w->m_label->setWordWrap(true);
-    w->m_label->show();
-    w->m_label->setGeometry(view->viewport()->rect());
-    view->viewport()->installEventFilter(w);
+    label->setAttribute(Qt::WA_TransparentForMouseEvents);
+    label->setWordWrap(true);
+    label->setGeometry(view->viewport()->rect());
+    view->viewport()->installEventFilter(hint);
 
-    auto update = [w]() {
-      QAbstractItemModel *m = w->m_view->model();
-      w->m_label->setVisible(!m || m->rowCount() == 0);
+    QPointer<QAbstractItemModel> model(view->model());
+    auto update = [hint, model]() {
+      if (hint->m_label)
+        hint->m_label->setVisible(!model || model->rowCount() == 0);
     };
-    auto *m = view->model();
-    QObject::connect(m, &QAbstractItemModel::rowsInserted, w, update);
-    QObject::connect(m, &QAbstractItemModel::rowsRemoved, w, update);
-    QObject::connect(m, &QAbstractItemModel::modelReset, w, update);
-    QObject::connect(m, &QAbstractItemModel::layoutChanged, w, update);
+    QObject::connect(model.data(), &QAbstractItemModel::rowsInserted, hint, update);
+    QObject::connect(model.data(), &QAbstractItemModel::rowsRemoved, hint, update);
+    QObject::connect(model.data(), &QAbstractItemModel::modelReset, hint, update);
+    QObject::connect(model.data(), &QAbstractItemModel::layoutChanged, hint, update);
+    update();
   }
 
   bool eventFilter(QObject *obj, QEvent *ev) override
   {
     // Resize 跟随视口变化；Paint 兜底同步。用 visibleRegion 而非 rect：
     // 页面内嵌 QScrollArea 导致视图只有部分可见时，提示仍居中于可见区域。
-    if (m_label && obj == m_view->viewport() &&
+    if (m_label && m_viewport && obj == m_viewport.data() &&
         (ev->type() == QEvent::Resize || ev->type() == QEvent::Paint ||
          ev->type() == QEvent::Show || ev->type() == QEvent::Move)) {
       QWidget *vp = static_cast<QWidget*>(obj);
@@ -58,8 +60,8 @@ public:
   }
 
 private:
-  QAbstractItemView *m_view = nullptr;
-  QLabel *m_label = nullptr;
+  QPointer<QWidget> m_viewport;
+  QPointer<QLabel> m_label;
 };
 
 } // namespace UiUtil

@@ -8,8 +8,10 @@ import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getEngine } from '../tools/containerEngine.js';
-import { IMAGE_MAP } from '../tools/toolRunner.js';
+import { IMAGE_MAP, BIN_MAP } from '../tools/toolRunner.js';
 import { resolveTargetProfile, derivePreferredClass, checkTargetTypeCompatibility } from './targetProfileResolver.js';
+import { buildContextForTarget } from './targetAdapters/index.js';
+import { inspectRuntimeResources, inspectWordlistFiles } from './resourceInspection.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = dirname(__filename);
@@ -166,6 +168,7 @@ export async function runPreflightChecks({ playbookId, target, db }) {
     });
   }
 
+  let executionEnvironment = null;
   // ── Check 3: tool_binaries (container engine available) ────────────
   {
     let engine;
@@ -174,13 +177,17 @@ export async function runPreflightChecks({ playbookId, target, db }) {
     } catch (err) {
       engine = null;
     }
-    const ok = !!engine;
+    executionEnvironment = engine;
+    const resources = await inspectRuntimeResources({
+      engine, toolIds: steps.map(step => step.tool_id), imageMap: IMAGE_MAP, binMap: BIN_MAP,
+    });
+    const ok = resources.passed;
     checks.push({
       name: 'tool_binaries',
       passed: ok,
       message: ok
-        ? `Container engine available: ${engine}`
-        : 'No container engine (podman/docker) detected and no fallback available',
+        ? `Execution resources available: ${engine}`
+        : resources.missing.join('; '),
     });
   }
 
@@ -203,12 +210,19 @@ export async function runPreflightChecks({ playbookId, target, db }) {
     ]);
 
     const issues = [];
+    const profile = checks.find(check => check.name === 'target_class_compatibility')?.target_profile;
+    const context = profile ? buildContextForTarget(profile) : {};
     for (const step of steps) {
       if (!step.args_template) continue;
       let args;
       try {
         args = JSON.parse(step.args_template);
       } catch {
+        issues.push({ step_index: step.step_index, unresolved: 'Invalid JSON argument template' });
+        continue;
+      }
+      if (!Array.isArray(args)) {
+        issues.push({ step_index: step.step_index, unresolved: 'Argument template must be an array' });
         continue;
       }
       for (const arg of args) {
@@ -217,7 +231,9 @@ export async function runPreflightChecks({ playbookId, target, db }) {
         while ((match = TEMPLATE_VAR_PATTERN.exec(arg)) !== null) {
           const inner = match[1].trim();
           // Allow <target> and known context variables
-          if (inner !== 'target' && inner !== '<target>' && !KNOWN_CONTEXT_VARS.has(inner)) {
+          if (match[1] !== inner || !/^[a-z_]+$/.test(inner) || !KNOWN_CONTEXT_VARS.has(inner)
+              || context[inner] === undefined || context[inner] === null || String(context[inner]).trim() === ''
+              || /\b(?:placeholder|CHANGE_ME|REPLACE_ME)\b/i.test(String(context[inner]))) {
             issues.push({
               step_index: step.step_index,
               tool_id: step.tool_id,
@@ -240,13 +256,15 @@ export async function runPreflightChecks({ playbookId, target, db }) {
   // ── Check 5: wordlists ─────────────────────────────────────────────
   {
     const wordlistsDir = join(PROJECT_ROOT, 'data', 'wordlists');
-    const ok = existsSync(wordlistsDir);
+    const profile = checks.find(check => check.name === 'target_class_compatibility')?.target_profile;
+    const resources = inspectWordlistFiles(steps, profile ? buildContextForTarget(profile) : {}, PROJECT_ROOT, executionEnvironment);
+    const ok = existsSync(wordlistsDir) && resources.passed;
     checks.push({
       name: 'wordlists',
       passed: ok,
       message: ok
-        ? `Wordlists directory exists: ${wordlistsDir}`
-        : `Wordlists directory not found: ${wordlistsDir}`,
+        ? `Required wordlist files checked: ${resources.required.length}`
+        : resources.issues.length > 0 ? resources.issues.join('; ') : `Wordlists directory not found: ${wordlistsDir}`,
     });
   }
 

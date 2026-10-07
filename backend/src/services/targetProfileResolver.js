@@ -16,7 +16,12 @@
  *   unknown    — cannot be classified
  */
 
-const DVWA_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0']);
+// DVWA 靶场主机集合。默认含 172.17.0.2（Docker 默认桥接网第一个容器 IP，常见本地 DVWA 部署位置）。
+// 可通过环境变量 DVWA_HOSTS 覆盖/扩展（逗号分隔）。
+const DVWA_HOSTS = new Set([
+  'localhost', '127.0.0.1', '0.0.0.0', '172.17.0.2',
+  ...(process.env.DVWA_HOSTS ? process.env.DVWA_HOSTS.split(',').map(s => s.trim()).filter(Boolean) : []),
+]);
 const DVWA_PORTS = new Set([8080, 80, 3000]);
 
 const PRIVATE_IP_PATTERNS = [
