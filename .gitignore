@@ -44,3 +44,9 @@ containers/recon/binaries/
 check_*.mjs
 fix_data.mjs
 pentagi-v3/
+
+# Codex local conversation records
+.codex/
+
+# Windows alternate data stream metadata
+*Zone.Identifier
