@@ -29,6 +29,13 @@ public:
   /// Load and display a specific run by ID (used by FlowPage workbench
   /// when a pipeline's execute step produces a run).
   void showRun(const QString &runId);
+  void clearRunContext();
+
+signals:
+  /// Emitted when a run reaches a terminal state (COMPLETED/FAILED/ABORTED).
+  /// Carries the run_id so listeners (e.g. EvaluatePage) can focus it.
+  void runCompleted(const QString &runId);
+  void runSelected(const QString &runId);
 
 public slots:
   void onRefreshRuns();
@@ -80,6 +87,7 @@ private:
   QString m_loadedRunId;        // run currently rendered in the detail tab
   QTimer *m_pollTimer;          // polls every 2s while a run is RUNNING
   int m_pollErrorCount = 0;     // consecutive poll failures (stop after threshold)
+  int m_contextRevision = 0;
 
   // Cached playbook data
   QJsonArray m_allPlaybooks;

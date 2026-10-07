@@ -9,6 +9,7 @@
 #include "pages/PlaybookPage.h"
 #include "pages/ScanPage.h"
 #include "pages/ExecutionPage.h"
+#include "pages/EvaluatePage.h"
 #include "pages/SystemPage.h"
 #include "pages/DongleLockPage.h"
 #include "services/dongle/DongleService.h"
@@ -216,6 +217,9 @@ void MainWindow::setupWebSocket()
             connect(m_ws, &WsClient::runReact, embExec, &ExecutionPage::onRunReact);
             connect(m_ws, &WsClient::runCompleted, embExec, &ExecutionPage::onRefreshRuns);
         }
+        connect(m_ws, &WsClient::runCompleted, m_flowPage, [this](const QJsonObject &data) {
+            m_flowPage->onRunCompleted(data.value(QStringLiteral("run_id")).toString());
+        });
     }
 
 

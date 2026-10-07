@@ -20,6 +20,7 @@
 #include <QFileInfo>
 #include <QStackedWidget>
 #include <QDir>
+#include <QPointer>
 
 EvaluatePage::EvaluatePage(ApiClient *api, const QString &role, const QString &username, QWidget *parent)
     : QWidget(parent), m_api(api), m_previewMode(false) {
@@ -37,10 +38,20 @@ void EvaluatePage::setTarget(const QString &target) {
 
 void EvaluatePage::showRun(const QString &runId) {
   if (runId.isEmpty()) return;
-  // Populate the run combo, then select the target run (unlike onLoadRuns
-  // which auto-selects index 0).  Used by FlowPage when a pipeline completes.
-  m_api->get("/api/runs", 5000, [this, runId](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
+  if (runId == m_requestedRunId &&
+      (m_runLoadPending || runId == m_gradingRunId || runId == m_gradedRunId)) return;
+  clearRun();
+  m_requestedRunId = runId;
+  m_runLoadPending = true;
+  const int revision = ++m_runRequestRevision;
+  m_scoreLabel->setText(QStringLiteral("正在加载执行记录：%1").arg(runId));
+  m_api->get("/api/runs", 5000, [this, runId, revision](const QJsonObject &res) {
+    if (revision != m_runRequestRevision) return;
+    m_runLoadPending = false;
+    if (res["status"].toString() != "ok") {
+      m_scoreLabel->setText(QStringLiteral("加载执行记录失败，请切换评估页重试。"));
+      return;
+    }
     m_runCombo->clear();
     auto arr = res["data"].toArray();
     int targetIndex = -1;
@@ -64,8 +75,33 @@ void EvaluatePage::showRun(const QString &runId) {
       m_runCombo->setCurrentIndex(targetIndex);
       m_tabs->setCurrentIndex(0);  // 切到"执行评分"子页
       onGradeRun();
+    } else {
+      m_runCombo->setCurrentIndex(-1);
+      m_scoreLabel->setText(QStringLiteral("执行记录不可用：%1").arg(runId));
     }
   });
+}
+
+void EvaluatePage::clearRun() {
+  ++m_runRequestRevision;
+  ++m_gradeRequestRevision;
+  ++m_reportRequestRevision;
+  m_requestedRunId.clear();
+  m_selectedRunId.clear();
+  m_gradedRunId.clear();
+  m_gradingRunId.clear();
+  m_runLoadPending = false;
+  m_runCombo->setCurrentIndex(-1);
+  m_scoreLabel->setText(QStringLiteral("选择执行记录后点击评分"));
+  m_mitreLabel->clear();
+  m_stepTable->setRowCount(0);
+  m_gradeBtn->setEnabled(true);
+  m_genReportBtn->setEnabled(false);
+  m_genReportBtn->setText(QStringLiteral("生成测试报告"));
+}
+
+void EvaluatePage::retryRun(const QString &runId) {
+  if (runId == m_requestedRunId) showRun(runId);
 }
 
 void EvaluatePage::showReports() {
@@ -96,6 +132,22 @@ void EvaluatePage::setupUI() {
   selectH->addWidget(m_gradeBtn);
   gradeL->addLayout(selectH);
   connect(m_gradeBtn, &QPushButton::clicked, this, &EvaluatePage::onGradeRun);
+  connect(m_runCombo, QOverload<int>::of(&QComboBox::activated), this, [this](int) {
+    ++m_runRequestRevision;
+    ++m_gradeRequestRevision;
+    ++m_reportRequestRevision;
+    m_requestedRunId = m_runCombo->currentData().toString();
+    m_selectedRunId.clear();
+    m_gradedRunId.clear();
+    m_gradingRunId.clear();
+    m_runLoadPending = false;
+    m_scoreLabel->setText(QStringLiteral("选择执行记录后点击评分"));
+    m_mitreLabel->clear();
+    m_stepTable->setRowCount(0);
+    m_gradeBtn->setEnabled(true);
+    m_genReportBtn->setEnabled(false);
+    m_genReportBtn->setText(QStringLiteral("生成测试报告"));
+  });
 
   m_scoreLabel = new QLabel("选择执行记录后点击评分");
   m_scoreLabel->setStyleSheet(Theme::SectionStyle);
@@ -438,8 +490,9 @@ void EvaluatePage::setupUI() {
 // ════════════════════════════════════════════════════════════════════════
 
 void EvaluatePage::onLoadRuns() {
-  m_api->get("/api/runs", 5000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
+  const int revision = ++m_runRequestRevision;
+  m_api->get("/api/runs", 5000, [this, revision](const QJsonObject &res) {
+    if (revision != m_runRequestRevision || res["status"].toString() != "ok") return;
     m_runCombo->clear();
     auto arr = res["data"].toArray();
     for (int i = 0; i < arr.size(); i++) {
@@ -455,21 +508,33 @@ void EvaluatePage::onLoadRuns() {
                status);
       m_runCombo->addItem(label, r["run_id"].toString());
     }
-    if (m_runCombo->count() > 0) {
-      onGradeRun();
-    }
+    m_runCombo->setCurrentIndex(-1);
   });
 }
 
 void EvaluatePage::onGradeRun() {
   QString runId = m_runCombo->currentData().toString();
   if (runId.isEmpty()) return;
+  if (runId == m_gradingRunId) return;
   m_selectedRunId = runId;
+  m_requestedRunId = runId;
+  m_gradingRunId = runId;
+  m_gradedRunId.clear();
+  const int revision = ++m_gradeRequestRevision;
+  ++m_reportRequestRevision;
   m_gradeBtn->setEnabled(false);
+  m_genReportBtn->setEnabled(false);
+  m_genReportBtn->setText(QStringLiteral("生成测试报告"));
 
-  m_api->post("/api/runs/" + runId + "/grade", QJsonObject(), 5000, [this](const QJsonObject &res) {
+  m_api->post("/api/runs/" + runId + "/grade", QJsonObject(), 5000, [this, runId, revision](const QJsonObject &res) {
+    if (revision != m_gradeRequestRevision || runId != m_runCombo->currentData().toString()) return;
+    m_gradingRunId.clear();
     m_gradeBtn->setEnabled(true);
-    if (res["status"].toString() != "ok") return;
+    if (res["status"].toString() != "ok") {
+      m_scoreLabel->setText(QStringLiteral("评分失败，请重试。"));
+      return;
+    }
+    m_gradedRunId = runId;
     auto d = res["data"].toObject();
 
     QString grade = d["grade"].toString();
@@ -503,12 +568,18 @@ void EvaluatePage::onGradeRun() {
 }
 
 void EvaluatePage::onGenerateReport() {
-  if (m_selectedRunId.isEmpty()) return;
+  const QString runId = m_selectedRunId;
+  if (runId.isEmpty() || runId != m_gradedRunId || runId != m_runCombo->currentData().toString()
+      || !m_genReportBtn->isEnabled()) return;
   QJsonObject body;
-  body["run_id"] = m_selectedRunId;
+  body["run_id"] = runId;
+  const int revision = ++m_reportRequestRevision;
+  QPointer<EvaluatePage> page(this);
   m_genReportBtn->setEnabled(false);
   m_genReportBtn->setText("生成中...");
-  m_api->post("/api/reports/generate", body, 5000, [this](const QJsonObject &res) {
+  m_api->post("/api/reports/generate", body, 5000, [this, page, runId, revision](const QJsonObject &res) {
+    if (!page || revision != m_reportRequestRevision || runId != m_gradedRunId
+        || runId != m_runCombo->currentData().toString()) return;
     m_genReportBtn->setEnabled(true);
     m_genReportBtn->setText("生成测试报告");
     if (res["status"].toString() == "ok") {
