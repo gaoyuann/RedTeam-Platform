@@ -38,6 +38,7 @@ public:
   /// Expose embedded stage-tab pages for WebSocket wiring in MainWindow.
   ScanPage *scanTab() const;
   ExecutionPage *execTab() const;
+  EvaluatePage *evalTab() const;  // 评估页（用于 run:complete 时预加载评分）
 
   /// Switch to a stage tab by index (0=拓扑, 1=扫描, 2=攻击, 3=评估)
   void switchToStageTab(int idx);
@@ -53,6 +54,7 @@ public slots:
   void onPipelineStatus(const QJsonObject &data);
   void onPipelineStep(const QJsonObject &data);
   void onPipelineLog(const QJsonObject &data);
+  void onRunCompleted(const QString &runId);
 
 private slots:
   void onCreateFlow();
@@ -73,6 +75,7 @@ private:
   void loadFlowDetail(const QString &pipelineId);
   void approveFlow(const QString &preferredPlaybookId);
   bool m_approvalInFlight = false;
+  void clearRunContext();
 
   QString statusText(const QString &status) const;
   QString statusIcon(const QString &status) const;
@@ -118,6 +121,7 @@ private:
   QString m_selectedPipelineId;
   QString m_lastDetailPipelineId;
   QJsonObject m_lastDisplayedDetail;
+  QString m_workbenchRunId;
   // Dedup guards: track the last run/playbook loaded into the attack tab,
   // so repeated pipeline events don't re-call selectPlaybook/showRun (which
   // would reset the user's manual combo selection and yank the sub-tab).

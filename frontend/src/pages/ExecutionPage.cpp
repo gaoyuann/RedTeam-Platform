@@ -21,6 +21,7 @@
 #include <QDialog>
 #include <QTextEdit>
 #include <QRegularExpression>
+#include <QMessageBox>
 
 // ── Helper: create a table item with truncated display text and the full
 //    text stored in Qt::UserRole for double-click expansion. ─────────────
@@ -413,12 +414,34 @@ void ExecutionPage::showRun(const QString &runId)
   // and status label live.  onPollRunning stops automatically at a terminal
   // state, so a completed run costs at most one extra GET.
   m_runningRunId = runId;
+  m_pollErrorCount = 0;
   if (!m_pollTimer->isActive()) m_pollTimer->start();
   // Refresh the run table so the target run appears, then load its details
   onRefreshRuns();
   loadRunDetails(runId);
   // Switch to the detail tab so step progress / evidence / Cortex are visible
   m_tabWidget->setCurrentIndex(1);
+}
+
+void ExecutionPage::clearRunContext() {
+  ++m_contextRevision;
+  m_pollTimer->stop();
+  m_runningRunId.clear();
+  m_runningPlaybookId.clear();
+  m_loadedRunId.clear();
+  m_pollErrorCount = 0;
+  m_stopBtn->setEnabled(false);
+  m_execBtn->setEnabled(m_pipelineId.isEmpty());
+  m_execBtn->setText(QStringLiteral("执行"));
+  m_stepTable->setRowCount(0);
+  m_evidenceTable->setRowCount(0);
+  m_runTable->setRowCount(0);
+  m_evidenceLabel->setText(QStringLiteral("暂无执行证据"));
+  m_cortexPanel->clearMessages();
+  m_injectedReactSteps.clear();
+  m_injectedPayloadSteps.clear();
+  m_stopBtn->hide();
+  m_statusLabel->setText(QStringLiteral("选择执行记录查看详情"));
 }
 
 // ── Load playbooks filtered by baseline_group ───────────────────────
@@ -460,6 +483,8 @@ void ExecutionPage::setPipelineContext(const QString &pipelineId, const QString 
       : runId.isEmpty() ? QStringLiteral("当前任务尚无执行记录，请查看顶部任务进度。")
       : QStringLiteral("仅显示当前任务关联的执行记录。点击记录可查看步骤、证据与 AI 记录。"));
   if (changed) {
+    ++m_contextRevision;
+    m_pollErrorCount = 0;
     m_pollTimer->stop();
     m_runningRunId.clear();
     m_loadedRunId.clear();
@@ -495,6 +520,69 @@ void ExecutionPage::onExecute() {
     return;
   }
 
+  // ── 执行前展示 playbook 计划，让用户了解要做什么、有哪些步骤 ──
+  QJsonObject selPlaybook;
+  for (int i = 0; i < m_allPlaybooks.size(); ++i) {
+    auto p = m_allPlaybooks[i].toObject();
+    if (p["playbook_id"].toString() == playbookId) { selPlaybook = p; break; }
+  }
+  if (!selPlaybook.isEmpty()) {
+    QString pbName = selPlaybook["name"].toString();
+    QString pbDesc = selPlaybook["description"].toString();
+    QString pbDiff = selPlaybook["difficulty"].toString();
+    auto ttArr = selPlaybook["target_type"].toArray();
+    QStringList ttList;
+    for (const auto &v : ttArr) ttList << v.toString();
+    auto mitreArr = selPlaybook["mitre_techniques"].toArray();
+    QStringList mitreList;
+    for (const auto &v : mitreArr) mitreList << v.toString();
+    QString teaching = selPlaybook["teaching_objective"].toString();
+
+    // 基于 target_type 推断预期流程
+    QString flow;
+    if (ttList.contains("dvwa") || ttList.contains("web_url") || ttList.contains("web")) {
+      flow = "1. 侦察 (whatweb)：识别 Web 服务、框架、版本\n"
+             "2. 目录枚举 (gobuster/ffuf)：发现隐藏路径和攻击面\n"
+             "3. 漏洞扫描 (nikto/nuclei)：检测已知漏洞和配置问题\n"
+             "4. 注入测试 (sqlmap)：验证 SQL 注入等注入点\n"
+             "5. 认证测试 (hydra)：暴力破解弱密码\n"
+             "6. 利用验证：基于发现验证攻击路径";
+    } else {
+      flow = "1. 端口扫描 (nmap)：发现开放端口和服务\n"
+             "2. 服务识别：指纹识别运行的服务\n"
+             "3. 漏洞扫描：检测已知漏洞\n"
+             "4. 利用：基于发现验证攻击路径";
+    }
+
+    QString planHtml = QString(
+      "<h3>%1</h3>"
+      "<p><b>描述：</b>%2</p>"
+      "<p><b>目标：</b>%3 &nbsp;&nbsp; <b>难度：</b>%4 &nbsp;&nbsp; <b>目标类型：</b>%5</p>"
+      "<p><b>MITRE 技术：</b>%6</p>"
+      "%7"
+      "<p><b>预期执行流程：</b></p>"
+      "<pre style='font-family:monospace;background:#f5f5f5;padding:8px;'>%8</pre>"
+      "<p style='color:#888;font-size:11px;'>⚠ ReAct 引擎会根据每步结果动态调整后续步骤，实际执行可能与此计划不同。</p>"
+      "<p><b>是否开始执行？</b></p>")
+      .arg(pbName, pbDesc.isEmpty() ? QStringLiteral("（无描述）") : pbDesc,
+           target, pbDiff.isEmpty() ? QStringLiteral("未标注") : pbDiff,
+           ttList.isEmpty() ? QStringLiteral("未指定") : ttList.join(", "),
+           mitreList.isEmpty() ? QStringLiteral("未标注") : mitreList.join(", "),
+           teaching.isEmpty() ? QString() : QString("<p><b>教学目标：</b>%1</p>").arg(teaching),
+           flow);
+
+    auto *msg = new QMessageBox(this);
+    msg->setIcon(QMessageBox::Question);
+    msg->setWindowTitle(QStringLiteral("执行计划确认"));
+    msg->setText(planHtml);
+    msg->setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+    msg->button(QMessageBox::Yes)->setText(QStringLiteral("开始执行"));
+    msg->button(QMessageBox::No)->setText(QStringLiteral("取消"));
+    if (msg->exec() != QMessageBox::Yes) {
+      return;  // 用户取消
+    }
+  }
+
   m_execBtn->setEnabled(false);
   m_execBtn->setText("创建中...");
 
@@ -515,7 +603,9 @@ void ExecutionPage::onExecute() {
   QJsonObject body;
   body["playbook_id"] = playbookId;
   body["target"] = target;
-  m_api->post("/api/runs", body, 5000, [this, playbookId](const QJsonObject &res) {
+  const int contextRevision = m_contextRevision;
+  m_api->post("/api/runs", body, 5000, [this, playbookId, contextRevision](const QJsonObject &res) {
+    if (contextRevision != m_contextRevision) return;
     if (res["status"].toString() != "ok") {
       m_execBtn->setEnabled(true);
       m_execBtn->setText("执行");
@@ -534,7 +624,8 @@ void ExecutionPage::onExecute() {
     }
 
     QJsonObject empty;
-    m_api->post("/api/runs/" + runId + "/execute", empty, 5000, [this, runId, playbookId](const QJsonObject &execRes) {
+    m_api->post("/api/runs/" + runId + "/execute", empty, 5000, [this, runId, playbookId, contextRevision](const QJsonObject &execRes) {
+      if (contextRevision != m_contextRevision) return;
       m_execBtn->setEnabled(true);
       m_execBtn->setText("执行");
       if (execRes["status"].toString() != "ok") {
@@ -548,6 +639,7 @@ void ExecutionPage::onExecute() {
       // Track this run for real-time polling + auto-highlight
       m_runningRunId = runId;
       m_runningPlaybookId = playbookId;
+      m_pollErrorCount = 0;
       // Clear Cortex for new execution
       m_cortexPanel->clearMessages();
       m_injectedReactSteps.clear();
@@ -565,8 +657,9 @@ void ExecutionPage::onExecute() {
 
 // ── Refresh runs ─────────────────────────────────────────────────────
 void ExecutionPage::onRefreshRuns() {
-  m_api->get("/api/runs", 5000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
+  const int contextRevision = m_contextRevision;
+  m_api->get("/api/runs", 5000, [this, contextRevision](const QJsonObject &res) {
+    if (contextRevision != m_contextRevision || res["status"].toString() != "ok") return;
     QJsonArray arr;
     for (const auto &value : res["data"].toArray()) {
       if (m_pipelineId.isEmpty() || value.toObject()["run_id"].toString() == m_pipelineRunId)
@@ -603,13 +696,13 @@ void ExecutionPage::onRefreshRuns() {
 
     m_runTable->setSortingEnabled(sortingEnabled);
 
-    // Sorting can move rows: resolve the run ID in the final table order.
+    // Auto-select and show details for the running run
+    const QString selectedRunId = m_loadedRunId.isEmpty() ? m_runningRunId : m_loadedRunId;
     for (int row = 0; row < m_runTable->rowCount(); ++row) {
       auto *item = m_runTable->item(row, 0);
-      if (item && !m_runningRunId.isEmpty() && item->text() == m_runningRunId) {
+      if (!selectedRunId.isEmpty() && item && item->text() == selectedRunId) {
         m_runTable->selectRow(row);
-        // Refresh data without changing the tab the user is reading.
-        if (m_loadedRunId == m_runningRunId) loadRunDetails(m_runningRunId);
+        m_runTable->scrollToItem(item);
         break;
       }
     }
@@ -661,6 +754,12 @@ void ExecutionPage::onRunClicked(int row, int) {
   auto *runItem = m_runTable->item(row, 0);
   if (!runItem) return;
   QString runId = runItem->text();
+  if (runId != m_runningRunId) {
+    m_pollTimer->stop();
+    m_runningRunId.clear();
+    m_runningPlaybookId.clear();
+    m_pollErrorCount = 0;
+  }
   loadRunDetails(runId);
   // Auto-switch to detail tab
   m_tabWidget->setCurrentIndex(1);
@@ -675,6 +774,7 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
     m_injectedPayloadSteps.clear();
     m_lastReactAction.clear();
     m_loadedRunId = runId;
+    emit runSelected(runId);
   }
 
   m_api->get("/api/runs/" + runId, 5000, [this, runId](const QJsonObject &res) {
@@ -1115,10 +1215,15 @@ void ExecutionPage::onPollRunning() {
     // Terminal state — stop polling
     if (status != "RUNNING" && status != "PENDING") {
       m_pollTimer->stop();
+      QString finishedRunId = m_runningRunId;
       m_runningRunId.clear();
       m_runningPlaybookId.clear();
       // Full refresh to update final state
       onRefreshRuns();
+      // Notify listeners (e.g. EvaluatePage) to focus this run
+      if (!finishedRunId.isEmpty()) {
+        emit runCompleted(finishedRunId);
+      }
     }
   });
 }

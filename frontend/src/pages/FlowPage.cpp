@@ -291,6 +291,19 @@ void FlowPage::setupWorkbenchView()
   m_stageTabs->addTab(m_execTab, QStringLiteral("漏洞攻击"));
   m_stageTabs->addTab(m_evalTab, QStringLiteral("测试评估"));
 
+  connect(m_execTab, &ExecutionPage::runSelected, this, [this](const QString &runId) {
+    if (!m_selectedPipelineId.isEmpty() || m_stack->currentIndex() != 1) return;
+    if (runId == m_workbenchRunId) return;
+    m_workbenchRunId = runId;
+    m_lastLoadedEvalRunId.clear();
+    m_evalTab->clearRun();
+  });
+  connect(m_execTab, &ExecutionPage::runCompleted, this, &FlowPage::onRunCompleted);
+  connect(m_stageTabs, &QTabWidget::currentChanged, this, [this](int index) {
+    if (index == 3 && m_stack->currentIndex() == 1 && !m_lastLoadedEvalRunId.isEmpty())
+      m_evalTab->retryRun(m_lastLoadedEvalRunId);
+  });
+
   // 演示动线：扫描结果漏洞 → 一键转入漏洞攻击 Tab（目标预填 + 预案匹配）
   connect(m_scanTab, &ScanPage::attackRequested, this, [this](const QString &target, const QString &vulnText, const QString &resultType) {
     m_execTab->attackFromVuln(target, vulnText, resultType);
@@ -473,7 +486,7 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     };
     m_statusLabel->setStyleSheet(
       QString("font-size:12px; font-weight:700; color:%1; background:%2; "
-              "padding:5px 14px; border-radius:11px; border:1px solid %3;")
+              "padding:3px 12px; border-radius:6px; border:1px solid %3;")
         .arg(sc.name(), rgba(sc, 26), rgba(sc, 102)));
 
     // 从 pipeline 数据提取 run_id 和 playbook_id，自动加载到攻击 Tab.
@@ -481,6 +494,7 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     // the ID actually changes, so we don't reset the user's manual combo
     // selection or yank the sub-tab on every status tick.
     QString runId = p["run_id"].toString();
+    m_workbenchRunId = runId;
     QString playbookId = p["generated_playbook_id"].toString();
     m_generatedPlaybookId = playbookId;
     if (!playbookId.isEmpty() && playbookId != m_lastLoadedPlaybookId) {
@@ -496,8 +510,7 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     // stage tab 的切换由 onPipelineStatus 在完成事件到达时驱动，避免打开已
     // 完成的流水线时强制跳到评估 Tab）
     if (!runId.isEmpty() && status == "completed" && runId != m_lastLoadedEvalRunId) {
-      m_lastLoadedEvalRunId = runId;
-      m_evalTab->showRun(runId, false);
+      onRunCompleted(runId);
     }
 
     // Step progress → StepIndicator
@@ -556,6 +569,7 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
         }
       }
     }
+
 
     // Action visibility based on status
     bool isAwaiting = (status == "awaiting_approval");
@@ -634,14 +648,12 @@ void FlowPage::onFlowDoubleClicked(int row)
   QString pid = flowIdAtRow(row);
   if (pid.isEmpty()) return;
   m_selectedPipelineId = pid;
+  clearRunContext();
   m_lastDisplayedDetail = {};
   m_resultBtn->hide();
   m_execTab->setPipelineContext(pid, "loading", {});
   m_topoTab->setPipelineContext(pid, {}, {}, false);
   m_reasoningPanel->clear();
-  m_lastLoadedRunId.clear();
-  m_lastLoadedPlaybookId.clear();
-  m_lastLoadedEvalRunId.clear();
   loadFlowDetail(pid);
   m_stack->setCurrentIndex(1);
   // Refresh the embedded scan tab so it picks up any new scan tasks
@@ -662,9 +674,11 @@ void FlowPage::onFlowContextMenu(const QPoint &pos)
   auto *menu = new QMenu(this);
   menu->addAction(QStringLiteral("打开"), [this, pid]() {
     m_selectedPipelineId = pid;
-    m_lastLoadedRunId.clear();
-    m_lastLoadedPlaybookId.clear();
-    m_lastLoadedEvalRunId.clear();
+    clearRunContext();
+    m_resultBtn->hide();
+    m_execTab->setPipelineContext(pid, "loading", {});
+    m_topoTab->setPipelineContext(pid, {}, {}, false);
+    m_reasoningPanel->clear();
     loadFlowDetail(pid);
     m_stack->setCurrentIndex(1);
   });
@@ -699,6 +713,8 @@ void FlowPage::onOpenFlow()
 
 void FlowPage::onBackToList()
 {
+  m_selectedPipelineId.clear();
+  clearRunContext();
   m_stack->setCurrentIndex(0);
   refreshFlows();
 }
@@ -891,6 +907,31 @@ ExecutionPage *FlowPage::execTab() const
   return m_execTab;
 }
 
+EvaluatePage *FlowPage::evalTab() const
+{
+  return m_evalTab;
+}
+
+void FlowPage::clearRunContext()
+{
+  m_lastDisplayedDetail = {};
+  m_lastDetailPipelineId.clear();
+  m_workbenchRunId.clear();
+  m_lastLoadedRunId.clear();
+  m_lastLoadedPlaybookId.clear();
+  m_lastLoadedEvalRunId.clear();
+  m_execTab->clearRunContext();
+  m_evalTab->clearRun();
+}
+
+void FlowPage::onRunCompleted(const QString &runId)
+{
+  if (m_stack->currentIndex() != 1 || runId.isEmpty() || runId != m_workbenchRunId) return;
+  if (runId == m_lastLoadedEvalRunId) return;
+  m_lastLoadedEvalRunId = runId;
+  m_evalTab->showRun(runId, false);
+}
+
 void FlowPage::switchToStageTab(int idx)
 {
   if (m_stageTabs && idx >= 0 && idx < m_stageTabs->count())
@@ -901,10 +942,8 @@ void FlowPage::jumpToExecution(const QString &playbookId, const QString &target)
 {
   // Clear pipeline context — this is a direct execution, not a pipeline view
   m_selectedPipelineId.clear();
+  clearRunContext();
   m_execTab->setPipelineContext({}, {}, {});
-  m_lastLoadedRunId.clear();
-  m_lastLoadedPlaybookId.clear();
-  m_lastLoadedEvalRunId.clear();
 
   // Show "direct execution" in the workbench header
   m_targetLabel->setText(QStringLiteral("直接执行: %1").arg(

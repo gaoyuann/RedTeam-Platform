@@ -95,7 +95,9 @@ export default function (db) {
     }
 
     // Fire and forget — execution happens in background
-    executeScan(req.params.scanTaskId).catch(() => {});
+    executeScan(req.params.scanTaskId).catch(err => {
+      console.error(`[scans] executeScan failed for ${req.params.scanTaskId}:`, err.message || err);
+    });
     // WebSocket: notify scan started (include operator info)
     const ws = getWsManager();
     if (ws) ws.broadcast('scan:started', {

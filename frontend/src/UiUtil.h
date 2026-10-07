@@ -18,28 +18,27 @@ public:
   static void attach(QAbstractItemView *view, const QString &text)
   {
     if (!view || !view->model()) return;
-    // The hint dies with the viewport, before the view model is destroyed.
-    auto *w = new EmptyHint(view->viewport());
-    w->m_viewport = view->viewport();
-    w->m_label = new QLabel(text, view->viewport());
-    w->m_label->setAlignment(Qt::AlignCenter);
-    w->m_label->setStyleSheet(
+    auto *label = new QLabel(text, view->viewport());
+    auto *hint = new EmptyHint(label);
+    hint->m_viewport = view->viewport();
+    hint->m_label = label;
+    label->setAlignment(Qt::AlignCenter);
+    label->setStyleSheet(
       "color:#64748b; font-size:13px; background:transparent; padding:0 16px;");
-    w->m_label->setAttribute(Qt::WA_TransparentForMouseEvents);
-    w->m_label->setWordWrap(true);
-    w->m_label->show();
-    w->m_label->setGeometry(view->viewport()->rect());
-    view->viewport()->installEventFilter(w);
+    label->setAttribute(Qt::WA_TransparentForMouseEvents);
+    label->setWordWrap(true);
+    label->setGeometry(view->viewport()->rect());
+    view->viewport()->installEventFilter(hint);
 
-    auto update = [w, model = QPointer<QAbstractItemModel>(view->model())]() {
-      if (!w->m_label) return;
-      w->m_label->setVisible(!model || model->rowCount() == 0);
+    QPointer<QAbstractItemModel> model(view->model());
+    auto update = [hint, model]() {
+      if (hint->m_label)
+        hint->m_label->setVisible(!model || model->rowCount() == 0);
     };
-    auto *m = view->model();
-    QObject::connect(m, &QAbstractItemModel::rowsInserted, w, update);
-    QObject::connect(m, &QAbstractItemModel::rowsRemoved, w, update);
-    QObject::connect(m, &QAbstractItemModel::modelReset, w, update);
-    QObject::connect(m, &QAbstractItemModel::layoutChanged, w, update);
+    QObject::connect(model.data(), &QAbstractItemModel::rowsInserted, hint, update);
+    QObject::connect(model.data(), &QAbstractItemModel::rowsRemoved, hint, update);
+    QObject::connect(model.data(), &QAbstractItemModel::modelReset, hint, update);
+    QObject::connect(model.data(), &QAbstractItemModel::layoutChanged, hint, update);
     update();
   }
 

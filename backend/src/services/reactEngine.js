@@ -276,7 +276,7 @@ function buildReactPrompt({ stepIndex, toolId, stepName, stepResult,
   }
 
   const success = stepResult.success ? '成功' : '失败';
-  const output = (stepResult.stdout || stepResult.stderr || '').slice(0, 500);
+  const output = (stepResult.stdout || stepResult.stderr || '').slice(0, 2500);
 
   const evidenceText = serializeEvidenceHistory(evidenceHistory);
   const planText = serializeCurrentPlan(remainingSteps);
@@ -334,7 +334,7 @@ function buildExplorationPrompt({ stepIndex, toolId, stepName, stepResult,
                                     kgContext, detectedTechContext, appContext, reactCallCount, guardWarning, ruleMatchContext,
                                     payloadContext, failedToolsHint, currentFailHint, insertHint }) {
   const success = stepResult.success ? '成功' : '失败';
-  const output = (stepResult.stdout || stepResult.stderr || '').slice(0, 500);
+  const output = (stepResult.stdout || stepResult.stderr || '').slice(0, 2500);
 
   const evidenceText = serializeEvidenceHistory(evidenceHistory);
   const planText = serializeCurrentPlan(remainingSteps);

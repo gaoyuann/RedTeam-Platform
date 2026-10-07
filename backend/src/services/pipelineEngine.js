@@ -118,9 +118,15 @@ function ensureStep(db, pipelineId, stepOrder, stepType) {
   }
 }
 
-/** Mark a pipeline as failed with an error. */
+/** Mark a pipeline as failed with an error. Also cleans up any steps still
+ *  marked 'running' — this happens when a step's await never resolved (e.g.
+ *  tool process hung on SIGTERM) and the outer catch fired. */
 function failPipeline(db, pipelineId, errorMessage) {
   updateStatus(db, pipelineId, 'failed', { error_message: errorMessage });
+  // Mark any still-running steps as failed so the UI doesn't show "执行中"
+  db.prepare(
+    `UPDATE pipeline_steps SET status = 'failed', completed_at = ?, error_message = COALESCE(error_message, ?) WHERE pipeline_id = ? AND status = 'running'`
+  ).run(new Date().toISOString(), `流水线失败: ${errorMessage}`, pipelineId);
   runningPipelines.delete(pipelineId);
 }
 
@@ -675,6 +681,34 @@ export async function runPipeline(pipelineId) {
     failPipeline(db, pipelineId, `流水线异常: ${err.message}`);
     pipelineLog(pipelineId, `流水线异常: ${err.message}`, 'error');
     return { ok: false, pipeline_id: pipelineId, status: 'failed', error: err.message };
+  }
+}
+
+// ── Startup cleanup ───────────────────────────────────────────────────────
+
+/** Clean up orphaned pipeline steps left 'running' by a crash/kill/timeout.
+ *  Called once on server boot. Also marks pipelines stuck in 'running'/
+ *  'awaiting_approval' as 'failed' — they can't resume after a restart. */
+export function cleanupOrphanedPipelines() {
+  const db = getDb();
+  const now = new Date().toISOString();
+
+  // 1. Mark pipelines stuck in running/awaiting_approval as failed
+  const stuckPipelines = db.prepare(
+    `UPDATE pipelines SET status = 'failed', error_message = COALESCE(error_message, '服务重启前未正常终止'), updated_at = ?
+     WHERE status IN ('running', 'awaiting_approval')`
+  ).run(now);
+  if (stuckPipelines.changes > 0) {
+    console.log(`[pipelineEngine] cleaned ${stuckPipelines.changes} stuck pipeline(s)`);
+  }
+
+  // 2. Mark pipeline_steps stuck in running/pending as failed
+  const stuckSteps = db.prepare(
+    `UPDATE pipeline_steps SET status = 'failed', completed_at = ?, error_message = COALESCE(error_message, '服务重启前未正常终止')
+     WHERE status IN ('running', 'pending')`
+  ).run(now);
+  if (stuckSteps.changes > 0) {
+    console.log(`[pipelineEngine] cleaned ${stuckSteps.changes} stuck pipeline step(s)`);
   }
 }
 

@@ -7,8 +7,8 @@
  * Ported from RedTeam-Edu: backend/src/utils/evidenceSerializer.js
  */
 
-const MAX_EVIDENCE_LENGTH = 6000;  // Total cap for evidence text
-const MAX_STEP_OUTPUT = 300;       // Truncate per-step output
+const MAX_EVIDENCE_LENGTH = 8000;  // Total cap for evidence text
+const MAX_STEP_OUTPUT = 1500;      // Truncate per-step output
 
 /**
  * Serialize evidence history into ReAct prompt text.
@@ -34,11 +34,18 @@ export function serializeEvidenceHistory(history) {
       output = typeof entry.output === 'string'
         ? entry.output
         : JSON.stringify(entry.output);
-      // Take only first line or first MAX_STEP_OUTPUT chars
-      const firstLine = output.split('\n')[0] || '';
-      output = firstLine.length > MAX_STEP_OUTPUT
-        ? firstLine.slice(0, MAX_STEP_OUTPUT) + '…'
-        : firstLine;
+      // Take first meaningful lines, skipping tool banner/config noise so AI
+      // sees actual findings (e.g. gobuster Found lines, nmap open ports).
+      // Skip: pure === separators, gobuster [+] config lines, version/bylines.
+      const meaningfulLines = output.split('\n')
+        .filter(l => !l.match(/^=+\s*$/))            // === separators
+        .filter(l => !l.match(/^\[\+\]/))            // gobuster [+] config banner
+        .filter(l => !l.match(/^(Gobuster|by OJ|by Christian|Starting gobuster)\s/))  // version/start lines
+        .slice(0, 30);
+      const preview = meaningfulLines.join('\n');
+      output = preview.length > MAX_STEP_OUTPUT
+        ? preview.slice(0, MAX_STEP_OUTPUT) + '…'
+        : preview;
     }
 
     let evidenceStr = '';

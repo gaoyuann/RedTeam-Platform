@@ -28,6 +28,8 @@ public:
   /// Load a specific run by ID, trigger grading, and switch to the grade tab.
   /// Used by FlowPage workbench when a pipeline completes.
   void showRun(const QString &runId, bool focus = true);
+  void clearRun();
+  void retryRun(const QString &runId);
 
   /// Switch to the reports sub-tab and refresh the report list.
   void showReports();
@@ -83,6 +85,13 @@ private:
   QPushButton *m_gradeBtn;
   QPushButton *m_genReportBtn;
   QString m_selectedRunId;
+  QString m_requestedRunId;
+  QString m_gradedRunId;
+  QString m_gradingRunId;
+  int m_runRequestRevision = 0;
+  int m_gradeRequestRevision = 0;
+  int m_reportRequestRevision = 0;
+  bool m_runLoadPending = false;
 
   // Reports tab
   QTableWidget *m_reportTable;

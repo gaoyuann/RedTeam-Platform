@@ -9,6 +9,7 @@
 #include "pages/PlaybookPage.h"
 #include "pages/ScanPage.h"
 #include "pages/ExecutionPage.h"
+#include "pages/EvaluatePage.h"
 #include "pages/SystemPage.h"
 #include "pages/DongleLockPage.h"
 #include "services/dongle/DongleService.h"
@@ -72,13 +73,12 @@ void MainWindow::setupUI()
     sidebarLayout->setContentsMargins(12, 18, 12, 14);
     sidebarLayout->setSpacing(14);
 
-    auto *brandLabel = new QLabel(QStringLiteral("红队安全运营"), sidebar);
+    auto *brandLabel = new QLabel(QStringLiteral("信息系统渗透智能化测试平台"), sidebar);
     brandLabel->setObjectName("sidebarBrand");
+    brandLabel->setStyleSheet(QStringLiteral(
+        "color: #ffffff; font-size: 14px; font-weight: 800; letter-spacing: 0px;"));
+    brandLabel->setWordWrap(true);
     sidebarLayout->addWidget(brandLabel);
-
-    auto *brandSubtitle = new QLabel(QStringLiteral("信息系统安全测试平台"), sidebar);
-    brandSubtitle->setObjectName("sidebarSubtitle");
-    sidebarLayout->addWidget(brandSubtitle);
 
     auto *brandDivider = new QFrame(sidebar);
     brandDivider->setObjectName("sidebarDivider");
@@ -218,6 +218,9 @@ void MainWindow::setupWebSocket()
             connect(m_ws, &WsClient::runReact, embExec, &ExecutionPage::onRunReact);
             connect(m_ws, &WsClient::runCompleted, embExec, &ExecutionPage::onRefreshRuns);
         }
+        connect(m_ws, &WsClient::runCompleted, m_flowPage, [this](const QJsonObject &data) {
+            m_flowPage->onRunCompleted(data.value(QStringLiteral("run_id")).toString());
+        });
     }
 
 

@@ -41,5 +41,17 @@ RUN apk add --no-cache ruby ruby-bundler git make gcc musl-dev ruby-dev && \
     ln -sf /opt/whatweb/whatweb /usr/local/bin/whatweb && \
     apk del git make gcc musl-dev ruby-dev
 
+# ── Wordlists for gobuster/ffuf (code references /usr/share/wordlists/...) ──
+# gobuster 等工具的字典文件。rt-recon 镜像此前只装二进制不装字典，
+# 导致 gobuster 启动即失败（wordlist file does not exist）。
+RUN apk add --no-cache wget && \
+    mkdir -p /usr/share/wordlists/dirb /usr/share/wordlists/dirbuster /usr/share/wordlists/metasploit && \
+    wget -q -O /usr/share/wordlists/dirb/common.txt https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/common.txt && \
+    wget -q -O /usr/share/wordlists/dirb/small.txt https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/raft-small-words.txt && \
+    wget -q -O /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/directory-list-2.3-small.txt && \
+    wget -q -O /usr/share/wordlists/metasploit/unix_users.txt https://raw.githubusercontent.com/danielmiessler/SecLists/master/Usernames/Names/names.txt && \
+    wget -q -O /usr/share/wordlists/metasploit/unix_passwords.txt https://raw.githubusercontent.com/danielmiessler/SecLists/master/Passwords/Common-Credentials/10-million-password-list-top-10000.txt && \
+    apk del wget
+
 # Clear proxy (not needed at runtime)
 ENV http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY=

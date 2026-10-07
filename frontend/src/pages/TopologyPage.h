@@ -32,6 +32,7 @@ class TopologyPage : public QWidget {
 
 public:
     explicit TopologyPage(ApiClient *api, const QString &role = "", const QString &username = "", QWidget *parent = nullptr);
+    ~TopologyPage() override;
 
     /// Pre-fill the target input (used when embedded in FlowPage workbench)
     void setTarget(const QString &target);
@@ -72,6 +73,7 @@ private:
     bool m_scanFinished = false;
     bool m_autoLoadAttempted = false;
     quint64 m_contextGeneration = 0;
+    void refreshScans(bool preserveStatus);
     void populateTopologyDocument();
     void populateDocumentPlaceholder(const QString &title, const QString &detail);
     void renderTopologyScene();
@@ -123,6 +125,7 @@ private:
     bool m_editorDirty = false;
     bool m_documentDirty = false;
     QString m_selectedScanTaskId;
+    int m_scanRefreshRevision = 0;
     QList<TopologyScanRecord> m_recentRecords;
 
     // Hero stat cards

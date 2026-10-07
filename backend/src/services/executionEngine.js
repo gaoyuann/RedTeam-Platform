@@ -514,7 +514,7 @@ export async function executeRun(runId) {
           stepIndex: step.step_index,
           toolId: step.tool_id,
           success: result.success,
-          output: output.slice(0, 300),
+          output: output.slice(0, 2500),
         });
 
         // Get remaining steps
