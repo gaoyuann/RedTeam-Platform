@@ -24,7 +24,7 @@ public:
     hint->m_label = label;
     label->setAlignment(Qt::AlignCenter);
     label->setStyleSheet(
-      "color:#b6c2d2; font-size:13px; background:transparent; padding:0 16px;");
+      "color:#64748b; font-size:13px; background:transparent; padding:0 16px;");
     label->setAttribute(Qt::WA_TransparentForMouseEvents);
     label->setWordWrap(true);
     label->setGeometry(view->viewport()->rect());
@@ -44,17 +44,12 @@ public:
 
   bool eventFilter(QObject *obj, QEvent *ev) override
   {
-    // Resize 跟随视口变化；Paint 兜底同步。用 visibleRegion 而非 rect：
-    // 页面内嵌 QScrollArea 导致视图只有部分可见时，提示仍居中于可见区域。
-    if (m_label && m_viewport && obj == m_viewport.data() &&
-        (ev->type() == QEvent::Resize || ev->type() == QEvent::Paint ||
-         ev->type() == QEvent::Show || ev->type() == QEvent::Move)) {
-      QWidget *vp = static_cast<QWidget*>(obj);
-      QRect r = vp->visibleRegion().boundingRect();
-      if (r.width() < vp->width() || r.height() < vp->height())
-        m_label->setGeometry(r);
-      else
-        m_label->setGeometry(vp->rect());
+    // Layout changes are handled outside paint events; painting must not
+    // schedule another child geometry/repaint cycle when a panel is uncovered.
+    if (m_label && obj == m_viewport &&
+        (ev->type() == QEvent::Resize || ev->type() == QEvent::Show)) {
+      const QRect r = static_cast<QWidget *>(obj)->rect();
+      if (m_label->geometry() != r) m_label->setGeometry(r);
     }
     return QObject::eventFilter(obj, ev);
   }

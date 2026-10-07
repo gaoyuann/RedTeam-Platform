@@ -161,6 +161,17 @@ export default function (db) {
     res.json({ status: 'ok', data: { message: '已退出登录' } });
   });
 
+  // Only the caller's effective capabilities; use the same live rules as rbacGuard.
+  router.get('/me/permissions', (req, res) => {
+    const permissions = Object.fromEntries(
+      Object.entries(DEFAULT_RBAC).map(([prefix, rules]) => [prefix, {
+        read: rules.read.includes(req.user.role),
+        write: rules.write.includes(req.user.role),
+      }])
+    );
+    res.json({ status: 'ok', data: permissions });
+  });
+
   // List users (admin only)
   router.get('/', requireRole('admin'), (_req, res) => {
     const rows = db.prepare('SELECT id, username, role, display_name, is_active, created_at, updated_at FROM users ORDER BY id').all();

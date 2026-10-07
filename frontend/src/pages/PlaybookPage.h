@@ -40,9 +40,11 @@ private slots:
 
 protected:
   bool eventFilter(QObject *watched, QEvent *ev) override;
+  void showEvent(QShowEvent *event) override;
 
 private:
   void setupUI();
+  void refreshPermissions();
   void loadPlaybookDetail(const QString &id);
   void fitDetailTreeHeight();
   void compressListColumns();
@@ -77,5 +79,9 @@ private:
 
   // New playbook
   QPushButton *m_newBtn;
+  QPushButton *m_deleteBtn;
+  QLabel *m_permissionHint;
+  bool m_canWrite = false;
+  bool m_permissionRequestPending = false;
   bool m_compressPending = false;  // 防抖：一轮布局结束再压缩列宽
 };

@@ -68,9 +68,9 @@ void MainWindow::setupUI()
 
     auto *sidebar = new QFrame(centralWidget);
     sidebar->setObjectName("sidebar");
-    sidebar->setFixedWidth(186);
+    sidebar->setFixedWidth(200);
     auto *sidebarLayout = new QVBoxLayout(sidebar);
-    sidebarLayout->setContentsMargins(10, 18, 10, 14);
+    sidebarLayout->setContentsMargins(12, 18, 12, 14);
     sidebarLayout->setSpacing(14);
 
     auto *brandLabel = new QLabel(QStringLiteral("信息系统渗透智能化测试平台"), sidebar);
@@ -87,6 +87,7 @@ void MainWindow::setupUI()
 
     m_navList = new QListWidget(sidebar);
     m_navList->setObjectName("navList");
+    m_navList->setMinimumWidth(0);
     for (const auto &name : m_modules) {
         m_navList->addItem(name);
     }

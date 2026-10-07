@@ -3,6 +3,10 @@
 #include "../Theme.h"
 #include "../UiUtil.h"
 #include <QSplitter>
+#include <QGridLayout>
+#include <QTabBar>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QPushButton>
@@ -352,10 +356,28 @@ void ScanPage::setTarget(const QString &target)
   m_bruteTargetInput->setText(target);
 }
 
+void ScanPage::setTaskScope(const QStringList &taskIds)
+{
+  if (m_scopedTasks && taskIds == m_scopeTaskIds) return;
+  m_scopedTasks = true;
+  m_scopeTaskIds = taskIds;
+  m_selectInitialScopeTask = true;
+  if (!taskIds.contains(m_selectedTaskId)) {
+    m_selectedTaskId.clear();
+    clearDetailPanel();
+  }
+  for (auto *button : findChildren<QPushButton*>("scanCreateToggle")) {
+    button->setChecked(false);
+    button->hide();
+  }
+  onRefreshTasks();
+}
+
 void ScanPage::setupUI() {
   setStyleSheet(Theme::PageStyle);
 
   auto *mainLayout = new QVBoxLayout(this);
+  mainLayout->setContentsMargins(12, 12, 12, 12);
 
   // ══ Left Panel ══════════════════════════════════════════════════════
   auto *left = new QVBoxLayout;
@@ -371,23 +393,23 @@ void ScanPage::setupUI() {
     auto *tab = new QWidget;
     auto *layout = new QVBoxLayout(tab);
     // Input row
-    auto *h = new QHBoxLayout;
-    h->addWidget(new QLabel("目标:"));
+    auto *h = new QGridLayout;
+    h->addWidget(new QLabel("目标:"), 0, 0);
     m_portTargetInput = new QLineEdit;
     m_portTargetInput->setPlaceholderText("例: 192.168.1.1");
     m_portTargetInput->setMinimumWidth(150);
     auto *completer = new QCompleter(history, this);
     completer->setCaseSensitivity(Qt::CaseInsensitive);
     m_portTargetInput->setCompleter(completer);
-    h->addWidget(m_portTargetInput, 2);
-    h->addWidget(new QLabel("端口:"));
+    h->addWidget(m_portTargetInput, 0, 1);
+    h->addWidget(new QLabel("端口:"), 1, 0);
     m_portsInput = new QLineEdit;
     m_portsInput->setPlaceholderText("22,80");
-    m_portsInput->setMaximumWidth(100);
-    h->addWidget(m_portsInput);
+    m_portsInput->setMinimumWidth(150);
+    h->addWidget(m_portsInput, 1, 1);
     auto *btn = new QPushButton("创建扫描");
     btn->setProperty("primary", true);
-    h->addWidget(btn);
+    h->addWidget(btn, 2, 1);
     layout->addLayout(h);
     connect(btn, &QPushButton::clicked, this, &ScanPage::onCreateScan);
     // Task table
@@ -440,18 +462,18 @@ void ScanPage::setupUI() {
   {
     auto *tab = new QWidget;
     auto *layout = new QVBoxLayout(tab);
-    auto *h = new QHBoxLayout;
-    h->addWidget(new QLabel("目标:"));
+    auto *h = new QGridLayout;
+    h->addWidget(new QLabel("目标:"), 0, 0);
     m_vulnTargetInput = new QLineEdit;
     m_vulnTargetInput->setPlaceholderText("例: 192.168.1.1");
     m_vulnTargetInput->setMinimumWidth(150);
     auto *completer = new QCompleter(history, this);
     completer->setCaseSensitivity(Qt::CaseInsensitive);
     m_vulnTargetInput->setCompleter(completer);
-    h->addWidget(m_vulnTargetInput, 2);
+    h->addWidget(m_vulnTargetInput, 0, 1);
     auto *btn = new QPushButton("创建扫描");
     btn->setProperty("primary", true);
-    h->addWidget(btn);
+    h->addWidget(btn, 2, 1);
     layout->addLayout(h);
     connect(btn, &QPushButton::clicked, this, &ScanPage::onCreateScan);
     auto *headerH = new QHBoxLayout;
@@ -500,23 +522,23 @@ void ScanPage::setupUI() {
   {
     auto *tab = new QWidget;
     auto *layout = new QVBoxLayout(tab);
-    auto *h = new QHBoxLayout;
-    h->addWidget(new QLabel("目标:"));
+    auto *h = new QGridLayout;
+    h->addWidget(new QLabel("目标:"), 0, 0);
     m_webTargetInput = new QLineEdit;
     m_webTargetInput->setPlaceholderText("例: http://target:8080");
     m_webTargetInput->setMinimumWidth(150);
     auto *completer = new QCompleter(history, this);
     completer->setCaseSensitivity(Qt::CaseInsensitive);
     m_webTargetInput->setCompleter(completer);
-    h->addWidget(m_webTargetInput, 2);
-    h->addWidget(new QLabel("会话标识："));
+    h->addWidget(m_webTargetInput, 0, 1);
+    h->addWidget(new QLabel("会话标识："), 1, 0);
     m_cookieInput = new QLineEdit;
     m_cookieInput->setPlaceholderText("PHPSESSID=abc; security=low");
-    m_cookieInput->setMaximumWidth(200);
-    h->addWidget(m_cookieInput);
+    m_cookieInput->setMinimumWidth(150);
+    h->addWidget(m_cookieInput, 1, 1);
     auto *btn = new QPushButton("创建扫描");
     btn->setProperty("primary", true);
-    h->addWidget(btn);
+    h->addWidget(btn, 2, 1);
     layout->addLayout(h);
     connect(btn, &QPushButton::clicked, this, &ScanPage::onCreateScan);
     auto *headerH = new QHBoxLayout;
@@ -565,16 +587,16 @@ void ScanPage::setupUI() {
   {
     auto *tab = new QWidget;
     auto *layout = new QVBoxLayout(tab);
-    auto *h = new QHBoxLayout;
-    h->addWidget(new QLabel("目标:"));
+    auto *h = new QGridLayout;
+    h->addWidget(new QLabel("目标:"), 0, 0);
     m_bruteTargetInput = new QLineEdit;
     m_bruteTargetInput->setPlaceholderText("例: 192.168.1.1");
     m_bruteTargetInput->setMinimumWidth(150);
     auto *completer = new QCompleter(history, this);
     completer->setCaseSensitivity(Qt::CaseInsensitive);
     m_bruteTargetInput->setCompleter(completer);
-    h->addWidget(m_bruteTargetInput, 2);
-    h->addWidget(new QLabel("服务:"));
+    h->addWidget(m_bruteTargetInput, 0, 1);
+    h->addWidget(new QLabel("服务:"), 1, 0);
     m_serviceCombo = new QComboBox;
     for (const auto &pair : QList<QPair<QString,QString>>{
       {"HTTP表单", "http-post-form"}, {"SSH", "ssh"}, {"FTP", "ftp"},
@@ -583,10 +605,10 @@ void ScanPage::setupUI() {
     }) {
       m_serviceCombo->addItem(pair.first, pair.second);
     }
-    h->addWidget(m_serviceCombo);
+    h->addWidget(m_serviceCombo, 1, 1);
     auto *btn = new QPushButton("创建扫描");
     btn->setProperty("primary", true);
-    h->addWidget(btn);
+    h->addWidget(btn, 2, 1);
     layout->addLayout(h);
     connect(btn, &QPushButton::clicked, this, &ScanPage::onCreateScan);
     // Form definition row (only for http-post-form)
@@ -598,8 +620,9 @@ void ScanPage::setupUI() {
     h2->addWidget(m_formDefInput, 1);
     h2->addStretch();
     layout->addLayout(h2);
-    formDefLabel->setVisible(false);
-    m_formDefInput->setVisible(false);
+    const bool needsForm = m_serviceCombo->currentData().toString() == "http-post-form";
+    formDefLabel->setVisible(needsForm);
+    m_formDefInput->setVisible(needsForm);
     connect(m_serviceCombo, &QComboBox::currentTextChanged, this, [this, formDefLabel]() {
       bool isForm = (m_serviceCombo->currentData().toString() == "http-post-form");
       formDefLabel->setVisible(isForm);
@@ -647,20 +670,69 @@ void ScanPage::setupUI() {
     m_scanTypeTabs->addTab(tab, QStringLiteral("弱口令扫描"));
   }
 
+  left->setContentsMargins(0, 0, 0, 0);
+  auto *typePicker = new QComboBox(this);
+  typePicker->setObjectName("scanTypePicker");
+  for (int i = 0; i < m_scanTypeTabs->count(); ++i) {
+    typePicker->addItem(m_scanTypeTabs->tabText(i));
+    auto *tabLayout = qobject_cast<QVBoxLayout*>(m_scanTypeTabs->widget(i)->layout());
+    auto *form = new QWidget;
+    auto *formLayout = new QVBoxLayout(form);
+    formLayout->setContentsMargins(0, 0, 0, 0);
+    auto *inputItem = tabLayout->takeAt(0);
+    formLayout->addLayout(inputItem->layout());
+    if (i == 3) {
+      auto *extraItem = tabLayout->takeAt(0);
+      formLayout->addLayout(extraItem->layout());
+    }
+    auto *formDialog = new QDialog(this);
+    formDialog->setObjectName("scanCreateDialog");
+    formDialog->setWindowTitle(QStringLiteral("新建") + m_scanTypeTabs->tabText(i));
+    formDialog->setWindowModality(Qt::WindowModal);
+    formDialog->setMinimumWidth(460);
+    auto *dialogLayout = new QVBoxLayout(formDialog);
+    dialogLayout->setContentsMargins(20, 20, 20, 20);
+    dialogLayout->addWidget(form);
+    auto *cancel = new QDialogButtonBox(QDialogButtonBox::Cancel, formDialog);
+    cancel->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("取消"));
+    connect(cancel, &QDialogButtonBox::rejected, formDialog, &QDialog::reject);
+    dialogLayout->addWidget(cancel);
+    auto *newScan = new QPushButton(QStringLiteral("＋ 新建扫描"));
+    newScan->setObjectName("scanCreateToggle");
+    connect(newScan, &QPushButton::clicked, formDialog, [formDialog]() {
+      formDialog->show();
+      formDialog->raise();
+      formDialog->activateWindow();
+    });
+    tabLayout->insertWidget(0, newScan);
+    tabLayout->setContentsMargins(0, 8, 0, 0);
+  }
+  m_scanTypeTabs->tabBar()->hide();
+  m_scanTypeTabs->setStyleSheet("QTabWidget::pane { border:0; background:transparent; }");
+  connect(typePicker, QOverload<int>::of(&QComboBox::currentIndexChanged), m_scanTypeTabs, &QTabWidget::setCurrentIndex);
+  connect(m_scanTypeTabs, &QTabWidget::currentChanged, typePicker, &QComboBox::setCurrentIndex);
+  left->addWidget(typePicker);
   left->addWidget(m_scanTypeTabs, 1);
 
   auto *leftW = new QWidget;
   leftW->setLayout(left);
-  leftW->setMinimumWidth(200);
+  leftW->setMinimumWidth(310);
 
   // ══ Right Panel ═════════════════════════════════════════════════════
-  auto *right = new QVBoxLayout;
+  auto *detailLayout = new QVBoxLayout;
+  detailLayout->setContentsMargins(0, 0, 0, 0);
+  auto *detailTabs = new QTabWidget;
+  detailTabs->setObjectName("scanDetailTabs");
+  auto *resultsPage = new QWidget;
+  auto *right = new QVBoxLayout(resultsPage);
+  auto *plansPage = new QWidget;
+  auto *plansLayout = new QVBoxLayout(plansPage);
 
   // ── Status label ──────────────────────────────────────────────────
   m_statusLabel = new QLabel("选择任务查看详情");
   m_statusLabel->setStyleSheet(Theme::StatusInfoStyle);
   m_statusLabel->setWordWrap(true);
-  right->addWidget(m_statusLabel);
+  detailLayout->addWidget(m_statusLabel);
 
   // ── Re-execute button (hidden by default) ─────────────────────────
   auto *reexecH = new QHBoxLayout;
@@ -668,7 +740,7 @@ void ScanPage::setupUI() {
   m_reexecBtn->setVisible(false);
   reexecH->addWidget(m_reexecBtn);
   reexecH->addStretch();
-  right->addLayout(reexecH);
+  detailLayout->addLayout(reexecH);
   connect(m_reexecBtn, &QPushButton::clicked, this, &ScanPage::onReexecScan);
 
   // ── Results (QTreeWidget grouped by result_type) ──────────────────
@@ -679,9 +751,10 @@ void ScanPage::setupUI() {
   m_resultTree->setHeaderLabels({"严重度", "数据", "工具"});
   m_resultTree->setAlternatingRowColors(true);
   m_resultTree->setContextMenuPolicy(Qt::CustomContextMenu);
-  m_resultTree->header()->setStretchLastSection(true);
+  m_resultTree->header()->setStretchLastSection(false);
+  m_resultTree->header()->setSectionResizeMode(1, QHeaderView::Stretch);
   m_resultTree->setColumnWidth(0, 70);
-  m_resultTree->setColumnWidth(1, 300);
+  m_resultTree->setColumnWidth(2, 85);
   m_resultTree->setIndentation(20);
   right->addWidget(m_resultTree, 1);
   connect(m_resultTree, &QTreeWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
@@ -691,22 +764,47 @@ void ScanPage::setupUI() {
     // Copy the most useful column (data column = 1 for child items, 0 for group items)
     QString text = item->text(1).isEmpty() ? item->text(0) : item->text(1);
     menu.addAction("复制内容", [text]() { QApplication::clipboard()->setText(text); });
+    // 演示动线：漏洞结果一键发起攻击
+    const QString resultType = item->data(0, Qt::UserRole).toString();
+    const QStringList attackable = {"vulnerability", "web_vuln", "sql_injection", "credential"};
+    if (!m_currentTaskTarget.isEmpty() && attackable.contains(resultType)) {
+      menu.addSeparator();
+      menu.addAction("⚔ 对此漏洞发起攻击", [this, item, resultType]() {
+        const QString raw = item->toolTip(1);  // 优先原始 JSON（关键词更全），展示文本兜底
+        emit attackRequested(m_currentTaskTarget, raw.isEmpty() ? item->text(1) : raw, resultType);
+      });
+    }
     menu.exec(m_resultTree->viewport()->mapToGlobal(pos));
+  });
+  connect(m_resultTree, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem *item, int) {
+    // 双击漏洞行 = 直接发起攻击（分组头/不可攻击类型忽略）
+    if (!item || item->parent() == nullptr) return;
+    const QString resultType = item->data(0, Qt::UserRole).toString();
+    const QStringList attackable = {"vulnerability", "web_vuln", "sql_injection", "credential"};
+    if (!attackable.contains(resultType) || m_currentTaskTarget.isEmpty()) return;
+    const QString raw = item->toolTip(1);
+    emit attackRequested(m_currentTaskTarget, raw.isEmpty() ? item->text(1) : raw, resultType);
   });
 
   // ── Recommendations ───────────────────────────────────────────────
   auto *recLabel = new QLabel("推荐预案"); recLabel->setStyleSheet(Theme::SectionStyle);
-  right->addWidget(recLabel);
+  plansLayout->addWidget(recLabel);
   m_recTable = new QTableWidget(0, 4);
   UiUtil::EmptyHint::attach(m_recTable, QStringLiteral("暂无推荐预案 · 先完成扫描"));
   m_recTable->setHorizontalHeaderLabels({"名称", "难度", "基线组", "匹配原因"});
+  m_recTable->verticalHeader()->hide();
+  m_recTable->horizontalHeader()->setMinimumSectionSize(50);
   m_recTable->setAlternatingRowColors(true);
   m_recTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_recTable->setSelectionBehavior(QAbstractItemView::SelectRows);
   m_recTable->setSortingEnabled(true);
   m_recTable->setContextMenuPolicy(Qt::CustomContextMenu);
-  m_recTable->horizontalHeader()->setStretchLastSection(true);
-  right->addWidget(m_recTable, 1);
+  m_recTable->horizontalHeader()->setStretchLastSection(false);
+  m_recTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+  m_recTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+  m_recTable->setColumnWidth(1, 60);
+  m_recTable->setColumnWidth(2, 90);
+  plansLayout->addWidget(m_recTable, 1);
   connect(m_recTable, &QTableWidget::cellClicked, this, &ScanPage::onRecommendationClicked);
 
   // ── 推荐预案"前往执行→"按钮 ─────────────────────────────────────
@@ -716,7 +814,7 @@ void ScanPage::setupUI() {
   m_recExecBtn->setProperty("primary", true);
   recExecH->addWidget(m_recExecBtn);
   recExecH->addStretch();
-  right->addLayout(recExecH);
+  plansLayout->addLayout(recExecH);
   connect(m_recExecBtn, &QPushButton::clicked, this, &ScanPage::onRecExecClicked);
 
   // ── AI Generate Playbook ──────────────────────────────────────────
@@ -726,7 +824,7 @@ void ScanPage::setupUI() {
   m_genBtn->setProperty("primary", true);
   bottomH->addWidget(m_genBtn);
   bottomH->addStretch();
-  right->addLayout(bottomH);
+  plansLayout->addLayout(bottomH);
   connect(m_genBtn, &QPushButton::clicked, this, &ScanPage::onGeneratePlaybook);
 
   // ── AI 生成预案预览区（初始隐藏）──────────────────────────────────
@@ -757,7 +855,7 @@ void ScanPage::setupUI() {
   connect(m_genExecBtn, &QPushButton::clicked, this, &ScanPage::onGenExecClicked);
 
   m_genPreviewWidget->setVisible(false);
-  right->addWidget(m_genPreviewWidget);
+  plansLayout->addWidget(m_genPreviewWidget);
 
   // 步骤表格右键菜单
   connect(m_genStepTable, &QTableWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
@@ -769,17 +867,32 @@ void ScanPage::setupUI() {
   });
 
   auto *rightW = new QWidget;
-  rightW->setLayout(right);
-  rightW->setMinimumWidth(200);
+  detailTabs->addTab(resultsPage, QStringLiteral("扫描结果"));
+  detailTabs->addTab(plansPage, QStringLiteral("推荐与生成方案"));
+  detailLayout->addWidget(detailTabs, 1);
+  rightW->setLayout(detailLayout);
+  rightW->setMinimumWidth(350);
 
   // ══ Splitter ═══════════════════════════════════════════════════════
   auto *splitter = new QSplitter(Qt::Horizontal, this);
   splitter->addWidget(leftW);
   splitter->addWidget(rightW);
-  splitter->setStretchFactor(0, 1);
+  splitter->setChildrenCollapsible(false);
+  splitter->setHandleWidth(12);
+  splitter->setStretchFactor(0, 0);
   splitter->setStretchFactor(1, 1);
-  splitter->setSizes({500, 500});
+  splitter->setSizes({330, 760});
   mainLayout->addWidget(splitter);
+
+  for (auto *table : {m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable}) {
+    table->verticalHeader()->hide();
+    table->verticalHeader()->setDefaultSectionSize(36);
+    table->horizontalHeader()->setStretchLastSection(false);
+    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    table->setColumnWidth(1, 76);
+    table->setColumnWidth(2, 100);
+    table->setTextElideMode(Qt::ElideMiddle);
+  }
 
   // ── Poll timer for running scans ──────────────────────────────────
   m_pollTimer = new QTimer(this);
@@ -788,10 +901,20 @@ void ScanPage::setupUI() {
 
   // ── Tab switch: update delete button state ────────────────────────
   connect(m_scanTypeTabs, &QTabWidget::currentChanged, this, [this]() {
-    // Re-evaluate: if a task is selected and belongs to the new tab, enable del; otherwise disable
-    enableCurrentTabDelBtn(!m_selectedTaskId.isEmpty());
+    m_selectedTaskId.clear();
+    clearDetailPanel();
+    const QList<QTableWidget*> tables{m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable};
+    auto *table = tables.value(m_scanTypeTabs->currentIndex());
+    if (table && table->rowCount() > 0) {
+      const int row = qMax(0, table->currentRow());
+      table->selectRow(row);
+      emit table->cellClicked(row, 0);
+    } else {
+      m_statusLabel->setText(QStringLiteral("当前扫描类型暂无任务"));
+    }
   });
 
+  // ── Result tree: 攻击动线入口（右键 / 双击漏洞行）──────────────────
   // ── Right-click menu for rec table ────────────────────────────────
   connect(m_recTable, &QTableWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
     auto *item = m_recTable->itemAt(pos);
@@ -807,6 +930,8 @@ void ScanPage::updateStatusLabel(const QJsonObject &d) {
   QString status = d["status"].toString();
   QString target = d["target"].toString();
   QString scanType = formatScanType(d["scan_type"].toString());
+  m_currentTaskTarget = target;              // 供"对此漏洞发起攻击"取目标
+  m_currentScanType = d["scan_type"].toString();
   auto arr = d["results"].toArray();
   bool structured = hasStructuredResults(arr);
 
@@ -833,7 +958,9 @@ void ScanPage::updateStatusLabel(const QJsonObject &d) {
   if (!summary.isEmpty()) parts << summary;
 
   m_statusLabel->setText(parts.join(" | "));
-  if (status == "COMPLETED" && !structured)
+  if (status == "FAILED")
+    m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
+  else if (status == "COMPLETED" && !structured)
     m_statusLabel->setStyleSheet(Theme::StatusWarningStyle);
   else
     m_statusLabel->setStyleSheet(Theme::StatusInfoStyle);
@@ -867,10 +994,11 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
     QFont groupFont = groupItem->font(0);
     groupFont.setBold(true);
     groupItem->setFont(0, groupFont);
-    // Group header: dark background + light text
+    groupItem->setFirstColumnSpanned(true);
+    // Group header separates result types without competing with severity colors
     for (int col = 0; col < 3; col++) {
-      groupItem->setBackground(col, QColor(45, 55, 72));
-      groupItem->setForeground(col, QColor("#e2e8f0"));
+      groupItem->setBackground(col, QColor("#eaf1fa"));
+      groupItem->setForeground(col, QColor("#334155"));
     }
 
     for (const auto &r : arr) {
@@ -883,6 +1011,7 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
       auto *child = new QTreeWidgetItem(groupItem);
       child->setText(0, formatSeverity(sev));
       child->setForeground(0, severityColor(sev));
+      child->setData(0, Qt::UserRole, resultType);  // 供右键"发起攻击"判断类型
       child->setText(1, formatResultData(rawData, resultType));
       child->setToolTip(1, rawData);
       child->setText(2, tool);
@@ -912,9 +1041,10 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
     QFont groupFont = groupItem->font(0);
     groupFont.setBold(true);
     groupItem->setFont(0, groupFont);
+    groupItem->setFirstColumnSpanned(true);
     for (int col = 0; col < 3; col++) {
-      groupItem->setBackground(col, QColor(45, 55, 72));
-      groupItem->setForeground(col, QColor("#e2e8f0"));
+      groupItem->setBackground(col, QColor("#eaf1fa"));
+      groupItem->setForeground(col, QColor("#334155"));
     }
 
     for (const auto &r : arr) {
@@ -927,6 +1057,7 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
       auto *child = new QTreeWidgetItem(groupItem);
       child->setText(0, formatSeverity(sev));
       child->setForeground(0, severityColor(sev));
+      child->setData(0, Qt::UserRole, resultType);  // 供右键"发起攻击"判断类型
       child->setText(1, formatResultData(rawData, resultType));
       child->setToolTip(1, rawData);
       child->setText(2, tool);
@@ -934,8 +1065,8 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
     groupItem->setExpanded(true);
   }
 
-  m_resultTree->resizeColumnToContents(0);
-  m_resultTree->resizeColumnToContents(2);
+  m_resultTree->setColumnWidth(0, 90);
+  m_resultTree->setColumnWidth(2, 80);
 }
 
 // ── Create scan (auto-execute) ───────────────────────────────────────
@@ -1004,6 +1135,7 @@ void ScanPage::onCreateScan() {
       m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
       return;
     }
+    for (auto *dialog : findChildren<QDialog*>("scanCreateDialog")) dialog->accept();
     QString taskId = res["data"].toObject()["scan_task_id"].toString();
     m_selectedTaskId = taskId;
     m_statusLabel->setText(QString("已创建: %1 — 正在自动执行...").arg(taskId.left(16)));
@@ -1065,6 +1197,7 @@ void ScanPage::onRefreshTasks() {
     for (int i = 0; i < arr.size(); i++) {
       auto t = arr[i].toObject();
       QString taskId = t["scan_task_id"].toString();
+      if (m_scopedTasks && !m_scopeTaskIds.contains(taskId)) continue;
       QString scanType = t["scan_type"].toString();
       QString status = t["status"].toString();
 
@@ -1077,6 +1210,7 @@ void ScanPage::onRefreshTasks() {
 
       auto *targetItem = new QTableWidgetItem(t["target"].toString());
       targetItem->setData(Qt::UserRole, taskId);
+      targetItem->setToolTip(t["target"].toString());
       table->setItem(row, 0, targetItem);
 
       auto *statusItem = new QTableWidgetItem(formatStatus(status));
@@ -1101,8 +1235,7 @@ void ScanPage::onRefreshTasks() {
 
     // Resize columns
     for (auto *table : {m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable}) {
-      table->resizeColumnsToContents();
-      table->horizontalHeader()->setStretchLastSection(true);
+      table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     }
 
     // Update count labels
@@ -1126,6 +1259,19 @@ void ScanPage::onRefreshTasks() {
       }
     }
 
+    // Opening a pipeline should show its results, not unrelated global tasks.
+    if (m_scopedTasks && m_selectInitialScopeTask && m_selectedTaskId.isEmpty()) {
+      const QList<QTableWidget*> tables{m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable};
+      for (int tab = 0; tab < tables.size(); ++tab) {
+        if (tables[tab]->rowCount() == 0) continue;
+        m_scanTypeTabs->setCurrentIndex(tab);
+        tables[tab]->selectRow(0);
+        emit tables[tab]->cellClicked(0, 0);
+        m_selectInitialScopeTask = false;
+        break;
+      }
+    }
+
     m_runningTaskIds = runningIds;
     startPollingIfNeeded();
   });
@@ -1145,6 +1291,7 @@ void ScanPage::onTaskClicked(int row, int) {
   enableCurrentTabDelBtn(true);
 
   m_api->get("/api/scan-tasks/" + id, 5000, [this, id](const QJsonObject &res) {
+    if (id != m_selectedTaskId) return;
     if (res["status"].toString() != "ok") return;
     auto d = res["data"].toObject();
     QString status = d["status"].toString();
@@ -1224,9 +1371,12 @@ void ScanPage::loadResults(const QString &taskId) {
 
 // ── Load recommendations ─────────────────────────────────────────────
 void ScanPage::loadRecommendations(const QString &taskId) {
-  m_api->get("/api/scan-tasks/" + taskId + "/recommendations", 5000, [this](const QJsonObject &res) {
+  m_api->get("/api/scan-tasks/" + taskId + "/recommendations", 5000, [this, taskId](const QJsonObject &res) {
+    if (taskId != m_selectedTaskId) return;
     if (res["status"].toString() != "ok") return;
     auto arr = res["data"].toArray();
+    const bool sorting = m_recTable->isSortingEnabled();
+    m_recTable->setSortingEnabled(false);
     m_recTable->setRowCount(arr.size());
     for (int i = 0; i < arr.size(); i++) {
       auto r = arr[i].toObject();
@@ -1235,10 +1385,13 @@ void ScanPage::loadRecommendations(const QString &taskId) {
       m_recTable->setItem(i, 0, nameItem);
       m_recTable->setItem(i, 1, new QTableWidgetItem(formatDifficulty(r["difficulty"].toString())));
       m_recTable->setItem(i, 2, new QTableWidgetItem(formatBaselineGroup(r["baseline_group"].toString())));
-      m_recTable->setItem(i, 3, new QTableWidgetItem(r["match_reason"].toString()));
+      auto *reason = new QTableWidgetItem(r["match_reason"].toString());
+      reason->setToolTip(reason->text());
+      m_recTable->setItem(i, 3, reason);
     }
-    m_recTable->resizeColumnsToContents();
-    m_recTable->horizontalHeader()->setStretchLastSection(true);
+    m_recTable->setSortingEnabled(sorting);
+    m_recTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    m_recTable->horizontalHeader()->setStretchLastSection(false);
   });
 }
 
@@ -1436,6 +1589,7 @@ void ScanPage::onPollStatus() {
     for (int i = 0; i < arr.size(); i++) {
       auto t = arr[i].toObject();
       QString taskId = t["scan_task_id"].toString();
+      if (m_scopedTasks && !m_scopeTaskIds.contains(taskId)) continue;
       QString status = t["status"].toString();
 
       if (m_runningTaskIds.contains(taskId)) {
@@ -1474,7 +1628,9 @@ void ScanPage::onPollStatus() {
           auto *idItem = table->item(row, 0);
           if (idItem && idItem->data(Qt::UserRole).toString() == m_selectedTaskId) {
             // Directly load the task details
-            m_api->get("/api/scan-tasks/" + m_selectedTaskId, 5000, [this](const QJsonObject &detailRes) {
+            const QString selectedId = m_selectedTaskId;
+      m_api->get("/api/scan-tasks/" + selectedId, 5000, [this, selectedId](const QJsonObject &detailRes) {
+        if (selectedId != m_selectedTaskId) return;
               if (detailRes["status"].toString() != "ok") return;
               auto d = detailRes["data"].toObject();
               m_currentTarget = d["target"].toString();
@@ -1504,7 +1660,9 @@ void ScanPage::onPollStatus() {
       }
     } else if (!m_selectedTaskId.isEmpty() && m_runningTaskIds.contains(m_selectedTaskId)) {
       // Still running — update results incrementally
-      m_api->get("/api/scan-tasks/" + m_selectedTaskId, 5000, [this](const QJsonObject &detailRes) {
+      const QString selectedId = m_selectedTaskId;
+      m_api->get("/api/scan-tasks/" + selectedId, 5000, [this, selectedId](const QJsonObject &detailRes) {
+        if (selectedId != m_selectedTaskId) return;
         if (detailRes["status"].toString() != "ok") return;
         auto d = detailRes["data"].toObject();
         m_currentTarget = d["target"].toString();

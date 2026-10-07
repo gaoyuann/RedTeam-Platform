@@ -30,6 +30,7 @@ signals:
 
 protected:
   void paintEvent(QPaintEvent *event) override;
+  bool event(QEvent *event) override;
   void mousePressEvent(QMouseEvent *event) override;
 
 private:

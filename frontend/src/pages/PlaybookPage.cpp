@@ -21,6 +21,7 @@
 #include <QPointer>
 #include <QTimer>
 #include <cstdio>
+#include <QShowEvent>
 
 PlaybookPage::PlaybookPage(ApiClient *api, const QString &role, const QString &username, QWidget *parent)
     : QWidget(parent), m_api(api), m_role(role), m_username(username) {
@@ -96,15 +97,24 @@ void PlaybookPage::setupUI() {
   auto *btnH = new QHBoxLayout;
   m_newBtn = new QPushButton("＋ 新建");
   m_newBtn->setProperty("primary", true);
-  auto *delBtn = new QPushButton("删除选中");
-  delBtn->setProperty("danger", true);
+  m_deleteBtn = new QPushButton("删除选中");
+  m_deleteBtn->setProperty("danger", true);
+  m_newBtn->setObjectName("playbookNew");
+  m_deleteBtn->setObjectName("playbookDelete");
+  m_newBtn->setEnabled(false);
+  m_deleteBtn->setEnabled(false);
   btnH->addWidget(m_newBtn);
   btnH->addStretch();
-  btnH->addWidget(delBtn);
+  btnH->addWidget(m_deleteBtn);
   left->addLayout(btnH);
+  m_permissionHint = new QLabel(QStringLiteral("正在确认预案编辑权限…"));
+  m_permissionHint->setObjectName("playbookPermissionHint");
+  m_permissionHint->setWordWrap(true);
+  m_permissionHint->setStyleSheet(Theme::StatusInfoStyle);
+  left->addWidget(m_permissionHint);
 
   connect(m_newBtn, &QPushButton::clicked, this, &PlaybookPage::onNewPlaybook);
-  connect(delBtn, &QPushButton::clicked, this, &PlaybookPage::onDeletePlaybook);
+  connect(m_deleteBtn, &QPushButton::clicked, this, &PlaybookPage::onDeletePlaybook);
 
   auto *leftW = new QWidget;
   leftW->setLayout(left);
@@ -233,6 +243,40 @@ void PlaybookPage::setupUI() {
   m_tabs->addTab(m_payloadTab, QStringLiteral("载荷样本库"));
 
   outerLayout->addWidget(m_tabs);
+}
+
+void PlaybookPage::showEvent(QShowEvent *event) {
+  QWidget::showEvent(event);
+  refreshPermissions();
+}
+
+void PlaybookPage::refreshPermissions() {
+  if (m_permissionRequestPending) return;
+  m_permissionRequestPending = true;
+  m_canWrite = false;
+  m_newBtn->setEnabled(false);
+  m_deleteBtn->setEnabled(false);
+  m_permissionHint->setText(QStringLiteral("正在确认预案编辑权限…"));
+  m_permissionHint->show();
+  QPointer<PlaybookPage> self(this);
+  m_api->get("/api/users/me/permissions", 5000, [this, self](const QJsonObject &res) {
+    if (!self) return;
+    m_permissionRequestPending = false;
+    if (res["status"].toString() != "ok") {
+      m_permissionHint->setText(QStringLiteral("无法确认编辑权限，暂不可修改。请检查连接后重新进入此页；旧版服务端需先更新。"));
+      return;
+    }
+    const auto permissions = res["data"].toObject()["playbooks"].toObject();
+    m_canWrite = permissions["write"].toBool();
+    m_newBtn->setEnabled(m_canWrite);
+    m_deleteBtn->setEnabled(m_canWrite);
+    m_newBtn->setToolTip(m_canWrite ? QString() : QStringLiteral("当前账号没有预案编辑权限"));
+    m_deleteBtn->setToolTip(m_newBtn->toolTip());
+    m_permissionHint->setText(permissions["read"].toBool()
+      ? QStringLiteral("只读预案库 · 可查看方案；新建和删除需要管理员授予编辑权限。")
+      : QStringLiteral("当前账号没有预案读取或编辑权限，请联系管理员。"));
+    m_permissionHint->setVisible(!m_canWrite);
+  });
 }
 
 // ── Formatting helpers ─────────────────────────────────────────────────
@@ -479,12 +523,21 @@ void PlaybookPage::onStepSelected() {
 }
 
 void PlaybookPage::onDeletePlaybook() {
+  if (!m_canWrite) return;
   if (m_selectedId.isEmpty()) return;
   auto reply = QMessageBox::question(this->window(), "确认删除",
     QString("确定要删除此预案吗？此操作不可撤销。"),
     QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
   if (reply != QMessageBox::Yes) return;
-  m_api->del("/api/playbooks/" + m_selectedId, 5000, [this](const QJsonObject &) {
+  QPointer<PlaybookPage> self(this);
+  m_api->del("/api/playbooks/" + m_selectedId, 5000, [this, self](const QJsonObject &res) {
+    if (!self) return;
+    if (res["status"].toString() != "ok") {
+      QMessageBox::warning(this, QStringLiteral("删除失败"),
+        res["error"].toObject()["message"].toString(QStringLiteral("删除未完成，请重试")));
+      refreshPermissions();
+      return;
+    }
     m_selectedId.clear();
     m_detailTree->clear();
     m_detailLabel->setText("选择预案查看详情");
@@ -511,6 +564,7 @@ void PlaybookPage::onGoExecute() {
 
 // ── New Playbook ─────────────────────────────────────────────────────
 void PlaybookPage::onNewPlaybook() {
+  if (!m_canWrite) return;
   QDialog dlg(this);
   dlg.setWindowTitle("新建预案");
   dlg.setMinimumWidth(420);
@@ -588,8 +642,10 @@ void PlaybookPage::onNewPlaybook() {
   m_newBtn->setEnabled(false);
   m_newBtn->setText("创建中...");
 
-  m_api->post("/api/playbooks", body, 10000, [this](const QJsonObject &res) {
-    m_newBtn->setEnabled(true);
+  QPointer<PlaybookPage> self(this);
+  m_api->post("/api/playbooks", body, 10000, [this, self](const QJsonObject &res) {
+    if (!self) return;
+    m_newBtn->setEnabled(m_canWrite);
     m_newBtn->setText("＋ 新建");
 
     if (res["status"].toString() == "ok") {

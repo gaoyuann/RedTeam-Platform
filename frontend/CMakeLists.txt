@@ -30,6 +30,7 @@ set(SOURCES
     src/pages/SystemPage.cpp
     src/pages/StepIndicator.cpp
     src/pages/PhasePanel.cpp
+    src/pages/StatsSummaryCard.cpp
     src/models/TopologyTypes.cpp
     src/pages/TopologyPage.cpp
     src/services/dongle/DongleService.cpp

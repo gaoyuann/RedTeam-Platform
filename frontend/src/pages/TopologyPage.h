@@ -36,6 +36,8 @@ public:
 
     /// Pre-fill the target input (used when embedded in FlowPage workbench)
     void setTarget(const QString &target);
+    void setPipelineContext(const QString &pipelineId, const QString &target,
+                            const QStringList &scanIds, bool scanFinished);
 
 private slots:
     void onRefreshScans();
@@ -55,10 +57,27 @@ private slots:
 
 private:
     void setupUI();
+    bool restoreCurrentArchive();
+    void loadExistingScanTopology();
+    QString archiveDocumentPath() const;
+    void archiveGeneratedDocument();
+    struct Draft {
+        TopologyDocument document;
+        QString path;
+        QString selectedScan;
+        bool dirty = false;
+    };
+    QMap<QString, Draft> m_drafts;
+    QString m_pipelineId;
+    QStringList m_pipelineScanIds;
+    bool m_scanFinished = false;
+    bool m_autoLoadAttempted = false;
+    quint64 m_contextGeneration = 0;
     void refreshScans(bool preserveStatus);
     void populateTopologyDocument();
     void populateDocumentPlaceholder(const QString &title, const QString &detail);
     void renderTopologyScene();
+    void fxFadeIn(QGraphicsItem *item, quint64 gen, int delayMs, qreal fromScale);  // 发现动效：淡入+缩放
     void populateNodeList();
     void populateEdgeList();
     void showNodeDetail(const TopologyNodeRecord &node);
@@ -100,6 +119,8 @@ private:
     QString m_selectedEdgeId;
     QMap<QString, QGraphicsItem *> m_nodeItems;
     QMap<QString, QGraphicsLineItem *> m_edgeItems;
+    bool m_discoveryFxPending = false;  // 下一次 renderTopologyScene 播放发现动效
+    quint64 m_sceneGen = 0;             // 场景重建代数 — 动效回调据此失效
     bool m_syncingSelection = false;
     bool m_editorDirty = false;
     bool m_documentDirty = false;

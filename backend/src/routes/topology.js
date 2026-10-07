@@ -35,6 +35,7 @@ function extractTopologyFromResults(target, results) {
       data = typeof data === 'string' ? JSON.parse(data) : data;
     } catch { data = {}; }
 
+    if (!data || typeof data !== 'object') continue;
     const tool = row.source_tool || '';
     const type = row.result_type || '';
 
@@ -199,6 +200,28 @@ function buildUserPrompt(target, results) {
 
 export default function (db) {
   const router = Router();
+
+  // Read-only projection of this pipeline's existing results. No scan or LLM call.
+  router.get('/from-pipeline/:id', (req, res) => {
+    const pipeline = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(req.params.id);
+    if (!pipeline) return res.status(404).json({ status: 'error', error: { message: '任务不存在' } });
+    if (req.user.role !== 'admin' && req.user.sub !== pipeline.created_by) {
+      return res.status(403).json({ status: 'error', error: { message: '没有权限查看此任务' } });
+    }
+    const ids = [...new Set((pipeline.scan_task_id || '').split(',').map(id => id.trim()).filter(Boolean))];
+    const results = ids.length ? db.prepare(
+      `SELECT * FROM scan_results WHERE scan_task_id IN (${ids.map(() => '?').join(',')}) ORDER BY captured_at`
+    ).all(...ids) : [];
+    if (!results.length) return res.json({ status: 'ok', data: { topology: null } });
+    const topology = extractTopologyFromResults(pipeline.target, results);
+    // Scan co-occurrence is not evidence of a physical network connection.
+    topology.edges = [];
+    topology.flowId = pipeline.pipeline_id;
+    topology.target = pipeline.target;
+    topology.generatedAt = new Date().toISOString();
+    topology.summary = `已有扫描记录 · ${topology.nodes.length} 台主机（未提供连接关系）`;
+    res.json({ status: 'ok', data: { topology } });
+  });
 
   router.post('/generate-from-scan', async (req, res) => {
     try {

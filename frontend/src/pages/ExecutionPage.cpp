@@ -20,6 +20,7 @@
 #include <QClipboard>
 #include <QDialog>
 #include <QTextEdit>
+#include <QRegularExpression>
 #include <QMessageBox>
 
 // ── Helper: create a table item with truncated display text and the full
@@ -65,6 +66,17 @@ void ExecutionPage::setupUI() {
   auto *tab1Layout = new QVBoxLayout(tab1);
   tab1Layout->setContentsMargins(8, 8, 8, 8);
 
+  m_standaloneControls = new QWidget(tab1);
+  m_standaloneControls->setObjectName("standaloneExecutionControls");
+  auto *standaloneLayout = new QVBoxLayout(m_standaloneControls);
+  standaloneLayout->setContentsMargins(0, 0, 0, 0);
+  tab1Layout->addWidget(m_standaloneControls);
+  m_pipelineHint = new QLabel(tab1);
+  m_pipelineHint->setWordWrap(true);
+  m_pipelineHint->setStyleSheet("color:#64748b;padding:4px 0;");
+  m_pipelineHint->hide();
+  tab1Layout->addWidget(m_pipelineHint);
+
   // ── Attack category filter ─────────────────────────────────────────
   auto *catH = new QHBoxLayout;
   catH->addWidget(new QLabel("攻击类型:"));
@@ -83,7 +95,7 @@ void ExecutionPage::setupUI() {
   catH->addWidget(m_catTamper);
   catH->addWidget(m_catDeviceCtrl);
   catH->addStretch();
-  tab1Layout->addLayout(catH);
+  standaloneLayout->addLayout(catH);
   connect(m_catGroup, QOverload<int>::of(&QButtonGroup::buttonClicked),
           this, &ExecutionPage::onAttackCategoryChanged);
 
@@ -91,6 +103,8 @@ void ExecutionPage::setupUI() {
   auto *h1 = new QHBoxLayout;
   h1->addWidget(new QLabel("预案:"));
   m_playbookCombo = new QComboBox;
+  m_playbookCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+  m_playbookCombo->setMinimumContentsLength(12);
   h1->addWidget(m_playbookCombo, 1);
   h1->addWidget(new QLabel("目标:"));
   m_targetInput = new QLineEdit;
@@ -107,7 +121,7 @@ void ExecutionPage::setupUI() {
   m_execBtn = new QPushButton("执行");
   m_execBtn->setProperty("primary", true);
   h1->addWidget(m_execBtn);
-  tab1Layout->addLayout(h1);
+  standaloneLayout->addLayout(h1);
   connect(m_execBtn, &QPushButton::clicked, this, &ExecutionPage::onExecute);
 
   // ── Run list ──────────────────────────────────────────────────────
@@ -142,9 +156,6 @@ void ExecutionPage::setupUI() {
 
   // ── Right: Step details + Evidence ─────────────────────────────────
   auto *rightWidget = new QWidget;
-  auto *rightScroll = new QScrollArea;
-  rightScroll->setWidgetResizable(true);
-  rightScroll->setFrameShape(QFrame::NoFrame);
   auto *rightInner = new QWidget;
   auto *rightLayout = new QVBoxLayout(rightInner);
   rightLayout->setContentsMargins(8, 8, 8, 8);
@@ -153,10 +164,11 @@ void ExecutionPage::setupUI() {
   auto *statusRow = new QHBoxLayout;
   statusRow->setSpacing(8);
   m_statusLabel = new QLabel;
+  m_statusLabel->setWordWrap(true);
   statusRow->addWidget(m_statusLabel, 1);
 
   m_stopBtn = new QPushButton(QStringLiteral("🛑 停止执行"));
-  m_stopBtn->setFixedSize(110, 32);
+  m_stopBtn->setMinimumWidth(110);
   m_stopBtn->setCursor(Qt::PointingHandCursor);
   m_stopBtn->setStyleSheet(
     "QPushButton { background: #ef4444; color: #ffffff; border: none; "
@@ -189,7 +201,7 @@ void ExecutionPage::setupUI() {
   rightLayout->addWidget(stepLabel);
   m_stepTable = new QTableWidget(0, 8);
   UiUtil::EmptyHint::attach(m_stepTable, QStringLiteral("选择执行记录后展示步骤"));
-  m_stepTable->setHorizontalHeaderLabels({"步骤", "工具", "参数", "成功", "来源", "输出摘要", "载荷", "推理"});
+  m_stepTable->setHorizontalHeaderLabels({"步骤", "工具", "参数", "工具结果", "来源", "输出摘要", "载荷", "推理"});
   m_stepTable->setAlternatingRowColors(true);
   m_stepTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_stepTable->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -225,20 +237,44 @@ void ExecutionPage::setupUI() {
   m_evidenceTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
   rightLayout->addWidget(m_evidenceTable, 1);
 
-  rightScroll->setWidget(rightInner);
+  auto *detailTabs = new QTabWidget;
+  detailTabs->setObjectName("executionDetailTabs");
+  auto *stepsPage = new QWidget;
+  auto *stepsLayout = new QVBoxLayout(stepsPage);
+  stepLabel->hide();
+  auto *stepHint = new QLabel(QStringLiteral("双击步骤查看完整参数、输出与推理。"));
+  stepHint->setStyleSheet("color:#64748b;");
+  stepHint->setText(QStringLiteral("双击查看完整输出；工具执行成功不代表已确认漏洞，请结合证据判断。"));
+  stepHint->setWordWrap(true);
+  stepsLayout->addWidget(stepHint);
+  m_stepTable->setToolTip(stepHint->text());
+  stepsLayout->addWidget(m_stepTable, 1);
+  auto *evidencePage = new QWidget;
+  auto *evidenceLayout = new QVBoxLayout(evidencePage);
+  evidenceLayout->addWidget(m_evidenceLabel);
+  evLabel->hide();
+  evidenceLayout->addWidget(m_evidenceTable, 1);
+  detailTabs->addTab(stepsPage, QStringLiteral("执行步骤"));
+  detailTabs->addTab(evidencePage, QStringLiteral("证据"));
+  detailTabs->addTab(m_cortexPanel, QStringLiteral("AI 记录"));
+  rightLayout->addWidget(detailTabs, 1);
   auto *rightOuterLayout = new QVBoxLayout(rightWidget);
   rightOuterLayout->setContentsMargins(0, 0, 0, 0);
-  rightOuterLayout->addWidget(rightScroll);
+  rightOuterLayout->addWidget(rightInner);
+  tab2Layout->addWidget(rightWidget);
 
-  // ── Splitter: Cortex (left) | Details (right) ──────────────────────
-  auto *splitter = new QSplitter(Qt::Horizontal);
-  splitter->addWidget(m_cortexPanel);
-  splitter->addWidget(rightWidget);
-  splitter->setStretchFactor(0, 2);  // Cortex: 40%
-  splitter->setStretchFactor(1, 3);  // Details: 60%
-  splitter->setSizes({380, 570});
-  tab2Layout->addWidget(splitter);
-
+  for (auto *table : {m_runTable, m_stepTable, m_evidenceTable}) {
+    table->verticalHeader()->hide();
+    table->horizontalHeader()->setStretchLastSection(false);
+    table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    table->setWordWrap(false);
+    table->setTextElideMode(Qt::ElideRight);
+  }
+  for (int col : {2, 4, 6, 7}) m_stepTable->setColumnHidden(col, true);
+  m_stepTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Fixed);
+  m_stepTable->setColumnWidth(0, 60);
+  m_stepTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Fixed);
+  m_stepTable->setColumnWidth(3, 100);
   m_tabWidget->addTab(tab2, QStringLiteral("执行详情"));
 
   mainLayout->addWidget(m_tabWidget, 1);
@@ -273,14 +309,16 @@ void ExecutionPage::setupUI() {
   });
 
   // ── Double-click to expand truncated cells in a popup ───────────────
-  connect(m_stepTable, &QTableWidget::cellDoubleClicked, this, [this](int row, int col) {
-    auto *item = m_stepTable->item(row, col);
-    if (!item) return;
-    QString full = item->data(Qt::UserRole).toString();
-    if (full.isEmpty()) full = item->text();
-    if (full.isEmpty() || full == QStringLiteral("-")) return;
-    QString colTitle = m_stepTable->horizontalHeaderItem(col)->text();
-    showCellDetail(QStringLiteral("步骤 %1 — %2").arg(row + 1).arg(colTitle), full);
+  connect(m_stepTable, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
+    QStringList lines;
+    for (int col = 0; col < m_stepTable->columnCount(); ++col) {
+      const auto *item = m_stepTable->item(row, col);
+      if (!item) continue;
+      QString full = item->data(Qt::UserRole).toString();
+      if (full.isEmpty()) full = item->text();
+      lines << m_stepTable->horizontalHeaderItem(col)->text() + ":\n" + full;
+    }
+    showCellDetail(QStringLiteral("步骤 %1 · 完整详情").arg(row + 1), lines.join("\n\n"));
   });
   connect(m_evidenceTable, &QTableWidget::cellDoubleClicked, this, [this](int row, int col) {
     auto *item = m_evidenceTable->item(row, col);
@@ -340,9 +378,37 @@ void ExecutionPage::selectPlaybook(const QString &playbookId, const QString &tar
     });
 }
 
+// ── 演示动线：从扫描漏洞一键发起攻击 ──────────────────────────────────
+void ExecutionPage::attackFromVuln(const QString &target, const QString &vulnText, const QString &resultType) {
+  setTarget(target);
+
+  // 关键词 → 预案规则（按优先级，首个命中即用）
+  const QString hay = (vulnText + " " + resultType).toLower();
+  const QList<QPair<QStringList, QString>> rules = {
+    {{"sql", "注入", "sqlmap", "sqli"}, "sqli_exploit_sqlmap_basic"},
+    {{"upload", "上传"}, "web_file_upload_exploit"},
+    {{"password", "credential", "弱口令", "爆破", "brute"}, "brute_force_hydra"},
+    {{"nikto", "cgi", "xss", "web_vuln"}, "web_vuln_exploit"},
+  };
+  QString matched;
+  for (const auto &rule : rules) {
+    for (const auto &kw : rule.first) {
+      if (hay.contains(kw)) { matched = rule.second; break; }
+    }
+    if (!matched.isEmpty()) break;
+  }
+  if (matched.isEmpty()) matched = "web_vuln_exploit";  // web 漏洞通用兜底
+
+  selectPlaybook(matched, target);
+  m_statusLabel->setText(QString("已从扫描漏洞转入攻击：目标 %1 · 匹配预案 %2（可手动调整后执行）")
+                             .arg(target, matched));
+  m_statusLabel->setStyleSheet(Theme::StatusInfoStyle);
+}
+
 // ── Show a specific run (public, used by FlowPage workbench) ──────────
 void ExecutionPage::showRun(const QString &runId)
 {
+  if (!m_pipelineId.isEmpty() && runId != m_pipelineRunId) return;
   if (runId.isEmpty()) return;
   // Track as the running run so the poll timer keeps the step table, evidence,
   // and status label live.  onPollRunning stops automatically at a terminal
@@ -365,8 +431,17 @@ void ExecutionPage::clearRunContext() {
   m_loadedRunId.clear();
   m_pollErrorCount = 0;
   m_stopBtn->setEnabled(false);
-  m_execBtn->setEnabled(true);
+  m_execBtn->setEnabled(m_pipelineId.isEmpty());
   m_execBtn->setText(QStringLiteral("执行"));
+  m_stepTable->setRowCount(0);
+  m_evidenceTable->setRowCount(0);
+  m_runTable->setRowCount(0);
+  m_evidenceLabel->setText(QStringLiteral("暂无执行证据"));
+  m_cortexPanel->clearMessages();
+  m_injectedReactSteps.clear();
+  m_injectedPayloadSteps.clear();
+  m_stopBtn->hide();
+  m_statusLabel->setText(QStringLiteral("选择执行记录查看详情"));
 }
 
 // ── Load playbooks filtered by baseline_group ───────────────────────
@@ -391,8 +466,51 @@ void ExecutionPage::onAttackCategoryChanged(int id) {
   }
 }
 
+// A pipeline owns its execution; independent runs remain in the standalone view.
+void ExecutionPage::setPipelineContext(const QString &pipelineId, const QString &status, const QString &runId) {
+  const bool changed = pipelineId != m_pipelineId || runId != m_pipelineRunId;
+  m_pipelineId = pipelineId;
+  m_pipelineStatus = status;
+  m_pipelineRunId = runId;
+  const bool scoped = !pipelineId.isEmpty();
+  m_targetInput->setReadOnly(scoped);
+  m_standaloneControls->setVisible(!scoped);
+  m_pipelineHint->setVisible(scoped);
+  m_execBtn->setEnabled(!scoped);
+  m_execBtn->setText(QStringLiteral("执行"));
+  m_pipelineHint->setText(status == "awaiting_approval"
+      ? QStringLiteral("当前任务待确认。请使用顶部“确认预案并执行”；本页展示执行过程与结果。")
+      : runId.isEmpty() ? QStringLiteral("当前任务尚无执行记录，请查看顶部任务进度。")
+      : QStringLiteral("仅显示当前任务关联的执行记录。点击记录可查看步骤、证据与 AI 记录。"));
+  if (changed) {
+    ++m_contextRevision;
+    m_pollErrorCount = 0;
+    m_pollTimer->stop();
+    m_runningRunId.clear();
+    m_loadedRunId.clear();
+    m_runningPlaybookId.clear();
+    m_stepTable->setRowCount(0);
+    m_evidenceTable->setRowCount(0);
+    m_runTable->setRowCount(0);
+    m_evidenceLabel->setText(QStringLiteral("暂无执行证据"));
+    m_cortexPanel->clearMessages();
+    m_injectedReactSteps.clear();
+    m_injectedPayloadSteps.clear();
+    m_stopBtn->hide();
+    m_statusLabel->setText(QStringLiteral("选择执行记录查看详情"));
+    onRefreshRuns();
+  }
+  if (scoped && runId.isEmpty()) {
+    m_statusLabel->setText(status == "awaiting_approval"
+        ? QStringLiteral("当前任务尚未确认执行。使用顶部“确认预案并执行”审阅预案；此处仅显示本任务关联的执行记录。")
+        : QStringLiteral("当前任务尚无关联执行记录，请查看上方任务进度。"));
+    m_statusLabel->setStyleSheet(Theme::StatusInfoStyle);
+  }
+}
+
 // ── Execute ─────────────────────────────────────────────────────────
 void ExecutionPage::onExecute() {
+  if (!m_pipelineId.isEmpty()) return;
   QString playbookId = m_playbookCombo->currentData().toString();
   QString target = m_targetInput->text().trimmed();
   if (playbookId.isEmpty() || target.isEmpty()) {
@@ -542,7 +660,11 @@ void ExecutionPage::onRefreshRuns() {
   const int contextRevision = m_contextRevision;
   m_api->get("/api/runs", 5000, [this, contextRevision](const QJsonObject &res) {
     if (contextRevision != m_contextRevision || res["status"].toString() != "ok") return;
-    auto arr = res["data"].toArray();
+    QJsonArray arr;
+    for (const auto &value : res["data"].toArray()) {
+      if (m_pipelineId.isEmpty() || value.toObject()["run_id"].toString() == m_pipelineRunId)
+        arr.append(value);
+    }
     const bool sortingEnabled = m_runTable->isSortingEnabled();
     m_runTable->setSortingEnabled(false);
     m_runTable->setRowCount(arr.size());
@@ -570,8 +692,8 @@ void ExecutionPage::onRefreshRuns() {
         }
       }
     }
-    m_runTable->resizeColumnsToContents();
-    m_runTable->horizontalHeader()->setStretchLastSection(true);
+
+
     m_runTable->setSortingEnabled(sortingEnabled);
 
     // Auto-select and show details for the running run
@@ -645,6 +767,7 @@ void ExecutionPage::onRunClicked(int row, int) {
 
 // ── Load run details by ID (shared by onRunClicked and onExecute) ────
 void ExecutionPage::loadRunDetails(const QString &runId) {
+  if (!m_pipelineId.isEmpty() && runId != m_pipelineRunId) return;
   if (runId != m_loadedRunId) {
     m_cortexPanel->clearMessages();
     m_injectedReactSteps.clear();
@@ -678,14 +801,23 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
     QString pbId = d["playbook_id"].toString();
     QString pbName = d["playbook_name"].toString();
     if (pbName.isEmpty()) pbName = pbId;
-    QString statusText = QString("执行: %1 | 预案: %2 | 状态: %3 | 引擎: %4")
-        .arg(d["run_id"].toString(), pbName, statusVal,
-             engineType.isEmpty() ? "机械" : engineType);
-    if (!stopReason.isEmpty()) {
-      statusText += " | 停止原因: " + stopReason;
+    const auto allSteps = d["steps"].toArray();
+    int succeeded = 0, failed = 0;
+    for (const auto &value : allSteps) {
+      const auto outcome = value.toObject()["success"];
+      if (!outcome.isBool() && !outcome.isDouble()) continue;
+      if (outcome.toBool() || outcome.toInt() != 0) ++succeeded; else ++failed;
     }
+    QString statusText = QString("%1 · %2\n已返回 %3/%4 步结果  ·  成功 %5  ·  失败 %6  ·  证据 %7 条")
+        .arg(pbName, statusVal).arg(succeeded + failed).arg(allSteps.size())
+        .arg(succeeded).arg(failed).arg(d["evidence"].toArray().size());
+    if (!stopReason.isEmpty()) statusText += "\n停止原因：" + stopReason;
+    m_statusLabel->setTextFormat(Qt::PlainText);
+    m_statusLabel->setToolTip(QString("执行编号：%1\n引擎：%2").arg(runId, engineType));
     m_statusLabel->setText(statusText);
-    m_statusLabel->setStyleSheet(Theme::StatusInfoStyle);
+    m_statusLabel->setStyleSheet(d["status"] == "FAILED" ? Theme::StatusErrorStyle :
+        failed > 0 ? Theme::StatusWarningStyle :
+        d["status"] == "COMPLETED" ? Theme::StatusSuccessStyle : Theme::StatusInfoStyle);
 
     // ── Build evidence lookup: step_index → payload info ────────────
     auto evidence = d["evidence"].toArray();
@@ -707,7 +839,15 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
       m_stepTable->setItem(i, 0, new QTableWidgetItem(QString::number(stepIdx)));
       m_stepTable->setItem(i, 1, new QTableWidgetItem(s["tool_id"].toString()));
       m_stepTable->setItem(i, 2, truncItem(s["args"].toString(), 40));
-      m_stepTable->setItem(i, 3, new QTableWidgetItem(s["success"].toInt() ? "✓ 成功" : "✗ 失败"));
+      const auto outcome = s["success"];
+      const bool reported = outcome.isBool() || outcome.isDouble();
+      const bool success = reported && (outcome.toBool() || outcome.toInt() != 0);
+      auto *resultItem = new QTableWidgetItem(!reported ? QStringLiteral("等待结果") :
+                                             success ? QStringLiteral("✓ 成功") : QStringLiteral("✕ 失败"));
+      resultItem->setForeground(QColor(!reported ? "#64748b" : success ? "#15803d" : "#b91c1c"));
+      resultItem->setBackground(QColor(!reported ? "#f8fafc" : success ? "#f0fdf4" : "#fff1f2"));
+      resultItem->setTextAlignment(Qt::AlignCenter);
+      m_stepTable->setItem(i, 3, resultItem);
 
       // Column 4: 来源 — mark dynamic steps inserted by ReAct
       bool isDynamic = (prevActionType == QStringLiteral("insert") ||
@@ -724,7 +864,17 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
 
       {
         QString notesFull = s["notes"].toString();
+        QString summary = s["description"].toString().simplified();
+        if (summary.isEmpty()) {
+          const auto lines = notesFull.split('\n');
+          const QRegularExpression meaningful(QStringLiteral("[\\p{L}\\p{N}]{2,}"));
+          for (const auto &line : lines) {
+            if (meaningful.match(line).hasMatch()) { summary = line.simplified(); break; }
+          }
+        }
+        if (summary.isEmpty()) summary = notesFull.isEmpty() ? QStringLiteral("暂无输出") : QStringLiteral("双击查看完整输出");
         auto *notesItem = truncItem(notesFull, 60);
+        notesItem->setText(summary.left(120));
         notesItem->setToolTip(wrapToolTip(notesFull));
         m_stepTable->setItem(i, 5, notesItem);
       }
@@ -776,8 +926,8 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
         prevActionType.clear();
       }
     }
-    m_stepTable->resizeColumnsToContents();
-    m_stepTable->horizontalHeader()->setStretchLastSection(true);
+
+
 
     // ── Evidence ────────────────────────────────────────────────────
     m_evidenceLabel->setText(QString("攻击证据: %1 条").arg(evidence.size()));
@@ -858,8 +1008,8 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
       recItem->setData(Qt::UserRole, recFull.isEmpty() ? recDisplay : recFull);
       m_evidenceTable->setItem(i, 4, recItem);
     }
-    m_evidenceTable->resizeColumnsToContents();
-    m_evidenceTable->horizontalHeader()->setStretchLastSection(true);
+
+
 
     // ── Cortex panel: ReAct thoughts + Payload cards ──────────────────
     // Update engine info and status in Cortex header
@@ -872,6 +1022,7 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
       QString rawStatus = d["status"].toString();
       bool canStop = (rawStatus == "RUNNING" || rawStatus == "PENDING");
       m_stopBtn->setEnabled(canStop);
+      m_stopBtn->setVisible(canStop);
       if (canStop)
         m_stopBtn->setText(QStringLiteral("🛑 停止执行"));
       else if (rawStatus == "ABORTED")
@@ -1048,6 +1199,7 @@ void ExecutionPage::onPollRunning() {
     {
       bool canStop = (status == "RUNNING" || status == "PENDING");
       m_stopBtn->setEnabled(canStop);
+      m_stopBtn->setVisible(canStop);
       if (canStop)
         m_stopBtn->setText(QStringLiteral("🛑 停止执行"));
       else if (status == "ABORTED")
@@ -1058,28 +1210,7 @@ void ExecutionPage::onPollRunning() {
         m_stopBtn->setText(QStringLiteral("✗ 已失败"));
     }
 
-    // Update status label with progress
-    auto steps = d["steps"].toArray();
-    int done = 0, total = steps.size();
-    for (const auto &s : steps) {
-      const QJsonValue success = s.toObject()["success"];
-      if (success.isBool() || success.isDouble()) done++;
-    }
-    QString statusCn;
-    if (status == "RUNNING") statusCn = "运行中";
-    else if (status == "PENDING") statusCn = "待执行";
-    else if (status == "COMPLETED") statusCn = "已完成";
-    else if (status == "FAILED") statusCn = "失败";
-    else if (status == "ABORTED") statusCn = "已中止";
-    else statusCn = status;
-
-    // Show playbook name in status
-    QString pbName = d["playbook_name"].toString();
-    if (pbName.isEmpty()) pbName = d["playbook_id"].toString();
-    m_statusLabel->setText(QString("执行: %1 | 预案: %2 | 状态: %3 (%4/%5步)")
-        .arg(runId, pbName, statusCn)
-        .arg(done).arg(total));
-    m_statusLabel->setStyleSheet(Theme::StatusInfoStyle);
+    // loadRunDetails renders the same summary for initial load and polling.
 
     // Terminal state — stop polling
     if (status != "RUNNING" && status != "PENDING") {

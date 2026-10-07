@@ -3,6 +3,8 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QHelpEvent>
+#include <QToolTip>
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -10,6 +12,7 @@
 
 static QColor colorForStatus(const QString &status)
 {
+  if (status == "awaiting_approval") return QColor("#b45309");
   if (status == "running")    return QColor("#2a7dd6");
   if (status == "completed")  return QColor("#27ae60");
   if (status == "skipped")    return QColor("#b45309");
@@ -18,14 +21,15 @@ static QColor colorForStatus(const QString &status)
   /* pending  */              return QColor("#a0aec0");
 }
 
-static QString iconForStatus(const QString &status)
+static QString labelForStatus(const QString &status)
 {
-  if (status == "running")    return QStringLiteral("▶");
-  if (status == "completed")  return QStringLiteral("✓");
-  if (status == "skipped")    return QStringLiteral("»");
-  if (status == "failed")     return QStringLiteral("✗");
-  if (status == "cancelled")  return QStringLiteral("⊘");
-  /* pending  */              return QStringLiteral("○");
+  if (status == "running") return QStringLiteral("进行中");
+  if (status == "awaiting_approval") return QStringLiteral("待确认");
+  if (status == "completed") return QStringLiteral("已完成");
+  if (status == "failed") return QStringLiteral("失败");
+  if (status == "cancelled") return QStringLiteral("已取消");
+  if (status == "skipped") return QStringLiteral("已跳过");
+  return QStringLiteral("待开始");
 }
 
 // ---------------------------------------------------------------------------
@@ -36,7 +40,7 @@ StepIndicator::StepIndicator(QWidget *parent)
     : QWidget(parent)
 {
   setMouseTracking(true);
-  setMinimumHeight(104);
+  setFixedHeight(78);
   setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
   // Default three campaign phases (in order)
@@ -71,40 +75,24 @@ QVector<PhaseStep> StepIndicator::phases() const
 
 QSize StepIndicator::minimumSizeHint() const
 {
-  return QSize(300, 104);
+  return QSize(300, 78);
 }
 
 QSize StepIndicator::sizeHint() const
 {
-  return QSize(600, 104);
+  return QSize(600, 78);
 }
 
 // ---------------------------------------------------------------------------
 // Layout helpers
 // ---------------------------------------------------------------------------
 
-static constexpr int kRadius   = 18;   // circle radius (px)
-static constexpr int kDiameter = 36;   // 2 * radius
-
-// Returns the bounding rect for the hit-test / hover region around node `index`.
 QRect StepIndicator::nodeRect(int index) const
 {
-  if (index < 0 || index >= m_phases.size())
-    return {};
-
-  const int count = m_phases.size();
-  const int w     = width();
-  const int gap   = qMax(8, (w - count * kDiameter) / (count + 1));
-
-  const int cx    = gap + index * (kDiameter + gap) + kRadius;
-  const int cy    = height() / 2 - 5;   // same Y as paintEvent uses
-
-  // Slightly larger than the visual circle for easier clicking
-  const int margin = 6;
-  return QRect(cx - kRadius - margin,
-               cy - kRadius - margin,
-               kDiameter + 2 * margin,
-               kDiameter + 2 * margin);
+  if (index < 0 || index >= m_phases.size()) return {};
+  const int gap = 8;
+  const int cardWidth = (width() - gap * (m_phases.size() - 1)) / m_phases.size();
+  return QRect(index * (cardWidth + gap), 2, cardWidth, height() - 4);
 }
 
 int StepIndicator::nodeAtPos(const QPoint &pos) const
@@ -120,108 +108,38 @@ int StepIndicator::nodeAtPos(const QPoint &pos) const
 // Painting
 // ---------------------------------------------------------------------------
 
-void StepIndicator::paintEvent(QPaintEvent * /*event*/)
+void StepIndicator::paintEvent(QPaintEvent *)
 {
   QPainter p(this);
   p.setRenderHint(QPainter::Antialiasing);
-
-  const int count = m_phases.size();
-  if (count == 0)
-    return;
-
-  const int w   = width();
-  const int gap = qMax(8, (w - count * kDiameter) / (count + 1));
-
-  // Vertical centres
-  const int circleY = height() / 2 - 5;    // centre of each circle
-  const int iconY   = circleY - kRadius - 18;  // status icon above
-  const int nameY   = circleY + kRadius + 6;   // display name below
-
-  // ---------- 1. arrows between nodes ----------
-  QColor arrowColor("#cbd5e0");
-  p.setPen(QPen(arrowColor, 3));
-  p.setBrush(arrowColor);
-
-  for (int i = 0; i < count - 1; ++i) {
-    const int cx1 = gap + i * (kDiameter + gap) + kRadius;
-    const int cx2 = gap + (i + 1) * (kDiameter + gap) + kRadius;
-
-    const int lineX1 = cx1 + kRadius + 2;   // leave a tiny gap from the circle
-    const int lineX2 = cx2 - kRadius - 2;
-
-    if (lineX2 <= lineX1)
-      continue;   // too narrow, skip arrow
-
-    // Line
-    p.drawLine(lineX1, circleY, lineX2, circleY);
-
-    // Arrowhead (triangle pointing right)
-    const int aSize = 4;   // arrow head length
-    QPainterPath arrowPath;
-    arrowPath.moveTo(lineX2 + 1, circleY);            // tip
-    arrowPath.lineTo(lineX2 - aSize + 1, circleY - 3); // top
-    arrowPath.lineTo(lineX2 - aSize + 1, circleY + 3); // bottom
-    arrowPath.closeSubpath();
-    p.drawPath(arrowPath);
-  }
-
-  // ---------- 2. nodes ----------
-  for (int i = 0; i < count; ++i) {
-    const PhaseStep &ps = m_phases[i];
-    const QColor col    = colorForStatus(ps.status);
-    const int cx = gap + i * (kDiameter + gap) + kRadius;
-
-    // -- status icon (above circle) --
-    {
-      p.setPen(col);
-      QFont f = p.font();
-      f.setPixelSize(16);
-      p.setFont(f);
-      QRect iconRect(cx - kRadius, iconY, kDiameter, 18);
-      p.drawText(iconRect, Qt::AlignCenter, iconForStatus(ps.status));
-    }
-
-    // -- circle --
-    {
-      p.setPen(QPen(col, 2));
-      p.setBrush(Qt::white);
-      p.drawEllipse(QPointF(cx, circleY), kRadius, kRadius);
-    }
-
-    // -- number inside circle --
-    {
-      p.setPen(col);
-      QFont f = p.font();
-      f.setPixelSize(14);
-      f.setBold(true);
-      p.setFont(f);
-      QRect numRect(cx - kRadius, circleY - kRadius, kDiameter, kDiameter);
-      p.drawText(numRect, Qt::AlignCenter, QString::number(i + 1));
-    }
-
-    // -- Chinese name below --
-    {
-      p.setPen(QColor("#4a5568"));
-      QFont f = p.font();
-      f.setPixelSize(11);
-      p.setFont(f);
-      QRect nameRect(cx - kRadius - 8, nameY, kDiameter + 16, 18);
-      p.drawText(nameRect, Qt::AlignCenter, ps.displayName);
-    }
-
-    // -- optional summary line under the name --
-    if (!ps.summary.isEmpty()) {
-      p.setPen(QColor("#94a3b8"));
-      QFont f = p.font();
-      f.setPixelSize(10);
-      p.setFont(f);
-      const int summaryY = nameY + 19;
-      const int summaryW = kDiameter + 88;
-      QString text = QFontMetrics(p.font()).elidedText(
-        ps.summary, Qt::ElideRight, summaryW);
-      QRect summaryRect(cx - summaryW / 2, summaryY, summaryW, 14);
-      p.drawText(summaryRect, Qt::AlignCenter, text);
-    }
+  for (int i = 0; i < m_phases.size(); ++i) {
+    const auto &phase = m_phases[i];
+    const auto rect = nodeRect(i);
+    const auto color = colorForStatus(phase.status);
+    const bool active = phase.status == "running" || phase.status == "awaiting_approval";
+    p.setPen(QPen(active ? color : QColor("#dbe3ef"), active ? 1.5 : 1));
+    p.setBrush(active ? (phase.status == "running" ? QColor("#eff6ff") : QColor("#fffbeb")) : QColor("#ffffff"));
+    p.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 8, 8);
+    const QRect badge(rect.left() + 10, rect.top() + 12, 25, 25);
+    p.setPen(Qt::NoPen); p.setBrush(color); p.drawEllipse(badge);
+    QFont font = p.font(); font.setPixelSize(12); font.setBold(true);
+    p.setFont(font); p.setPen(Qt::white);
+    const QString icon = phase.status == "completed" ? QStringLiteral("✓") :
+                         phase.status == "failed" ? QStringLiteral("×") : QString::number(i + 1);
+    p.drawText(badge, Qt::AlignCenter, icon);
+    p.setPen(QColor("#172033")); font.setPixelSize(13); p.setFont(font);
+    const QRect title(rect.left() + 43, rect.top() + 10, rect.width() - 98, 24);
+    p.drawText(title, Qt::AlignLeft | Qt::AlignVCenter,
+               QFontMetrics(font).elidedText(phase.displayName, Qt::ElideRight, title.width()));
+    font.setPixelSize(10); font.setBold(false); p.setFont(font); p.setPen(color);
+    p.drawText(QRect(rect.right() - 52, rect.top() + 13, 42, 20), Qt::AlignRight | Qt::AlignVCenter,
+               labelForStatus(phase.status));
+    const QString summary = phase.summary.isEmpty()
+        ? (active ? QStringLiteral("正在处理，请稍候") : labelForStatus(phase.status)) : phase.summary;
+    font.setPixelSize(12); p.setFont(font); p.setPen(QColor("#52637a"));
+    const QRect summaryRect(rect.left() + 11, rect.top() + 46, rect.width() - 22, 19);
+    p.drawText(summaryRect, Qt::AlignLeft | Qt::AlignVCenter,
+               QFontMetrics(font).elidedText(summary, Qt::ElideRight, summaryRect.width()));
   }
 }
 
@@ -236,4 +154,20 @@ void StepIndicator::mousePressEvent(QMouseEvent *event)
     emit phaseClicked(idx);
 
   QWidget::mousePressEvent(event);
+}
+
+
+bool StepIndicator::event(QEvent *event)
+{
+  if (event->type() == QEvent::ToolTip) {
+    auto *help = static_cast<QHelpEvent*>(event);
+    const int index = nodeAtPos(help->pos());
+    if (index >= 0) {
+      const auto &phase = m_phases[index];
+      QToolTip::showText(help->globalPos(), phase.displayName + " · " + labelForStatus(phase.status)
+                        + "\n" + phase.summary, this);
+      return true;
+    }
+  }
+  return QWidget::event(event);
 }
