@@ -274,31 +274,9 @@ int main(int argc, char *argv[])
     healthTimer.singleShot(5000, &healthLoop, &QEventLoop::quit);
     healthLoop.exec();
 
-    // Animate progress from 80% → 100% over ~10 seconds (1% per 500ms)
-    // so the user sees the progress bar moving during the wait.
-    QEventLoop finishLoop;
-    QTimer animTimer;
-    int animProgress = 80;
-    animTimer.start(500);
-
-    QObject::connect(&animTimer, &QTimer::timeout, [&]() {
-      animProgress++;
-      QString msg;
-      if (animProgress < 85)       msg = QStringLiteral("正在初始化模块...");
-      else if (animProgress < 90)  msg = QStringLiteral("正在加载配置...");
-      else if (animProgress < 100) msg = QStringLiteral("正在准备界面...");
-      else                         msg = QStringLiteral("就绪");
-
-      splash.updateProgress(animProgress, msg);
-
-      if (animProgress >= 100) {
-        animTimer.stop();
-        splash.hide();
-        finishLoop.quit();
-      }
-    });
-
-    finishLoop.exec();
+    // Proceed as soon as the real initialization has finished.
+    splash.updateProgress(100, "就绪");
+    splash.hide();
 
     // ── Login + Main Window loop ─────────────────────────────────────
     // Loop supports logout → re-login with role switching.

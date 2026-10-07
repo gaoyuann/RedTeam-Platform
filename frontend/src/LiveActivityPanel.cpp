@@ -21,7 +21,7 @@ LiveActivityPanel::LiveActivityPanel(const QString &role, const QString &usernam
   // ── Header bar ─────────────────────────────────────────────────────
   auto *headerFrame = new QFrame(this);
   headerFrame->setObjectName("activityHeader");
-  headerFrame->setFixedHeight(32);
+  headerFrame->setFixedHeight(36);
   headerFrame->setStyleSheet(
     "QFrame#activityHeader {"
     "  background: #fbfdff;"
@@ -43,9 +43,9 @@ LiveActivityPanel::LiveActivityPanel(const QString &role, const QString &usernam
   headerLayout->addStretch();
 
   m_collapseBtn = new QPushButton(QStringLiteral("▼"), this);
-  m_collapseBtn->setFixedSize(24, 24);
+  m_collapseBtn->setFixedSize(64, 28);
   m_collapseBtn->setStyleSheet(
-    "QPushButton { border: none; color: #94a3b8; font-size: 14px; background: transparent; }"
+    "QPushButton { border: none; color: #64748b; font-size: 12px; background: transparent; min-height:0; padding:0; }"
     "QPushButton:hover { color: #64748b; }"
   );
   connect(m_collapseBtn, &QPushButton::clicked, this, &LiveActivityPanel::onToggleCollapse);
@@ -91,7 +91,7 @@ void LiveActivityPanel::setCompact(bool compact)
 {
   m_compact = compact;
   if (compact) {
-    setFixedHeight(180);
+    setFixedHeight(m_collapsed ? 36 : 156);
   } else {
     setMinimumHeight(200);
     setMaximumHeight(QWIDGETSIZE_MAX);
@@ -273,15 +273,11 @@ void LiveActivityPanel::onPipelineStep(const QJsonObject &data)
 void LiveActivityPanel::addEvent(const QString &icon, const QString &text, const QString &color)
 {
   QString time = nowTime();
-  QString html = QString(
-    "<span style='color:#94a3b8;'>%1</span> "
-    "%2 "
-    "<span style='color:%3;'>%4</span>"
-  ).arg(time, icon, color, text.toHtmlEscaped());
-
-  auto *item = new QListWidgetItem(m_eventList);
-  item->setText(html);
-  item->setFlags(item->flags() & ~Qt::ItemIsSelectable);
+  const QString line = QString("%1  %2  %3").arg(time, icon, text);
+  auto *item = new QListWidgetItem(line, m_eventList);
+  item->setForeground(QColor(color));
+  item->setToolTip(line);
+  m_countLabel->setToolTip(line);
 
   // Trim old events
   while (m_eventList->count() > MAX_EVENTS) {
@@ -321,8 +317,8 @@ void LiveActivityPanel::onToggleCollapse()
 {
   m_collapsed = !m_collapsed;
   m_eventList->setVisible(!m_collapsed);
-  m_collapseBtn->setText(m_collapsed ? QStringLiteral("▲") : QStringLiteral("▼"));
+  m_collapseBtn->setText(m_collapsed ? QStringLiteral("展开 ↑") : QStringLiteral("收起 ↓"));
   if (m_compact) {
-    setFixedHeight(m_collapsed ? 32 : 180);
+    setFixedHeight(m_collapsed ? 36 : 156);
   }
 }

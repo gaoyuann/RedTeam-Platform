@@ -1,4 +1,5 @@
 #include "FlowPage.h"
+#include "../AuxiliaryPanel.h"
 #include "LiveActivityPanel.h"
 #include "StepIndicator.h"
 #include "TopologyPage.h"
@@ -79,8 +80,10 @@ FlowPage::FlowPage(ApiClient *api, const QString &role,
   auto *timer = new QTimer(this);
   timer->setInterval(5000);
   connect(timer, &QTimer::timeout, this, [this]() {
-    refreshFlows();
-    if (m_stack->currentIndex() == 1 && !m_selectedPipelineId.isEmpty()) {
+    if (!isVisible()) return;
+    if (m_stack->currentIndex() == 0) {
+      refreshFlows();
+    } else if (!m_selectedPipelineId.isEmpty()) {
       loadFlowDetail(m_selectedPipelineId);
     }
   });
@@ -190,8 +193,8 @@ void FlowPage::setupWorkbenchView()
   topBar->setStyleSheet("background:#ffffff; border-bottom:1px solid #dbe3ef;");
   topBar->setFixedHeight(60);
   auto *topLayout = new QHBoxLayout(topBar);
-  topLayout->setContentsMargins(20, 0, 20, 0);
-  topLayout->setSpacing(14);
+  topLayout->setContentsMargins(14, 0, 14, 0);
+  topLayout->setSpacing(8);
 
   m_backBtn = new QPushButton(QStringLiteral("← 返回列表"), topBar);
   connect(m_backBtn, &QPushButton::clicked, this, &FlowPage::onBackToList);
@@ -204,6 +207,8 @@ void FlowPage::setupWorkbenchView()
 
   m_targetLabel = new QLabel(topBar);
   m_targetLabel->setStyleSheet("font-size:15px; font-weight:600; color:#1e293b;");
+  m_targetLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+  m_targetLabel->setMinimumWidth(80);
   topLayout->addWidget(m_targetLabel, 1);
 
   m_statusLabel = new QLabel(topBar);
@@ -214,7 +219,7 @@ void FlowPage::setupWorkbenchView()
   topLayout->addSpacing(8);
 
   // Approve button (visible only when awaiting_approval)
-  m_approveBtn = new QPushButton(QStringLiteral("选择预案并执行"), topBar);
+  m_approveBtn = new QPushButton(QStringLiteral("确认预案并执行"), topBar);
   m_approveBtn->setStyleSheet(
     "QPushButton { background:#2563eb; color:#ffffff; border:1px solid #1d4ed8; "
     "border-radius:8px; padding:7px 16px; font-size:13px; font-weight:600; }"
@@ -223,6 +228,15 @@ void FlowPage::setupWorkbenchView()
   m_approveBtn->setVisible(false);
   connect(m_approveBtn, &QPushButton::clicked, this, &FlowPage::onApproveFlow);
   topLayout->addWidget(m_approveBtn);
+  m_resultBtn = new QPushButton(QStringLiteral("查看结果"), topBar);
+  m_resultBtn->setObjectName("flowResultButton");
+  m_resultBtn->setStyleSheet(m_approveBtn->styleSheet());
+  m_resultBtn->hide();
+  topLayout->addWidget(m_resultBtn);
+  connect(m_resultBtn, &QPushButton::clicked, this, [this]() {
+    m_stageTabs->setCurrentIndex(3);
+    if (!m_lastLoadedRunId.isEmpty()) m_evalTab->showRun(m_lastLoadedRunId);
+  });
 
   // ⋯ dropdown menu for secondary actions (cancel / delete / report)
   m_moreBtn = new QPushButton(QStringLiteral("⋯"), topBar);
@@ -251,7 +265,7 @@ void FlowPage::setupWorkbenchView()
   auto *progressFrame = new QFrame(m_workbenchView);
   progressFrame->setStyleSheet("background:#f8fbff;");
   auto *progressLayout = new QHBoxLayout(progressFrame);
-  progressLayout->setContentsMargins(24, 8, 24, 4);
+  progressLayout->setContentsMargins(14, 6, 14, 6);
   m_stepIndicator = new StepIndicator(progressFrame);
   progressLayout->addWidget(m_stepIndicator, 1);
   layout->addWidget(progressFrame);
@@ -268,6 +282,7 @@ void FlowPage::setupWorkbenchView()
   );
   m_topoTab = new TopologyPage(m_api, m_role, m_username, m_stageTabs);
   m_scanTab = new ScanPage(m_api, m_role, m_username, m_stageTabs);
+  m_scanTab->setTaskScope({});
   // 攻击 Tab：快速执行（原"多阶段战役"子 Tab 已移除）
   m_execTab = new ExecutionPage(m_api, m_role, m_username, m_stageTabs);
   m_evalTab = new EvaluatePage(m_api, m_role, m_username, m_stageTabs);
@@ -276,32 +291,40 @@ void FlowPage::setupWorkbenchView()
   m_stageTabs->addTab(m_execTab, QStringLiteral("漏洞攻击"));
   m_stageTabs->addTab(m_evalTab, QStringLiteral("测试评估"));
 
-  // AI 推理流（左）+ 阶段 Tab（右）— runReact/pipelineLog 事件写入推理流
-  m_contentSplitter = new QSplitter(Qt::Horizontal, m_workbenchView);
-  m_contentSplitter->setChildrenCollapsible(false);
-  auto *reasoningPane = new QWidget(m_contentSplitter);
-  auto *reasoningLayout = new QVBoxLayout(reasoningPane);
-  reasoningLayout->setContentsMargins(8, 8, 0, 8);
-  reasoningLayout->setSpacing(6);
-  auto *reasoningTitle = new QLabel(QStringLiteral("AI 推理流"), reasoningPane);
-  reasoningTitle->setStyleSheet("font-size:13px; font-weight:600; color:#475569; padding:2px 4px;");
-  m_reasoningPanel = new QTextBrowser(reasoningPane);
-  m_reasoningPanel->setStyleSheet(
-    "QTextBrowser { background:#ffffff; border:1px solid #dbe3ef; border-radius:8px; "
-    "padding:8px; font-size:12px; color:#334155; }");
-  m_reasoningPanel->setOpenExternalLinks(true);
-  reasoningLayout->addWidget(reasoningTitle);
-  reasoningLayout->addWidget(m_reasoningPanel, 1);
-  m_contentSplitter->addWidget(reasoningPane);
-  m_contentSplitter->addWidget(m_stageTabs);
-  m_contentSplitter->setStretchFactor(0, 0);
-  m_contentSplitter->setStretchFactor(1, 1);
-  m_contentSplitter->setSizes({240, 960});
-  layout->addWidget(m_contentSplitter, 1);
+  // 演示动线：扫描结果漏洞 → 一键转入漏洞攻击 Tab（目标预填 + 预案匹配）
+  connect(m_scanTab, &ScanPage::attackRequested, this, [this](const QString &target, const QString &vulnText, const QString &resultType) {
+    m_execTab->attackFromVuln(target, vulnText, resultType);
+    m_stageTabs->setCurrentIndex(2);
+  });
 
-  // 实时动态（底部，可折叠）— MainWindow 将 WS 事件接入 activityPanel()
+  // Keep the workspace for task results; auxiliary reasoning opens on demand.
+  auto *reasoningDialog = new AuxiliaryPanel(m_workbenchView);
+  reasoningDialog->setObjectName("flowReasoningDialog");
+  reasoningDialog->setWindowTitle(QStringLiteral("AI 分析记录"));
+  reasoningDialog->resize(660, 480);
+  auto *reasoningLayout = new QVBoxLayout(reasoningDialog);
+  auto *reasoningHint = new QLabel(QStringLiteral("展示当前任务收到的分析记录；暂无记录时不会占用工作区。"));
+  reasoningHint->setWordWrap(true);
+  reasoningLayout->addWidget(reasoningHint);
+  m_reasoningPanel = new QTextBrowser(reasoningDialog);
+  m_reasoningPanel->setPlaceholderText(QStringLiteral("暂无 AI 分析记录"));
+  m_reasoningPanel->setOpenExternalLinks(false);
+  reasoningLayout->addWidget(m_reasoningPanel, 1);
+  auto *reasoningClose = new QDialogButtonBox(QDialogButtonBox::Close, reasoningDialog);
+  reasoningClose->button(QDialogButtonBox::Close)->setText(QStringLiteral("关闭"));
+  connect(reasoningClose, &QDialogButtonBox::rejected, reasoningDialog, &QDialog::reject);
+  reasoningLayout->addWidget(reasoningClose);
+  auto *reasoningButton = new QPushButton(QStringLiteral("AI 记录"), topBar);
+  reasoningButton->setObjectName("flowReasoningButton");
+  topLayout->insertWidget(topLayout->count() - 1, reasoningButton);
+  connect(reasoningButton, &QPushButton::clicked, this, [reasoningDialog]() {
+    reasoningDialog->present();
+  });
+  layout->addWidget(m_stageTabs, 1);
+
   m_activityPanel = new LiveActivityPanel(m_role, m_username, m_workbenchView);
   m_activityPanel->setCompact(true);
+  m_activityPanel->onToggleCollapse();
   layout->addWidget(m_activityPanel);
 
   m_stack->addWidget(m_workbenchView);
@@ -415,15 +438,32 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     auto p = res["data"].toObject();
     QString target = p["target"].toString();
     QString status = p["status"].toString();
+    // Still poll for changes, but stable completed/approval views need no rebuild.
+    if (m_lastDetailPipelineId == pipelineId && m_lastDisplayedDetail == p
+        && status != "running") return;
+    m_lastDetailPipelineId = pipelineId;
+    m_lastDisplayedDetail = p;
 
     // Sync target to all embedded stage tabs
-    m_topoTab->setTarget(target);
+    bool scanFinished = false;
+    for (const auto &value : p["steps"].toArray()) {
+      const auto step = value.toObject();
+      if (step["step_type"].toString() == "scan")
+        scanFinished = step["status"].toString() == "completed"
+            || step["status"].toString() == "failed"
+            || step["status"].toString() == "cancelled";
+    }
+    m_topoTab->setPipelineContext(pipelineId, target,
+        p["scan_task_id"].toString().split(',', Qt::SkipEmptyParts), scanFinished);
     m_scanTab->setTarget(target);
+    m_scanTab->setTaskScope(p["scan_task_id"].toString().split(',', Qt::SkipEmptyParts));
+    m_execTab->setPipelineContext(pipelineId, status, p["run_id"].toString());
     m_execTab->setTarget(target);
     m_evalTab->setTarget(target);
 
     // Header
     m_targetLabel->setText(QStringLiteral("目标: %1").arg(target));
+    m_targetLabel->setToolTip(target);
     QColor sc = statusColor(status);
     m_statusLabel->setText(QStringLiteral(" %1 %2 ").arg(statusIcon(status), statusText(status)));
     // Qt 的 8 位十六进制是 #AARRGGBB（alpha 在前），拼 #RRGGBBAA 会被误解析，须用 rgba()
@@ -457,7 +497,7 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     // 完成的流水线时强制跳到评估 Tab）
     if (!runId.isEmpty() && status == "completed" && runId != m_lastLoadedEvalRunId) {
       m_lastLoadedEvalRunId = runId;
-      m_evalTab->showRun(runId);
+      m_evalTab->showRun(runId, false);
     }
 
     // Step progress → StepIndicator
@@ -489,11 +529,15 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
               method == "ai_generated" ? "AI生成" : "匹配", name);
           } else if (ps.phaseType == "execute") {
             QString runId = output["run_id"].toString();
-            ps.summary = QStringLiteral("Run: %1").arg(runId.left(16));
+            ps.summary = QStringLiteral("执行已结束，可查看结果");
           }
         } else if (ps.status == "failed") {
           ps.summary = step["error_message"].toString();
         }
+      }
+      if (ps.phaseType == "execute" && status == "awaiting_approval") {
+        ps.status = "awaiting_approval";
+        ps.summary = QStringLiteral("预案已就绪，等待确认");
       }
       phaseSteps.append(ps);
     }
@@ -513,23 +557,12 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
       }
     }
 
-    // execute 阶段运行中时自动切到攻击 Tab（不含 completed——完成后让用户
-    // 自行决定落点，避免打开已完成的流水线时永远到不了"测试评估"Tab）
-    for (int i = 0; i < steps.size(); i++) {
-      auto step = steps[i].toObject();
-      if (step["step_type"].toString() == "execute") {
-        QString sStatus = step["status"].toString();
-        if (sStatus == "running") {
-          m_stageTabs->setCurrentIndex(2);  // 漏洞攻击
-        }
-      }
-    }
-
     // Action visibility based on status
     bool isAwaiting = (status == "awaiting_approval");
     bool isActive = (status == "running" || status == "awaiting_approval");
     bool isDeletable = !isActive;  // backend refuses delete on running/awaiting
     m_approveBtn->setVisible(isAwaiting);
+    m_resultBtn->setVisible(status == "completed" && !runId.isEmpty());
     m_cancelAction->setVisible(isActive);
     m_deleteAction->setVisible(isDeletable);
     m_reportAction->setVisible(status == "completed");
@@ -601,6 +634,11 @@ void FlowPage::onFlowDoubleClicked(int row)
   QString pid = flowIdAtRow(row);
   if (pid.isEmpty()) return;
   m_selectedPipelineId = pid;
+  m_lastDisplayedDetail = {};
+  m_resultBtn->hide();
+  m_execTab->setPipelineContext(pid, "loading", {});
+  m_topoTab->setPipelineContext(pid, {}, {}, false);
+  m_reasoningPanel->clear();
   m_lastLoadedRunId.clear();
   m_lastLoadedPlaybookId.clear();
   m_lastLoadedEvalRunId.clear();
@@ -700,23 +738,31 @@ void FlowPage::onDeleteFlow()
 
 void FlowPage::onApproveFlow()
 {
-  if (m_selectedPipelineId.isEmpty()) return;
+  approveFlow({});
+}
+
+void FlowPage::approveFlow(const QString &preferredPlaybookId)
+{
+  if (m_selectedPipelineId.isEmpty() || m_approvalInFlight) return;
+  m_approvalInFlight = true;
   QString pid = m_selectedPipelineId;
 
   m_approveBtn->setEnabled(false);
   m_approveBtn->setText(QStringLiteral("加载预案..."));
 
   // Fetch playbooks for the selection dialog
-  m_api->get("/api/playbooks?includeGenerated=true", 5000, [this, pid](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") {
+  m_api->get("/api/playbooks?includeGenerated=true", 5000, [this, pid, preferredPlaybookId](const QJsonObject &res) {
+    if (pid != m_selectedPipelineId || res["status"].toString() != "ok") {
+      m_approvalInFlight = false;
       m_approveBtn->setEnabled(true);
-      m_approveBtn->setText(QStringLiteral("选择预案并执行"));
+      m_approveBtn->setText(QStringLiteral("确认预案并执行"));
       return;
     }
     auto playbooks = res["data"].toArray();
 
     QDialog dlg(this);
-    dlg.setWindowTitle(QStringLiteral("审批执行"));
+    dlg.setWindowTitle(QStringLiteral("确认当前任务执行"));
+    dlg.setObjectName("pipelineApprovalDialog");
     dlg.setMinimumWidth(500);
     auto *l = new QVBoxLayout(&dlg);
     l->setSpacing(12);
@@ -733,10 +779,14 @@ void FlowPage::onApproveFlow()
       QString name = pb["name"].toString();
       QString label = name + " [" + pbId + "]";
       if (pbId == m_generatedPlaybookId) {
-        label = QStringLiteral("★ ") + label + QStringLiteral("  (AI生成)");
+        label = QStringLiteral("★ ") + label + QStringLiteral("  (本任务推荐)");
         defaultIndex = i;
       }
       combo->addItem(label, pbId);
+    }
+    if (!preferredPlaybookId.isEmpty()) {
+      const int preferredIndex = combo->findData(preferredPlaybookId);
+      if (preferredIndex >= 0) defaultIndex = preferredIndex;
     }
     if (combo->count() > 0) combo->setCurrentIndex(defaultIndex);
     l->addWidget(combo);
@@ -744,13 +794,15 @@ void FlowPage::onApproveFlow()
     auto *btns = new QDialogButtonBox(
       QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
     btns->button(QDialogButtonBox::Ok)->setText(QStringLiteral("批准并执行"));
+    btns->button(QDialogButtonBox::Ok)->setEnabled(combo->count() > 0);
     connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
     connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
     l->addWidget(btns);
 
-    if (dlg.exec() != QDialog::Accepted) {
+    if (dlg.exec() != QDialog::Accepted || pid != m_selectedPipelineId) {
+      m_approvalInFlight = false;
       m_approveBtn->setEnabled(true);
-      m_approveBtn->setText(QStringLiteral("选择预案并执行"));
+      m_approveBtn->setText(QStringLiteral("确认预案并执行"));
       return;
     }
 
@@ -762,10 +814,16 @@ void FlowPage::onApproveFlow()
     body["playbook_id"] = selectedPlaybookId;
     m_api->post(QStringLiteral("/api/pipelines/%1/approve").arg(pid),
                 body, 10000, [this, pid](const QJsonObject &approveRes) {
+      m_approvalInFlight = false;
       m_approveBtn->setEnabled(true);
-      m_approveBtn->setText(QStringLiteral("选择预案并执行"));
+      m_approveBtn->setText(QStringLiteral("确认预案并执行"));
       if (approveRes["status"].toString() == "ok") {
+        if (pid == m_selectedPipelineId) m_stageTabs->setCurrentIndex(2);
         refreshFlows();
+        loadFlowDetail(pid);
+      } else {
+        QMessageBox::warning(this, QStringLiteral("执行未启动"),
+            approveRes["error"].toObject()["message"].toString());
         loadFlowDetail(pid);
       }
     });
@@ -785,19 +843,7 @@ void FlowPage::onPipelineStatus(const QJsonObject &data)
   if (pid == m_selectedPipelineId && m_stack->currentIndex() == 1) {
     loadFlowDetail(pid);
 
-    // pipeline 完成时自动切到评估 Tab 并加载评分
-    if (data["status"].toString() == "completed") {
-      QString runId = data["run_id"].toString();
-      if (runId.isEmpty()) {
-        // 兜底：completed 事件可能不含顶层 run_id，从 result.execution 取
-        runId = data["result"].toObject()["execution"].toObject()["run_id"].toString();
-      }
-      if (!runId.isEmpty() && runId != m_lastLoadedEvalRunId) {
-        m_lastLoadedEvalRunId = runId;
-        m_stageTabs->setCurrentIndex(3);  // 测试评估
-        m_evalTab->showRun(runId);
-      }
-    }
+    // Background completion updates the header and result action, preserving the current view.
   }
   refreshFlows();
 }
@@ -807,11 +853,6 @@ void FlowPage::onPipelineStep(const QJsonObject &data)
   QString pid = data["pipeline_id"].toString();
   if (pid == m_selectedPipelineId && m_stack->currentIndex() == 1) {
     loadFlowDetail(pid);
-    // execute 步骤开始时自动切到攻击 Tab
-    if (data["step_type"].toString() == "execute" &&
-        data["status"].toString() == "running") {
-      m_stageTabs->setCurrentIndex(2);
-    }
     // Append to reasoning stream
     QString stepType = data["step_type"].toString();
     QString status = data["status"].toString();
@@ -860,6 +901,7 @@ void FlowPage::jumpToExecution(const QString &playbookId, const QString &target)
 {
   // Clear pipeline context — this is a direct execution, not a pipeline view
   m_selectedPipelineId.clear();
+  m_execTab->setPipelineContext({}, {}, {});
   m_lastLoadedRunId.clear();
   m_lastLoadedPlaybookId.clear();
   m_lastLoadedEvalRunId.clear();
@@ -874,6 +916,7 @@ void FlowPage::jumpToExecution(const QString &playbookId, const QString &target)
 
   // Hide pipeline-specific action buttons
   m_approveBtn->setVisible(false);
+  m_resultBtn->hide();
   m_moreBtn->setVisible(false);
 
   // Switch to workbench + attack tab

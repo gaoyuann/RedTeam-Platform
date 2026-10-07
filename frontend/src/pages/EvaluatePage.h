@@ -15,6 +15,7 @@
 #include <QJsonArray>
 
 class ApiClient;
+class StatsSummaryCard;
 
 class EvaluatePage : public QWidget {
   Q_OBJECT
@@ -26,10 +27,13 @@ public:
 
   /// Load a specific run by ID, trigger grading, and switch to the grade tab.
   /// Used by FlowPage workbench when a pipeline completes.
-  void showRun(const QString &runId);
+  void showRun(const QString &runId, bool focus = true);
 
   /// Switch to the reports sub-tab and refresh the report list.
   void showReports();
+
+  /// Select one report and preview it, without asking the user to find its run.
+  void showReport(const QString &reportId);
 
 private slots:
   void onLoadRuns();
@@ -72,6 +76,7 @@ private:
 
   // Grade tab
   QComboBox *m_runCombo;
+  StatsSummaryCard *m_statsCard;  // 攻击结果统计（自绘环形+条形榜）
   QLabel *m_scoreLabel;
   QLabel *m_mitreLabel;
   QTableWidget *m_stepTable;
@@ -90,6 +95,8 @@ private:
   QComboBox *m_formatCombo;
   QStackedWidget *m_reportStack;
   QString m_selectedReportId;
+  QString m_pendingReportId;
+  int m_reportListRevision = 0;
   QString m_lastExportPath;
   QString m_lastExportFormat;
   QString m_lastExportReportId;  // 上次导出的报告 ID，用于检测选中报告是否切换

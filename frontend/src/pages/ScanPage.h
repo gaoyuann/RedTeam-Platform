@@ -19,9 +19,12 @@ public:
 
   /// Pre-fill all 4 target inputs (used when embedded in FlowPage workbench)
   void setTarget(const QString &target);
+  void setTaskScope(const QStringList &taskIds);
 
 signals:
   void playbookNavigateRequested(const QString &playbookId, const QString &target = "");
+  /// 从扫描结果漏洞一键发起攻击（演示动线：扫描 → 漏洞列表 → 攻击）
+  void attackRequested(const QString &target, const QString &vulnText, const QString &resultType);
 
 public slots:
   void onRefreshTasks();
@@ -84,6 +87,8 @@ private:
   // ── Right panel ──
   QTreeWidget *m_resultTree;       // grouped results by result_type
   QLabel *m_statusLabel;
+  QString m_currentTaskTarget;     // 当前选中任务的目标（供"发起攻击"使用）
+  QString m_currentScanType;
 
   // ── Per-tab delete buttons (need to enable/disable the one in the active tab) ──
   QPushButton *m_portDelBtn;
@@ -104,6 +109,9 @@ private:
   QTableWidget *m_genStepTable;     // 步骤预览表格
   QPushButton *m_genExecBtn;        // "前往执行→"按钮
 
+  bool m_scopedTasks = false;
+  bool m_selectInitialScopeTask = false;
+  QStringList m_scopeTaskIds;
   QString m_selectedTaskId;
   QString m_lastGeneratedId;       // playbook_id of last AI-generated playbook
   QString m_currentTarget;         // current selected task's target, for cross-page navigation

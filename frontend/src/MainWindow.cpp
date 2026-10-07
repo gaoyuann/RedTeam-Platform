@@ -67,9 +67,9 @@ void MainWindow::setupUI()
 
     auto *sidebar = new QFrame(centralWidget);
     sidebar->setObjectName("sidebar");
-    sidebar->setFixedWidth(248);
+    sidebar->setFixedWidth(200);
     auto *sidebarLayout = new QVBoxLayout(sidebar);
-    sidebarLayout->setContentsMargins(16, 18, 16, 14);
+    sidebarLayout->setContentsMargins(12, 18, 12, 14);
     sidebarLayout->setSpacing(14);
 
     auto *brandLabel = new QLabel(QStringLiteral("红队安全运营"), sidebar);
@@ -87,7 +87,7 @@ void MainWindow::setupUI()
 
     m_navList = new QListWidget(sidebar);
     m_navList->setObjectName("navList");
-    m_navList->setFixedWidth(220);
+    m_navList->setMinimumWidth(0);
     for (const auto &name : m_modules) {
         m_navList->addItem(name);
     }

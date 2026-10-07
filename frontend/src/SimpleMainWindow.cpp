@@ -27,6 +27,10 @@
 #include <QJsonDocument>
 #include <QTextEdit>
 #include <QUuid>
+#include <QPointer>
+#include <QDialogButtonBox>
+#include <QTextBrowser>
+#include "UiUtil.h"
 
 // ── Formatting helpers ────────────────────────────────────────────────
 
@@ -58,6 +62,7 @@ SimpleMainWindow::SimpleMainWindow(ApiClient *api, const QString &role,
     , m_username(username)
 {
   setupUI();
+  updateStageUI();
   loadHistory();
 
   // 加密锁运行时心跳：每 5s 校验一次策略，失败则锁屏，恢复则回到原页面。
@@ -77,14 +82,38 @@ void SimpleMainWindow::setupUI()
   centralWidget->setObjectName("contentArea");
   auto *mainLayout = new QHBoxLayout(centralWidget);
 
-  // ── Left: navigation ───────────────────────────────────────────────
-  m_navList = new QListWidget(this);
+  // Shared visual language with the administrator workspace.
+  auto *sidebar = new QFrame(centralWidget);
+  sidebar->setObjectName("sidebar");
+  sidebar->setFixedWidth(224);
+  sidebar->setStyleSheet(
+    "QFrame#sidebar { background:#10243e; border:none; }"
+    "QListWidget#navList { background:transparent; color:#a8bdd5; border:none; outline:none; }"
+    "QListWidget#navList::item { padding:12px 10px; margin:2px 0; border-radius:8px; }"
+    "QListWidget#navList::item:selected { background:#2563eb; color:white; }"
+    "QListWidget#navList::item:hover:!selected { background:#1d3655; color:white; }");
+  auto *sidebarLayout = new QVBoxLayout(sidebar);
+  sidebarLayout->setContentsMargins(16, 22, 16, 16);
+  sidebarLayout->setSpacing(14);
+  auto *brand = new QLabel(QStringLiteral("红队安全测试"), sidebar);
+  brand->setStyleSheet("color:#ffffff; font-size:19px; font-weight:700;");
+  sidebarLayout->addWidget(brand);
+  auto *identity = new QLabel(QStringLiteral("普通用户工作区"), sidebar);
+  identity->setStyleSheet("color:#93b4d5; font-size:12px;");
+  sidebarLayout->addWidget(identity);
+  auto *divider = new QFrame(sidebar);
+  divider->setFixedHeight(1);
+  divider->setStyleSheet("background:#294667;");
+  sidebarLayout->addWidget(divider);
+  m_navList = new QListWidget(sidebar);
   m_navList->setObjectName("navList");
-  m_navList->setFixedWidth(220);
-  for (const auto &name : m_modules) {
-    m_navList->addItem(name);
-  }
+  for (const auto &name : m_modules) m_navList->addItem(name);
   m_navList->setCurrentRow(0);
+  sidebarLayout->addWidget(m_navList, 1);
+  auto *guide = new QLabel(QStringLiteral("扫描目标 → 确认方案\n执行测试 → 查看报告"), sidebar);
+  guide->setStyleSheet("color:#93b4d5; font-size:12px;");
+  guide->setWordWrap(true);
+  sidebarLayout->addWidget(guide);
 
   // ── Right: stacked pages ───────────────────────────────────────────
   m_stackWidget = new QStackedWidget(this);
@@ -110,17 +139,24 @@ void SimpleMainWindow::setupUI()
   m_stackWidget->addWidget(m_executionPage);
 
   // Page 5: Evaluate (测试评估)
-  m_stackWidget->addWidget(new EvaluatePage(m_api, m_role, m_username, this));
+  m_evaluatePage = new EvaluatePage(m_api, m_role, m_username, this);
+  m_stackWidget->addWidget(m_evaluatePage);
 
   // 加密锁锁屏页（不占导航行，仅在校验失败时显示）
   m_dongleLockPage = new DongleLockPage(this);
   m_stackWidget->addWidget(m_dongleLockPage);
 
   // Cross-page navigation: ScanPage → ExecutionPage (select playbook)
-  connect(m_scanPage, &ScanPage::playbookNavigateRequested, this, [this](const QString &playbookId) {
-    m_executionPage->selectPlaybook(playbookId, QString());
+  connect(m_scanPage, &ScanPage::playbookNavigateRequested, this, [this](const QString &playbookId, const QString &target) {
+    m_executionPage->selectPlaybook(playbookId, target);
     m_navList->setCurrentRow(4);  // switch to "攻击执行" page
   });
+
+  connect(m_scanPage, &ScanPage::attackRequested, this,
+    [this](const QString &target, const QString &vulnText, const QString &resultType) {
+      m_executionPage->attackFromVuln(target, vulnText, resultType);
+      m_navList->setCurrentRow(4);
+    });
 
   // Cross-page navigation: PlaybookPage → ExecutionPage (go execute)
   // Primary: direct callback (most reliable)
@@ -135,7 +171,9 @@ void SimpleMainWindow::setupUI()
     Q_UNUSED(playbookId);
   });
 
-  mainLayout->addWidget(m_navList);
+  mainLayout->setContentsMargins(0, 0, 0, 0);
+  mainLayout->setSpacing(0);
+  mainLayout->addWidget(sidebar);
   mainLayout->addWidget(m_stackWidget, 1);
   setCentralWidget(centralWidget);
 
@@ -157,6 +195,19 @@ void SimpleMainWindow::setupUI()
     QString("%1 [%2]").arg(m_username, roleLabel), this);
   userLabel->setStyleSheet("color: #a0aec0; padding: 0 10px; font-size: 13px;");
   statusBar()->addWidget(userLabel);
+
+  m_currentTaskBtn = new QPushButton(QStringLiteral("返回当前任务"), this);
+  m_currentTaskBtn->setObjectName("checkBtn");
+  m_currentTaskBtn->hide();
+  statusBar()->addPermanentWidget(m_currentTaskBtn);
+  connect(m_currentTaskBtn, &QPushButton::clicked, this, [this]() {
+    m_navList->setCurrentRow(0);
+  });
+  m_currentReportBtn = new QPushButton(QStringLiteral("查看本次报告"), this);
+  m_currentReportBtn->setObjectName("checkBtn");
+  m_currentReportBtn->hide();
+  statusBar()->addPermanentWidget(m_currentReportBtn);
+  connect(m_currentReportBtn, &QPushButton::clicked, this, &SimpleMainWindow::onViewReport);
 
   // Logout button
   auto *logoutBtn = new QPushButton(QStringLiteral("退出登录"), this);
@@ -211,22 +262,35 @@ void SimpleMainWindow::setupQuickTestPage(QWidget *page)
   scrollArea->setFrameShape(QFrame::NoFrame);
   auto *container = new QWidget;
   auto *layout = new QVBoxLayout(container);
-  layout->setSpacing(20);
-  layout->setContentsMargins(28, 24, 28, 24);
+  layout->setSpacing(16);
+  layout->setContentsMargins(24, 20, 24, 20);
+  auto *heading = new QLabel(QStringLiteral("测试工作台"));
+  heading->setStyleSheet("font-size:24px; font-weight:700; color:#172033;");
+  layout->addWidget(heading);
+  auto *intro = new QLabel(QStringLiteral("从目标扫描开始，逐步完成方案确认、执行和评估。"));
+  intro->setWordWrap(true);
+  intro->setStyleSheet("font-size:13px; color:#64748b;");
+  layout->addWidget(intro);
+  m_workflowHint = new QLabel(QStringLiteral("第一步：填写目标地址，开始扫描并生成方案。"));
+  m_workflowHint->setObjectName("workflowHint");
+  m_workflowHint->setWordWrap(true);
+  m_workflowHint->setTextFormat(Qt::PlainText);
+  m_workflowHint->setStyleSheet(Theme::StatusInfoStyle);
+  layout->addWidget(m_workflowHint);
 
   // ══ Quick test card ═══════════════════════════════════════════════
   auto *testCard = new QFrame;
   testCard->setProperty("card", true);
   auto *testLayout = new QVBoxLayout(testCard);
-  testLayout->setContentsMargins(32, 28, 32, 28);
+  testLayout->setContentsMargins(24, 20, 24, 20);
   testLayout->setSpacing(18);
 
-  auto *testTitle = new QLabel(QStringLiteral("快速渗透测试"));
+  auto *testTitle = new QLabel(QStringLiteral("新建测试"));
   testTitle->setStyleSheet(Theme::SectionStyle);
   testLayout->addWidget(testTitle);
 
   auto *descLabel = new QLabel(
-    QStringLiteral("输入目标地址，一键完成：扫描 → 生成攻击方案（执行攻击和报告需手动操作）"));
+    QStringLiteral("扫描并生成方案后，由你审阅确认；执行结束后自动生成本次报告。"));
   descLabel->setStyleSheet("font-size: 13px; color: #64748b;");
   descLabel->setWordWrap(true);
   testLayout->addWidget(descLabel);
@@ -242,7 +306,8 @@ void SimpleMainWindow::setupQuickTestPage(QWidget *page)
   m_targetInput = new QLineEdit;
   m_targetInput->setPlaceholderText(QStringLiteral("例: 192.168.1.1"));
   m_targetInput->setMinimumHeight(36);
-  m_targetInput->setMinimumWidth(280);
+  m_targetInput->setMinimumWidth(150);
+  m_targetInput->setObjectName("quickTestTarget");
   QSettings settings("RedTeam", "RedTeam-Platform");
   QStringList history = settings.value("history/targets").toStringList();
   auto *completer = new QCompleter(history, this);
@@ -267,20 +332,16 @@ void SimpleMainWindow::setupQuickTestPage(QWidget *page)
   btnRow->setSpacing(16);
   btnRow->addStretch();
 
-  m_startBtn = new QPushButton(QStringLiteral("一键开始测试"));
+  m_startBtn = new QPushButton(QStringLiteral("开始扫描并生成方案"));
   m_startBtn->setProperty("primary", true);
-  m_startBtn->setFixedSize(220, 52);
-  m_startBtn->setStyleSheet(
-    "QPushButton { background: #2563eb; color: #ffffff; border: none; "
-    "border-radius: 10px; font-size: 17px; font-weight: bold; }"
-    "QPushButton:hover { background: #1d4ed8; }"
-    "QPushButton:pressed { background: #1e40af; }"
-    "QPushButton:disabled { background: #94a3b8; color: #ffffff; }");
+  m_startBtn->setMinimumSize(210, 42);
+  m_startBtn->setObjectName("quickTestStart");
   btnRow->addWidget(m_startBtn);
 
-  m_retryBtn = new QPushButton(QStringLiteral("重试当前阶段"));
+  m_retryBtn = new QPushButton(QStringLiteral("重新开始扫描"));
   m_retryBtn->setVisible(false);
-  m_retryBtn->setFixedSize(180, 52);
+  m_retryBtn->setMinimumHeight(42);
+  m_retryBtn->setObjectName("quickTestRetry");
   m_retryBtn->setStyleSheet(
     "QPushButton { background: #f59e0b; color: #ffffff; border: none; "
     "border-radius: 10px; font-size: 15px; font-weight: bold; }"
@@ -299,10 +360,10 @@ void SimpleMainWindow::setupQuickTestPage(QWidget *page)
   auto *progressCard = new QFrame;
   progressCard->setProperty("card", true);
   auto *progressLayout = new QVBoxLayout(progressCard);
-  progressLayout->setContentsMargins(32, 24, 32, 24);
+  progressLayout->setContentsMargins(24, 18, 24, 18);
   progressLayout->setSpacing(14);
 
-  auto *progressTitle = new QLabel(QStringLiteral("执行进度"));
+  auto *progressTitle = new QLabel(QStringLiteral("任务进度"));
   progressTitle->setStyleSheet(Theme::SectionStyle);
   progressLayout->addWidget(progressTitle);
 
@@ -338,9 +399,12 @@ void SimpleMainWindow::setupQuickTestPage(QWidget *page)
 
     m_stages[i].statusLabel = new QLabel(QStringLiteral("等待中"));
     m_stages[i].statusLabel->setMinimumWidth(120);
+    m_stages[i].statusLabel->setObjectName(QString("quickStageStatus%1").arg(i));
+    m_stages[i].statusLabel->setWordWrap(true);
     m_stages[i].statusLabel->setStyleSheet("font-size: 14px; color: #94a3b8;");
 
     m_stages[i].thoughtLabel = new QLabel;
+    m_stages[i].thoughtLabel->setTextFormat(Qt::PlainText);
     m_stages[i].thoughtLabel->setStyleSheet("font-size: 12px; color: #6366f1; padding-left: 56px;");
     m_stages[i].thoughtLabel->setWordWrap(true);
     m_stages[i].thoughtLabel->hide();
@@ -359,7 +423,7 @@ void SimpleMainWindow::setupQuickTestPage(QWidget *page)
   m_summaryFrame = new QFrame;
   m_summaryFrame->setProperty("card", true);
   auto *summaryLayout = new QVBoxLayout(m_summaryFrame);
-  summaryLayout->setContentsMargins(32, 24, 32, 24);
+  summaryLayout->setContentsMargins(24, 18, 24, 18);
   summaryLayout->setSpacing(12);
 
   auto *summaryTitle = new QLabel(QStringLiteral("发现摘要"));
@@ -390,23 +454,17 @@ void SimpleMainWindow::setupQuickTestPage(QWidget *page)
   m_viewPlaybookBtn->setVisible(false);
   pbRow->addWidget(m_viewPlaybookBtn);
 
-  m_gotoExecBtn = new QPushButton(QStringLiteral("前往执行"));
-  m_gotoExecBtn->setFixedSize(80, 28);
-  m_gotoExecBtn->setStyleSheet(
-    "QPushButton { background: #22c55e; color: #fff; border: none; border-radius: 4px; font-size: 13px; font-weight: bold; }"
-    "QPushButton:hover { background: #16a34a; }");
+  m_gotoExecBtn = new QPushButton(QStringLiteral("审阅方案 →"));
+  m_gotoExecBtn->setObjectName("quickTestContinue");
+  m_gotoExecBtn->setProperty("primary", true);
+  m_gotoExecBtn->setMinimumHeight(38);
   m_gotoExecBtn->setVisible(false);
-  pbRow->addWidget(m_gotoExecBtn);
+  btnRow->insertWidget(2, m_gotoExecBtn);
 
   summaryLayout->addLayout(pbRow);
 
   connect(m_viewPlaybookBtn, &QPushButton::clicked, this, &SimpleMainWindow::onViewPlaybook);
-  connect(m_gotoExecBtn, &QPushButton::clicked, this, [this]() {
-    if (!m_playbookId.isEmpty() && m_executionPage) {
-      m_executionPage->selectPlaybook(m_playbookId, m_target);
-      m_navList->setCurrentRow(4);  // switch to "攻击执行" page
-    }
-  });
+  connect(m_gotoExecBtn, &QPushButton::clicked, this, &SimpleMainWindow::onReviewPlan);
 
   layout->addWidget(m_summaryFrame);
 
@@ -423,7 +481,7 @@ void SimpleMainWindow::setupQuickTestPage(QWidget *page)
   m_reportFrame = new QFrame;
   m_reportFrame->setProperty("card", true);
   auto *reportLayout = new QVBoxLayout(m_reportFrame);
-  reportLayout->setContentsMargins(32, 24, 32, 24);
+  reportLayout->setContentsMargins(24, 18, 24, 18);
   reportLayout->setSpacing(12);
 
   auto *reportTitle = new QLabel(QStringLiteral("测试报告"));
@@ -441,6 +499,12 @@ void SimpleMainWindow::setupQuickTestPage(QWidget *page)
   m_viewReportBtn->setFixedWidth(100);
   m_viewReportBtn->setProperty("primary", true);
   reportRow->addWidget(m_viewReportBtn);
+  m_generateReportBtn = new QPushButton(QStringLiteral("生成本次结果报告"));
+  m_generateReportBtn->setObjectName("generateCurrentReport");
+  m_generateReportBtn->setProperty("primary", true);
+  m_generateReportBtn->hide();
+  reportRow->addWidget(m_generateReportBtn);
+  connect(m_generateReportBtn, &QPushButton::clicked, this, &SimpleMainWindow::onGenerateCurrentReport);
   reportLayout->addLayout(reportRow);
 
   connect(m_viewReportBtn, &QPushButton::clicked, this, &SimpleMainWindow::onViewReport);
@@ -451,7 +515,7 @@ void SimpleMainWindow::setupQuickTestPage(QWidget *page)
   auto *historyCard = new QFrame;
   historyCard->setProperty("card", true);
   auto *historyLayout = new QVBoxLayout(historyCard);
-  historyLayout->setContentsMargins(32, 24, 32, 24);
+  historyLayout->setContentsMargins(24, 18, 24, 18);
   historyLayout->setSpacing(12);
 
   auto *historyTitle = new QLabel(QStringLiteral("历史记录"));
@@ -473,6 +537,7 @@ void SimpleMainWindow::setupQuickTestPage(QWidget *page)
   m_historyTable->setColumnWidth(2, 100);
   m_historyTable->verticalHeader()->setVisible(false);
   m_historyTable->setMinimumHeight(120);
+  UiUtil::EmptyHint::attach(m_historyTable, QStringLiteral("暂无报告 · 完成执行后可生成并查看报告"));
   historyLayout->addWidget(m_historyTable);
 
   connect(m_historyTable, &QTableWidget::cellClicked, this, &SimpleMainWindow::onViewHistoryReport);
@@ -484,6 +549,7 @@ void SimpleMainWindow::setupQuickTestPage(QWidget *page)
   auto *pageLayout = new QVBoxLayout(page);
   pageLayout->setContentsMargins(0, 0, 0, 0);
   pageLayout->addWidget(scrollArea);
+  resetStageRows();
 }
 
 // ── Module navigation ─────────────────────────────────────────────────
@@ -546,78 +612,92 @@ void SimpleMainWindow::setDongleLocked(bool locked, const QString &errorMessage)
 
 void SimpleMainWindow::setStage(Stage s)
 {
+  if (s == Failed && m_currentStage != Failed) m_failedStage = m_currentStage;
   m_currentStage = s;
   updateStageUI();
 }
 
-void SimpleMainWindow::updateStageUI()
+void SimpleMainWindow::resetStageRows()
 {
-  for (int i = 0; i < 5; i++) {
-    m_stages[i].iconLabel->setText(QStringLiteral("--"));
-    m_stages[i].iconLabel->setStyleSheet("font-size: 15px; color: #94a3b8;");
-    m_stages[i].progress->setValue(0);
-    m_stages[i].progress->setStyleSheet(
-      "QProgressBar { background: #e2e8f0; border: none; border-radius: 9px; }"
-      "QProgressBar::chunk { background: #94a3b8; border-radius: 9px; }");
-    m_stages[i].statusLabel->setText(QStringLiteral("等待中"));
-    m_stages[i].statusLabel->setStyleSheet("font-size: 14px; color: #94a3b8;");
+  for (int i = 0; i < 5; ++i) {
+    updateStageRow(i, QStringLiteral("—"), 0,
+      i < 3 ? QStringLiteral("等待开始") : QStringLiteral("待确认方案"), "#94a3b8");
     m_stages[i].thoughtLabel->clear();
     m_stages[i].thoughtLabel->hide();
   }
+}
 
-  int completedUpTo = 0;
-  if (m_currentStage == Done) {
-    // Only stages 0-2 actually ran (port scan, vuln scan, gen playbook)
-    // Stages 3-4 (exec attack, gen report) are manual — mark them specially
-    completedUpTo = 3;
-  } else if (m_currentStage == Failed) {
-    return;
-  } else if (m_currentStage > Idle) {
-    completedUpTo = static_cast<int>(m_currentStage) - 1;
+void SimpleMainWindow::showStageError(int index, const QString &message)
+{
+  updateStageRow(index, QStringLiteral("!"), 0, QStringLiteral("未完成"), "#b42318");
+  m_stages[index].thoughtLabel->setText(message);
+  m_stages[index].thoughtLabel->setStyleSheet("font-size:12px; color:#b42318; padding-left:56px;");
+  m_stages[index].thoughtLabel->show();
+}
+
+void SimpleMainWindow::updateStageUI()
+{
+  // Rows follow actual results, not the overall stage.
+  const bool busy = m_currentStage == PortScan || m_currentStage == VulnScan ||
+                    m_currentStage == GenPlaybook || m_currentStage == ExecAttack ||
+                    m_currentStage == GenReport;
+  m_startBtn->setEnabled(!busy && !m_reviewPending && (m_currentStage != Failed || m_failedStage == ExecAttack));
+  const bool planReady = m_currentStage == PlanReady;
+  m_startBtn->setProperty("primary", !planReady);
+  m_startBtn->style()->unpolish(m_startBtn);
+  m_startBtn->style()->polish(m_startBtn);
+  m_startBtn->update();
+  m_targetInput->setEnabled(!busy && !m_reviewPending);
+  m_portsInput->setEnabled(!busy && !m_reviewPending);
+  m_retryBtn->setVisible(m_currentStage == Failed && m_failedStage != ExecAttack);
+  m_retryBtn->setText(m_failedStage == GenPlaybook ? QStringLiteral("重试方案生成")
+    : m_failedStage == GenReport ? QStringLiteral("重试生成报告") : QStringLiteral("重新开始扫描"));
+  m_gotoExecBtn->setVisible(planReady);
+  m_gotoExecBtn->setEnabled(planReady && !m_reviewPending);
+  m_currentTaskBtn->setVisible(m_currentStage != Idle);
+  m_currentReportBtn->setVisible(!m_latestReportId.isEmpty());
+  m_generateReportBtn->setVisible(!m_runTerminalStatus.isEmpty() && m_latestReportId.isEmpty()
+                                  && m_currentStage != GenReport);
+  m_startBtn->setText(busy ? QStringLiteral("正在处理…") :
+    m_currentStage == PlanReady || m_currentStage == Done
+      ? QStringLiteral("开始新的扫描") : QStringLiteral("开始扫描并生成方案"));
+  m_workflowHint->setStyleSheet(m_currentStage == Failed
+    ? Theme::StatusErrorStyle : Theme::StatusInfoStyle);
+  switch (m_currentStage) {
+    case Idle:
+      m_workflowHint->setText(QStringLiteral("第一步：填写目标地址，开始扫描并生成方案。"));
+      break;
+    case PortScan:
+    case VulnScan:
+      m_workflowHint->setText(QStringLiteral("正在扫描 %1；结果会自动更新，可切换页面查看其他任务。").arg(m_target));
+      break;
+    case GenPlaybook:
+      m_workflowHint->setText(QStringLiteral("扫描已完成，正在生成方案；暂未执行攻击。"));
+      break;
+    case PlanReady:
+      m_workflowHint->setText(QStringLiteral("方案已就绪。下一步：审阅目标与方案步骤，确认后开始执行；完成后自动生成报告。"));
+      updateStageRow(3, QStringLiteral("→"), 0, QStringLiteral("待确认并执行"), "#b45309");
+      updateStageRow(4, QStringLiteral("—"), 0, QStringLiteral("执行后生成"), "#64748b");
+      break;
+    case Failed:
+      m_workflowHint->setText(QStringLiteral("任务未完成，已保留各阶段结果。请查看下方原因后重试；不会自动继续执行。"));
+      break;
+    case Done:
+      m_workflowHint->setStyleSheet(Theme::StatusSuccessStyle);
+      m_workflowHint->setText(m_runTerminalStatus == "COMPLETED"
+        ? QStringLiteral("本次测试与报告已完成。可直接查看报告，或在执行页检查证据。")
+        : QStringLiteral("本次结果报告已生成，包含执行失败或中止的情况；不代表测试全部成功。"));
+      break;
+    case ExecAttack:
+      m_workflowHint->setText(QStringLiteral("正在执行 %1，可查看实时步骤或停止执行；完成后自动生成报告。").arg(m_target));
+      break;
+    case GenReport:
+      m_workflowHint->setText(QStringLiteral("正在整理本次执行结果并生成报告，请稍候。"));
+      break;
+    default:
+      m_workflowHint->setText(QStringLiteral("正在处理当前阶段，请稍候。"));
+      break;
   }
-
-  for (int i = 0; i < completedUpTo && i < 5; i++) {
-    m_stages[i].iconLabel->setText(QStringLiteral("[OK]"));
-    m_stages[i].iconLabel->setStyleSheet("font-size: 15px; color: #22c55e; font-weight: bold;");
-    m_stages[i].progress->setValue(100);
-    m_stages[i].progress->setStyleSheet(
-      "QProgressBar { background: #e2e8f0; border: none; border-radius: 9px; }"
-      "QProgressBar::chunk { background: #22c55e; border-radius: 9px; }");
-    m_stages[i].statusLabel->setText(QStringLiteral("已完成"));
-    m_stages[i].statusLabel->setStyleSheet("font-size: 14px; color: #22c55e;");
-  }
-
-  // Mark stages 3-4 as "待手动" when Done (they weren't auto-executed)
-  if (m_currentStage == Done) {
-    for (int i = 3; i < 5; i++) {
-      m_stages[i].iconLabel->setText(QStringLiteral("[–]"));
-      m_stages[i].iconLabel->setStyleSheet("font-size: 15px; color: #f59e0b; font-weight: bold;");
-      m_stages[i].progress->setValue(0);
-      m_stages[i].progress->setStyleSheet(
-        "QProgressBar { background: #e2e8f0; border: none; border-radius: 9px; }"
-        "QProgressBar::chunk { background: #f59e0b; border-radius: 9px; }");
-      m_stages[i].statusLabel->setText(QStringLiteral("待手动执行"));
-      m_stages[i].statusLabel->setStyleSheet("font-size: 14px; color: #f59e0b;");
-    }
-  }
-
-  int runningIndex = static_cast<int>(m_currentStage) - 1;
-  if (runningIndex >= 0 && runningIndex < 5) {
-    m_stages[runningIndex].iconLabel->setText(QStringLiteral(">>"));
-    m_stages[runningIndex].iconLabel->setStyleSheet("font-size: 15px; color: #2563eb; font-weight: bold;");
-    m_stages[runningIndex].progress->setStyleSheet(
-      "QProgressBar { background: #e2e8f0; border: none; border-radius: 9px; }"
-      "QProgressBar::chunk { background: #2563eb; border-radius: 9px; }");
-  }
-
-  m_startBtn->setEnabled(m_currentStage == Idle || m_currentStage == Done);
-  if (m_currentStage != Idle && m_currentStage != Done) {
-    m_startBtn->setText(QStringLiteral("测试进行中..."));
-  } else {
-    m_startBtn->setText(QStringLiteral("一键开始测试"));
-  }
-
-  m_retryBtn->setVisible(m_currentStage == Failed);
 }
 
 void SimpleMainWindow::updateStageRow(int index, const QString &icon,
@@ -629,6 +709,9 @@ void SimpleMainWindow::updateStageRow(int index, const QString &icon,
   m_stages[index].iconLabel->setStyleSheet(
     QString("font-size: 15px; color: %1; font-weight: bold;").arg(color));
   m_stages[index].progress->setValue(percent);
+  m_stages[index].progress->setStyleSheet(
+    QString("QProgressBar { background:#e2e8f0; border:none; border-radius:5px; }"
+            "QProgressBar::chunk { background:%1; border-radius:5px; }").arg(color));
   m_stages[index].statusLabel->setText(status);
   m_stages[index].statusLabel->setStyleSheet(
     QString("font-size: 14px; color: %1;").arg(color));
@@ -638,6 +721,8 @@ void SimpleMainWindow::updateStageRow(int index, const QString &icon,
 
 void SimpleMainWindow::onStartTest()
 {
+  if (m_reviewPending || m_currentStage == PortScan || m_currentStage == VulnScan ||
+      m_currentStage == GenPlaybook || m_currentStage == ExecAttack || m_currentStage == GenReport) return;
   QString target = m_targetInput->text().trimmed();
   if (target.isEmpty()) {
     QMessageBox::warning(this, QStringLiteral("提示"),
@@ -645,6 +730,9 @@ void SimpleMainWindow::onStartTest()
     return;
   }
 
+  ++m_workflowRevision;
+  m_runPollInFlight = false;
+  m_runTerminalStatus.clear();
   m_target = target;
 
   // Save to history
@@ -661,6 +749,10 @@ void SimpleMainWindow::onStartTest()
     }
   }
 
+  resetStageRows();
+  m_portScanSucceeded = m_vulnScanSucceeded = false;
+  m_portPollInFlight = m_vulnPollInFlight = false;
+  m_failedStage = Idle;
   // Reset UI
   m_portScanTaskId.clear();
   m_vulnScanTaskId.clear();
@@ -707,7 +799,7 @@ void SimpleMainWindow::onStartTest()
 
   m_api->post("/api/scan-tasks", body, 10000, [this](const QJsonObject &res) {
     if (res["status"].toString() != "ok") {
-      updateStageRow(0, "[X]", 0, QStringLiteral("创建失败"), "#ef4444");
+      showStageError(0, res["error"].toObject()["message"].toString(QStringLiteral("创建失败，请检查服务连接")));
       m_portScanDone = true;
       checkBothScansDone();
       return;
@@ -719,7 +811,7 @@ void SimpleMainWindow::onStartTest()
     m_api->post("/api/scan-tasks/" + m_portScanTaskId + "/execute", empty, 5000,
       [this](const QJsonObject &execRes) {
         if (execRes["status"].toString() != "ok") {
-          updateStageRow(0, "[X]", 0, QStringLiteral("执行失败"), "#ef4444");
+          showStageError(0, execRes["error"].toObject()["message"].toString(QStringLiteral("执行失败，请检查服务连接")));
           m_portScanDone = true;
           checkBothScansDone();
           return;
@@ -743,7 +835,7 @@ void SimpleMainWindow::onStartTest()
 
   m_api->post("/api/scan-tasks", vulnBody, 10000, [this](const QJsonObject &res) {
     if (res["status"].toString() != "ok") {
-      updateStageRow(1, "[X]", 0, QStringLiteral("创建失败"), "#ef4444");
+      showStageError(1, res["error"].toObject()["message"].toString(QStringLiteral("创建失败，请检查服务连接")));
       m_vulnScanDone = true;
       checkBothScansDone();
       return;
@@ -755,7 +847,7 @@ void SimpleMainWindow::onStartTest()
     m_api->post("/api/scan-tasks/" + m_vulnScanTaskId + "/execute", empty, 5000,
       [this](const QJsonObject &execRes) {
         if (execRes["status"].toString() != "ok") {
-          updateStageRow(1, "[X]", 0, QStringLiteral("执行失败"), "#ef4444");
+          showStageError(1, execRes["error"].toObject()["message"].toString(QStringLiteral("执行失败，请检查服务连接")));
           m_vulnScanDone = true;
           checkBothScansDone();
           return;
@@ -770,20 +862,24 @@ void SimpleMainWindow::onStartTest()
 
 void SimpleMainWindow::onPollScan()
 {
-  if (!m_portScanDone && !m_portScanTaskId.isEmpty()) {
-    m_api->get("/api/scan-tasks/" + m_portScanTaskId, 5000,
-      [this](const QJsonObject &res) {
+  QPointer<SimpleMainWindow> self(this);
+  if (!m_portScanDone && !m_portScanTaskId.isEmpty() && !m_portPollInFlight) {
+    m_portPollInFlight = true;
+    const QString taskId = m_portScanTaskId;
+    m_api->get("/api/scan-tasks/" + taskId, 5000,
+      [this, self, taskId](const QJsonObject &res) {
+        if (!self || taskId != m_portScanTaskId) return;
+        m_portPollInFlight = false;
+        if (m_portScanDone) return;
         if (res["status"].toString() != "ok") {
-          // API error — treat as failed
-          updateStageRow(0, "[X]", 0, QStringLiteral("查询失败"), "#ef4444");
-          m_portScanDone = true;
-          checkBothScansDone();
+          updateStageRow(0, "…", m_stages[0].progress->value(), QStringLiteral("连接中断，重试中"), "#b45309");
           return;
         }
         auto d = res["data"].toObject();
         QString status = d["status"].toString();
         if (status == "COMPLETED") {
           updateStageRow(0, "[OK]", 100, QStringLiteral("已完成"), "#22c55e");
+          m_portScanSucceeded = true;
           m_portResults = d["results"].toArray();
           QStringList ports;
           for (const auto &r : m_portResults) {
@@ -802,11 +898,13 @@ void SimpleMainWindow::onPollScan()
           if (!ports.isEmpty()) {
             m_portsLabel->setText(QStringLiteral("开放端口: ") + ports.join("  "));
             m_portsLabel->setStyleSheet("font-size: 15px; color: #1a2a3a;");
+          } else {
+            m_portsLabel->setText(QStringLiteral("开放端口: 未发现"));
           }
           m_portScanDone = true;
           checkBothScansDone();
         } else if (status == "FAILED" || status == "CANCELLED") {
-          updateStageRow(0, "[X]", 0, QStringLiteral("失败"), "#ef4444");
+          showStageError(0, d["error_message"].toString(QStringLiteral("扫描失败或已取消，请检查扫描任务详情")));
           m_portScanDone = true;
           checkBothScansDone();
         } else if (status == "RUNNING") {
@@ -817,19 +915,23 @@ void SimpleMainWindow::onPollScan()
       });
   }
 
-  if (!m_vulnScanDone && !m_vulnScanTaskId.isEmpty()) {
-    m_api->get("/api/scan-tasks/" + m_vulnScanTaskId, 5000,
-      [this](const QJsonObject &res) {
+  if (!m_vulnScanDone && !m_vulnScanTaskId.isEmpty() && !m_vulnPollInFlight) {
+    m_vulnPollInFlight = true;
+    const QString taskId = m_vulnScanTaskId;
+    m_api->get("/api/scan-tasks/" + taskId, 5000,
+      [this, self, taskId](const QJsonObject &res) {
+        if (!self || taskId != m_vulnScanTaskId) return;
+        m_vulnPollInFlight = false;
+        if (m_vulnScanDone) return;
         if (res["status"].toString() != "ok") {
-          updateStageRow(1, "[X]", 0, QStringLiteral("查询失败"), "#ef4444");
-          m_vulnScanDone = true;
-          checkBothScansDone();
+          updateStageRow(1, "…", m_stages[1].progress->value(), QStringLiteral("连接中断，重试中"), "#b45309");
           return;
         }
         auto d = res["data"].toObject();
         QString status = d["status"].toString();
         if (status == "COMPLETED") {
           updateStageRow(1, "[OK]", 100, QStringLiteral("已完成"), "#22c55e");
+          m_vulnScanSucceeded = true;
           m_vulnResults = d["results"].toArray();
           QMap<QString, int> counts;
           for (const auto &r : m_vulnResults) {
@@ -851,7 +953,7 @@ void SimpleMainWindow::onPollScan()
           m_vulnScanDone = true;
           checkBothScansDone();
         } else if (status == "FAILED" || status == "CANCELLED") {
-          updateStageRow(1, "[X]", 0, QStringLiteral("失败"), "#ef4444");
+          showStageError(1, d["error_message"].toString(QStringLiteral("扫描失败或已取消，请检查扫描任务详情")));
           m_vulnScanDone = true;
           checkBothScansDone();
         } else if (status == "RUNNING") {
@@ -865,53 +967,107 @@ void SimpleMainWindow::onPollScan()
 
 void SimpleMainWindow::checkBothScansDone()
 {
+  if (m_currentStage != PortScan && m_currentStage != VulnScan) return;
   if (m_portScanDone && m_vulnScanDone) {
     m_pollTimer->stop();
+    if (!m_portScanSucceeded || !m_vulnScanSucceeded) {
+      updateStageRow(2, "—", 0, QStringLiteral("等待扫描完成"), "#64748b");
+      setStage(Failed);
+      return;
+    }
     advanceStage();
   }
 }
 
 // ── Start playbook execution (called after playbook is ready) ─────────
 
-void SimpleMainWindow::startExecution()
+void SimpleMainWindow::onReviewPlan()
 {
-  if (m_playbookId.isEmpty()) {
-    updateStageRow(3, "[X]", 0, QStringLiteral("无攻击方案"), "#ef4444");
-    setStage(Failed);
-    return;
-  }
-
-  setStage(ExecAttack);
-  updateStageRow(3, ">>", 10, QStringLiteral("创建执行..."), "#2563eb");
-
-  QJsonObject runBody;
-  runBody["playbook_id"] = m_playbookId;
-  runBody["target"] = m_target;
-  runBody["user_sub"] = m_username;
-  runBody["user_role"] = m_role;
-
-  m_api->post("/api/runs", runBody, 10000,
-    [this](const QJsonObject &runRes) {
-      if (runRes["status"].toString() != "ok") {
-        updateStageRow(3, "[X]", 0, QStringLiteral("创建失败"), "#ef4444");
-        setStage(Failed);
+  if (m_currentStage != PlanReady || m_playbookId.isEmpty() || m_reviewPending) return;
+  m_reviewPending = true;
+  updateStageUI();
+  const int revision = m_workflowRevision;
+  const QString playbookId = m_playbookId;
+  QPointer<SimpleMainWindow> self(this);
+  m_api->get("/api/playbooks/" + playbookId, 10000,
+    [this, self, revision, playbookId](const QJsonObject &res) {
+      if (!self || revision != m_workflowRevision) return;
+      m_reviewPending = false;
+      updateStageUI();
+      const auto plan = res["data"].toObject();
+      const auto steps = plan["steps"].toArray();
+      if (res["status"].toString() != "ok" || steps.isEmpty()) {
+        m_workflowHint->setText(QStringLiteral("无法审阅方案：详情加载失败或没有可执行步骤。请重试或选择其他方案。"));
+        m_workflowHint->setStyleSheet(Theme::StatusErrorStyle);
         return;
       }
-      m_runId = runRes["data"].toObject()["run_id"].toString();
-      updateStageRow(3, ">>", 20, QStringLiteral("执行中..."), "#2563eb");
-
-      QJsonObject empty;
-      m_api->post("/api/runs/" + m_runId + "/execute", empty, 5000,
-        [this](const QJsonObject &execRes) {
-          if (execRes["status"].toString() != "ok") {
-            updateStageRow(3, "[X]", 0, QStringLiteral("启动失败"), "#ef4444");
-            setStage(Failed);
-            return;
-          }
-          updateStageRow(3, ">>", 30, QStringLiteral("执行中..."), "#2563eb");
-          if (!m_pollTimer->isActive()) m_pollTimer->start();
-        });
+      QDialog dialog(this);
+      dialog.setObjectName("workflowReviewDialog");
+      dialog.setWindowTitle(QStringLiteral("审阅本次测试方案"));
+      dialog.resize(760, 560);
+      auto *layout = new QVBoxLayout(&dialog);
+      auto *content = new QTextBrowser(&dialog);
+      content->setOpenExternalLinks(false);
+      QString html = QString("<h2>%1</h2><p><b>本次目标：</b>%2</p>"
+        "<p><b>扫描来源：</b>%3 / %4</p><p>%5</p><h3>计划执行 %6 个步骤</h3><ol>")
+        .arg(plan["name"].toString().toHtmlEscaped(), m_target.toHtmlEscaped(),
+             m_portScanTaskId.toHtmlEscaped(), m_vulnScanTaskId.toHtmlEscaped(),
+             plan["description"].toString().toHtmlEscaped()).arg(steps.size());
+      for (const auto &value : steps) {
+        const auto step = value.toObject();
+        html += QString("<li><b>%1</b> · 工具：%2<p>%3</p></li>")
+          .arg(step["name"].toString(step["step_id"].toString()).toHtmlEscaped(),
+               step["tool_id"].toString().toHtmlEscaped(),
+               step["description"].toString().toHtmlEscaped());
+      }
+      html += QStringLiteral("</ol><p>确认后开始执行以上方案，执行结束后自动生成本次结果报告。</p>");
+      content->setHtml(html);
+      layout->addWidget(content);
+      auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+      buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("确认并开始执行"));
+      buttons->button(QDialogButtonBox::Ok)->setObjectName("confirmWorkflowExecution");
+      buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("返回修改"));
+      connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+      connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+      layout->addWidget(buttons);
+      if (dialog.exec() != QDialog::Accepted) return;
+      if (!self || revision != m_workflowRevision || m_playbookId != playbookId ||
+          m_currentStage != PlanReady) return;
+      startExecution();
     });
+}
+
+void SimpleMainWindow::startExecution()
+{
+  if (m_currentStage != PlanReady || m_playbookId.isEmpty() || !m_runId.isEmpty()) return;
+  setStage(ExecAttack);
+  updateStageRow(3, "…", 0, QStringLiteral("创建执行记录…"), "#2563eb");
+  const int revision = m_workflowRevision;
+  QPointer<SimpleMainWindow> self(this);
+  QJsonObject body{{"playbook_id", m_playbookId}, {"target", m_target},
+                   {"scan_task_id", m_vulnScanTaskId}, {"user_sub", m_username}, {"user_role", m_role}};
+  m_api->post("/api/runs", body, 10000, [this, self, revision](const QJsonObject &res) {
+    if (!self || revision != m_workflowRevision) return;
+    m_runId = res["data"].toObject()["run_id"].toString();
+    if (res["status"].toString() != "ok" || m_runId.isEmpty()) {
+      showStageError(3, res["error"].toObject()["message"].toString(QStringLiteral("未取得执行编号，请检查执行记录后再开始新任务")));
+      setStage(Failed);
+      return;
+    }
+    const QString runId = m_runId;
+    m_api->post("/api/runs/" + runId + "/execute", {}, 10000,
+      [this, self, revision, runId](const QJsonObject &started) {
+        if (!self || revision != m_workflowRevision || runId != m_runId) return;
+        m_executionPage->showRun(runId);
+        m_navList->setCurrentRow(4);
+        if (started["status"].toString() != "ok") {
+          // A timeout does not prove that the server failed to start.
+          m_workflowHint->setText(QStringLiteral("启动响应异常，正在核对本次执行状态；请勿重复启动。"));
+        }
+        m_pollTimer->start();
+        onPollRun();
+      });
+  });
 }
 
 // ── Advance to next stage ─────────────────────────────────────────────
@@ -941,7 +1097,7 @@ void SimpleMainWindow::advanceStage()
             [this](const QJsonObject &recRes) {
               if (recRes["status"].toString() != "ok" ||
                   recRes["data"].toArray().isEmpty()) {
-                updateStageRow(2, "[X]", 0, QStringLiteral("无可用方案"), "#ef4444");
+                showStageError(2, recRes["error"].toObject()["message"].toString(QStringLiteral("未找到可用方案，可重试生成或在预案库中选择")));
                 setStage(Failed);
                 return;
               }
@@ -956,8 +1112,8 @@ void SimpleMainWindow::advanceStage()
               m_viewPlaybookBtn->setVisible(true);
               m_gotoExecBtn->setVisible(true);
 
-              // Done — stop here, user can view the playbook
-              setStage(Done);
+              // Plan ready; execution still requires the user.
+              setStage(PlanReady);
             });
           return;
           }
@@ -973,56 +1129,8 @@ void SimpleMainWindow::advanceStage()
         m_viewPlaybookBtn->setVisible(true);
         m_gotoExecBtn->setVisible(true);
 
-        // Done — stop here, user can view the playbook
-        setStage(Done);
-      });
-  }
-  else if (m_currentStage == ExecAttack) {
-    setStage(GenReport);
-    updateStageRow(4, ">>", 30, QStringLiteral("生成中..."), "#2563eb");
-
-    QString reportId = "rpt_" + QUuid::createUuid().toString(QUuid::Id128).left(12);
-    QString title = m_target + QStringLiteral(" 渗透测试报告");
-
-    QJsonObject genBody;
-    genBody["run_id"] = m_runId;
-    genBody["title"] = title;
-
-    m_api->post("/api/reports/generate", genBody, 30000,
-      [this, reportId, title](const QJsonObject &res) {
-        QString rid = reportId;
-        if (res["status"].toString() == "ok") {
-          rid = res["data"].toObject()["report_id"].toString(rid);
-        }
-        if (res["status"].toString() != "ok") {
-          QJsonObject manualBody;
-          manualBody["report_id"] = reportId;
-          manualBody["title"] = title;
-          manualBody["run_id"] = m_runId;
-          manualBody["generated_by"] = m_username;
-
-          m_api->post("/api/reports", manualBody, 10000,
-            [this, reportId, title](const QJsonObject &r2) {
-              if (r2["status"].toString() == "ok") {
-                m_latestReportId = r2["data"].toObject()["report_id"].toString(reportId);
-              }
-              updateStageRow(4, "[OK]", 100, QStringLiteral("已完成"), "#22c55e");
-              setStage(Done);
-              m_reportTitleLabel->setText(title);
-              m_reportTitleLabel->setStyleSheet("font-size: 15px; color: #1a2a3a;");
-              m_viewReportBtn->setVisible(true);
-              loadHistory();
-            });
-          return;
-        }
-
-        m_latestReportId = rid;
-        updateStageRow(4, "[OK]", 100, QStringLiteral("已完成"), "#22c55e");
-        setStage(Done);
-        m_reportTitleLabel->setText(title);
-        m_reportTitleLabel->setStyleSheet("font-size: 15px; color: #1a2a3a;");
-        m_viewReportBtn->setVisible(true);
-        loadHistory();
+        // Plan ready; execution still requires the user.
+        setStage(PlanReady);
       });
   }
 }
@@ -1031,75 +1139,118 @@ void SimpleMainWindow::advanceStage()
 
 void SimpleMainWindow::onPollRun()
 {
-  if (m_runId.isEmpty()) return;
-
-  m_api->get("/api/runs/" + m_runId, 5000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
-    auto d = res["data"].toObject();
-    QString status = d["status"].toString();
-
-    if (status == "COMPLETED") {
-      updateStageRow(3, "[OK]", 100, QStringLiteral("已完成"), "#22c55e");
+  if (m_currentStage != ExecAttack || m_runId.isEmpty() || m_runPollInFlight) return;
+  m_runPollInFlight = true;
+  const int revision = m_workflowRevision;
+  const QString runId = m_runId;
+  QPointer<SimpleMainWindow> self(this);
+  m_api->get("/api/runs/" + runId, 5000, [this, self, revision, runId](const QJsonObject &res) {
+    if (!self || revision != m_workflowRevision || runId != m_runId) return;
+    m_runPollInFlight = false;
+    if (m_currentStage != ExecAttack) return;
+    if (res["status"].toString() != "ok") {
+      updateStageRow(3, "…", 0, QStringLiteral("连接中断，重试中"), "#b45309");
+      return;
+    }
+    const auto data = res["data"].toObject();
+    const QString status = data["status"].toString();
+    if (status == "COMPLETED" || status == "FAILED" || status == "ABORTED" || status == "CANCELLED") {
       m_pollTimer->stop();
-      advanceStage();
-    } else if (status == "FAILED" || status == "ABORTED") {
-      updateStageRow(3, "[X]", 0, QStringLiteral("失败"), "#ef4444");
-      m_pollTimer->stop();
-      setStage(Failed);
-    } else if (status == "RUNNING") {
-      auto steps = d["steps"].toArray();
-      int totalSteps = steps.size();
-      int completedSteps = 0;
-      for (const auto &s : steps) {
-        if (s.toObject()["success"].toInt() == 1) completedSteps++;
-      }
-      if (totalSteps > 0) {
-        int pct = 30 + (completedSteps * 70 / totalSteps);
-        QString stepInfo = QString("步骤 %1/%2").arg(completedSteps).arg(totalSteps);
-        updateStageRow(3, ">>", pct, stepInfo, "#2563eb");
+      m_runTerminalStatus = status;
+      if (status == "COMPLETED") {
+        updateStageRow(3, "✓", 100, QStringLiteral("已完成"), "#22c55e");
+        onGenerateCurrentReport();
       } else {
-        updateStageRow(3, ">>", 40, QStringLiteral("执行中..."), "#2563eb");
+        showStageError(3, data["final_summary"].toString(QStringLiteral("执行失败或已中止，可查看执行详情并生成本次结果报告")));
+        updateStageRow(4, "—", 0, QStringLiteral("可生成结果报告"), "#b45309");
+        setStage(Failed);
+        m_navList->setCurrentRow(0);
       }
+      return;
+    }
+    const auto steps = data["steps"].toArray();
+    int finished = 0;
+    for (const auto &step : steps) {
+      const auto success = step.toObject()["success"];
+      if (success.isBool() || success.isDouble()) ++finished;
+    }
+    updateStageRow(3, "…", steps.isEmpty() ? 0 : finished * 100 / steps.size(),
+      status == "PENDING" ? QStringLiteral("等待执行") :
+      steps.isEmpty() ? QStringLiteral("执行中…") : QStringLiteral("已结束 %1/%2 步").arg(finished).arg(steps.size()), "#2563eb");
+  });
+}
 
-      // Show ReAct thoughts from step data
-      for (const auto &s : steps) {
-        auto stepObj = s.toObject();
-        QString thought = stepObj["react_thought"].toString();
-        int stepIdx = stepObj["step_index"].toInt();
-        if (!thought.isEmpty() && stepIdx >= 0 && stepIdx < 5) {
-          m_stages[3].thoughtLabel->setText(QStringLiteral("💭 ") + thought);
-          m_stages[3].thoughtLabel->show();
-        }
+void SimpleMainWindow::onGenerateCurrentReport()
+{
+  if (m_runId.isEmpty() || m_runTerminalStatus.isEmpty() || m_currentStage == GenReport) return;
+  if (!m_latestReportId.isEmpty()) { onViewReport(); return; }
+  setStage(GenReport);
+  m_stages[4].thoughtLabel->hide();
+  updateStageRow(4, "…", 0, QStringLiteral("正在生成报告…"), "#2563eb");
+  const int revision = m_workflowRevision;
+  const QString runId = m_runId;
+  const QString title = m_target + QStringLiteral(" 渗透测试报告");
+  QPointer<SimpleMainWindow> self(this);
+  // Reconcile an earlier timed-out request before creating another report.
+  m_api->get("/api/reports", 5000, [this, self, revision, runId, title](const QJsonObject &list) {
+    if (!self || revision != m_workflowRevision || runId != m_runId) return;
+    if (list["status"].toString() != "ok") {
+      showStageError(4, QStringLiteral("无法核对已有报告，请恢复连接后重试；不会重复执行测试。"));
+      setStage(Failed);
+      return;
+    }
+    for (const auto &value : list["data"].toArray()) {
+      const auto report = value.toObject();
+      if (report["run_id"].toString() == runId && !report["report_id"].toString().isEmpty()) {
+        finishReport(report["report_id"].toString(), report["title"].toString(title));
+        return;
       }
     }
+    m_api->post("/api/reports/generate", {{"run_id", runId}, {"title", title}}, 30000,
+      [this, self, revision, runId, title](const QJsonObject &res) {
+        if (!self || revision != m_workflowRevision || runId != m_runId) return;
+        const QString id = res["data"].toObject()["report_id"].toString();
+        if (res["status"].toString() != "ok" || id.isEmpty()) {
+          showStageError(4, res["error"].toObject()["message"].toString(QStringLiteral("报告未生成，请重试；本次执行结果已保留")));
+          setStage(Failed);
+          m_navList->setCurrentRow(0);
+          return;
+        }
+        finishReport(id, title);
+      });
   });
+}
+
+void SimpleMainWindow::finishReport(const QString &reportId, const QString &title)
+{
+  m_latestReportId = reportId;
+  updateStageRow(4, "✓", 100, QStringLiteral("报告已生成"), "#22c55e");
+  m_reportTitleLabel->setText(title);
+  m_reportTitleLabel->setStyleSheet("font-size:15px; color:#1a2a3a;");
+  m_viewReportBtn->show();
+  setStage(Done);
+  loadHistory();
+  // Keep the completed task visible; its report opens by exact ID.
+  m_navList->setCurrentRow(0);
+  statusBar()->showMessage(QStringLiteral("本次报告已生成，点击“查看本次报告”直接预览或导出。"), 10000);
 }
 
 // ── Retry current stage ───────────────────────────────────────────────
 
 void SimpleMainWindow::onRetryStage()
 {
-  if (m_currentStage == Failed) {
-    m_startBtn->setEnabled(true);
-    m_startBtn->setText(QStringLiteral("一键开始测试"));
-    m_retryBtn->setVisible(false);
-    setStage(Idle);
-
-    for (int i = 0; i < 5; i++) {
-      m_stages[i].iconLabel->setText(QStringLiteral("--"));
-      m_stages[i].iconLabel->setStyleSheet("font-size: 15px; color: #94a3b8;");
-      m_stages[i].progress->setValue(0);
-      m_stages[i].progress->setStyleSheet(
-        "QProgressBar { background: #e2e8f0; border: none; border-radius: 9px; }"
-        "QProgressBar::chunk { background: #94a3b8; border-radius: 9px; }");
-      m_stages[i].statusLabel->setText(QStringLiteral("等待中"));
-      m_stages[i].statusLabel->setStyleSheet("font-size: 14px; color: #94a3b8;");
-      m_stages[i].thoughtLabel->clear();
-      m_stages[i].thoughtLabel->hide();
-    }
-
-    onStartTest();
+  if (m_currentStage != Failed) return;
+  if (m_failedStage == GenReport) { onGenerateCurrentReport(); return; }
+  if (m_failedStage == ExecAttack) return;
+  if (m_failedStage == GenPlaybook) {
+    m_stages[2].thoughtLabel->clear();
+    m_stages[2].thoughtLabel->hide();
+    // Reuse completed scans rather than creating duplicates.
+    m_currentStage = PortScan;
+    advanceStage();
+    return;
   }
+  onStartTest();
 }
 
 // ── View playbook details (inline expand/collapse) ───────────────────
@@ -1260,146 +1411,17 @@ void SimpleMainWindow::onViewPlaybook()
 void SimpleMainWindow::onViewReport()
 {
   if (m_latestReportId.isEmpty()) return;
-
-  m_api->get("/api/reports/" + m_latestReportId, 5000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") {
-      QMessageBox::warning(this, QStringLiteral("错误"), QStringLiteral("无法加载报告"));
-      return;
-    }
-
-    auto data = res["data"].toObject();
-    QDialog dlg(this);
-    dlg.setWindowTitle(QStringLiteral("测试报告"));
-    dlg.resize(750, 550);
-    auto *layout = new QVBoxLayout(&dlg);
-    layout->setSpacing(16);
-    layout->setContentsMargins(28, 24, 28, 24);
-
-    auto *title = new QLabel(data["title"].toString());
-    title->setStyleSheet("font-size: 20px; font-weight: bold; color: #1a2a3a;");
-    title->setWordWrap(true);
-    layout->addWidget(title);
-
-    auto *timeLabel = new QLabel(QStringLiteral("生成时间: ") + data["created_at"].toString());
-    timeLabel->setStyleSheet("font-size: 14px; color: #64748b;");
-    layout->addWidget(timeLabel);
-
-    auto *sep = new QFrame;
-    sep->setFixedHeight(1);
-    sep->setStyleSheet("background: #dce1e8;");
-    layout->addWidget(sep);
-
-    auto *content = new QTextEdit;
-    content->setReadOnly(true);
-    content->setStyleSheet(
-      "QTextEdit { font-size: 14px; background: #fafbfc; "
-      "border: 1px solid #dce1e8; border-radius: 8px; padding: 16px; }");
-
-    QString contentStr = data["content"].toString();
-    if (!contentStr.isEmpty()) {
-      QJsonParseError err;
-      auto doc = QJsonDocument::fromJson(contentStr.toUtf8(), &err);
-      if (err.error == QJsonParseError::NoError) {
-        content->setText(doc.toJson(QJsonDocument::Indented));
-      } else {
-        content->setText(contentStr);
-      }
-    } else {
-      content->setText(
-        QStringLiteral("目标: ") + m_target + "\n" +
-        QStringLiteral("报告编号：") + m_latestReportId + "\n" +
-        QStringLiteral("执行编号：") + data["run_id"].toString() + "\n" +
-        QStringLiteral("状态: ") + data["status"].toString());
-    }
-    layout->addWidget(content, 1);
-
-    auto *closeBtn = new QPushButton(QStringLiteral("关闭"));
-    closeBtn->setProperty("primary", true);
-    closeBtn->setFixedSize(120, 40);
-    connect(closeBtn, &QPushButton::clicked, &dlg, &QDialog::accept);
-    auto *btnRow = new QHBoxLayout;
-    btnRow->addStretch();
-    btnRow->addWidget(closeBtn);
-    btnRow->addStretch();
-    layout->addLayout(btnRow);
-
-    dlg.exec();
-  });
+  m_navList->setCurrentRow(5);
+  m_evaluatePage->showReport(m_latestReportId);
 }
-
-// ── View history report ───────────────────────────────────────────────
 
 void SimpleMainWindow::onViewHistoryReport(int row, int col)
 {
   if (col != 3) return;
-  auto *item = m_historyTable->item(row, 3);
-  if (!item) return;
-  QString reportId = item->data(Qt::UserRole).toString();
-  if (reportId.isEmpty()) return;
-
-  m_api->get("/api/reports/" + reportId, 5000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") {
-      QMessageBox::warning(this, QStringLiteral("错误"), QStringLiteral("无法加载报告"));
-      return;
-    }
-
-    auto data = res["data"].toObject();
-    QDialog dlg(this);
-    dlg.setWindowTitle(QStringLiteral("测试报告"));
-    dlg.resize(750, 550);
-    auto *layout = new QVBoxLayout(&dlg);
-    layout->setSpacing(16);
-    layout->setContentsMargins(28, 24, 28, 24);
-
-    auto *title = new QLabel(data["title"].toString());
-    title->setStyleSheet("font-size: 20px; font-weight: bold; color: #1a2a3a;");
-    title->setWordWrap(true);
-    layout->addWidget(title);
-
-    auto *timeLabel = new QLabel(QStringLiteral("生成时间: ") + data["created_at"].toString());
-    timeLabel->setStyleSheet("font-size: 14px; color: #64748b;");
-    layout->addWidget(timeLabel);
-
-    auto *sep = new QFrame;
-    sep->setFixedHeight(1);
-    sep->setStyleSheet("background: #dce1e8;");
-    layout->addWidget(sep);
-
-    auto *content = new QTextEdit;
-    content->setReadOnly(true);
-    content->setStyleSheet(
-      "QTextEdit { font-size: 14px; background: #fafbfc; "
-      "border: 1px solid #dce1e8; border-radius: 8px; padding: 16px; }");
-
-    QString contentStr = data["content"].toString();
-    if (!contentStr.isEmpty()) {
-      QJsonParseError err;
-      auto doc = QJsonDocument::fromJson(contentStr.toUtf8(), &err);
-      if (err.error == QJsonParseError::NoError) {
-        content->setText(doc.toJson(QJsonDocument::Indented));
-      } else {
-        content->setText(contentStr);
-      }
-    } else {
-      content->setText(
-        QStringLiteral("报告编号：") + data["report_id"].toString() + "\n" +
-        QStringLiteral("执行编号：") + data["run_id"].toString() + "\n" +
-        QStringLiteral("状态: ") + data["status"].toString());
-    }
-    layout->addWidget(content, 1);
-
-    auto *closeBtn = new QPushButton(QStringLiteral("关闭"));
-    closeBtn->setProperty("primary", true);
-    closeBtn->setFixedSize(120, 40);
-    connect(closeBtn, &QPushButton::clicked, &dlg, &QDialog::accept);
-    auto *btnRow = new QHBoxLayout;
-    btnRow->addStretch();
-    btnRow->addWidget(closeBtn);
-    btnRow->addStretch();
-    layout->addLayout(btnRow);
-
-    dlg.exec();
-  });
+  const auto *item = m_historyTable->item(row, 3);
+  if (!item || item->data(Qt::UserRole).toString().isEmpty()) return;
+  m_navList->setCurrentRow(5);
+  m_evaluatePage->showReport(item->data(Qt::UserRole).toString());
 }
 
 // ── Load history ──────────────────────────────────────────────────────

@@ -71,6 +71,8 @@ private:
   void setupWorkbenchView();
   void loadFlows();
   void loadFlowDetail(const QString &pipelineId);
+  void approveFlow(const QString &preferredPlaybookId);
+  bool m_approvalInFlight = false;
 
   QString statusText(const QString &status) const;
   QString statusIcon(const QString &status) const;
@@ -97,13 +99,13 @@ private:
   QLabel *m_targetLabel;
   QLabel *m_statusLabel;
   QPushButton *m_approveBtn;
+  QPushButton *m_resultBtn;
   QPushButton *m_moreBtn;       // ⋯ dropdown (cancel / delete / report)
   QAction *m_cancelAction;
   QAction *m_deleteAction;
   QAction *m_reportAction;
   StepIndicator *m_stepIndicator;   // pipeline 四阶段进度（自绘节点+连线+摘要）
   LiveActivityPanel *m_activityPanel;
-  QSplitter *m_contentSplitter;     // left-right splitter: AI reasoning | stage tabs
   QTextBrowser *m_reasoningPanel;   // left-column AI reasoning stream
 
   // Stage tabs (拓扑/扫描/攻击/评估) embedded in the workbench
@@ -114,6 +116,8 @@ private:
   EvaluatePage *m_evalTab;
 
   QString m_selectedPipelineId;
+  QString m_lastDetailPipelineId;
+  QJsonObject m_lastDisplayedDetail;
   // Dedup guards: track the last run/playbook loaded into the attack tab,
   // so repeated pipeline events don't re-call selectPlaybook/showRun (which
   // would reset the user's manual combo selection and yank the sub-tab).

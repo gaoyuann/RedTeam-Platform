@@ -2,6 +2,7 @@
 #include "../ApiClient.h"
 #include "../Theme.h"
 #include "../UiUtil.h"
+#include "StatsSummaryCard.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -20,6 +21,9 @@
 #include <QFileInfo>
 #include <QStackedWidget>
 #include <QDir>
+#include <QPointer>
+#include <QDialog>
+#include <QGridLayout>
 
 EvaluatePage::EvaluatePage(ApiClient *api, const QString &role, const QString &username, QWidget *parent)
     : QWidget(parent), m_api(api), m_previewMode(false) {
@@ -35,11 +39,11 @@ void EvaluatePage::setTarget(const QString &target) {
   (void)target;
 }
 
-void EvaluatePage::showRun(const QString &runId) {
+void EvaluatePage::showRun(const QString &runId, bool focus) {
   if (runId.isEmpty()) return;
   // Populate the run combo, then select the target run (unlike onLoadRuns
   // which auto-selects index 0).  Used by FlowPage when a pipeline completes.
-  m_api->get("/api/runs", 5000, [this, runId](const QJsonObject &res) {
+  m_api->get("/api/runs", 5000, [this, runId, focus](const QJsonObject &res) {
     if (res["status"].toString() != "ok") return;
     m_runCombo->clear();
     auto arr = res["data"].toArray();
@@ -62,7 +66,7 @@ void EvaluatePage::showRun(const QString &runId) {
     // Select the pipeline's run and trigger grading
     if (targetIndex >= 0) {
       m_runCombo->setCurrentIndex(targetIndex);
-      m_tabs->setCurrentIndex(0);  // 切到"执行评分"子页
+      if (focus) m_tabs->setCurrentIndex(0);  // Only explicit navigation changes tabs.
       onGradeRun();
     }
   });
@@ -73,35 +77,57 @@ void EvaluatePage::showReports() {
   onRefreshReports();
 }
 
+void EvaluatePage::showReport(const QString &reportId) {
+  if (reportId.isEmpty()) return;
+  m_pendingReportId = reportId;
+  m_tabs->setCurrentIndex(1);
+  onRefreshReports();
+}
+
 void EvaluatePage::setupUI() {
   setStyleSheet(Theme::PageStyle);
 
-  auto *scrollArea = new QScrollArea(this);
-  scrollArea->setWidgetResizable(true);
-  scrollArea->setFrameShape(QFrame::NoFrame);
-  auto *container = new QWidget;
-  auto *layout = new QVBoxLayout(container);
+  auto *layout = new QVBoxLayout(this);
+  layout->setContentsMargins(12, 8, 12, 8);
   m_tabs = new QTabWidget;
 
   // ── Tab 1: Grading ────────────────────────────────────────────────
   auto *gradeW = new QWidget;
   auto *gradeL = new QVBoxLayout(gradeW);
 
+  // 攻击结果统计卡（自绘）— 演示④
+  m_statsCard = new StatsSummaryCard(gradeW);
+  auto *statsDialog = new QDialog(this);
+  statsDialog->setObjectName("evaluationStats");
+  statsDialog->setWindowTitle(QStringLiteral("执行状态统计"));
+  statsDialog->resize(820, 280);
+  auto *statsLayout = new QVBoxLayout(statsDialog);
+  statsLayout->addWidget(m_statsCard);
+  auto *statsButton = new QPushButton(QStringLiteral("执行统计"));
+  connect(statsButton, &QPushButton::clicked, this, [statsDialog]() {
+    statsDialog->show(); statsDialog->raise();
+  });
+
   auto *selectH = new QHBoxLayout;
   selectH->addWidget(new QLabel("执行记录:"));
   m_runCombo = new QComboBox;
+  m_runCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+  m_runCombo->setMinimumContentsLength(16);
   selectH->addWidget(m_runCombo, 1);
   m_gradeBtn = new QPushButton("评分");
   m_gradeBtn->setProperty("primary", true);
   selectH->addWidget(m_gradeBtn);
+  selectH->addWidget(statsButton);
   gradeL->addLayout(selectH);
   connect(m_gradeBtn, &QPushButton::clicked, this, &EvaluatePage::onGradeRun);
 
   m_scoreLabel = new QLabel("选择执行记录后点击评分");
   m_scoreLabel->setStyleSheet(Theme::SectionStyle);
+  m_scoreLabel->setWordWrap(true);
   gradeL->addWidget(m_scoreLabel);
 
   m_mitreLabel = new QLabel;
+  m_mitreLabel->setWordWrap(true);
   gradeL->addWidget(m_mitreLabel);
 
   m_stepTable = new QTableWidget(0, 5);
@@ -111,7 +137,7 @@ void EvaluatePage::setupUI() {
   m_stepTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_stepTable->setSortingEnabled(true);
   m_stepTable->setContextMenuPolicy(Qt::CustomContextMenu);
-  gradeL->addWidget(m_stepTable);
+  gradeL->addWidget(m_stepTable, 1);
 
   m_genReportBtn = new QPushButton("生成测试报告");
   m_genReportBtn->setProperty("primary", true);
@@ -133,7 +159,7 @@ void EvaluatePage::setupUI() {
   m_reportTable->setSelectionBehavior(QAbstractItemView::SelectRows);
   m_reportTable->setSortingEnabled(true);
   m_reportTable->setContextMenuPolicy(Qt::CustomContextMenu);
-  rptL->addWidget(m_reportTable, 1);
+
   connect(m_reportTable, &QTableWidget::cellClicked, this, &EvaluatePage::onReportClicked);
 
   // Report detail: stacked widget with JSON source and HTML preview
@@ -144,7 +170,14 @@ void EvaluatePage::setupUI() {
 
   m_reportPreview = new QTextBrowser;
   m_reportStack->addWidget(m_reportPreview);  // index 1 = HTML preview
-  rptL->addWidget(m_reportStack, 1);
+  auto *reportSplit = new QSplitter(Qt::Vertical);
+  reportSplit->setChildrenCollapsible(false);
+  reportSplit->addWidget(m_reportTable);
+  reportSplit->addWidget(m_reportStack);
+  m_reportTable->setMinimumHeight(96);
+  m_reportStack->setMinimumHeight(100);
+  reportSplit->setSizes({140, 240});
+  rptL->addWidget(reportSplit, 1);
 
   // Report action buttons
   auto *rptBtnH = new QHBoxLayout;
@@ -196,6 +229,8 @@ void EvaluatePage::setupUI() {
   auto *evSelectH = new QHBoxLayout;
   evSelectH->addWidget(new QLabel("执行记录:"));
   m_evidenceRunCombo = new QComboBox;
+  m_evidenceRunCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+  m_evidenceRunCombo->setMinimumContentsLength(16);
   evSelectH->addWidget(m_evidenceRunCombo, 1);
   evL->addLayout(evSelectH);
   connect(m_evidenceRunCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -209,13 +244,17 @@ void EvaluatePage::setupUI() {
   m_evidenceTable->setSelectionBehavior(QAbstractItemView::SelectRows);
   m_evidenceTable->setSortingEnabled(true);
   m_evidenceTable->setContextMenuPolicy(Qt::CustomContextMenu);
-  evL->addWidget(m_evidenceTable, 1);
+
   connect(m_evidenceTable, &QTableWidget::cellClicked, this, &EvaluatePage::onEvidenceClicked);
 
   m_evidenceDetail = new QTextEdit;
   m_evidenceDetail->setReadOnly(true);
   m_evidenceDetail->setPlaceholderText("点击证据行查看完整数据");
-  evL->addWidget(m_evidenceDetail, 1);
+  auto *evidenceSplit = new QSplitter(Qt::Vertical);
+  evidenceSplit->setChildrenCollapsible(false);
+  evidenceSplit->addWidget(m_evidenceTable);
+  evidenceSplit->addWidget(m_evidenceDetail);
+  evL->addWidget(evidenceSplit, 1);
 
   m_tabs->addTab(evW, "攻击证据");
 
@@ -257,42 +296,42 @@ void EvaluatePage::setupUI() {
 
   // ── Right: config + status + analysis results ─────────────────────
   auto *capRightW = new QWidget;
-  auto *capRightL = new QVBoxLayout(capRightW);
+  auto *capRightOuter = new QVBoxLayout(capRightW);
+  capRightOuter->setContentsMargins(0, 0, 0, 0);
+  auto *captureDetails = new QTabWidget;
+  captureDetails->setObjectName("captureDetails");
+  capRightOuter->addWidget(captureDetails);
+  auto *captureConfig = new QWidget;
+  auto *capRightL = new QVBoxLayout(captureConfig);
+  auto *captureAnalysis = new QWidget;
+  auto *analysisLayout = new QVBoxLayout(captureAnalysis);
 
-  // Section 1: Capture Configuration
-  auto *cfgGroup = new QLabel("── 捕获配置 ──");
-  cfgGroup->setStyleSheet(Theme::SectionStyle);
-  capRightL->addWidget(cfgGroup);
-
-  auto *ifH = new QHBoxLayout;
-  ifH->addWidget(new QLabel("网络接口:"));
+  auto *configGrid = new QGridLayout;
+  configGrid->setVerticalSpacing(4);
+  configGrid->addWidget(new QLabel("网络接口"), 0, 0);
+  configGrid->addWidget(new QLabel("模式"), 0, 1);
   m_interfaceCombo = new QComboBox;
   m_interfaceCombo->addItem("任意接口", "any");
+  m_interfaceCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+  m_interfaceCombo->setMinimumContentsLength(8);
   onLoadInterfaces();
-  ifH->addWidget(m_interfaceCombo, 1);
-  capRightL->addLayout(ifH);
-
-  auto *bpfH = new QHBoxLayout;
-  bpfH->addWidget(new QLabel("BPF过滤:"));
+  m_captureTypeCombo = new QComboBox;
+  m_captureTypeCombo->addItems({"定时", "手动停止"});
+  configGrid->addWidget(m_interfaceCombo, 1, 0);
+  configGrid->addWidget(m_captureTypeCombo, 1, 1);
+  configGrid->addWidget(new QLabel("BPF 过滤"), 2, 0);
+  configGrid->addWidget(new QLabel("时长（秒）"), 2, 1);
   m_bpfInput = new QLineEdit;
-  m_bpfInput->setPlaceholderText("例: port 80 or port 443");
-  bpfH->addWidget(m_bpfInput, 1);
-  capRightL->addLayout(bpfH);
-
-  auto *durH = new QHBoxLayout;
-  durH->addWidget(new QLabel("时长(秒):"));
+  m_bpfInput->setPlaceholderText("例: port 443");
   m_durationSpin = new QSpinBox;
   m_durationSpin->setRange(5, 3600);
   m_durationSpin->setValue(60);
-  durH->addWidget(m_durationSpin, 1);
-  capRightL->addLayout(durH);
-
-  auto *typeH = new QHBoxLayout;
-  typeH->addWidget(new QLabel("模式:"));
-  m_captureTypeCombo = new QComboBox;
-  m_captureTypeCombo->addItems({"定时", "手动停止"});
-  typeH->addWidget(m_captureTypeCombo, 1);
-  capRightL->addLayout(typeH);
+  configGrid->addWidget(m_bpfInput, 3, 0);
+  configGrid->addWidget(m_durationSpin, 3, 1);
+  configGrid->setColumnStretch(0, 1);
+  configGrid->setColumnStretch(1, 1);
+  capRightL->setSpacing(6);
+  capRightL->addLayout(configGrid);
 
   auto *actH = new QHBoxLayout;
   m_startCaptureBtn = new QPushButton("▶ 开始捕获");
@@ -306,21 +345,10 @@ void EvaluatePage::setupUI() {
   connect(m_startCaptureBtn, &QPushButton::clicked, this, &EvaluatePage::onStartCapture);
   connect(m_stopCaptureBtn, &QPushButton::clicked, this, &EvaluatePage::onStopCapture);
 
-  // Section 2: Capture Status (real-time)
-  capRightL->addSpacing(8);
-  auto *statusGroup = new QLabel("── 捕获状态 ──");
-  statusGroup->setStyleSheet(Theme::SectionStyle);
-  capRightL->addWidget(statusGroup);
-
   m_captureStatusLabel = new QLabel("选择左侧捕获任务查看详情");
+  m_captureStatusLabel->setWordWrap(true);
   m_captureStatusLabel->setStyleSheet("font-size: 13px; padding: 8px;");
   capRightL->addWidget(m_captureStatusLabel);
-
-  // Section 3: Analysis Results (auto-loaded on selection)
-  capRightL->addSpacing(8);
-  auto *anaGroup = new QLabel("── 分析结果 ──");
-  anaGroup->setStyleSheet(Theme::SectionStyle);
-  capRightL->addWidget(anaGroup);
 
   auto *anaBtnH = new QHBoxLayout;
   m_runAnalysisBtn = new QPushButton("🔍 分析");
@@ -328,7 +356,7 @@ void EvaluatePage::setupUI() {
   m_runAnalysisBtn->setEnabled(false);
   anaBtnH->addWidget(m_runAnalysisBtn);
   anaBtnH->addStretch();
-  capRightL->addLayout(anaBtnH);
+  analysisLayout->addLayout(anaBtnH);
   connect(m_runAnalysisBtn, &QPushButton::clicked, this, &EvaluatePage::onRunAnalysis);
 
   m_analysisResultTable = new QTableWidget(0, 4);
@@ -338,23 +366,27 @@ void EvaluatePage::setupUI() {
   m_analysisResultTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_analysisResultTable->setSelectionBehavior(QAbstractItemView::SelectRows);
   m_analysisResultTable->setSortingEnabled(true);
-  m_analysisResultTable->setMaximumHeight(200);
-  capRightL->addWidget(m_analysisResultTable);
+  m_analysisResultTable->setMinimumHeight(100);
+  analysisLayout->addWidget(m_analysisResultTable, 1);
   connect(m_analysisResultTable, &QTableWidget::cellClicked, this, &EvaluatePage::onAnalysisResultClicked);
 
   m_analysisDetail = new QTextEdit;
   m_analysisDetail->setReadOnly(true);
   m_analysisDetail->setPlaceholderText("点击分析结果行查看详情");
-  m_analysisDetail->setMaximumHeight(200);
-  capRightL->addWidget(m_analysisDetail);
+  m_analysisDetail->setMinimumHeight(70);
+  analysisLayout->addWidget(m_analysisDetail, 1);
 
   capRightL->addStretch();
+  captureDetails->addTab(captureConfig, QStringLiteral("捕获配置"));
+  captureDetails->addTab(captureAnalysis, QStringLiteral("分析结果"));
 
   capSplitter->addWidget(capLeftW);
   capSplitter->addWidget(capRightW);
-  capSplitter->setStretchFactor(0, 3);
-  capSplitter->setStretchFactor(1, 2);
-  capOuterL->addWidget(capSplitter);
+  capSplitter->setChildrenCollapsible(false);
+  capSplitter->setStretchFactor(0, 1);
+  capSplitter->setStretchFactor(1, 1);
+  capSplitter->setSizes({330, 470});
+  capOuterL->addWidget(capSplitter, 1);
 
   // Poll timer for capture status
   m_capturePollTimer = new QTimer(this);
@@ -428,9 +460,16 @@ void EvaluatePage::setupUI() {
 
   layout->addWidget(m_tabs);
 
-  scrollArea->setWidget(container);
-  auto *outerLayout = new QVBoxLayout(this);
-  outerLayout->addWidget(scrollArea);
+  for (auto *table : {m_stepTable, m_reportTable, m_evidenceTable,
+                      m_captureTaskTable, m_analysisResultTable}) {
+    table->verticalHeader()->hide();
+    table->horizontalHeader()->setStretchLastSection(false);
+    table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    table->horizontalHeader()->setMinimumSectionSize(42);
+    table->setWordWrap(false);
+    table->setTextElideMode(Qt::ElideRight);
+  }
+  m_captureTaskTable->setColumnHidden(0, true);
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -442,6 +481,7 @@ void EvaluatePage::onLoadRuns() {
     if (res["status"].toString() != "ok") return;
     m_runCombo->clear();
     auto arr = res["data"].toArray();
+    m_statsCard->setRuns(arr);  // 统计卡与下拉框共用同一份记录
     for (int i = 0; i < arr.size(); i++) {
       auto r = arr[i].toObject();
       QString status = r["status"].toString();
@@ -487,6 +527,8 @@ void EvaluatePage::onGradeRun() {
         .arg(mitre["score"].toInt()));
 
     auto breakdown = d["breakdown"].toArray();
+    const bool sorting = m_stepTable->isSortingEnabled();
+    m_stepTable->setSortingEnabled(false);
     m_stepTable->setRowCount(breakdown.size());
     for (int i = 0; i < breakdown.size(); i++) {
       auto s = breakdown[i].toObject();
@@ -496,8 +538,9 @@ void EvaluatePage::onGradeRun() {
       m_stepTable->setItem(i, 3, new QTableWidgetItem(QString::number(s["earned"].toInt())));
       m_stepTable->setItem(i, 4, new QTableWidgetItem(s["success"].toBool() ? "通过" : "失败"));
     }
-    m_stepTable->resizeColumnsToContents();
-    m_stepTable->horizontalHeader()->setStretchLastSection(true);
+
+
+    m_stepTable->setSortingEnabled(sorting);
     m_genReportBtn->setEnabled(true);
   });
 }
@@ -526,9 +569,17 @@ void EvaluatePage::onGenerateReport() {
 // ════════════════════════════════════════════════════════════════════════
 
 void EvaluatePage::onRefreshReports() {
-  m_api->get("/api/reports", 5000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
+  const int revision = ++m_reportListRevision;
+  QPointer<EvaluatePage> self(this);
+  m_api->get("/api/reports", 5000, [this, self, revision](const QJsonObject &res) {
+    if (!self || revision != m_reportListRevision) return;
+    if (res["status"].toString() != "ok") {
+      m_reportDetail->setPlainText(QStringLiteral("报告列表加载失败，请刷新后重试。"));
+      return;
+    }
     auto arr = res["data"].toArray();
+    const bool sorting = m_reportTable->isSortingEnabled();
+    m_reportTable->setSortingEnabled(false);
     m_reportTable->setRowCount(arr.size());
     for (int i = 0; i < arr.size(); i++) {
       auto r = arr[i].toObject();
@@ -545,8 +596,22 @@ void EvaluatePage::onRefreshReports() {
       m_reportTable->setItem(i, 3, new QTableWidgetItem(rptStatus));
       m_reportTable->setItem(i, 4, new QTableWidgetItem(r["created_at"].toString()));
     }
-    m_reportTable->resizeColumnsToContents();
-    m_reportTable->horizontalHeader()->setStretchLastSection(true);
+    m_reportTable->setSortingEnabled(sorting);
+
+
+    if (!m_pendingReportId.isEmpty()) {
+      const QString requested = m_pendingReportId;
+      m_pendingReportId.clear();
+      for (int row = 0; row < m_reportTable->rowCount(); ++row) {
+        if (m_reportTable->item(row, 0)->text() != requested) continue;
+        m_reportTable->selectRow(row);
+        m_reportTable->scrollToItem(m_reportTable->item(row, 0));
+        onReportClicked(row, 0);
+        onPreviewReport();
+        return;
+      }
+      m_reportDetail->setPlainText(QStringLiteral("未找到本次报告，可能已被删除。请刷新后重试。"));
+    }
   });
 }
 
@@ -567,7 +632,9 @@ void EvaluatePage::onReportClicked(int row, int) {
     m_previewBtn->setText("预览报告");
   }
 
-  m_api->get("/api/reports/" + id, 5000, [this](const QJsonObject &res) {
+  QPointer<EvaluatePage> self(this);
+  m_api->get("/api/reports/" + id, 5000, [this, self, id](const QJsonObject &res) {
+    if (!self || m_selectedReportId != id) return;
     if (res["status"].toString() != "ok") return;
     auto d = res["data"].toObject();
     QString content = d["content"].toString();
@@ -795,7 +862,9 @@ void EvaluatePage::onPreviewReport() {
   m_previewBtn->setText("加载中...");
 
   QString url = QString("/api/reports/%1/export?format=html").arg(reportId);
-  m_api->download(url, 15000, [this, reportId](bool ok, const QByteArray &data, const QString &) {
+  QPointer<EvaluatePage> self(this);
+  m_api->download(url, 15000, [this, self, reportId](bool ok, const QByteArray &data, const QString &) {
+    if (!self) return;
     // 用户在加载期间切换了报告，丢弃这次过期结果，不触碰 UI（由当前选中报告的决定生效）
     if (m_selectedReportId != reportId) return;
 
@@ -852,18 +921,22 @@ void EvaluatePage::onEvidenceRunSelected(int index) {
     auto d = res["data"].toObject();
     auto evidence = d["evidence"].toArray();
 
+    const bool sorting = m_evidenceTable->isSortingEnabled();
+    m_evidenceTable->setSortingEnabled(false);
     m_evidenceTable->setRowCount(evidence.size());
     for (int i = 0; i < evidence.size(); i++) {
       auto e = evidence[i].toObject();
       m_evidenceTable->setItem(i, 0, new QTableWidgetItem(QString::number(e["step_index"].toInt())));
+      m_evidenceTable->item(i, 0)->setData(Qt::UserRole, e);
       m_evidenceTable->setItem(i, 1, new QTableWidgetItem(e["evidence_type"].toString()));
       m_evidenceTable->setItem(i, 2, new QTableWidgetItem(e["evidence_data"].toString().left(200)));
       m_evidenceTable->setItem(i, 3, new QTableWidgetItem(e["mitre_hits"].toString().left(150)));
       m_evidenceTable->setItem(i, 4, new QTableWidgetItem(e["recommendations"].toString().left(200)));
     }
-    m_evidenceTable->resizeColumnsToContents();
-    m_evidenceTable->horizontalHeader()->setStretchLastSection(true);
 
+
+
+    m_evidenceTable->setSortingEnabled(sorting);
     if (evidence.isEmpty()) {
       m_evidenceDetail->setText("该执行记录无攻击证据数据");
     } else {
@@ -873,16 +946,9 @@ void EvaluatePage::onEvidenceRunSelected(int index) {
 }
 
 void EvaluatePage::onEvidenceClicked(int row, int) {
-  if (row < 0) return;
-  QString runId = m_evidenceRunCombo->currentData().toString();
-  if (runId.isEmpty()) return;
-
-  m_api->get("/api/runs/" + runId, 5000, [this, row](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
-    auto evidence = res["data"].toObject()["evidence"].toArray();
-    if (row >= evidence.size()) return;
-
-    auto e = evidence[row].toObject();
+  auto *item = m_evidenceTable->item(row, 0);
+  if (!item) return;
+  const auto e = item->data(Qt::UserRole).toJsonObject();
     QStringList lines;
     lines << "=== 攻击证据详情 ===";
     lines << QString("步骤: %1").arg(e["step_index"].toInt());
@@ -904,9 +970,9 @@ void EvaluatePage::onEvidenceClicked(int row, int) {
       lines << "--- 工具原始输出 (stdout) ---";
       lines << e["raw_stdout"].toString().left(3000);
     }
-    m_evidenceDetail->setText(lines.join("\n"));
-  });
+    m_evidenceDetail->setPlainText(lines.join("\n"));
 }
+
 
 // ════════════════════════════════════════════════════════════════════════
 // Tab 4: Network Data Capture + Analysis (merged)
@@ -916,6 +982,8 @@ void EvaluatePage::onLoadCaptureTasks() {
   m_api->get("/api/capture-tasks", 5000, [this](const QJsonObject &res) {
     if (res["status"].toString() != "ok") return;
     auto arr = res["data"].toArray();
+    const bool sorting = m_captureTaskTable->isSortingEnabled();
+    m_captureTaskTable->setSortingEnabled(false);
     m_captureTaskTable->setRowCount(arr.size());
     bool hasRunning = false;
     for (int i = 0; i < arr.size(); i++) {
@@ -939,9 +1007,10 @@ void EvaluatePage::onLoadCaptureTasks() {
                        : QString("%1 B").arg(sizeBytes);
       m_captureTaskTable->setItem(i, 4, new QTableWidgetItem(sizeStr));
     }
-    m_captureTaskTable->resizeColumnsToContents();
-    m_captureTaskTable->horizontalHeader()->setStretchLastSection(true);
 
+
+
+    m_captureTaskTable->setSortingEnabled(sorting);
     // Start/stop polling based on running tasks
     if (hasRunning && !m_capturePollTimer->isActive()) {
       m_capturePollTimer->start();
@@ -1193,14 +1262,9 @@ void EvaluatePage::onPollAnalysisResults() {
 }
 
 void EvaluatePage::onAnalysisResultClicked(int row, int) {
-  if (row < 0 || m_selectedCaptureTaskId.isEmpty()) return;
-
-  m_api->get("/api/capture-tasks/" + m_selectedCaptureTaskId + "/analysis", 5000, [this, row](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
-    auto arr = res["data"].toArray();
-    if (row >= arr.size()) return;
-
-    auto r = arr[row].toObject();
+  auto *item = m_analysisResultTable->item(row, 0);
+  if (!item) return;
+  const auto r = item->data(Qt::UserRole).toJsonObject();
     QString dataStr = r["analysis_data"].toString();
     QJsonDocument doc = QJsonDocument::fromJson(dataStr.toUtf8());
 
@@ -1214,9 +1278,9 @@ void EvaluatePage::onAnalysisResultClicked(int row, int) {
     } else {
       lines << dataStr;
     }
-    m_analysisDetail->setText(lines.join("\n"));
-  });
+    m_analysisDetail->setPlainText(lines.join("\n"));
 }
+
 
 // ── Helper: load analysis results for a capture task ─────────────────
 void EvaluatePage::loadAnalysisForCapture(const QString &captureTaskId) {
@@ -1239,10 +1303,13 @@ void EvaluatePage::loadAnalysisForCapture(const QString &captureTaskId) {
 
 // ── Helper: populate analysis result table ───────────────────────────
 void EvaluatePage::populateAnalysisTable(const QJsonArray &arr) {
-  m_analysisResultTable->setRowCount(arr.size());
+  const bool sorting = m_analysisResultTable->isSortingEnabled();
+    m_analysisResultTable->setSortingEnabled(false);
+    m_analysisResultTable->setRowCount(arr.size());
   for (int i = 0; i < arr.size(); i++) {
     auto r = arr[i].toObject();
     m_analysisResultTable->setItem(i, 0, new QTableWidgetItem(formatAnalysisType(r["analysis_type"].toString())));
+    m_analysisResultTable->item(i, 0)->setData(Qt::UserRole, r);
     m_analysisResultTable->setItem(i, 1, new QTableWidgetItem(formatSeverity(r["severity"].toString())));
 
     // Extract a summary from analysis_data JSON
@@ -1262,9 +1329,10 @@ void EvaluatePage::populateAnalysisTable(const QJsonArray &arr) {
     }
     m_analysisResultTable->setItem(i, 2, new QTableWidgetItem(summary));
     m_analysisResultTable->setItem(i, 3, new QTableWidgetItem(r["created_at"].toString()));
-  }
-  m_analysisResultTable->resizeColumnsToContents();
-  m_analysisResultTable->horizontalHeader()->setStretchLastSection(true);
+  }    m_analysisResultTable->setSortingEnabled(sorting);
+
+
+
 }
 
 // ── Helper: format analysis type ─────────────────────────────────────

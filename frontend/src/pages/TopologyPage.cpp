@@ -1,14 +1,25 @@
+#include <QGraphicsItemGroup>
+#include <QStyleOptionGraphicsItem>
 #include "TopologyPage.h"
 #include "../ApiClient.h"
 #include "../Theme.h"
 #include "../UiUtil.h"
+#include "../AuxiliaryPanel.h"
 
 #include <QApplication>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QMenu>
+#include <QTabWidget>
 #include <QDir>
 #include <QFile>
+#include <QSaveFile>
+#include <QCryptographicHash>
+#include <QPointer>
+#include <QUrl>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QFrame>
@@ -38,6 +49,8 @@
 #include <QStackedWidget>
 #include <QTableWidget>
 #include <QTimer>
+#include <QVariantAnimation>
+#include <QEasingCurve>
 #include <QVBoxLayout>
 #include <QtMath>
 #include <QWheelEvent>
@@ -293,11 +306,41 @@ public:
         setData(0, nodeId);
         setData(1, QStringLiteral("node"));
         setZValue(2.0);
+        setTransformOriginPoint(rect.center());  // 发现动效缩放以圆心为准
     }
 
     std::function<void(const QString &, const QPointF &)> onMoveFinished;
 
 protected:
+    void paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget) override {
+        QStyleOptionGraphicsItem clean(*option);
+        clean.state &= ~QStyle::State_Selected;
+        QGraphicsEllipseItem::paint(painter, &clean, widget);
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing);
+        painter->setBrush(Qt::NoBrush);
+        if (isSelected()) {
+            painter->setPen(QPen(QColor("#60a5fa"), 3));
+            painter->drawEllipse(rect().adjusted(2, 2, -2, -2));
+        }
+        painter->setPen(QPen(QColor("#10243e"), 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        const QString kind = data(2).toString().toLower();
+        if (kind.contains("router") || kind.contains("gateway") || kind.contains("switch")) {
+            painter->drawRoundedRect(QRectF(-12, -5, 24, 12), 2, 2);
+            painter->drawLine(QPointF(-8, -5), QPointF(-8, -12));
+            painter->drawLine(QPointF(8, -5), QPointF(8, -12));
+            for (int x : {-7, -1, 5}) painter->drawLine(QPointF(x, 1), QPointF(x+2, 1));
+        } else if (kind.contains("server")) {
+            painter->drawRoundedRect(QRectF(-9, -13, 18, 26), 2, 2);
+            for (int y : {-5, 4}) painter->drawLine(QPointF(-8, y), QPointF(8, y));
+            for (int y : {-9, 0, 9}) painter->drawPoint(QPointF(-5, y));
+        } else {
+            painter->drawRoundedRect(QRectF(-12, -10, 24, 17), 2, 2);
+            painter->drawLine(QPointF(0, 7), QPointF(0, 12));
+            painter->drawLine(QPointF(-6, 12), QPointF(6, 12));
+        }
+        painter->restore();
+    }
     void mouseReleaseEvent(QGraphicsSceneMouseEvent *event) override {
         QGraphicsEllipseItem::mouseReleaseEvent(event);
         if (onMoveFinished) {
@@ -617,126 +660,210 @@ void TopologyPage::setTarget(const QString &target)
     m_targetInput->setText(target);
 }
 
+void TopologyPage::setPipelineContext(const QString &pipelineId, const QString &target,
+                                      const QStringList &scanIds, bool scanFinished)
+{
+    const bool changed = pipelineId != m_pipelineId;
+    if (changed) {
+        // Keep unsaved edits when navigating between tasks; polling never replaces them.
+        if (!m_pipelineId.isEmpty() && !m_topologyDocument.nodes.isEmpty()) {
+            applyPendingEditorChanges();
+            m_drafts.insert(m_pipelineId, {m_topologyDocument, m_loadedTopologyPath,
+                                          m_selectedScanTaskId, m_documentDirty});
+        }
+        ++m_contextGeneration;
+        m_pipelineId = pipelineId;
+        m_autoLoadAttempted = false;
+        m_selectedScanTaskId.clear();
+        m_generateBtn->setEnabled(false);
+        populateDocumentPlaceholder(QStringLiteral("正在读取任务拓扑"),
+                                     QStringLiteral("优先显示当前任务的归档；扫描结束后自动展示已有结果。"));
+        if (m_drafts.contains(pipelineId)) {
+            const auto draft = m_drafts.take(pipelineId);
+            m_topologyDocument = draft.document;
+            m_loadedTopologyPath = draft.path;
+            m_selectedScanTaskId = draft.selectedScan;
+            m_documentDirty = draft.dirty;
+            populateTopologyDocument();
+            setStatusMessage(draft.dirty ? QStringLiteral("已恢复当前任务的未保存修改。")
+                                        : QStringLiteral("已恢复当前任务的拓扑。"), infoStatusStyle());
+        }
+    }
+    if (m_pipelineScanIds != scanIds || (!m_scanFinished && scanFinished))
+        m_autoLoadAttempted = false;
+    m_pipelineScanIds = scanIds;
+    m_scanFinished = scanFinished;
+    setTarget(target);
+    m_targetInput->setReadOnly(!pipelineId.isEmpty());
+    m_createScanBtn->setEnabled(pipelineId.isEmpty());
+    if (changed || m_scanTaskTable->rowCount() == 0) {
+        // Filter the existing table immediately; a scoped refresh can populate it.
+        for (int row = m_scanTaskTable->rowCount() - 1; row >= 0; --row) {
+            auto *item = m_scanTaskTable->item(row, 0);
+            if (!item || !scanIds.contains(item->text())) m_scanTaskTable->removeRow(row);
+        }
+    }
+    if (m_documentDirty || m_editorDirty || !m_topologyDocument.nodes.isEmpty()) return;
+    if (restoreCurrentArchive()) return;
+    if (scanFinished && !scanIds.isEmpty()) {
+        loadExistingScanTopology();
+    } else {
+        populateDocumentPlaceholder(QStringLiteral("等待扫描结果"),
+                                     QStringLiteral("当前任务尚无拓扑归档，扫描结束后会自动展示。"));
+        setStatusMessage(QStringLiteral("等待当前任务的扫描结果，无需另行创建扫描。"), infoStatusStyle());
+    }
+}
+
+QString TopologyPage::archiveDocumentPath() const
+{
+    if (!m_pipelineId.isEmpty()) {
+        const auto key = QCryptographicHash::hash(m_pipelineId.toUtf8(), QCryptographicHash::Sha256).toHex();
+        return topologyDataDir() + QStringLiteral("/pipeline_%1_topology.json").arg(QString::fromLatin1(key));
+    }
+    if (!m_topologyDocument.flowId.isEmpty())
+        return topologyDocumentPath(QString::fromLatin1(QUrl::toPercentEncoding(m_topologyDocument.flowId)));
+    return defaultTopologyDocumentPath();
+}
+
+bool TopologyPage::restoreCurrentArchive()
+{
+    if (m_pipelineId.isEmpty()) return false;
+    QStringList paths{archiveDocumentPath()};
+    for (const auto &id : m_pipelineScanIds)
+        paths.append(topologyDocumentPath(QString::fromLatin1(QUrl::toPercentEncoding(id))));
+    paths.append(defaultTopologyDocumentPath()); // Migrate old saves only when their scan belongs to this task.
+    for (const auto &path : paths) {
+        TopologyDocument doc;
+        if (!loadTopologyDocumentFromPath(path, &doc) || doc.nodes.isEmpty()) continue;
+        if (doc.flowId != m_pipelineId && !m_pipelineScanIds.contains(doc.flowId)) continue;
+        m_topologyDocument = doc;
+        m_loadedTopologyPath = path;
+        m_documentDirty = false;
+        m_editorDirty = false;
+        populateTopologyDocument();
+        setStatusMessage(QStringLiteral("已自动加载当前任务的拓扑归档。"), successStatusStyle());
+        return true;
+    }
+    return false;
+}
+
+void TopologyPage::loadExistingScanTopology()
+{
+    if (m_pipelineId.isEmpty() || m_autoLoadAttempted) return;
+    m_autoLoadAttempted = true;
+    const auto generation = m_contextGeneration;
+    const auto scanIds = m_pipelineScanIds;
+    QPointer<TopologyPage> guard(this);
+    setStatusMessage(QStringLiteral("正在读取已有扫描结果，无需重新扫描…"), infoStatusStyle());
+    m_api->get(QStringLiteral("/api/topology/from-pipeline/%1")
+                   .arg(QString::fromLatin1(QUrl::toPercentEncoding(m_pipelineId))), 10000,
+        [this, guard, generation, scanIds](const QJsonObject &res) {
+        if (!guard || generation != m_contextGeneration || scanIds != m_pipelineScanIds
+            || m_documentDirty || m_editorDirty || !m_topologyDocument.nodes.isEmpty()) return;
+        if (res["status"].toString() != "ok") {
+            setStatusMessage(QStringLiteral("读取已有拓扑结果失败，可在“扫描与记录”中刷新重试。"),
+                             errorStatusStyle());
+            return;
+        }
+        auto doc = TopologyDocument::fromJsonObject(res["data"].toObject()["topology"].toObject());
+        if (doc.nodes.isEmpty()) {
+            populateDocumentPlaceholder(QStringLiteral("暂无可展示的拓扑"),
+                                         QStringLiteral("当前任务没有可用于拓扑展示的扫描结果。"));
+            setStatusMessage(QStringLiteral("暂无主机数据；不会凭空补充节点或连接。"), infoStatusStyle());
+            return;
+        }
+        doc.flowId = m_pipelineId;
+        m_topologyDocument = doc;
+        m_loadedTopologyPath.clear();
+        m_documentDirty = true;
+        m_editorDirty = false;
+        archiveGeneratedDocument();
+    });
+}
+
+void TopologyPage::archiveGeneratedDocument()
+{
+    QString error;
+    if (saveTopologyDocument(&error)) {
+        m_loadedTopologyPath = archiveDocumentPath();
+        m_documentDirty = false;
+        m_editorDirty = false;
+        populateTopologyDocument();
+        onResetView();
+        setStatusMessage(QStringLiteral("拓扑已展示并自动归档：%1 个节点，%2 条连线。")
+                         .arg(m_topologyDocument.nodes.size()).arg(m_topologyDocument.edges.size()),
+                         successStatusStyle());
+    } else {
+        populateTopologyDocument();
+        onResetView();
+        setStatusMessage(QStringLiteral("拓扑已展示，但自动归档失败：%1。请点击“保存”重试。").arg(error),
+                         errorStatusStyle());
+    }
+}
+
 // ── UI Construction ────────────────────────────────────────────────────────
 
 void TopologyPage::setupUI() {
+    setStyleSheet(Theme::PageStyle);
     auto *rootLayout = new QVBoxLayout(this);
-    rootLayout->setContentsMargins(0, 0, 0, 0);
-
-    // ── Scroll area wrapper ───────────────────────────────────────────
-    auto *scrollArea = new QScrollArea(this);
-    scrollArea->setWidgetResizable(true);
-    scrollArea->setFrameShape(QFrame::NoFrame);
-    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-
-    auto *page = new QWidget(scrollArea);
-    page->setStyleSheet(QStringLiteral(
-        "QWidget { background:#f3f6fb; color:#0f172a; }"
-        "QLabel { background:transparent; border:none; }"
-        "QFrame[card=\"true\"] { background:#ffffff; border:1px solid #dbe5f0; border-radius:16px; }"
-        "QFrame[softCard=\"true\"] { background:#f8fbff; border:1px solid #dbe5f0; border-radius:12px; }"
-        "QLineEdit, QPlainTextEdit, QListWidget, QComboBox { background:#ffffff; border:1px solid #cfd9e6; border-radius:8px; padding:6px 8px; }"
-        "QLineEdit:focus, QPlainTextEdit:focus, QListWidget:focus, QComboBox:focus { border:1px solid #60a5fa; }"
-        "QListWidget::item { border:1px solid #e5edf6; border-radius:10px; margin:4px 0; padding:6px; background:#ffffff; }"
-        "QListWidget::item:selected { background:#eff6ff; color:#0f172a; border:1px solid #60a5fa; }"
-        "QPushButton { background:#eef3fb; color:#0f172a; border:1px solid #c7d5ea; border-radius:8px; padding:8px 14px; font-weight:600; }"
-        "QPushButton:hover { background:#d9e8ff; border:1px solid #9fc2f7; }"
-        "QPushButton[primary=\"true\"] { background:#2563eb; color:#ffffff; border:1px solid #1d4ed8; }"
-        "QPushButton[primary=\"true\"]:hover { background:#1d4ed8; border:1px solid #1e40af; }"
-        "QPushButton[danger=\"true\"] { background:#fff1f2; color:#b42318; border:1px solid #f3b5bd; }"
-        "QPushButton[danger=\"true\"]:hover { background:#ffe4e6; border:1px solid #e58b97; }"
-        "QPushButton:disabled { background:#e5e7eb; color:#94a3b8; border:1px solid #d1d5db; }"
-    ));
-
-    auto *pageLayout = new QVBoxLayout(page);
-    pageLayout->setContentsMargins(16, 16, 16, 18);
-    pageLayout->setSpacing(12);
-
-    // ── Hero Card with stat tiles ─────────────────────────────────────
-    auto *heroCard = new QFrame(page);
-    heroCard->setProperty("card", true);
-    auto *heroLayout = new QVBoxLayout(heroCard);
-    heroLayout->setContentsMargins(18, 16, 18, 16);
-    heroLayout->setSpacing(12);
-
-    auto *heroTopRow = new QHBoxLayout();
-    auto *titleLabel = new QLabel(QStringLiteral("网络拓扑探测与绘制"), heroCard);
-    QFont titleFont = titleLabel->font();
-    titleFont.setPointSize(15);
-    titleFont.setBold(true);
-    titleLabel->setFont(titleFont);
-    m_refreshBtn = new QPushButton(QStringLiteral("刷新"), heroCard);
-    m_refreshBtn->setProperty("primary", true);
-    heroTopRow->addWidget(titleLabel);
-    heroTopRow->addStretch();
-    heroTopRow->addWidget(m_refreshBtn);
-
-    auto createStatCard = [heroCard](const QString &title, QLabel **valueLabel) {
-        auto *card = new QFrame(heroCard);
-        card->setProperty("softCard", true);
-        auto *layout = new QVBoxLayout(card);
-        layout->setContentsMargins(12, 10, 12, 10);
-        layout->setSpacing(4);
-        auto *titleWidget = new QLabel(title, card);
-        titleWidget->setStyleSheet(QStringLiteral("color:#64748b; font-size:11px;"));
-        auto *valueWidget = new QLabel(QStringLiteral("--"), card);
-        QFont valueFont = valueWidget->font();
-        valueFont.setPointSize(13);
-        valueFont.setBold(true);
-        valueWidget->setFont(valueFont);
-        layout->addWidget(titleWidget);
-        layout->addWidget(valueWidget);
-        *valueLabel = valueWidget;
-        return card;
+    rootLayout->setContentsMargins(12, 10, 12, 10);
+    rootLayout->setSpacing(8);
+    auto openDialog = [](AuxiliaryPanel *dialog) {
+        dialog->present();
+    };
+    auto makeDialog = [this](const QString &name, const QString &title) {
+        auto *dialog = new AuxiliaryPanel(this);
+        dialog->setObjectName(name);
+        dialog->setWindowTitle(title);
+        dialog->resize(720, 540);
+        return dialog;
     };
 
-    auto *heroStatsGrid = new QGridLayout();
-    heroStatsGrid->setHorizontalSpacing(10);
-    heroStatsGrid->setVerticalSpacing(10);
-    heroStatsGrid->addWidget(createStatCard(QStringLiteral("当前状态"), &m_currentStatusValueLabel), 0, 0);
-    heroStatsGrid->addWidget(createStatCard(QStringLiteral("当前进度"), &m_currentProgressValueLabel), 0, 1);
-    heroStatsGrid->addWidget(createStatCard(QStringLiteral("当前目标"), &m_currentTargetValueLabel), 0, 2);
-    heroStatsGrid->addWidget(createStatCard(QStringLiteral("数据来源"), &m_currentSourceValueLabel), 0, 3);
-    heroStatsGrid->addWidget(createStatCard(QStringLiteral("最近生成"), &m_lastGeneratedValueLabel), 1, 0);
-    for (int column = 0; column < 4; ++column) {
-        heroStatsGrid->setColumnStretch(column, 1);
-    }
-
-    heroLayout->addLayout(heroTopRow);
-    heroLayout->addLayout(heroStatsGrid);
-
-    // ── Main splitter ─────────────────────────────────────────────────
-    auto *splitter = new QSplitter(Qt::Horizontal, page);
-    splitter->setChildrenCollapsible(false);
-    splitter->setHandleWidth(8);
-
-    // ── Left Panel ────────────────────────────────────────────────────
-    auto *leftPanel = new QFrame(splitter);
-    leftPanel->setProperty("card", true);
-    leftPanel->setMaximumWidth(340);
-    auto *leftLayout = new QVBoxLayout(leftPanel);
-    leftLayout->setContentsMargins(14, 12, 14, 14);
-    leftLayout->setSpacing(8);
-
-    auto *sectionLabel = new QLabel(QStringLiteral("拓扑探测"), leftPanel);
-    sectionLabel->setStyleSheet(Theme::SectionStyle);
-    leftLayout->addWidget(sectionLabel);
-
-    leftLayout->addWidget(new QLabel(QStringLiteral("目标"), leftPanel));
-    m_targetInput = new QLineEdit(leftPanel);
+    // Scanning and saved records are tools, not permanent columns around the canvas.
+    auto *sourceDialog = makeDialog("topologySources", QStringLiteral("扫描与拓扑记录"));
+    auto *sourceLayout = new QVBoxLayout(sourceDialog);
+    auto *sourceTabs = new QTabWidget;
+    sourceLayout->addWidget(sourceTabs);
+    auto *scanPage = new QWidget;
+    auto *scanLayout = new QVBoxLayout(scanPage);
+    auto *form = new QGridLayout;
+    m_targetInput = new QLineEdit;
     m_targetInput->setPlaceholderText(QStringLiteral("例: 192.168.1.0/24"));
-    leftLayout->addWidget(m_targetInput);
-
-    leftLayout->addWidget(new QLabel(QStringLiteral("扫描类型"), leftPanel));
-    m_scanTypeCombo = new QComboBox(leftPanel);
-    m_scanTypeCombo->addItem(QStringLiteral("端口扫描"), QStringLiteral("port_scan"));
-    m_scanTypeCombo->addItem(QStringLiteral("漏洞扫描"), QStringLiteral("vuln_scan"));
-    m_scanTypeCombo->addItem(QStringLiteral("网站扫描"), QStringLiteral("web_scan"));
-    leftLayout->addWidget(m_scanTypeCombo);
-
-    m_createScanBtn = new QPushButton(QStringLiteral("创建扫描"), leftPanel);
-    m_createScanBtn->setProperty("primary", true);
-    leftLayout->addWidget(m_createScanBtn);
+    m_scanTypeCombo = new QComboBox;
+    m_scanTypeCombo->addItem(QStringLiteral("端口扫描"), "port_scan");
+    m_scanTypeCombo->addItem(QStringLiteral("漏洞扫描"), "vuln_scan");
+    m_scanTypeCombo->addItem(QStringLiteral("网站扫描"), "web_scan");
+    m_createScanBtn = new QPushButton(QStringLiteral("创建扫描"));
+    form->addWidget(new QLabel(QStringLiteral("目标")), 0, 0);
+    form->addWidget(m_targetInput, 0, 1);
+    form->addWidget(m_scanTypeCombo, 0, 2);
+    form->addWidget(m_createScanBtn, 0, 3);
+    form->setColumnStretch(1, 1);
+    scanLayout->addLayout(form);
+    auto *sourceHint = new QLabel(QStringLiteral("选择已完成的扫描生成拓扑；未执行的扫描请先在“脆弱性扫描”页运行。"));
+    sourceHint->setWordWrap(true);
+    scanLayout->addWidget(sourceHint);
+    m_scanTaskTable = new QTableWidget(0, 4);
+    UiUtil::EmptyHint::attach(m_scanTaskTable, QStringLiteral("暂无扫描任务"));
+    m_scanTaskTable->setHorizontalHeaderLabels({"任务编号", "目标", "类型", "状态"});
+    m_scanTaskTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_scanTaskTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_scanTaskTable->setAlternatingRowColors(true);
+    m_scanTaskTable->verticalHeader()->hide();
+    m_scanTaskTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    scanLayout->addWidget(m_scanTaskTable, 1);
+    auto *sourceActions = new QHBoxLayout;
+    m_refreshBtn = new QPushButton(QStringLiteral("刷新扫描"));
+    m_generateBtn = new QPushButton(QStringLiteral("生成拓扑"));
+    m_generateBtn->setProperty("primary", true);
+    m_generateBtn->setEnabled(false);
+    sourceActions->addWidget(m_refreshBtn);
+    sourceActions->addStretch();
+    sourceActions->addWidget(m_generateBtn);
+    scanLayout->addLayout(sourceActions);
+    connect(m_scanTaskTable, &QTableWidget::cellClicked, this, &TopologyPage::onScanClicked);
+    connect(m_generateBtn, &QPushButton::clicked, this, &TopologyPage::onGenerateTopology);
+    sourceTabs->addTab(scanPage, QStringLiteral("扫描任务"));
     connect(m_createScanBtn, &QPushButton::clicked, this, [this]() {
         QString target = m_targetInput->text().trimmed();
         if (target.isEmpty()) {
@@ -773,171 +900,54 @@ void TopologyPage::setupUI() {
                     });
     });
 
-    auto *taskLabel = new QLabel(QStringLiteral("扫描任务"), leftPanel);
-    QFont taskFont = taskLabel->font();
-    taskFont.setBold(true);
-    taskLabel->setFont(taskFont);
-    leftLayout->addWidget(taskLabel);
 
-    m_scanTaskTable = new QTableWidget(0, 4, leftPanel);
-    UiUtil::EmptyHint::attach(m_scanTaskTable, QStringLiteral("暂无扫描任务"));
-    m_scanTaskTable->setHorizontalHeaderLabels({QStringLiteral("任务编号"),
-                                                  QStringLiteral("目标"),
-                                                  QStringLiteral("类型"),
-                                                  QStringLiteral("状态")});
-    m_scanTaskTable->setAlternatingRowColors(true);
-    m_scanTaskTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_scanTaskTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_scanTaskTable->setMinimumHeight(120);
-    m_scanTaskTable->horizontalHeader()->setStretchLastSection(true);
-    leftLayout->addWidget(m_scanTaskTable);
-    connect(m_scanTaskTable, &QTableWidget::cellClicked,
-            this, &TopologyPage::onScanClicked);
-
-    m_generateBtn = new QPushButton(QStringLiteral("生成拓扑"), leftPanel);
-    m_generateBtn->setProperty("primary", true);
-    m_generateBtn->setEnabled(false);
-    leftLayout->addWidget(m_generateBtn);
-    connect(m_generateBtn, &QPushButton::clicked,
-            this, &TopologyPage::onGenerateTopology);
-
-    // ── Recent records list ───────────────────────────────────────────
-    auto *recentLabel = new QLabel(QStringLiteral("最近探测记录"), leftPanel);
-    recentLabel->setFont(taskFont);
-    leftLayout->addWidget(recentLabel);
-
-    m_recentListWidget = new QListWidget(leftPanel);
+    auto *recentPage = new QWidget;
+    auto *recentLayout = new QVBoxLayout(recentPage);
+    m_recentListWidget = new QListWidget;
     UiUtil::EmptyHint::attach(m_recentListWidget, QStringLiteral("暂无历史记录"));
-    m_recentListWidget->setMinimumHeight(80);
-    m_recentListWidget->setMaximumHeight(160);
-    leftLayout->addWidget(m_recentListWidget);
-
-    m_removeRecordButton = new QPushButton(QStringLiteral("移除选中记录"), leftPanel);
+    recentLayout->addWidget(m_recentListWidget, 1);
+    m_removeRecordButton = new QPushButton(QStringLiteral("移除选中记录"));
     m_removeRecordButton->setProperty("danger", true);
     m_removeRecordButton->setEnabled(false);
-    leftLayout->addWidget(m_removeRecordButton);
-    connect(m_removeRecordButton, &QPushButton::clicked,
-            this, &TopologyPage::onRemoveSelectedRecord);
+    recentLayout->addWidget(m_removeRecordButton);
+    connect(m_removeRecordButton, &QPushButton::clicked, this, &TopologyPage::onRemoveSelectedRecord);
     connect(m_recentListWidget, &QListWidget::itemSelectionChanged, this, [this]() {
         m_removeRecordButton->setEnabled(m_recentListWidget->currentItem() != nullptr);
     });
+    sourceTabs->addTab(recentPage, QStringLiteral("最近记录"));
 
-    leftLayout->addStretch();
-
-    // ── Center Panel ──────────────────────────────────────────────────
-    auto *centerCard = new QFrame(splitter);
-    centerCard->setProperty("card", true);
-    auto *centerLayout = new QVBoxLayout(centerCard);
-    centerLayout->setContentsMargins(16, 14, 16, 16);
-    centerLayout->setSpacing(10);
-
-    auto *canvasHeader = new QHBoxLayout();
-    auto *canvasTextLayout = new QVBoxLayout();
-    canvasTextLayout->setSpacing(4);
-    m_canvasTitleLabel = new QLabel(QStringLiteral("等待拓扑文件"), centerCard);
-    QFont canvasTitleFont = m_canvasTitleLabel->font();
-    canvasTitleFont.setPointSize(14);
-    canvasTitleFont.setBold(true);
-    m_canvasTitleLabel->setFont(canvasTitleFont);
-    m_canvasSubtitleLabel = new QLabel(
-        QStringLiteral("支持缩放、拖动、编辑节点与连接信息。"), centerCard);
-    m_canvasSubtitleLabel->setWordWrap(true);
-    m_canvasSubtitleLabel->setStyleSheet(QStringLiteral("color:#475569;"));
-    canvasTextLayout->addWidget(m_canvasTitleLabel);
-    canvasTextLayout->addWidget(m_canvasSubtitleLabel);
-
-    auto *canvasActionRow = new QHBoxLayout();
-    canvasActionRow->setSpacing(6);
-    auto *zoomOutButton = new QPushButton(QStringLiteral("缩小"), centerCard);
-    auto *resetViewButton = new QPushButton(QStringLiteral("重置视图"), centerCard);
-    auto *zoomInButton = new QPushButton(QStringLiteral("放大"), centerCard);
-    m_addNodeButton = new QPushButton(QStringLiteral("添加主机"), centerCard);
-    m_addEdgeButton = new QPushButton(QStringLiteral("添加连线"), centerCard);
-    m_saveTopologyButton = new QPushButton(QStringLiteral("保存"), centerCard);
-    m_saveTopologyButton->setProperty("primary", true);
-    canvasActionRow->addWidget(zoomOutButton);
-    canvasActionRow->addWidget(resetViewButton);
-    canvasActionRow->addWidget(zoomInButton);
-    canvasActionRow->addWidget(m_addNodeButton);
-    canvasActionRow->addWidget(m_addEdgeButton);
-    canvasActionRow->addWidget(m_saveTopologyButton);
-
-    canvasHeader->addLayout(canvasTextLayout, 1);
-    canvasHeader->addLayout(canvasActionRow);
-
-    m_statusLabel = new QLabel(QStringLiteral("准备就绪。"), centerCard);
-    m_statusLabel->setWordWrap(true);
-    m_statusLabel->setStyleSheet(infoStatusStyle());
-
-    // ── Summary / Stats / Scope labels ────────────────────────────────
-    m_summaryLabel = new QLabel(QStringLiteral("当前拓扑文件：--"), centerCard);
-    m_summaryLabel->setWordWrap(true);
-    m_statsLabel = new QLabel(QStringLiteral("节点 -- | 连线 --"), centerCard);
-    m_scopeLabel = new QLabel(QStringLiteral("当前未绑定探测记录。"), centerCard);
-    m_scopeLabel->setStyleSheet(QStringLiteral("color:#475569;"));
-
-    m_graphScene = new QGraphicsScene(centerCard);
-    m_graphView = new TopologyGraphicsView(centerCard);
-    m_graphView->setScene(m_graphScene);
-    m_graphView->setRenderHint(QPainter::Antialiasing, true);
-    m_graphView->setDragMode(QGraphicsView::ScrollHandDrag);
-    m_graphView->setBackgroundBrush(QColor(QStringLiteral("#08121a")));
-    m_graphView->setMinimumHeight(600);
-    m_graphView->setViewportUpdateMode(QGraphicsView::SmartViewportUpdate);
-
-    centerLayout->addLayout(canvasHeader);
-    centerLayout->addWidget(m_statusLabel);
-    centerLayout->addWidget(m_summaryLabel);
-    centerLayout->addWidget(m_statsLabel);
-    centerLayout->addWidget(m_scopeLabel);
-    centerLayout->addWidget(m_graphView, 1);
-
-    // ── Right Panel ───────────────────────────────────────────────────
-    auto *rightPanel = new QFrame(splitter);
-    rightPanel->setProperty("card", true);
-    rightPanel->setMaximumWidth(300);
-    auto *rightLayout = new QVBoxLayout(rightPanel);
-    rightLayout->setContentsMargins(14, 12, 14, 14);
-    rightLayout->setSpacing(8);
-
-    auto *nodeListTitle = new QLabel(QStringLiteral("节点列表"), rightPanel);
-    nodeListTitle->setStyleSheet(Theme::SectionStyle);
-    rightLayout->addWidget(nodeListTitle);
-    m_nodeListWidget = new QListWidget(rightPanel);
-    UiUtil::EmptyHint::attach(m_nodeListWidget, QStringLiteral("暂无节点 · 生成拓扑后显示"));
-    m_nodeListWidget->setMinimumHeight(100);
-    rightLayout->addWidget(m_nodeListWidget);
-
-    auto *edgeListTitle = new QLabel(QStringLiteral("连接列表"), rightPanel);
-    edgeListTitle->setStyleSheet(Theme::SectionStyle);
-    rightLayout->addWidget(edgeListTitle);
-    m_edgeListWidget = new QListWidget(rightPanel);
-    UiUtil::EmptyHint::attach(m_edgeListWidget, QStringLiteral("暂无连接 · 生成拓扑后显示"));
-    m_edgeListWidget->setMinimumHeight(80);
-    rightLayout->addWidget(m_edgeListWidget);
-
-    auto *listActionRow = new QHBoxLayout();
-    listActionRow->setSpacing(6);
-    m_deleteNodeButton = new QPushButton(QStringLiteral("删除节点"), rightPanel);
+    // Full editors live in a separate inspector with a scrollable property form.
+    auto *inspector = makeDialog("topologyInspector", QStringLiteral("节点与连线"));
+    auto *inspectorLayout = new QVBoxLayout(inspector);
+    auto *inspectorTabs = new QTabWidget;
+    inspectorLayout->addWidget(inspectorTabs);
+    auto *nodesPage = new QWidget;
+    auto *nodesLayout = new QVBoxLayout(nodesPage);
+    m_nodeListWidget = new QListWidget;
+    m_nodeListWidget->setWordWrap(true);
+    UiUtil::EmptyHint::attach(m_nodeListWidget, QStringLiteral("暂无节点"));
+    nodesLayout->addWidget(m_nodeListWidget, 1);
+    m_deleteNodeButton = new QPushButton(QStringLiteral("删除节点"));
     m_deleteNodeButton->setProperty("danger", true);
-    m_deleteEdgeButton = new QPushButton(QStringLiteral("删除连线"), rightPanel);
+    nodesLayout->addWidget(m_deleteNodeButton);
+    auto *edgesPage = new QWidget;
+    auto *edgesLayout = new QVBoxLayout(edgesPage);
+    m_edgeListWidget = new QListWidget;
+    m_edgeListWidget->setWordWrap(true);
+    UiUtil::EmptyHint::attach(m_edgeListWidget, QStringLiteral("暂无连接"));
+    edgesLayout->addWidget(m_edgeListWidget, 1);
+    m_deleteEdgeButton = new QPushButton(QStringLiteral("删除连线"));
     m_deleteEdgeButton->setProperty("danger", true);
-    listActionRow->addWidget(m_deleteNodeButton);
-    listActionRow->addWidget(m_deleteEdgeButton);
-    rightLayout->addLayout(listActionRow);
-
-    auto *detailTitle = new QLabel(QStringLiteral("详细信息"), rightPanel);
-    detailTitle->setStyleSheet(Theme::SectionStyle);
-    rightLayout->addWidget(detailTitle);
-
-    m_detailHintLabel = new QLabel(
-        QStringLiteral("选择节点或连接后，可在这里编辑信息。"), rightPanel);
+    edgesLayout->addWidget(m_deleteEdgeButton);
+    auto *editorPage = new QWidget;
+    auto *editorLayout = new QVBoxLayout(editorPage);
+    m_detailHintLabel = new QLabel(QStringLiteral("选择节点或连线，再切换到属性编辑。"));
     m_detailHintLabel->setWordWrap(true);
-    m_detailHintLabel->setStyleSheet(QStringLiteral("color:#475569;"));
-    rightLayout->addWidget(m_detailHintLabel);
-
-    m_detailStack = new QStackedWidget(rightPanel);
-
+    editorLayout->addWidget(m_detailHintLabel);
+    auto *editorScroll = new QScrollArea;
+    editorScroll->setWidgetResizable(true);
+    editorScroll->setFrameShape(QFrame::NoFrame);
+    m_detailStack = new QStackedWidget;
     // Overview page (index 0)
     auto *overviewPage = new QWidget(m_detailStack);
     auto *overviewLayout = new QVBoxLayout(overviewPage);
@@ -1012,30 +1022,111 @@ void TopologyPage::setupUI() {
     m_detailStack->addWidget(nodeFormPage);    // 1
     m_detailStack->addWidget(edgeFormPage);    // 2
 
-    rightLayout->addWidget(m_detailStack, 1);
 
-    m_applyDetailButton = new QPushButton(QStringLiteral("应用"), rightPanel);
-    m_applyDetailButton->setObjectName(QStringLiteral("applyBtn"));
-    rightLayout->addWidget(m_applyDetailButton);
-    connect(m_applyDetailButton, &QPushButton::clicked,
-            this, &TopologyPage::onApplyDetailEdits);
+    editorScroll->setWidget(m_detailStack);
+    editorLayout->addWidget(editorScroll, 1);
+    m_applyDetailButton = new QPushButton(QStringLiteral("应用修改"));
+    m_applyDetailButton->setObjectName("applyBtn");
+    editorLayout->addWidget(m_applyDetailButton);
+    connect(m_applyDetailButton, &QPushButton::clicked, this, &TopologyPage::onApplyDetailEdits);
+    inspectorTabs->addTab(nodesPage, QStringLiteral("节点"));
+    inspectorTabs->addTab(edgesPage, QStringLiteral("连线"));
+    inspectorTabs->addTab(editorPage, QStringLiteral("属性编辑"));
+    connect(m_nodeListWidget, &QListWidget::itemDoubleClicked, this, [inspectorTabs]() { inspectorTabs->setCurrentIndex(2); });
+    connect(m_edgeListWidget, &QListWidget::itemDoubleClicked, this, [inspectorTabs]() { inspectorTabs->setCurrentIndex(2); });
 
-    // ── Assemble page layout ──────────────────────────────────────────
-    pageLayout->addWidget(heroCard);
-    pageLayout->addWidget(splitter, 1);
+    auto *infoDialog = makeDialog("topologyInfo", QStringLiteral("拓扑信息"));
+    auto *infoLayout = new QFormLayout(infoDialog);
+    auto addValue = [infoLayout](const QString &title, QLabel **label) {
+        *label = new QLabel("--");
+        (*label)->setWordWrap(true);
+        (*label)->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        infoLayout->addRow(title, *label);
+    };
+    addValue(QStringLiteral("状态"), &m_currentStatusValueLabel);
+    addValue(QStringLiteral("进度"), &m_currentProgressValueLabel);
+    addValue(QStringLiteral("目标"), &m_currentTargetValueLabel);
+    addValue(QStringLiteral("数据来源"), &m_currentSourceValueLabel);
+    addValue(QStringLiteral("生成时间"), &m_lastGeneratedValueLabel);
+    addValue(QStringLiteral("文件"), &m_summaryLabel);
+    addValue(QStringLiteral("范围"), &m_scopeLabel);
+    addValue(QStringLiteral("说明"), &m_canvasSubtitleLabel);
 
-    // ── Assemble splitter ─────────────────────────────────────────────
-    splitter->addWidget(leftPanel);
-    splitter->addWidget(centerCard);
-    splitter->addWidget(rightPanel);
-    splitter->setStretchFactor(0, 2);
-    splitter->setStretchFactor(1, 7);
-    splitter->setStretchFactor(2, 3);
-    splitter->setSizes({300, 700, 280});
+    auto *toolbar = new QHBoxLayout;
+    auto *sourcesButton = new QPushButton(QStringLiteral("扫描与记录"));
+    sourcesButton->setObjectName("topologySourcesButton");
+    sourcesButton->setProperty("primary", true);
+    auto *inspectorButton = new QPushButton(QStringLiteral("节点与连线"));
+    inspectorButton->setObjectName("topologyInspectorButton");
+    auto *infoButton = new QPushButton(QStringLiteral("信息"));
+    auto *zoomOutButton = new QPushButton("−");
+    auto *resetViewButton = new QPushButton(QStringLiteral("适应画布"));
+    auto *zoomInButton = new QPushButton("+");
+    zoomOutButton->setToolTip(QStringLiteral("缩小"));
+    zoomInButton->setToolTip(QStringLiteral("放大"));
+    m_addNodeButton = new QPushButton(QStringLiteral("添加主机"), this);
+    m_addEdgeButton = new QPushButton(QStringLiteral("添加连线"), this);
+    m_addNodeButton->hide();
+    m_addEdgeButton->hide();
+    auto *editButton = new QPushButton(QStringLiteral("编辑"));
+    auto *editMenu = new QMenu(editButton);
+    auto *addNode = editMenu->addAction(QStringLiteral("添加主机"), m_addNodeButton, &QPushButton::click);
+    auto *addEdge = editMenu->addAction(QStringLiteral("添加连线"), m_addEdgeButton, &QPushButton::click);
+    connect(editMenu, &QMenu::aboutToShow, this, [this, addNode, addEdge]() {
+        addNode->setEnabled(m_addNodeButton->isEnabled());
+        addEdge->setEnabled(m_addEdgeButton->isEnabled());
+    });
+    editButton->setMenu(editMenu);
+    m_saveTopologyButton = new QPushButton(QStringLiteral("保存"));
+    m_saveTopologyButton->setProperty("primary", true);
+    toolbar->addWidget(sourcesButton);
+    toolbar->addWidget(inspectorButton);
+    toolbar->addWidget(infoButton);
+    toolbar->addStretch();
+    toolbar->addWidget(zoomOutButton);
+    toolbar->addWidget(resetViewButton);
+    toolbar->addWidget(zoomInButton);
+    toolbar->addWidget(editButton);
+    toolbar->addWidget(m_saveTopologyButton);
+    rootLayout->addLayout(toolbar);
+    connect(sourcesButton, &QPushButton::clicked, this, [=]() { openDialog(sourceDialog); });
+    connect(inspectorButton, &QPushButton::clicked, this, [=]() { openDialog(inspector); });
+    connect(infoButton, &QPushButton::clicked, this, [=]() { openDialog(infoDialog); });
 
-    scrollArea->setWidget(page);
-    rootLayout->addWidget(scrollArea, 1);
-
+    auto *titleRow = new QHBoxLayout;
+    m_canvasTitleLabel = new QLabel(QStringLiteral("等待拓扑文件"));
+    m_canvasTitleLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_canvasTitleLabel->setMinimumWidth(0);
+    m_canvasTitleLabel->setStyleSheet("font-weight:600;font-size:15px;");
+    m_statsLabel = new QLabel(QStringLiteral("节点 -- | 连线 --"));
+    titleRow->addWidget(m_canvasTitleLabel, 1);
+    titleRow->addWidget(m_statsLabel);
+    rootLayout->addLayout(titleRow);
+    m_graphScene = new QGraphicsScene(this);
+    m_graphView = new TopologyGraphicsView(this);
+    m_graphView->setObjectName("topologyCanvas");
+    m_graphView->setScene(m_graphScene);
+    m_graphView->setRenderHint(QPainter::Antialiasing, true);
+    m_graphView->setDragMode(QGraphicsView::ScrollHandDrag);
+    m_graphView->setBackgroundBrush(QColor("#08121a"));
+    m_graphView->setMinimumSize(0, 160);
+    m_graphView->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    m_graphView->setViewportUpdateMode(QGraphicsView::SmartViewportUpdate);
+    rootLayout->addWidget(m_graphView, 1);
+    auto *legend = new QLabel(QStringLiteral(
+        "<span style='color:#15803d'>● 在线</span>　"
+        "<span style='color:#b45309'>● 告警</span>　"
+        "<span style='color:#b91c1c'>● 离线</span>　"
+        "<span style='color:#64748b'>● 未知</span>　"
+        "图标区分网络设备、服务器与主机 · 单击选中，拖动调整"));
+    legend->setObjectName("topologyLegend");
+    legend->setWordWrap(true);
+    legend->setStyleSheet("color:#52637a;font-size:12px;padding:2px 0;");
+    rootLayout->addWidget(legend);
+    m_statusLabel = new QLabel(QStringLiteral("准备就绪。"));
+    m_statusLabel->setWordWrap(true);
+    m_statusLabel->setStyleSheet(infoStatusStyle());
+    rootLayout->addWidget(m_statusLabel);
     // ── Connect signals ───────────────────────────────────────────────
     connect(m_refreshBtn, &QPushButton::clicked,
             this, &TopologyPage::onRefreshScans);
@@ -1198,6 +1289,10 @@ void TopologyPage::onRemoveSelectedRecord() {
 // ── Scan Task Management ──────────────────────────────────────────────────
 
 void TopologyPage::onRefreshScans() {
+    if (!m_pipelineId.isEmpty() && m_scanFinished && m_topologyDocument.nodes.isEmpty()) {
+        m_autoLoadAttempted = false;
+        if (!restoreCurrentArchive()) loadExistingScanTopology();
+    }
     m_api->get(QStringLiteral("/api/scan-tasks"), 5000,
                [this](const QJsonObject &res) {
                    if (res[QStringLiteral("status")].toString() != QStringLiteral("ok")) {
@@ -1205,6 +1300,13 @@ void TopologyPage::onRefreshScans() {
                        return;
                    }
                    auto arr = res[QStringLiteral("data")].toArray();
+                   if (!m_pipelineId.isEmpty()) {
+                       QJsonArray scoped;
+                       for (const auto &value : arr)
+                           if (m_pipelineScanIds.contains(value.toObject()["scan_task_id"].toString()))
+                               scoped.append(value);
+                       arr = scoped;
+                   }
                    m_scanTaskTable->setRowCount(arr.size());
                    for (int i = 0; i < arr.size(); ++i) {
                        auto t = arr[i].toObject();
@@ -1229,14 +1331,14 @@ void TopologyPage::onRefreshScans() {
                            i, 3,
                            new QTableWidgetItem(statusText));
                    }
-                   m_scanTaskTable->resizeColumnsToContents();
+                   m_scanTaskTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
 
                    // Update hero stat
                    if (m_currentStatusValueLabel) {
                        m_currentStatusValueLabel->setText(QStringLiteral("%1 条扫描").arg(arr.size()));
                    }
 
-                   setStatusMessage(QStringLiteral("已刷新扫描任务列表，共 %1 条。").arg(arr.size()),
+                   if (m_pipelineId.isEmpty()) setStatusMessage(QStringLiteral("已刷新扫描任务列表，共 %1 条。").arg(arr.size()),
                                     successStatusStyle());
                });
 }
@@ -1288,6 +1390,15 @@ void TopologyPage::onGenerateTopology() {
         return;
     }
 
+    if (m_documentDirty || m_editorDirty) {
+        if (QMessageBox::question(this, QStringLiteral("重新生成拓扑"),
+                QStringLiteral("重新生成会替换当前未保存的修改，是否继续？"),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) return;
+    }
+    const QString scanId = m_selectedScanTaskId;
+    const QString target = m_currentTargetValueLabel->text();
+    const auto generation = ++m_contextGeneration;
+    QPointer<TopologyPage> guard(this);
     // ── Progress dialog (heap-allocated, safe for async callback) ────
     if (m_progressDialog) {
         delete m_progressDialog;
@@ -1317,7 +1428,8 @@ void TopologyPage::onGenerateTopology() {
     body[QStringLiteral("scan_task_id")] = m_selectedScanTaskId;
 
     m_api->post(QStringLiteral("/api/topology/generate-from-scan"), body, 120000,
-                [this](const QJsonObject &res) {
+                [this, guard, scanId, target, generation](const QJsonObject &res) {
+                    if (!guard) return;
                     // Close and clean up progress dialog
                     if (m_progressDialog) {
                         m_progressDialog->close();
@@ -1327,6 +1439,7 @@ void TopologyPage::onGenerateTopology() {
                     m_generateBtn->setEnabled(true);
                     m_generateBtn->setText(QStringLiteral("生成拓扑"));
                     qApp->restoreOverrideCursor();
+                    if (generation != m_contextGeneration) return;
 
                     if (res[QStringLiteral("status")].toString() != QStringLiteral("ok")) {
                         QString errMsg = res[QStringLiteral("error")].toObject()[QStringLiteral("message")].toString();
@@ -1345,7 +1458,8 @@ void TopologyPage::onGenerateTopology() {
                     TopologyDocument doc = TopologyDocument::fromJsonObject(topoObj);
 
                     // Fill in metadata
-                    doc.flowId = m_selectedScanTaskId;
+                    doc.flowId = m_pipelineId.isEmpty() ? scanId : m_pipelineId;
+                    doc.target = target;
                     if (doc.generatedAt.trimmed().isEmpty()) {
                         doc.generatedAt = QDateTime::currentDateTime().toString(Qt::ISODate);
                     }
@@ -1402,6 +1516,7 @@ void TopologyPage::onGenerateTopology() {
                     m_selectedEdgeId.clear();
                     m_documentDirty = true;
                     m_editorDirty = false;
+                    m_discoveryFxPending = true;  // 生成完成 → 播放节点发现动效
                     populateTopologyDocument();
 
                     // Update hero stats
@@ -1417,17 +1532,13 @@ void TopologyPage::onGenerateTopology() {
 
                     // Persist recent record
                     TopologyScanRecord record;
-                    record.scanTaskId = m_selectedScanTaskId;
+                    record.scanTaskId = scanId;
                     record.target = m_currentTargetValueLabel ? m_currentTargetValueLabel->text() : QString();
                     record.createdAt = QDateTime::currentDateTime().toString(Qt::ISODate);
                     upsertRecentRecord(record);
                     saveRecentRecords();
 
-                    setStatusMessage(
-                        QStringLiteral("拓扑生成成功：%1 个节点，%2 条连线。")
-                            .arg(doc.nodes.size())
-                            .arg(doc.edges.size()),
-                        successStatusStyle());
+                    archiveGeneratedDocument();
                 });
 }
 
@@ -1440,8 +1551,8 @@ void TopologyPage::onSaveTopology() {
         QMessageBox::warning(this, QStringLiteral("保存失败"), errorMessage);
         return;
     }
-    if (m_loadedTopologyPath.isEmpty()) {
-        m_loadedTopologyPath = defaultTopologyDocumentPath();
+    {
+        m_loadedTopologyPath = archiveDocumentPath();
         if (m_currentSourceValueLabel) {
             m_currentSourceValueLabel->setText(QFileInfo(m_loadedTopologyPath).fileName());
         }
@@ -1467,7 +1578,7 @@ void TopologyPage::populateTopologyDocument() {
         ? QStringLiteral("当前有未保存修改。")
         : QStringLiteral("当前拓扑已与本地文件同步。");
     m_canvasSubtitleLabel->setText(
-        QStringLiteral("节点 %1 个，连线 %2 条。可直接拖动主机位置，并在下方编辑信息。%3")
+        QStringLiteral("节点 %1 个，连线 %2 条。可直接拖动主机位置，通过“节点与连线”编辑信息。%3")
             .arg(m_topologyDocument.nodes.size())
             .arg(m_topologyDocument.edges.size())
             .arg(dirtySuffix));
@@ -1537,7 +1648,12 @@ void TopologyPage::populateDocumentPlaceholder(const QString &title,
     if (m_scopeLabel) m_scopeLabel->setText(QStringLiteral("当前未加载任何拓扑文件。"));
     if (m_currentSourceValueLabel) m_currentSourceValueLabel->setText(QStringLiteral("--"));
 
+    ++m_sceneGen;
     m_graphScene->clear();
+    auto *empty = m_graphScene->addText(title + QStringLiteral("\n\n") + detail);
+    empty->setDefaultTextColor(QColor("#a8bdd5"));
+    empty->setTextWidth(400);
+    m_graphScene->setSceneRect(empty->boundingRect().adjusted(-40, -40, 40, 40));
     m_nodeItems.clear();
     m_edgeItems.clear();
     m_nodeListWidget->clear();
@@ -1549,6 +1665,7 @@ void TopologyPage::populateDocumentPlaceholder(const QString &title,
 // ── Render Topology Scene ────────────────────────────────────────────────
 
 void TopologyPage::renderTopologyScene() {
+    ++m_sceneGen;  // 场景重建 — 上一轮未完成的动效回调全部失效
     m_graphScene->clear();
     m_nodeItems.clear();
     m_edgeItems.clear();
@@ -1606,6 +1723,7 @@ void TopologyPage::renderTopologyScene() {
         edgeText->setBrush(QColor(selected ? QStringLiteral("#f8fafc") : QStringLiteral("#cbd5e1")));
         edgeText->setPos((source.x() + target.x()) * 0.5,
                          (source.y() + target.y()) * 0.5);
+        edgeText->setParentItem(line);  // 跟随连线淡入/拖动
         edgeText->setZValue(1.2);
     }
 
@@ -1616,7 +1734,9 @@ void TopologyPage::renderTopologyScene() {
         node.y = pos.y();
 
         auto *ellipse = new TopologyNodeItem(
-            node.id, QRectF(pos.x() - 22.0, pos.y() - 22.0, 44.0, 44.0));
+            node.id, QRectF(-22.0, -22.0, 44.0, 44.0));
+        ellipse->setPos(pos);
+        ellipse->setData(2, node.deviceType);
         ellipse->setBrush(QColor(nodeStatusColor(node.status)));
         ellipse->setPen(QPen(QColor(node.id == m_selectedNodeId
                                         ? QStringLiteral("#f8fafc")
@@ -1643,22 +1763,63 @@ void TopologyPage::renderTopologyScene() {
         const QString primaryLabel = topologyNodePrimaryLabel(node);
         const QString secondaryLabel = topologyNodeSecondaryLabel(node, primaryLabel);
 
-        auto *text = m_graphScene->addSimpleText(primaryLabel);
+        // Anchor labels to their host while retaining readable text at overview zoom.
+        auto *labels = new QGraphicsItemGroup(ellipse);
+        labels->setFlag(QGraphicsItem::ItemIgnoresTransformations);
+        labels->setPos(0, 28);
+        const QString visibleName = QFontMetrics(QApplication::font()).elidedText(primaryLabel, Qt::ElideRight, 150);
+        auto *text = new QGraphicsSimpleTextItem(visibleName, labels);
         text->setBrush(QColor(QStringLiteral("#e2e8f0")));
-        text->setPos(pos.x() + 28.0,
-                     secondaryLabel.isEmpty() ? pos.y() - 8.0 : pos.y() - 14.0);
+        text->setPos(-text->boundingRect().width() / 2.0, 0);
         text->setToolTip(topologyNodeTooltip(node));
 
         if (!secondaryLabel.isEmpty()) {
-            auto *subText = m_graphScene->addSimpleText(secondaryLabel);
+            auto *subText = new QGraphicsSimpleTextItem(secondaryLabel, labels);
             subText->setBrush(QColor(QStringLiteral("#94a3b8")));
-            subText->setPos(pos.x() + 28.0, pos.y() + 4.0);
+            subText->setPos(-subText->boundingRect().width() / 2.0, text->boundingRect().height() + 2);
             subText->setToolTip(topologyNodeTooltip(node));
         }
     }
 
     m_graphScene->setSceneRect(
         m_graphScene->itemsBoundingRect().adjusted(-60, -60, 60, 60));
+
+    // 发现动效：节点逐个弹入，连线随后淡入（仅 generate-from-scan 触发）
+    if (m_discoveryFxPending) {
+        m_discoveryFxPending = false;
+        int delay = 0;
+        for (const TopologyNodeRecord &node : m_topologyDocument.nodes) {  // 按文档顺序点亮
+            if (auto *item = m_nodeItems.value(node.id, nullptr))
+                fxFadeIn(item, m_sceneGen, delay, 0.4);
+            delay += 130;
+        }
+        const int edgeDelay = delay + 100;
+        int ei = 0;
+        for (auto it = m_edgeItems.constBegin(); it != m_edgeItems.constEnd(); ++it) {
+            fxFadeIn(it.value(), m_sceneGen, edgeDelay + ei * 60, 0.0);
+            ++ei;
+        }
+    }
+}
+
+// ── 发现动效：单项淡入（fromScale>0 叠加缩放弹入）───────────────────────
+void TopologyPage::fxFadeIn(QGraphicsItem *item, quint64 gen, int delayMs, qreal fromScale) {
+    item->setOpacity(0.0);
+    if (fromScale > 0.0) item->setScale(fromScale);
+    auto *anim = new QVariantAnimation(this);
+    anim->setDuration(300);
+    anim->setStartValue(0.0);
+    anim->setEndValue(1.0);
+    anim->setEasingCurve(fromScale > 0.0 ? QEasingCurve::OutBack : QEasingCurve::OutCubic);
+    connect(anim, &QVariantAnimation::valueChanged, this, [this, gen, item, fromScale, anim](const QVariant &v) {
+        if (gen != m_sceneGen) { anim->stop(); return; }  // 场景已重建，旧项失效
+        const qreal t = v.toDouble();
+        item->setOpacity(qBound(0.0, t, 1.0));
+        if (fromScale > 0.0) item->setScale(fromScale + (1.0 - fromScale) * t);
+    });
+    QTimer::singleShot(delayMs, this, [anim]() {
+        anim->start(QAbstractAnimation::DeleteWhenStopped);
+    });
 }
 
 // ── Node / Edge List Population ──────────────────────────────────────────
@@ -1680,7 +1841,7 @@ void TopologyPage::populateNodeList() {
         auto *item = new QListWidgetItem(text, m_nodeListWidget);
         item->setData(Qt::UserRole, node.id);
         item->setToolTip(text);
-        item->setSizeHint(QSize(0, 54));
+        item->setSizeHint(QSize(0, 72));
         if (node.id == currentNodeId) {
             rowToSelect = i;
         }
@@ -1706,7 +1867,7 @@ void TopologyPage::populateEdgeList() {
         auto *item = new QListWidgetItem(text, m_edgeListWidget);
         item->setData(Qt::UserRole, edge.id);
         item->setToolTip(text);
-        item->setSizeHint(QSize(0, 50));
+        item->setSizeHint(QSize(0, 72));
         if (edge.id == currentEdgeId) {
             rowToSelect = i;
         }
@@ -1917,7 +2078,7 @@ void TopologyPage::onResetView() {
     }
     m_graphView->resetTransform();
     m_graphView->fitInView(
-        m_graphScene->itemsBoundingRect().adjusted(-40, -40, 40, 40),
+        m_graphScene->itemsBoundingRect().adjusted(-50, -50, 50, 100),
         Qt::KeepAspectRatio);
 }
 
@@ -2307,29 +2468,19 @@ bool TopologyPage::saveTopologyDocument(QString *errorMessage) const {
     }
 
     QDir().mkpath(topologyDataDir());
-    const QString targetPath = !m_loadedTopologyPath.isEmpty()
-                                   ? m_loadedTopologyPath
-                                   : defaultTopologyDocumentPath();
-
-    QFile file(targetPath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("无法写入拓扑文件。");
-        }
-        return false;
-    }
-
+    const QString targetPath = archiveDocumentPath();
     const QByteArray payload =
         QJsonDocument(m_topologyDocument.toJsonObject()).toJson(QJsonDocument::Indented);
-    file.write(payload);
-
-    // Also write to latest
-    const QString latestPath = defaultTopologyDocumentPath();
-    if (targetPath != latestPath) {
-        QFile latestFile(latestPath);
-        if (latestFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            latestFile.write(payload);
-        }
+    QSaveFile file(targetPath);
+    if (!file.open(QIODevice::WriteOnly) || file.write(payload) != payload.size() || !file.commit()) {
+        if (errorMessage) *errorMessage = QStringLiteral("无法写入拓扑归档：%1").arg(file.errorString());
+        return false;
+    }
+    // Compatibility snapshot for the standalone page; task pages use their own archive.
+    if (targetPath != defaultTopologyDocumentPath()) {
+        QSaveFile latest(defaultTopologyDocumentPath());
+        if (latest.open(QIODevice::WriteOnly) && latest.write(payload) == payload.size())
+            latest.commit();
     }
     return true;
 }

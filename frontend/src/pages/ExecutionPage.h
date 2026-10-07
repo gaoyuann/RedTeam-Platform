@@ -23,12 +23,17 @@ public:
   /// Select a playbook by ID and pre-fill the target, for cross-page navigation
   void selectPlaybook(const QString &playbookId, const QString &target);
 
+  /// 演示动线：从扫描漏洞一键发起攻击 — 目标预填 + 关键词匹配预案
+  void attackFromVuln(const QString &target, const QString &vulnText, const QString &resultType);
+
   /// Pre-fill the target input (used when embedded in FlowPage workbench)
   void setTarget(const QString &target);
 
   /// Load and display a specific run by ID (used by FlowPage workbench
   /// when a pipeline's execute step produces a run).
   void showRun(const QString &runId);
+  void setPipelineContext(const QString &pipelineId, const QString &status, const QString &runId);
+
 
 public slots:
   void onRefreshRuns();
@@ -47,8 +52,13 @@ private:
   void loadRunDetails(const QString &runId);
   void showCellDetail(const QString &title, const QString &content);
 
+  QString m_pipelineId;
+  QString m_pipelineStatus;
+  QString m_pipelineRunId;
   ApiClient *m_api;
   QTabWidget *m_tabWidget;
+  QWidget *m_standaloneControls;
+  QLabel *m_pipelineHint;
   QComboBox *m_playbookCombo;
   QLineEdit *m_targetInput;
   QPushButton *m_execBtn;

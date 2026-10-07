@@ -14,6 +14,7 @@
 class QVBoxLayout;
 class ApiClient;
 class ExecutionPage;
+class EvaluatePage;
 class ScanPage;
 class PlaybookPage;
 class DongleLockPage;
@@ -36,7 +37,10 @@ private slots:
     void onViewReport();
     void onViewHistoryReport(int row, int col);
     void onLogout();
-    void onViewPlaybook();    void onPollScan();
+    void onViewPlaybook();
+    void onReviewPlan();
+    void onGenerateCurrentReport();
+    void onPollScan();
     void onPollRun();
 
 private:
@@ -46,6 +50,7 @@ private:
     void advanceStage();
     void checkBothScansDone();
     void startExecution();
+    void finishReport(const QString &reportId, const QString &title);
 
     // 加密锁运行时心跳与锁屏
     void verifyDongleHeartbeat();
@@ -60,10 +65,13 @@ private:
         ExecAttack = 4,
         GenReport = 5,
         Done = 6,
-        Failed = 7
+        Failed = 7,
+        PlanReady = 8
     };
     void setStage(Stage s);
     void updateStageUI();
+    void resetStageRows();
+    void showStageError(int index, const QString &message);
     void updateStageRow(int index, const QString &icon, int percent,
                         const QString &status, const QString &color);
 
@@ -77,6 +85,9 @@ private:
     ScanPage *m_scanPage;
     PlaybookPage *m_playbookPage;
     ExecutionPage *m_executionPage;
+    EvaluatePage *m_evaluatePage;
+    QPushButton *m_currentTaskBtn;
+    QPushButton *m_currentReportBtn;
 
     // Quick test page — target input area
     QLineEdit *m_targetInput;
@@ -85,6 +96,7 @@ private:
     QPushButton *m_retryBtn;
     QPushButton *m_viewPlaybookBtn;
     QPushButton *m_gotoExecBtn;
+    QLabel *m_workflowHint;
 
     // Progress area — 5 stage rows
     struct StageRow {
@@ -108,6 +120,7 @@ private:
     QFrame *m_reportFrame;
     QLabel *m_reportTitleLabel;
     QPushButton *m_viewReportBtn;
+    QPushButton *m_generateReportBtn;
     QString m_latestReportId;
 
     // History area
@@ -115,6 +128,7 @@ private:
 
     // Flow state
     Stage m_currentStage = Idle;
+    Stage m_failedStage = Idle;
     QString m_portScanTaskId;
     QString m_vulnScanTaskId;
     QString m_playbookId;
@@ -123,6 +137,14 @@ private:
     QTimer *m_pollTimer;
     bool m_portScanDone = false;
     bool m_vulnScanDone = false;
+    bool m_portScanSucceeded = false;
+    bool m_vulnScanSucceeded = false;
+    bool m_portPollInFlight = false;
+    bool m_vulnPollInFlight = false;
+    bool m_runPollInFlight = false;
+    bool m_reviewPending = false;
+    int m_workflowRevision = 0;
+    QString m_runTerminalStatus;
 
     // Scan result cache for summary
     QJsonArray m_portResults;
@@ -130,7 +152,7 @@ private:
 
     // Module names
     const QStringList m_modules = {
-        QStringLiteral("快速测试"),
+        QStringLiteral("测试工作台"),
         QStringLiteral("扫描任务"),
         QStringLiteral("载荷库"),
         QStringLiteral("想定预案"),
