@@ -1,3 +1,4 @@
+#include "../widgets/WorkbenchTabs.h"
 #include "KnowledgeGraphPage.h"
 #include "../Theme.h"
 #include "../UiUtil.h"
@@ -52,11 +53,12 @@ KnowledgeGraphPage::KnowledgeGraphPage(ApiClient *api, QWidget *parent)
 void KnowledgeGraphPage::setupUI() {
   setStyleSheet(Theme::PageStyle);
   auto *layout = new QVBoxLayout(this);
-  layout->setContentsMargins(0, 0, 0, 0);
+  layout->setContentsMargins(16, 12, 16, 16);
+  layout->setSpacing(12);
 
   auto *header = new QHBoxLayout;
   auto *title = new QLabel("攻防知识图谱");
-  title->setStyleSheet(Theme::SectionStyle);
+  title->setStyleSheet("font-size:17px; font-weight:700; color:#172033;");
   header->addWidget(title);
   auto *refreshBtn = new QPushButton("刷新");
   header->addStretch();
@@ -64,7 +66,7 @@ void KnowledgeGraphPage::setupUI() {
   layout->addLayout(header);
   connect(refreshBtn, &QPushButton::clicked, this, &KnowledgeGraphPage::refresh);
 
-  m_subTabs = new QTabWidget;
+  m_subTabs = new WorkbenchTabs;
 
   // Sub-tab 1: Stats
   auto *statsW = new QWidget;
@@ -245,15 +247,15 @@ void KnowledgeGraphPage::setupGraphTab(QWidget *parent) {
   filterH->addWidget(m_showSoftware);
   filterH->addStretch();
   auto *zoomInBtn = new QPushButton("放大");
-  zoomInBtn->setProperty("primary", true);
   auto *zoomOutBtn = new QPushButton("缩小");
-  zoomOutBtn->setProperty("primary", true);
   auto *resetBtn = new QPushButton("重置");
-  resetBtn->setProperty("primary", true);
-  filterH->addWidget(zoomInBtn);
-  filterH->addWidget(zoomOutBtn);
-  filterH->addWidget(resetBtn);
   leftL->addLayout(filterH);
+  auto *zoomRow = new QHBoxLayout;
+  zoomRow->addStretch();
+  zoomRow->addWidget(zoomInBtn);
+  zoomRow->addWidget(zoomOutBtn);
+  zoomRow->addWidget(resetBtn);
+  leftL->addLayout(zoomRow);
 
   // Graphics scene + view
   m_scene = new QGraphicsScene(this);
@@ -347,6 +349,12 @@ void KnowledgeGraphPage::setupMappingsTab(QWidget *parent) {
   m_mappingTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_mappingTable->setSortingEnabled(true);
   m_mappingTable->setContextMenuPolicy(Qt::CustomContextMenu);
+  m_mappingTable->horizontalHeader()->setStretchLastSection(false);
+  m_mappingTable->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+  m_mappingTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+  m_mappingTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+  m_mappingTable->horizontalHeader()->setMinimumSectionSize(80);
+  m_mappingTable->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
   l->addWidget(m_mappingTable, 1);
 
   connect(m_mappingSearchEdit, &QLineEdit::textChanged, this, &KnowledgeGraphPage::onMappingSearch);
@@ -385,18 +393,41 @@ void KnowledgeGraphPage::setupNodesTab(QWidget *parent) {
   l->addLayout(filterH);
 
   m_searchTable = new QTableWidget(0, 4);
-  UiUtil::EmptyHint::attach(m_searchTable, QStringLiteral("暂无搜索结果"));
+  m_searchTable->setObjectName("kgSearchTable");
+  UiUtil::EmptyHint::attach(m_searchTable, QStringLiteral("暂无搜索结果 · 输入节点名称或编号后点击搜索"));
   m_searchTable->setHorizontalHeaderLabels({"名称", "类型", "来源", "风险"});
   m_searchTable->setAlternatingRowColors(true);
   m_searchTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_searchTable->setSortingEnabled(true);
+  m_searchTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+  m_searchTable->setSelectionMode(QAbstractItemView::SingleSelection);
   m_searchTable->setContextMenuPolicy(Qt::CustomContextMenu);
-  l->addWidget(m_searchTable, 1);
-
+  m_searchTable->horizontalHeader()->setStretchLastSection(false);
+  m_searchTable->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+  m_searchTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+  m_searchTable->horizontalHeader()->setMinimumSectionSize(80);
+  m_searchTable->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+  auto *split = new QSplitter(Qt::Vertical);
+  split->setObjectName("kgSearchSplit");
+  split->setChildrenCollapsible(false);
+  split->addWidget(m_searchTable);
+  auto *detailPanel = new QWidget;
+  auto *detailLayout = new QVBoxLayout(detailPanel);
+  detailLayout->setContentsMargins(0, 6, 0, 0);
+  auto *detailTitle = new QLabel("节点详情");
+  detailTitle->setStyleSheet("font-size:13px; font-weight:600; color:#475569;");
+  detailLayout->addWidget(detailTitle);
   m_searchDetail = new QTextEdit;
+  m_searchDetail->setObjectName("kgSearchDetail");
   m_searchDetail->setReadOnly(true);
-  m_searchDetail->setMaximumHeight(180);
-  l->addWidget(m_searchDetail);
+  m_searchDetail->setPlaceholderText("选择上方搜索结果，查看节点说明和关联关系。");
+  m_searchDetail->setMinimumHeight(72);
+  detailLayout->addWidget(m_searchDetail);
+  split->addWidget(detailPanel);
+  split->setStretchFactor(0, 1);
+  split->setStretchFactor(1, 0);
+  split->setSizes({480, 130});
+  l->addWidget(split, 1);
 
   connect(searchBtn, &QPushButton::clicked, this, &KnowledgeGraphPage::onSearch);
   connect(m_searchEdit, &QLineEdit::returnPressed, this, &KnowledgeGraphPage::onSearch);
@@ -480,6 +511,7 @@ void KnowledgeGraphPage::setupTacticTreeTab(QWidget *parent) {
   // Right: detail panel
   m_tacticDetail = new QTextEdit;
   m_tacticDetail->setReadOnly(true);
+  m_tacticDetail->setPlaceholderText("选择左侧技术，查看关联工具与缓解措施。");
   m_tacticDetail->setStyleSheet("QTextEdit { font-size: 13px; padding: 8px; }");
   splitter->addWidget(m_tacticDetail);
 
@@ -824,18 +856,19 @@ void KnowledgeGraphPage::renderGraph() {
 
 void KnowledgeGraphPage::onNodeClicked(const QString &nodeId) {
   if (nodeId.isEmpty()) return;
-  m_api->get("/api/kg/node/" + nodeId, 5000, [this](const QJsonObject &res) {
+  const bool forSearch = m_subTabs->currentIndex() == 4;
+  m_api->get("/api/kg/node/" + nodeId, 5000, [this, forSearch](const QJsonObject &res) {
     if (res["status"].toString() != "ok") return;
-    showNodeDetail(res["data"].toObject());
+    showNodeDetail(res["data"].toObject(), forSearch);
   });
 }
 
-void KnowledgeGraphPage::showNodeDetail(const QJsonObject &detail) {
+void KnowledgeGraphPage::showNodeDetail(const QJsonObject &detail, bool forSearch) {
   auto node = detail["node"].toObject();
   QString type = node["type"].toString();
   QString color = nodeTypeColor(type);
 
-  m_detailTitle->setText(QString("<span style='color:%1'>%2</span> — %3")
+  if (!forSearch) m_detailTitle->setText(QString("<span style='color:%1'>%2</span> — %3")
     .arg(color, nodeTypeLabel(type), zhOrDefault(node, "name")));
 
   QStringList lines;
@@ -880,13 +913,18 @@ void KnowledgeGraphPage::showNodeDetail(const QJsonObject &detail) {
     }
   }
 
-  m_detailText->setText(lines.join("\n"));
+  if (forSearch) {
+    m_searchDetail->setPlainText(zhOrDefault(node, "name") + "\n" + lines.join("\n"));
+  } else {
+    m_detailText->setPlainText(lines.join("\n"));
+  }
 }
 
 void KnowledgeGraphPage::loadMappings() {
   m_api->get("/api/kg/mappings?limit=1000", 10000, [this](const QJsonObject &res) {
     if (res["status"].toString() != "ok") return;
     auto mappings = res["data"].toObject()["mappings"].toArray();
+    m_mappingTable->setSortingEnabled(false);
     m_mappingTable->setRowCount(mappings.size());
     for (int i = 0; i < mappings.size(); i++) {
       auto m = mappings[i].toObject();
@@ -901,8 +939,7 @@ void KnowledgeGraphPage::loadMappings() {
       else if (conf == "low") conf = "低";
       m_mappingTable->setItem(i, 3, new QTableWidgetItem(conf));
     }
-    m_mappingTable->resizeColumnsToContents();
-    m_mappingTable->horizontalHeader()->setStretchLastSection(true);
+    m_mappingTable->setSortingEnabled(true);
   });
 }
 
@@ -932,6 +969,7 @@ void KnowledgeGraphPage::onMappingSearch() {
       }
     }
 
+    m_mappingTable->setSortingEnabled(false);
     m_mappingTable->setRowCount(filtered.size());
     for (int i = 0; i < filtered.size(); i++) {
       auto m = filtered[i].toObject();
@@ -946,8 +984,7 @@ void KnowledgeGraphPage::onMappingSearch() {
       else if (conf == "low") conf = "低";
       m_mappingTable->setItem(i, 3, new QTableWidgetItem(conf));
     }
-    m_mappingTable->resizeColumnsToContents();
-    m_mappingTable->horizontalHeader()->setStretchLastSection(true);
+    m_mappingTable->setSortingEnabled(true);
   });
 }
 
@@ -961,6 +998,8 @@ void KnowledgeGraphPage::onSearch() {
   m_api->get(path, 5000, [this](const QJsonObject &res) {
     if (res["status"].toString() != "ok") return;
     auto results = res["data"].toObject()["results"].toArray();
+    m_searchDetail->clear();
+    m_searchTable->setSortingEnabled(false);
     m_searchTable->setRowCount(results.size());
     for (int i = 0; i < results.size(); i++) {
       auto r = results[i].toObject();
@@ -976,7 +1015,6 @@ void KnowledgeGraphPage::onSearch() {
       else if (risk == "critical") risk = "严重";
       m_searchTable->setItem(i, 3, new QTableWidgetItem(risk));
     }
-    m_searchTable->resizeColumnsToContents();
-    m_searchTable->horizontalHeader()->setStretchLastSection(true);
+    m_searchTable->setSortingEnabled(true);
   });
 }

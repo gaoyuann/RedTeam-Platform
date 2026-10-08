@@ -1,4 +1,5 @@
 #pragma once
+#include <QString>
 
 // ── Global Theme Constants ────────────────────────────────────────────
 // Single source of truth for all colors and shared style strings.
@@ -49,11 +50,68 @@ constexpr const char* SectionStyle =
   "font-size:17px; font-weight:700; color:#172033; "
   "padding:4px 0 7px; border-bottom:1px solid #dbe3ef;";
 
-// ── Page-level stylesheet (TopologyPage style) ───────────────────────
-// Apply via setStyleSheet(Theme::PageStyle) at start of each page's setupUI().
-// Provides: rounded input fields, 3 button variants (default/primary/danger),
-// card frames, and consistent focus styling.
-constexpr const char* PageStyle =
+// Shared button roles used by pages, dialogs and toolbars. Sizes are variants,
+// not separate visual themes; enabled state and action wiring remain native.
+inline const QString ButtonStyle = R"css(
+  QPushButton {
+    background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ffffff,stop:1 #fafcff); color:#475569; border:1px solid #d5deeb;
+    border-radius:8px; padding:0 14px; min-height:34px;
+    font-size:13px; font-weight:500;
+  }
+  QPushButton:hover { background:#f2f6ff; color:#1d4ed8; border-color:#adc5ef; }
+  QPushButton:pressed { background:#e6efff; border-color:#7ea6e8; }
+  QPushButton:focus { border-color:#7ea6e8; }
+  QPushButton[primary="true"] { background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #3b82f6,stop:1 #2563eb); color:#ffffff; border-color:#2563eb; font-weight:600; }
+  QPushButton[primary="true"]:hover { background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #4b8cf7,stop:1 #2d6aee); border-color:#3475e9; }
+  QPushButton[primary="true"]:pressed { background:#1e40af; border-color:#1e40af; }
+  QPushButton[primary="true"]:focus { border-color:#93c5fd; }
+  QPushButton[quiet="true"] { background:transparent; border-color:transparent; }
+  QPushButton[quiet="true"]:hover { background:#f1f5fb; color:#1d4ed8; border-color:#e2e8f0; }
+  QPushButton[quiet="true"]:focus { border-color:#7ea6e8; }
+  QPushButton[iconOnly="true"] { padding:0; font-size:18px; }
+  QPushButton[iconOnly="true"]::menu-indicator { image:none; width:0; }
+  QPushButton[menuAction="true"] { padding-right:24px; }
+  QPushButton[menuAction="true"]::menu-indicator { subcontrol-position:center right; right:9px; }
+
+  QPushButton[danger="true"], QPushButton#dangerBtn { background:#fff1f2; color:#b42318; border-color:#fecdd3; }
+  QPushButton[danger="true"]:hover, QPushButton#dangerBtn:hover { background:#ffe4e6; border-color:#fda4af; }
+  QPushButton[danger="true"]:pressed, QPushButton#dangerBtn:pressed { background:#fecdd3; border-color:#f87171; }
+  QPushButton[warning="true"] { background:#fffbeb; color:#a16207; border-color:#fde68a; }
+  QPushButton[warning="true"]:hover { background:#fef3c7; border-color:#facc15; }
+  QPushButton[warning="true"]:pressed { background:#fde68a; }
+  QPushButton[compact="true"] { min-height:26px; padding:0 10px; font-size:12px; border-radius:6px; }
+  QPushButton[large="true"] { min-height:44px; font-size:15px; }
+  QPushButton[danger="true"]:focus, QPushButton[warning="true"]:focus { border-color:#7ea6e8; }
+  QPushButton:disabled, QPushButton[primary="true"]:disabled,
+  QPushButton[danger="true"]:disabled, QPushButton#dangerBtn:disabled, QPushButton[warning="true"]:disabled,
+  QPushButton[quiet="true"]:disabled {
+    background:#f1f4f8; color:#9aa7ba; border-color:#e3e8f0;
+  }
+)css";
+inline const QString ToolbarButtonStyle = ButtonStyle;
+
+// Dark surfaces use the same geometry and interaction states.
+inline const QString DarkButtonStyle = ButtonStyle + R"css(
+  QPushButton { background:#253449; color:#e2e8f0; border-color:#475569; }
+  QPushButton:hover { background:#304563; color:#bfdbfe; border-color:#6487b7; }
+  QPushButton:pressed { background:#1d3655; }
+  QPushButton[danger="true"], QPushButton#dangerBtn { background:#442b36; color:#fda4af; border-color:#794152; }
+  QPushButton[danger="true"]:hover, QPushButton#dangerBtn:hover { background:#5d3041; }
+  QPushButton[warning="true"] { background:#443c27; color:#fde68a; border-color:#80652e; }
+  QPushButton[warning="true"]:hover { background:#5b4827; }
+  QPushButton:disabled, QPushButton[primary="true"]:disabled, QPushButton[danger="true"]:disabled,
+  QPushButton#dangerBtn:disabled, QPushButton[warning="true"]:disabled {
+    background:#263244; color:#7b8da5; border-color:#37465c;
+  }
+)css";
+
+// The selected row already identifies the active item. Suppress only the
+// native dotted/gray focus outline; keep focus, selection and keyboard behavior.
+inline const QString ItemViewStyle =
+  "QTableView, QTreeView, QListView { outline:0; }";
+
+// Pages share one set of controls while keeping their existing card layout.
+inline const QString PageStyle = QStringLiteral(
   "QLabel { background:transparent; border:none; }"
   "QFrame[card=\"true\"] { background:#ffffff; border:1px solid #dbe3ef; border-radius:14px; }"
   "QFrame[softCard=\"true\"] { background:#f8fbff; border:1px solid #dbe3ef; border-radius:12px; }"
@@ -61,20 +119,7 @@ constexpr const char* PageStyle =
     "background:#ffffff; border:1px solid #cbd5e1; border-radius:8px; padding:6px 9px; }"
   "QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus { "
     "border:1px solid #3b82f6; }"
-  "QPushButton { "
-    "background:#f8fafc; color:#1e293b; border:1px solid #cbd5e1; "
-    "border-radius:8px; padding:7px 14px; font-weight:600; }"
-  "QPushButton:hover { background:#eef4ff; border:1px solid #93b4ed; }"
-  "QPushButton[primary=\"true\"] { "
-    "background:#2563eb; color:#ffffff; border:1px solid #1d4ed8; }"
-  "QPushButton[primary=\"true\"]:hover { "
-    "background:#1d4ed8; border:1px solid #1e40af; }"
-  "QPushButton[danger=\"true\"] { "
-    "background:#fff1f2; color:#b42318; border:1px solid #fecdd3; }"
-  "QPushButton[danger=\"true\"]:hover { "
-    "background:#ffe4e6; border:1px solid #fda4af; }"
-  "QPushButton:disabled { "
-    "background:#e5e7eb; color:#94a3b8; border:1px solid #d1d5db; }";
+  ) + ButtonStyle + ItemViewStyle;
 
 // ── Status label styles (colored background + border + rounded) ──────
 constexpr const char* StatusSuccessStyle =

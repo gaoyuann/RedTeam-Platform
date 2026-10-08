@@ -44,7 +44,7 @@ private:
   void loadMappings();
   void loadTacticTree();
   void renderGraph();
-  void showNodeDetail(const QJsonObject &detail);
+  void showNodeDetail(const QJsonObject &detail, bool forSearch);
   QString nodeTypeColor(const QString &type) const;
   QString nodeTypeLabel(const QString &type) const;
   QString edgeTypeLabel(const QString &type) const;

@@ -11,6 +11,7 @@
 #include <QTabWidget>
 
 class ApiClient;
+class ScanResultOverview;
 
 class ScanPage : public QWidget {
   Q_OBJECT
@@ -85,6 +86,7 @@ private:
   QLabel *m_bruteForceCount;
 
   // ── Right panel ──
+  ScanResultOverview *m_resultOverview;
   QTreeWidget *m_resultTree;       // grouped results by result_type
   QLabel *m_statusLabel;
   QString m_currentTaskTarget;     // 当前选中任务的目标（供"发起攻击"使用）

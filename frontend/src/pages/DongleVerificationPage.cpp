@@ -1,3 +1,4 @@
+#include "../Theme.h"
 #include "DongleVerificationPage.h"
 
 #include <QCheckBox>
@@ -52,15 +53,9 @@ void DongleVerificationPage::buildUi() {
         "QFrame[donglePanel=\"true\"] { background:#ffffff; border:1px solid #dbe5f0; border-radius:12px; }"
         "QLineEdit, QTableWidget { background:#ffffff; color:#0f172a; border:1px solid #cfd9e6; border-radius:8px; padding:6px 8px; }"
         "QLineEdit:focus, QTableWidget:focus { border:1px solid #60a5fa; }"
-        "QPushButton { background:#eef3fb; color:#0f172a; border:1px solid #c7d5ea; border-radius:8px; padding:8px 14px; font-weight:600; }"
-        "QPushButton:hover { background:#d9e8ff; border-color:#9fc2f7; }"
-        "QPushButton[primary=\"true\"] { background:#2563eb; color:#ffffff; border-color:#1d4ed8; }"
-        "QPushButton[primary=\"true\"]:hover { background:#1d4ed8; }"
-        "QPushButton[danger=\"true\"] { background:#fff1f2; color:#be123c; border-color:#fecdd3; }"
-        "QPushButton:disabled { background:#e5e7eb; color:#94a3b8; border-color:#d1d5db; }"
         "QHeaderView::section { background:#eff4fa; color:#334155; border:none; border-bottom:1px solid #dbe5f0; padding:7px; font-weight:600; }"
         "QTableWidget { gridline-color:#e5edf6; }"
-        "QTableWidget::item:selected { background:#dbeafe; color:#0f172a; }"));
+        "QTableWidget::item:selected { background:#dbeafe; color:#0f172a; }") + Theme::ButtonStyle);
 
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);

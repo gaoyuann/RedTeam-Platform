@@ -3,7 +3,6 @@
 #include "LoginDialog.h"
 #include "WsClient.h"
 #include "ToastOverlay.h"
-#include "LiveActivityPanel.h"
 #include "pages/BasePage.h"
 #include "pages/FlowPage.h"
 #include "pages/PlaybookPage.h"
@@ -174,27 +173,12 @@ void MainWindow::setupWebSocket()
     m_ws = new WsClient(m_api, this);
     m_ws->connectToServer();
 
-    // Wire to FlowPage's activity panel + refresh flows on events
+    // Refresh task state and results on execution events
     if (m_flowPage) {
-        auto *flowPanel = m_flowPage->activityPanel();
-        if (flowPanel) {
-            connect(m_ws, &WsClient::scanCreated, flowPanel, &LiveActivityPanel::onScanCreated);
-            connect(m_ws, &WsClient::scanStarted, flowPanel, &LiveActivityPanel::onScanStarted);
-            connect(m_ws, &WsClient::scanCompleted, flowPanel, &LiveActivityPanel::onScanCompleted);
-            connect(m_ws, &WsClient::runCreated, flowPanel, &LiveActivityPanel::onRunCreated);
-            connect(m_ws, &WsClient::runStarted, flowPanel, &LiveActivityPanel::onRunStarted);
-            connect(m_ws, &WsClient::runStepComplete, flowPanel, &LiveActivityPanel::onRunStepComplete);
-            connect(m_ws, &WsClient::runCompleted, flowPanel, &LiveActivityPanel::onRunCompleted);
-            // Pipeline events → LiveActivityPanel
-            connect(m_ws, &WsClient::pipelineCreated, flowPanel, &LiveActivityPanel::onPipelineCreated);
-            connect(m_ws, &WsClient::pipelineStatus, flowPanel, &LiveActivityPanel::onPipelineStatus);
-            connect(m_ws, &WsClient::pipelineStep, flowPanel, &LiveActivityPanel::onPipelineStep);
-        }
         // Pipeline events → FlowPage real-time updates
         connect(m_ws, &WsClient::pipelineCreated, m_flowPage, &FlowPage::onPipelineCreated);
         connect(m_ws, &WsClient::pipelineStatus, m_flowPage, &FlowPage::onPipelineStatus);
         connect(m_ws, &WsClient::pipelineStep, m_flowPage, &FlowPage::onPipelineStep);
-        connect(m_ws, &WsClient::pipelineLog, m_flowPage, &FlowPage::onPipelineLog);
         // Scan/run events also refresh flow list (pipeline creates scans/runs internally)
         connect(m_ws, &WsClient::scanCompleted, m_flowPage, &FlowPage::refreshFlows);
         connect(m_ws, &WsClient::runCompleted, m_flowPage, &FlowPage::refreshFlows);
@@ -215,7 +199,6 @@ void MainWindow::setupWebSocket()
         }
         auto *embExec = m_flowPage->execTab();
         if (embExec) {
-            connect(m_ws, &WsClient::runReact, embExec, &ExecutionPage::onRunReact);
             connect(m_ws, &WsClient::runCompleted, embExec, &ExecutionPage::onRefreshRuns);
         }
         connect(m_ws, &WsClient::runCompleted, m_flowPage, [this](const QJsonObject &data) {

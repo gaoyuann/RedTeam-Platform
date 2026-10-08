@@ -1,6 +1,4 @@
 #include "FlowPage.h"
-#include "../AuxiliaryPanel.h"
-#include "LiveActivityPanel.h"
 #include "StepIndicator.h"
 #include "TopologyPage.h"
 #include "ScanPage.h"
@@ -9,10 +7,10 @@
 #include "../ApiClient.h"
 #include "../Theme.h"
 #include "../UiUtil.h"
+#include "../widgets/WorkbenchTabs.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
-#include <QSplitter>
 #include <QFrame>
 #include <QLabel>
 #include <QLineEdit>
@@ -23,7 +21,6 @@
 #include <QHeaderView>
 #include <QComboBox>
 #include <QTabWidget>
-#include <QTextBrowser>
 #include <QMenu>
 #include <QAction>
 #include <QDialog>
@@ -39,6 +36,24 @@ static const QStringList STEP_NAMES = {
   QStringLiteral("扫描"), QStringLiteral("分析"),
   QStringLiteral("生成"), QStringLiteral("执行"),
 };
+
+// Status is informational: a small pill rather than a full-height action.
+static QString statusBadgeStyle(const QString &status)
+{
+  QString text = "#64748b", background = "#f1f5f9", border = "#e2e8f0";
+  if (status == "completed") {
+    text = "#15803d"; background = "#ecfdf3"; border = "#d1fadf";
+  } else if (status == "running") {
+    text = "#1d4ed8"; background = "#eff6ff"; border = "#dbeafe";
+  } else if (status == "awaiting_approval" || status == "paused") {
+    text = "#a16207"; background = "#fffbeb"; border = "#fef0c7";
+  } else if (status == "failed") {
+    text = "#b42318"; background = "#fef3f2"; border = "#fee4e2";
+  }
+  return QString("QLabel { color:%1; background:%2; border:1px solid %3; "
+                 "border-radius:13px; padding:0 10px; font-size:12px; font-weight:500; }")
+      .arg(text, background, border);
+}
 
 // ── FlowPage ───────────────────────────────────────────────────────────
 
@@ -64,7 +79,6 @@ FlowPage::FlowPage(ApiClient *api, const QString &role,
     , m_deleteAction(nullptr)
     , m_reportAction(nullptr)
     , m_stepIndicator(nullptr)
-    , m_activityPanel(nullptr)
     , m_stageTabs(nullptr)
     , m_topoTab(nullptr)
     , m_scanTab(nullptr)
@@ -190,18 +204,22 @@ void FlowPage::setupWorkbenchView()
 
   // Top bar
   auto *topBar = new QFrame(m_workbenchView);
-  topBar->setStyleSheet("background:#ffffff; border-bottom:1px solid #dbe3ef;");
+  topBar->setObjectName("flowToolbar");
+  topBar->setStyleSheet("QFrame#flowToolbar { background:#ffffff; border-bottom:1px solid #dbe3ef; }");
   topBar->setFixedHeight(60);
   auto *topLayout = new QHBoxLayout(topBar);
   topLayout->setContentsMargins(14, 0, 14, 0);
   topLayout->setSpacing(8);
 
   m_backBtn = new QPushButton(QStringLiteral("← 返回列表"), topBar);
+  m_backBtn->setProperty("quiet", true);
+  UiUtil::styleToolbarButton(m_backBtn);
   connect(m_backBtn, &QPushButton::clicked, this, &FlowPage::onBackToList);
   topLayout->addWidget(m_backBtn);
 
   auto *sep1 = new QFrame(topBar);
   sep1->setFrameShape(QFrame::VLine);
+  sep1->setFixedHeight(22);
   sep1->setStyleSheet("color:#dbe3ef;");
   topLayout->addWidget(sep1);
 
@@ -212,25 +230,25 @@ void FlowPage::setupWorkbenchView()
   topLayout->addWidget(m_targetLabel, 1);
 
   m_statusLabel = new QLabel(topBar);
-  m_statusLabel->setStyleSheet(
-    "font-size:13px; font-weight:600; padding:4px 12px; border-radius:8px;");
+  m_statusLabel->setObjectName("flowStatusBadge");
+  m_statusLabel->setFixedHeight(26);
+  m_statusLabel->setAlignment(Qt::AlignCenter);
+  m_statusLabel->setStyleSheet(statusBadgeStyle({}));
   topLayout->addWidget(m_statusLabel);
 
   topLayout->addSpacing(8);
 
   // Approve button (visible only when awaiting_approval)
   m_approveBtn = new QPushButton(QStringLiteral("确认预案并执行"), topBar);
-  m_approveBtn->setStyleSheet(
-    "QPushButton { background:#2563eb; color:#ffffff; border:1px solid #1d4ed8; "
-    "border-radius:8px; padding:7px 16px; font-size:13px; font-weight:600; }"
-    "QPushButton:hover { background:#1d4ed8; border:1px solid #1e40af; }"
-    "QPushButton:disabled { background:#93c5fd; color:#ffffff; border:1px solid #60a5fa; }");
+  m_approveBtn->setProperty("primary", true);
+  UiUtil::styleToolbarButton(m_approveBtn);
   m_approveBtn->setVisible(false);
   connect(m_approveBtn, &QPushButton::clicked, this, &FlowPage::onApproveFlow);
   topLayout->addWidget(m_approveBtn);
   m_resultBtn = new QPushButton(QStringLiteral("查看结果"), topBar);
   m_resultBtn->setObjectName("flowResultButton");
-  m_resultBtn->setStyleSheet(m_approveBtn->styleSheet());
+  m_resultBtn->setProperty("primary", true);
+  UiUtil::styleToolbarButton(m_resultBtn);
   m_resultBtn->hide();
   topLayout->addWidget(m_resultBtn);
   connect(m_resultBtn, &QPushButton::clicked, this, [this]() {
@@ -240,11 +258,12 @@ void FlowPage::setupWorkbenchView()
 
   // ⋯ dropdown menu for secondary actions (cancel / delete / report)
   m_moreBtn = new QPushButton(QStringLiteral("⋯"), topBar);
-  m_moreBtn->setFixedWidth(40);
-  m_moreBtn->setStyleSheet(
-    "QPushButton { font-size:18px; font-weight:700; color:#475569; "
-    "background:#f1f5f9; border:1px solid #e2e8f0; border-radius:8px; padding:6px; }"
-    "QPushButton:hover { background:#e2e8f0; }");
+  m_moreBtn->setObjectName("flowMoreButton");
+  m_moreBtn->setProperty("iconOnly", true);
+  m_moreBtn->setToolTip(QStringLiteral("更多操作"));
+  m_moreBtn->setAccessibleName(QStringLiteral("更多任务操作"));
+  UiUtil::styleToolbarButton(m_moreBtn);
+  m_moreBtn->setFixedWidth(36);
   auto *moreMenu = new QMenu(m_moreBtn);
   moreMenu->setStyleSheet("QMenu { font-size:13px; padding:4px; }");
   m_cancelAction = moreMenu->addAction(QStringLiteral("取消任务"));
@@ -267,19 +286,19 @@ void FlowPage::setupWorkbenchView()
   auto *progressLayout = new QHBoxLayout(progressFrame);
   progressLayout->setContentsMargins(14, 6, 14, 6);
   m_stepIndicator = new StepIndicator(progressFrame);
+  QVector<PhaseStep> initialPhases;
+  for (int i = 0; i < STEP_NAMES.size(); ++i) {
+    PhaseStep step;
+    step.displayName = STEP_NAMES[i];
+    step.status = QStringLiteral("pending");
+    initialPhases.append(step);
+  }
+  m_stepIndicator->setPhases(initialPhases);
   progressLayout->addWidget(m_stepIndicator, 1);
   layout->addWidget(progressFrame);
 
   // Stage tabs (拓扑/扫描/攻击/评估) — full width, starting from the left edge
-  m_stageTabs = new QTabWidget(m_workbenchView);
-  m_stageTabs->setStyleSheet(
-    "QTabWidget::pane { border:none; background:#ffffff; }"
-    "QTabBar::tab { padding:8px 20px; font-size:13px; font-weight:600; color:#475569; "
-    "  border:1px solid #dbe3ef; border-bottom:none; border-top-left-radius:6px; border-top-right-radius:6px; "
-    "  background:#f8fafc; margin-right:2px; }"
-    "QTabBar::tab:selected { color:#1e40af; background:#ffffff; border-color:#dbe3ef; }"
-    "QTabBar::tab:hover:!selected { background:#eff6ff; }"
-  );
+  m_stageTabs = new WorkbenchTabs(m_workbenchView, false);
   m_topoTab = new TopologyPage(m_api, m_role, m_username, m_stageTabs);
   m_scanTab = new ScanPage(m_api, m_role, m_username, m_stageTabs);
   m_scanTab->setTaskScope({});
@@ -310,35 +329,8 @@ void FlowPage::setupWorkbenchView()
     m_stageTabs->setCurrentIndex(2);
   });
 
-  // Keep the workspace for task results; auxiliary reasoning opens on demand.
-  auto *reasoningDialog = new AuxiliaryPanel(m_workbenchView);
-  reasoningDialog->setObjectName("flowReasoningDialog");
-  reasoningDialog->setWindowTitle(QStringLiteral("AI 分析记录"));
-  reasoningDialog->resize(660, 480);
-  auto *reasoningLayout = new QVBoxLayout(reasoningDialog);
-  auto *reasoningHint = new QLabel(QStringLiteral("展示当前任务收到的分析记录；暂无记录时不会占用工作区。"));
-  reasoningHint->setWordWrap(true);
-  reasoningLayout->addWidget(reasoningHint);
-  m_reasoningPanel = new QTextBrowser(reasoningDialog);
-  m_reasoningPanel->setPlaceholderText(QStringLiteral("暂无 AI 分析记录"));
-  m_reasoningPanel->setOpenExternalLinks(false);
-  reasoningLayout->addWidget(m_reasoningPanel, 1);
-  auto *reasoningClose = new QDialogButtonBox(QDialogButtonBox::Close, reasoningDialog);
-  reasoningClose->button(QDialogButtonBox::Close)->setText(QStringLiteral("关闭"));
-  connect(reasoningClose, &QDialogButtonBox::rejected, reasoningDialog, &QDialog::reject);
-  reasoningLayout->addWidget(reasoningClose);
-  auto *reasoningButton = new QPushButton(QStringLiteral("AI 记录"), topBar);
-  reasoningButton->setObjectName("flowReasoningButton");
-  topLayout->insertWidget(topLayout->count() - 1, reasoningButton);
-  connect(reasoningButton, &QPushButton::clicked, this, [reasoningDialog]() {
-    reasoningDialog->present();
-  });
+  // Keep the four task stages full width.
   layout->addWidget(m_stageTabs, 1);
-
-  m_activityPanel = new LiveActivityPanel(m_role, m_username, m_workbenchView);
-  m_activityPanel->setCompact(true);
-  m_activityPanel->onToggleCollapse();
-  layout->addWidget(m_activityPanel);
 
   m_stack->addWidget(m_workbenchView);
 }
@@ -477,17 +469,8 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     // Header
     m_targetLabel->setText(QStringLiteral("目标: %1").arg(target));
     m_targetLabel->setToolTip(target);
-    QColor sc = statusColor(status);
-    m_statusLabel->setText(QStringLiteral(" %1 %2 ").arg(statusIcon(status), statusText(status)));
-    // Qt 的 8 位十六进制是 #AARRGGBB（alpha 在前），拼 #RRGGBBAA 会被误解析，须用 rgba()
-    auto rgba = [](const QColor &c, int a) {
-      return QString("rgba(%1,%2,%3,%4)").arg(c.red()).arg(c.green()).arg(c.blue())
-              .arg(a / 255.0, 0, 'f', 2);
-    };
-    m_statusLabel->setStyleSheet(
-      QString("font-size:12px; font-weight:700; color:%1; background:%2; "
-              "padding:3px 12px; border-radius:6px; border:1px solid %3;")
-        .arg(sc.name(), rgba(sc, 26), rgba(sc, 102)));
+    m_statusLabel->setText(QStringLiteral("%1  %2").arg(statusIcon(status), statusText(status)));
+    m_statusLabel->setStyleSheet(statusBadgeStyle(status));
 
     // 从 pipeline 数据提取 run_id 和 playbook_id，自动加载到攻击 Tab.
     // Guard against repeated events: only drive selectPlaybook/showRun when
@@ -608,6 +591,8 @@ void FlowPage::onCreateFlow()
 
   auto *btns = new QDialogButtonBox(
     QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+
+  UiUtil::styleDialogButtons(btns);
   btns->button(QDialogButtonBox::Ok)->setText(QStringLiteral("创建并开始"));
   connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
   connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
@@ -653,7 +638,6 @@ void FlowPage::onFlowDoubleClicked(int row)
   m_resultBtn->hide();
   m_execTab->setPipelineContext(pid, "loading", {});
   m_topoTab->setPipelineContext(pid, {}, {}, false);
-  m_reasoningPanel->clear();
   loadFlowDetail(pid);
   m_stack->setCurrentIndex(1);
   // Refresh the embedded scan tab so it picks up any new scan tasks
@@ -678,7 +662,6 @@ void FlowPage::onFlowContextMenu(const QPoint &pos)
     m_resultBtn->hide();
     m_execTab->setPipelineContext(pid, "loading", {});
     m_topoTab->setPipelineContext(pid, {}, {}, false);
-    m_reasoningPanel->clear();
     loadFlowDetail(pid);
     m_stack->setCurrentIndex(1);
   });
@@ -809,6 +792,8 @@ void FlowPage::approveFlow(const QString &preferredPlaybookId)
 
     auto *btns = new QDialogButtonBox(
       QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+
+    UiUtil::styleDialogButtons(btns);
     btns->button(QDialogButtonBox::Ok)->setText(QStringLiteral("批准并执行"));
     btns->button(QDialogButtonBox::Ok)->setEnabled(combo->count() > 0);
     connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
@@ -869,32 +854,8 @@ void FlowPage::onPipelineStep(const QJsonObject &data)
   QString pid = data["pipeline_id"].toString();
   if (pid == m_selectedPipelineId && m_stack->currentIndex() == 1) {
     loadFlowDetail(pid);
-    // Append to reasoning stream
-    QString stepType = data["step_type"].toString();
-    QString status = data["status"].toString();
-    QString timeStr = QDateTime::currentDateTime().toString("HH:mm:ss");
-    QString icon = (status == "completed") ? "✓" :
-                   (status == "failed")   ? "✗" :
-                   (status == "running")   ? "▶" : "○";
-    if (m_reasoningPanel)
-      m_reasoningPanel->append(
-        QString("<span style='color:#94a3b8;font-size:11px;'>[%1]</span> "
-                "<b>%2</b> 阶段 %3")
-          .arg(timeStr, icon, stepType.toHtmlEscaped()));
+
   }
-}
-
-void FlowPage::onPipelineLog(const QJsonObject &data)
-{
-  QString pid = data["pipeline_id"].toString();
-  if (pid != m_selectedPipelineId) return;
-  if (m_stack->currentIndex() != 1) return;
-  // Pipeline logs are handled by LiveActivityPanel; nothing to do here.
-}
-
-LiveActivityPanel *FlowPage::activityPanel() const
-{
-  return m_activityPanel;
 }
 
 ScanPage *FlowPage::scanTab() const
@@ -949,9 +910,7 @@ void FlowPage::jumpToExecution(const QString &playbookId, const QString &target)
   m_targetLabel->setText(QStringLiteral("直接执行: %1").arg(
     target.isEmpty() ? QStringLiteral("(未指定)") : target));
   m_statusLabel->setText(QStringLiteral(" 直接执行模式 "));
-  m_statusLabel->setStyleSheet(
-    "font-size:13px; font-weight:600; color:#64748b; background:#f1f5f9; "
-    "padding:4px 12px; border-radius:8px; border:1px solid #cbd5e1;");
+  m_statusLabel->setStyleSheet(statusBadgeStyle({}));
 
   // Hide pipeline-specific action buttons
   m_approveBtn->setVisible(false);

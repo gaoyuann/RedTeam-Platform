@@ -10,10 +10,8 @@
 #include <QTimer>
 #include <QJsonArray>
 #include <QTabWidget>
-#include <QSet>
 
 class ApiClient;
-class CortexPanel;
 
 class ExecutionPage : public QWidget {
   Q_OBJECT
@@ -44,7 +42,6 @@ signals:
 
 public slots:
   void onRefreshRuns();
-  void onRunReact(const QJsonObject &data);  // run:react — real-time AI reasoning
 
 private slots:
   void onRunClicked(int row, int col);
@@ -84,12 +81,6 @@ private:
   // Evidence display
   QLabel *m_evidenceLabel;
   QTableWidget *m_evidenceTable;
-
-  // Cortex decision panel (replaces m_reactPanel + m_payloadPanel)
-  CortexPanel *m_cortexPanel;
-  QSet<QString> m_injectedPayloadSteps;  // track which steps already injected payload cards
-  QSet<QString> m_injectedReactSteps;    // track which steps already injected react thoughts
-  QString m_lastReactAction;             // track previous step's react action for dynamic detection
 
   // Real-time polling for running executions
   QString m_runningRunId;       // currently running run (auto-highlighted)

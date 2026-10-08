@@ -334,6 +334,7 @@ void SimpleMainWindow::setupQuickTestPage(QWidget *page)
 
   m_startBtn = new QPushButton(QStringLiteral("开始扫描并生成方案"));
   m_startBtn->setProperty("primary", true);
+  m_startBtn->setProperty("large", true);
   m_startBtn->setMinimumSize(210, 42);
   m_startBtn->setObjectName("quickTestStart");
   btnRow->addWidget(m_startBtn);
@@ -342,10 +343,8 @@ void SimpleMainWindow::setupQuickTestPage(QWidget *page)
   m_retryBtn->setVisible(false);
   m_retryBtn->setMinimumHeight(42);
   m_retryBtn->setObjectName("quickTestRetry");
-  m_retryBtn->setStyleSheet(
-    "QPushButton { background: #f59e0b; color: #ffffff; border: none; "
-    "border-radius: 10px; font-size: 15px; font-weight: bold; }"
-    "QPushButton:hover { background: #d97706; }");
+  m_retryBtn->setProperty("warning", true);
+  m_retryBtn->setProperty("large", true);
   btnRow->addWidget(m_retryBtn);
 
   btnRow->addStretch();
@@ -447,10 +446,9 @@ void SimpleMainWindow::setupQuickTestPage(QWidget *page)
   auto *pbRow = new QHBoxLayout;
   pbRow->addWidget(m_playbookLabel, 1);
   m_viewPlaybookBtn = new QPushButton(QStringLiteral("查看方案"));
-  m_viewPlaybookBtn->setFixedSize(80, 28);
-  m_viewPlaybookBtn->setStyleSheet(
-    "QPushButton { background: #3a8fd6; color: #fff; border: none; border-radius: 4px; font-size: 13px; }"
-    "QPushButton:hover { background: #4da3e8; }");
+  m_viewPlaybookBtn->setFixedSize(84, 28);
+  m_viewPlaybookBtn->setProperty("compact", true);
+  m_viewPlaybookBtn->setProperty("primary", true);
   m_viewPlaybookBtn->setVisible(false);
   pbRow->addWidget(m_viewPlaybookBtn);
 
@@ -1024,6 +1022,7 @@ void SimpleMainWindow::onReviewPlan()
       content->setHtml(html);
       layout->addWidget(content);
       auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+      UiUtil::styleDialogButtons(buttons);
       buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("确认并开始执行"));
       buttons->button(QDialogButtonBox::Ok)->setObjectName("confirmWorkflowExecution");
       buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("返回修改"));
