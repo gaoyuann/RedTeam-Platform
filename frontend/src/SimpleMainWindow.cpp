@@ -2,6 +2,7 @@
 #include "ApiClient.h"
 #include "LoginDialog.h"
 #include "Theme.h"
+#include "WsClient.h"
 #include "pages/ScanPage.h"
 #include "pages/ExecutionPage.h"
 #include "pages/EvaluatePage.h"
@@ -62,6 +63,10 @@ SimpleMainWindow::SimpleMainWindow(ApiClient *api, const QString &role,
     , m_username(username)
 {
   setupUI();
+  auto *wsClient = new WsClient(m_api, this);
+  connect(wsClient, &WsClient::runReact, m_executionPage, &ExecutionPage::onRunReact);
+  connect(wsClient, &WsClient::runCompleted, m_executionPage, &ExecutionPage::onRefreshRuns);
+  wsClient->connectToServer();
   updateStageUI();
   loadHistory();
 
@@ -1041,6 +1046,8 @@ void SimpleMainWindow::startExecution()
   if (m_currentStage != PlanReady || m_playbookId.isEmpty() || !m_runId.isEmpty()) return;
   setStage(ExecAttack);
   updateStageRow(3, "…", 0, QStringLiteral("创建执行记录…"), "#2563eb");
+  m_navList->setCurrentRow(4);
+  m_executionPage->focusDetails();
   const int revision = m_workflowRevision;
   QPointer<SimpleMainWindow> self(this);
   QJsonObject body{{"playbook_id", m_playbookId}, {"target", m_target},
@@ -1049,7 +1056,11 @@ void SimpleMainWindow::startExecution()
     if (!self || revision != m_workflowRevision) return;
     m_runId = res["data"].toObject()["run_id"].toString();
     if (res["status"].toString() != "ok" || m_runId.isEmpty()) {
-      showStageError(3, res["error"].toObject()["message"].toString(QStringLiteral("未取得执行编号，请检查执行记录后再开始新任务")));
+      const QString message = res["error"].toObject()["message"].toString(
+          QStringLiteral("未取得执行编号，请检查执行记录后再开始新任务"));
+      showStageError(3, message);
+      m_executionPage->showExecutionError(message);
+      statusBar()->showMessage(message, 10000);
       setStage(Failed);
       return;
     }
@@ -1057,8 +1068,7 @@ void SimpleMainWindow::startExecution()
     m_api->post("/api/runs/" + runId + "/execute", {}, 10000,
       [this, self, revision, runId](const QJsonObject &started) {
         if (!self || revision != m_workflowRevision || runId != m_runId) return;
-        m_executionPage->showRun(runId);
-        m_navList->setCurrentRow(4);
+        m_executionPage->showRun(runId, false);
         if (started["status"].toString() != "ok") {
           // A timeout does not prove that the server failed to start.
           m_workflowHint->setText(QStringLiteral("启动响应异常，正在核对本次执行状态；请勿重复启动。"));
@@ -1163,7 +1173,7 @@ void SimpleMainWindow::onPollRun()
         showStageError(3, data["final_summary"].toString(QStringLiteral("执行失败或已中止，可查看执行详情并生成本次结果报告")));
         updateStageRow(4, "—", 0, QStringLiteral("可生成结果报告"), "#b45309");
         setStage(Failed);
-        m_navList->setCurrentRow(0);
+        statusBar()->showMessage(QStringLiteral("本次执行失败或已中止，可点击“返回当前任务”查看详情。"), 10000);
       }
       return;
     }
@@ -1212,7 +1222,7 @@ void SimpleMainWindow::onGenerateCurrentReport()
         if (res["status"].toString() != "ok" || id.isEmpty()) {
           showStageError(4, res["error"].toObject()["message"].toString(QStringLiteral("报告未生成，请重试；本次执行结果已保留")));
           setStage(Failed);
-          m_navList->setCurrentRow(0);
+          statusBar()->showMessage(QStringLiteral("本次报告生成失败，可点击“返回当前任务”重试。"), 10000);
           return;
         }
         finishReport(id, title);
@@ -1229,8 +1239,6 @@ void SimpleMainWindow::finishReport(const QString &reportId, const QString &titl
   m_viewReportBtn->show();
   setStage(Done);
   loadHistory();
-  // Keep the completed task visible; its report opens by exact ID.
-  m_navList->setCurrentRow(0);
   statusBar()->showMessage(QStringLiteral("本次报告已生成，点击“查看本次报告”直接预览或导出。"), 10000);
 }
 

@@ -321,7 +321,7 @@ Action: 使用以下 XML 格式之一：
   <action type="adjust" toolId="xxx" newArgs='["new1", "new2"]' stepIndex="当前步骤索引" />
   <action type="insert" toolId="xxx" args='["arg1", "arg2"]' position="after" />
   <action type="pivot" toolId="xxx" args='["arg1", "arg2"]' />
-  <action type="parallel" tools='[{"toolId":"gobuster","args":["-m","dir","-u","http://target:8080","-w","config/wordlists/common_dirs.txt"]}]' />
+  <action type="parallel" tools='[{"toolId":"gobuster","args":["dir","-u","http://target:8080","-w","/usr/share/wordlists/common_dirs.txt"]}]' />
   <action type="stop" reason="总结原因" finalSummary="最终报告文本" />
 
 注意：args 必须为严格的 JSON 序列化数组。不要输出任何其他内容。`;
@@ -381,7 +381,7 @@ Action: 使用以下 XML 格式之一：
   <action type="adjust" toolId="xxx" newArgs='["new1", "new2"]' stepIndex="当前步骤索引" />
   <action type="insert" toolId="xxx" args='["arg1", "arg2"]' position="after" />
   <action type="pivot" toolId="xxx" args='["arg1", "arg2"]' />
-  <action type="parallel" tools='[{"toolId":"gobuster","args":["-m","dir","-u","http://target:8080","-w","config/wordlists/common_dirs.txt"]}]' />
+  <action type="parallel" tools='[{"toolId":"gobuster","args":["dir","-u","http://target:8080","-w","/usr/share/wordlists/common_dirs.txt"]}]' />
   <action type="stop" reason="总结原因" finalSummary="最终报告文本" />
 
 注意：args 必须为严格的 JSON 序列化数组。不要输出任何其他内容。`;
@@ -419,7 +419,7 @@ function buildAllInsertHints({ evidenceHistory, stepResult, remainingSteps, targ
 
     if (hasHttpPort && !toolInPlan('gobuster') && !toolInPlan('dirb') && !toolInPlan('ffuf')) {
       const targetUrl = buildTargetUrl();
-      hints.push(`\n\n⚠️ 强制规则 [规则1]：证据显示目标存在 HTTP 服务端口，但当前计划中没有目录枚举步骤。你必须使用 insert Action 插入 gobuster 目录枚举步骤，例如：\n<action type="insert" toolId="gobuster" args='["-m", "dir", "-u", "${targetUrl}", "-w", "config/wordlists/common_dirs.txt"]' position="after" />\n这是强制要求，不允许使用 continue。`);
+      hints.push(`\n\n⚠️ 强制规则 [规则1]：证据显示目标存在 HTTP 服务端口，但当前计划中没有目录枚举步骤。你必须使用 insert Action 插入 gobuster 目录枚举步骤，例如：\n<action type="insert" toolId="gobuster" args='["dir", "-u", "${targetUrl}", "-w", "/usr/share/wordlists/common_dirs.txt"]' position="after" />\n这是强制要求，不允许使用 continue。`);
     }
   }
 
@@ -441,7 +441,11 @@ function buildAllInsertHints({ evidenceHistory, stepResult, remainingSteps, targ
 
     if (hasLoginForm && !toolInPlan('hydra')) {
       const targetUrl = buildTargetUrl();
-      hints.push(`\n\n🚨 强制规则 [规则3]：检测到登录表单，你必须使用 insert Action 插入 hydra 进行认证测试：\n<action type="insert" toolId="hydra" args='["-l", "admin", "-P", "config/wordlists/common_passwords.txt", "${targetUrl}", "http-post-form", "/login:user=^USER^&pass=^PASS^:F=incorrect"]' position="after" />\n这是强制要求，不允许使用 continue。`);
+      const parsedTarget = new URL(targetUrl);
+      const hydraArgs = JSON.stringify(['-l', 'admin', '-P', '/usr/share/wordlists/common_passwords.txt',
+        '-s', parsedTarget.port || (parsedTarget.protocol === 'https:' ? '443' : '80'), parsedTarget.hostname,
+        parsedTarget.protocol === 'https:' ? 'https-post-form' : 'http-post-form', '/login:user=^USER^&pass=^PASS^:F=incorrect']);
+      hints.push(`\n\n🚨 强制规则 [规则3]：检测到登录表单，建议使用 hydra 进行认证测试。须依据实际表单确认路径、参数名、CSRF 及成功/失败条件，不能把示例直接视为有效认证测试：\n<action type="insert" toolId="hydra" args='${hydraArgs}' position="after" />`);
     }
   }
 
@@ -462,6 +466,7 @@ function buildAllInsertHints({ evidenceHistory, stepResult, remainingSteps, targ
       || /\b(actuator|heapdump|threaddump)\b/i.test(currentOutput);
 
     if (hasActuator && !toolInPlan('curl') && !toolInPlan('wget')) {
+      const targetUrl = buildTargetUrl();
       hints.push(`\n\n🚨 强制规则 [规则5]：检测到 Actuator/敏感端点，你必须使用 insert Action 插入 curl 进行信息泄露检测：\n<action type="insert" toolId="curl" args='["-s", "${targetUrl}/actuator/env"]' position="after" />\n这是强制要求，不允许使用 continue。`);
     }
   }
@@ -560,7 +565,7 @@ export async function reactDecide(params) {
     evidenceHistory, remainingSteps, target, targetClass,
     aiConfig, reactCallCount = 0, guardState, ruleMatchContext,
     payloadContext, failedToolCounts = [], totalSteps = 0, completedSteps = 0,
-    explorationMode = false, detectedTechniques = [], appContext = '',
+    explorationMode = false, detectedTechniques = [], appContext = '', signal,
   } = params;
 
   // Safety: if ReAct called too many times, auto-continue
@@ -632,7 +637,7 @@ export async function reactDecide(params) {
 
   // Call LLM (never throws — returns fallback on failure)
   console.log(`[ReAct] Step ${stepIndex} [${toolId}]: calling LLM (call #${reactCallCount + 1})`);
-  const rawResponse = await callLlmReact(prompt, aiConfig || {});
+  const rawResponse = await callLlmReact(prompt, { ...aiConfig, signal });
 
   // Clean and parse response
   const decision = parseAction(rawResponse);
@@ -682,7 +687,7 @@ export async function reactDecide(params) {
   // reflection to avoid doubling LLM calls for common operations.
   const isHighRisk = HIGH_RISK_ACTIONS.includes(decision.action)
     || (decision.action === 'insert' && decision.toolId && HIGH_RISK_TOOLS.has(decision.toolId));
-  if (isHighRisk && reactCallCount < MAX_REACT_CALLS - 1) {
+  if (isHighRisk && reactCallCount < MAX_REACT_CALLS - 1 && !signal?.aborted) {
     try {
       const reflectionPrompt = buildReflectionPrompt({
         stepIndex, toolId, proposedDecision: decision,
@@ -690,7 +695,7 @@ export async function reactDecide(params) {
       });
 
       console.log(`[ReAct] 🪞 Step ${stepIndex}: self-critique for action="${decision.action}"${decision.toolId ? ` tool="${decision.toolId}"` : ''}`);
-      const reflectionResponse = await callLlmReact(reflectionPrompt, aiConfig || {});
+      const reflectionResponse = await callLlmReact(reflectionPrompt, { ...aiConfig, signal });
       const reflection = parseReflection(reflectionResponse);
 
       if (!reflection.confirmed && reflection.alternative) {

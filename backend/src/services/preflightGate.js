@@ -12,6 +12,9 @@ import { IMAGE_MAP, BIN_MAP } from '../tools/toolRunner.js';
 import { resolveTargetProfile, derivePreferredClass, checkTargetTypeCompatibility } from './targetProfileResolver.js';
 import { buildContextForTarget } from './targetAdapters/index.js';
 import { inspectRuntimeResources, inspectWordlistFiles } from './resourceInspection.js';
+import { ensureBuiltinWordlists } from './wordlistBootstrap.js';
+import { discoverTargetProfile, loadTargetProfile } from './targetDiscovery.js';
+import { validateVariablePlan } from './executionVariables.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = dirname(__filename);
@@ -33,7 +36,6 @@ function isValidTarget(target) {
 
 // ── Template variable pattern ─────────────────────────────────────────
 // Detect any {{...}} that is NOT exactly <target>
-const TEMPLATE_VAR_PATTERN = /\{\{([^}]+)\}\}/g;
 
 /**
  * Run all preflight checks for a playbook execution.
@@ -43,8 +45,14 @@ const TEMPLATE_VAR_PATTERN = /\{\{([^}]+)\}\}/g;
  * @param {object} params.db - better-sqlite3 Database
  * @returns {{ passed: boolean, checks: Array<{name, passed, message}> }}
  */
-export async function runPreflightChecks({ playbookId, target, db }) {
+export async function runPreflightChecks({ playbookId, target, db, scanTaskIds = [], runId, signal }) {
   const checks = [];
+  try {
+    const created = ensureBuiltinWordlists(PROJECT_ROOT);
+    if (created.length) console.log(`[Preflight] Created builtin wordlists: ${created.join(', ')}`);
+  } catch (error) {
+    checks.push({ name: 'builtin_wordlists', passed: false, message: error.message });
+  }
 
   // ── Check 1: target_fit ────────────────────────────────────────────
   {
@@ -62,7 +70,7 @@ export async function runPreflightChecks({ playbookId, target, db }) {
   {
     // Fetch playbook metadata for target type info
     const pb = db.prepare('SELECT target_type, not_suitable_for FROM playbooks WHERE playbook_id = ?').get(playbookId);
-    let targetProfile = null;
+    let targetProfile = loadTargetProfile(db, target, scanTaskIds);
     let compatOk = true;
     let compatMsg = 'No target type restriction';
 
@@ -70,7 +78,18 @@ export async function runPreflightChecks({ playbookId, target, db }) {
       const playbookTargetTypes = tryJson(pb.target_type);
       const notSuitableFor = tryJson(pb.not_suitable_for);
       const preferredClass = derivePreferredClass(playbookTargetTypes);
-      targetProfile = resolveTargetProfile(target, { preferredTargetClass: preferredClass });
+      if (preferredClass && !targetProfile.application) targetProfile = { ...targetProfile, ...resolveTargetProfile(target, { preferredTargetClass: preferredClass }) };
+      if (isValidTarget(target) && (/^https?:\/\//i.test(target) || playbookTargetTypes.some(type => ['dvwa', 'web', 'web_url'].includes(type)))) {
+        try {
+          const discovered = await discoverTargetProfile(db, target, scanTaskIds, { signal });
+          targetProfile = preferredClass && !discovered.application
+            ? { ...discovered, ...resolveTargetProfile(target, { preferredTargetClass: preferredClass }) } : discovered;
+          checks.push({ name: 'target_discovery', passed: true, message: targetProfile.application
+            ? `Application identified: ${targetProfile.application.name} (${targetProfile.application.confidence})` : 'HTTP target reachable; application fingerprint unknown' });
+        } catch (error) {
+          checks.push({ name: 'target_discovery', passed: false, message: error.message });
+        }
+      }
 
       // Check notSuitableFor (priority exclusion)
       if (notSuitableFor.length > 0 && notSuitableFor.includes(targetProfile.target_class)) {
@@ -88,7 +107,6 @@ export async function runPreflightChecks({ playbookId, target, db }) {
       }
     } else {
       // No playbook metadata — just resolve profile for info
-      targetProfile = resolveTargetProfile(target);
       compatMsg = `target_class=${targetProfile.target_class} (playbook metadata not found, skipping compat check)`;
     }
 
@@ -98,11 +116,13 @@ export async function runPreflightChecks({ playbookId, target, db }) {
       message: compatOk ? `Target class compatible: ${compatMsg}` : `Target class incompatible: ${compatMsg}`,
       target_profile: targetProfile,
     });
+    if (runId) db.prepare('UPDATE execution_runs SET target_class = ?, target_profile = ? WHERE run_id = ?')
+      .run(targetProfile.target_class, JSON.stringify(targetProfile), runId);
   }
 
   // ── Fetch playbook steps from DB ───────────────────────────────────
   const steps = db.prepare(
-    `SELECT step_index, tool_id, args_template FROM playbook_steps
+    `SELECT step_index, tool_id, args_template, input_variables, output_variables, payload_variables FROM playbook_steps
      WHERE playbook_id = ? ORDER BY step_index`
   ).all(playbookId);
 
@@ -193,63 +213,17 @@ export async function runPreflightChecks({ playbookId, target, db }) {
 
   // ── Check 4: template_vars ─────────────────────────────────────────
   {
-    // Known context variables provided by targetAdapters at runtime
-    const KNOWN_CONTEXT_VARS = new Set([
-      'host', 'port', 'scheme', 'base_url', 'target_url', 'target_class',
-      'login_url', 'dvwa_login_url', 'sqli_url', 'dvwa_sqli_url', 'dvwa_cookie',
-      'security_level', 'domain', 'username', 'password', 'hash',
-      'smb_port', 'winrm_port', 'ldap_port', 'rdp_port',
-      'aws_region', 'aws_profile', 'aws_account_id', 's3_bucket',
-      'wordlist_small', 'wordlist_medium', 'wordlist_small_users', 'wordlist_small_passwords',
-      'nuclei_template_dir', 'evidence_dir',
-      // application target adapter context variables
-      'api_base_url', 'api_base_path', 'auth_method', 'auth_endpoint', 'content_type',
-      'graphql_endpoint', 'introspection_enabled',
-      'swagger_url', 'openapi_url',
-      'admin_url', 'signup_url',
-    ]);
-
-    const issues = [];
     const profile = checks.find(check => check.name === 'target_class_compatibility')?.target_profile;
     const context = profile ? buildContextForTarget(profile) : {};
-    for (const step of steps) {
-      if (!step.args_template) continue;
-      let args;
-      try {
-        args = JSON.parse(step.args_template);
-      } catch {
-        issues.push({ step_index: step.step_index, unresolved: 'Invalid JSON argument template' });
-        continue;
-      }
-      if (!Array.isArray(args)) {
-        issues.push({ step_index: step.step_index, unresolved: 'Argument template must be an array' });
-        continue;
-      }
-      for (const arg of args) {
-        if (typeof arg !== 'string') continue;
-        let match;
-        while ((match = TEMPLATE_VAR_PATTERN.exec(arg)) !== null) {
-          const inner = match[1].trim();
-          // Allow <target> and known context variables
-          if (match[1] !== inner || !/^[a-z_]+$/.test(inner) || !KNOWN_CONTEXT_VARS.has(inner)
-              || context[inner] === undefined || context[inner] === null || String(context[inner]).trim() === ''
-              || /\b(?:placeholder|CHANGE_ME|REPLACE_ME)\b/i.test(String(context[inner]))) {
-            issues.push({
-              step_index: step.step_index,
-              tool_id: step.tool_id,
-              unresolved: match[0],
-            });
-          }
-        }
-      }
-    }
-    const ok = issues.length === 0;
+    const variablePlan = validateVariablePlan(steps, context);
+    const ok = variablePlan.passed;
     checks.push({
       name: 'template_vars',
       passed: ok,
       message: ok
-        ? 'All template variables are properly resolvable'
-        : `Unresolved template variables found: ${issues.map(i => `${i.unresolved} (step ${i.step_index})`).join(', ')}`,
+        ? 'Static variables and ordered runtime producers validated'
+        : `Unresolved template variables found: ${variablePlan.issues.join(', ')}`,
+      deferred_variables: variablePlan.deferred,
     });
   }
 

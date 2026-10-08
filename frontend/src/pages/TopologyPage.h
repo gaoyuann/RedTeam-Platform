@@ -3,6 +3,8 @@
 #include "models/TopologyTypes.h"
 
 #include <QMap>
+#include <QJsonObject>
+#include <QSet>
 #include <QWidget>
 
 class ApiClient;
@@ -38,6 +40,10 @@ public:
     void setTarget(const QString &target);
     void setPipelineContext(const QString &pipelineId, const QString &target,
                             const QStringList &scanIds, bool scanFinished);
+
+public slots:
+    void onScanStarted(const QJsonObject &data);
+    void onScanCompleted(const QJsonObject &data);
 
 private slots:
     void onRefreshScans();
@@ -127,6 +133,9 @@ private:
     QString m_selectedScanTaskId;
     int m_scanRefreshRevision = 0;
     QList<TopologyScanRecord> m_recentRecords;
+    QSet<QString> m_autoTopologyGenerationIds;
+    QSet<QString> m_observedCompletedScanIds;
+    bool m_scanSnapshotInitialized = false;
 
     // Hero stat cards
     QLabel *m_currentStatusValueLabel;

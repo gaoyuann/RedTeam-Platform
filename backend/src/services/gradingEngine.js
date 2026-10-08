@@ -24,30 +24,23 @@ export function computeGrade(runId) {
     ).all(run.playbook_id);
   }
 
-  // Get playbook MITRE techniques
-  let playbookMitre = [];
-  if (run.playbook_id) {
-    const pb = db.prepare('SELECT mitre_techniques FROM playbooks WHERE playbook_id = ?').get(run.playbook_id);
-    if (pb?.mitre_techniques) {
-      try { playbookMitre = JSON.parse(pb.mitre_techniques); } catch {}
-    }
-  }
-
   // Collect MITRE hits from evidence
   const evidence = db.prepare(
-    'SELECT mitre_hits FROM evidence_records WHERE run_id = ?'
+    'SELECT step_index, tool_id, mitre_hits, evidence_data FROM evidence_records WHERE run_id = ?'
   ).all(runId);
   const mitreHitSet = new Set();
   for (const e of evidence) {
     if (!e.mitre_hits) continue;
     try {
       const hits = JSON.parse(e.mitre_hits);
-      for (const h of hits) mitreHitSet.add(h);
+      const data = JSON.parse(e.evidence_data || '{}');
+      const successfulStep = execSteps.find(step => step.step_index === e.step_index && step.tool_id === e.tool_id);
+      if (data.success === false || !successfulStep || successfulStep.success !== 1 || successfulStep.exit_code !== 0) continue;
+      for (const hit of hits) {
+        const techniqueId = typeof hit === 'string' ? hit : hit?.id;
+        if (/^T\d{4}(\.\d{3})?$/.test(techniqueId || '')) mitreHitSet.add(techniqueId);
+      }
     } catch {}
-  }
-  // Also count playbook-declared techniques as covered if run completed
-  if (run.status === 'COMPLETED') {
-    for (const t of playbookMitre) mitreHitSet.add(t);
   }
 
   // Step-based scoring
@@ -60,7 +53,7 @@ export function computeGrade(runId) {
       const score = pbStep.score || 0;
       total += score;
       const execStep = execSteps.find(s => s.step_index === pbStep.step_index);
-      const success = execStep ? execStep.success === 1 : false;
+      const success = !!execStep && execStep.tool_id === pbStep.tool_id && execStep.success === 1 && execStep.exit_code === 0;
       const stepEarned = success ? score : 0;
       earned += stepEarned;
       breakdown.push({
@@ -77,14 +70,14 @@ export function computeGrade(runId) {
     // Fallback: 10 points per execution step
     for (const s of execSteps) {
       total += 10;
-      const stepEarned = s.success === 1 ? 10 : 0;
+      const stepEarned = s.success === 1 && s.exit_code === 0 ? 10 : 0;
       earned += stepEarned;
       breakdown.push({
         stepIndex: s.step_index,
         stepId: null,
         name: null,
         toolId: s.tool_id,
-        success: s.success === 1,
+        success: s.success === 1 && s.exit_code === 0,
         score: 10,
         earned: stepEarned,
       });

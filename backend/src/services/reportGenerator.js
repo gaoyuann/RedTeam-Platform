@@ -1,12 +1,13 @@
 import { getDb } from '../db/connection.js';
 import { computeGrade } from './gradingEngine.js';
 import { randomUUID } from 'crypto';
+import { getReportAssessment } from './reportAssessment.js';
 
 export function generateReport(runId, title, generatedBy) {
   const db = getDb();
 
   const run = db.prepare(
-    'SELECT run_id, playbook_id, target, status, final_summary FROM execution_runs WHERE run_id = ?'
+    'SELECT run_id, playbook_id, target, status, final_summary, stop_reason FROM execution_runs WHERE run_id = ?'
   ).get(runId);
   if (!run) return { ok: false, error: 'Run not found' };
 
@@ -32,11 +33,12 @@ export function generateReport(runId, title, generatedBy) {
     playbook_name: playbookName,
     target: run.target,
     run_status: run.status,
+    assessment: getReportAssessment(db, run, steps),
     grade: grade.ok ? grade : null,
     steps: steps.map(s => ({
       step_index: s.step_index,
       tool_id: s.tool_id,
-      success: s.success === 1,
+      success: s.success === 1 && s.exit_code === 0,
       exit_code: s.exit_code,
       output_preview: (s.notes || '').slice(0, 500),
     })),

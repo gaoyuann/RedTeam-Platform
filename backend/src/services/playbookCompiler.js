@@ -6,6 +6,7 @@
 
 import { IMAGE_MAP, VIRTUAL_TOOLS } from '../tools/toolRunner.js';
 import { buildKGContextForStep } from './knowledgeEnricher.js';
+import { isContextControlledVariable } from './executionVariables.js';
 import {
   getPayloadById,
   extractPayloadData,
@@ -22,7 +23,7 @@ import {
  * @param {object} params.db - better-sqlite3 Database
  * @returns {{ ok: boolean, compiledSteps: Array, warnings: Array, errors: Array }}
  */
-export function compilePlaybook({ steps, target, db }) {
+export function compilePlaybook({ steps, target, db, context = {} }) {
   const compiledSteps = [];
   const warnings = [];
   const errors = [];
@@ -97,7 +98,7 @@ export function compilePlaybook({ steps, target, db }) {
       if (unresolvedVars) {
         // Variables resolved at runtime by commandTemplateRenderer + targetAdapters
         const RUNTIME_RESOLVABLE = new Set([
-          'host', 'port', 'base_url', 'target_url', 'login_url',
+          'host', 'port', 'base_url', 'target_url', 'login_url', 'auth_cookie',
           'admin_url', 'api_base_url', 'signup_url', 'reset_password_url',
           'dvwa_login_url', 'sqli_url', 'dvwa_sqli_url', 'dvwa_cookie',
           'wordlist_small', 'wordlist_small_users', 'wordlist_small_passwords',
@@ -159,6 +160,7 @@ export function compilePlaybook({ steps, target, db }) {
         let result = a.replace(/<target>/g, target || '');
         // Replace payload_variables in template (escape key for regex safety)
         for (const [key, value] of Object.entries(payloadVars)) {
+          if (isContextControlledVariable(key, context)) continue;
           const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
           result = result.replace(new RegExp(`\\{\\{${escapedKey}\\}\\}`, 'g'), value);
         }

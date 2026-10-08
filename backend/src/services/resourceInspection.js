@@ -2,6 +2,7 @@ import { accessSync, constants, statSync } from 'fs';
 import { delimiter, isAbsolute, join } from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { normalizeToolArgs, inspectToolWordlists } from '../tools/toolContracts.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -58,21 +59,18 @@ export function inspectWordlistFiles(steps, context, projectRoot, engine = 'dock
       issues.push(`Invalid argument template (step ${step.step_index})`);
       continue;
     }
-    for (const arg of args) {
-      if (typeof arg !== 'string') continue;
-      const value = arg.replace(/\{\{(wordlist_[a-z_]+)\}\}/g, (token, variable) => {
+    args = args.map(arg => typeof arg === 'string' ? arg.replace(/\{\{(wordlist_[a-z_]+)\}\}/g, (token, variable) => {
         if (typeof context[variable] === 'string' && context[variable].trim()) return context[variable];
         issues.push(`Missing resource variable: ${variable} (step ${step.step_index})`);
         return token;
-      });
-      for (const match of value.matchAll(/\/usr\/share\/wordlists\/[^\s'";|&<>]+/g)) {
-        const relative = match[0].slice('/usr/share/wordlists/'.length);
-        if (relative.split('/').includes('..')) {
-          issues.push(`Invalid resource path (step ${step.step_index})`);
-        } else {
-          required.add(engine === 'host' ? match[0] : join(projectRoot, 'data', 'wordlists', relative));
-        }
-      }
+      }) : arg);
+    try {
+      const normalized = normalizeToolArgs(step.tool_id, args, { projectRoot, engine });
+      const inspection = inspectToolWordlists(step.tool_id, normalized, projectRoot, engine);
+      inspection.required.forEach(path => required.add(path));
+      issues.push(...inspection.issues.map(issue => `${issue} (step ${step.step_index})`));
+    } catch (error) {
+      issues.push(`${error.message} (step ${step.step_index})`);
     }
   }
   for (const path of required) {

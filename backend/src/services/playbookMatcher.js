@@ -1,5 +1,5 @@
 import { getDb } from '../db/connection.js';
-import { resolveTargetProfile, checkTargetTypeCompatibility } from './targetProfileResolver.js';
+import { checkTargetTypeCompatibility } from './targetProfileResolver.js';
 
 // result_type → baseline_group mapping
 const RESULT_TYPE_MAP = {
@@ -45,6 +45,8 @@ const SEVERITY_WEIGHT = { critical: 4, high: 3, medium: 2, low: 1, info: 0.5 };
 
 export function matchPlaybooks(scanResults, targetClass = null) {
   const db = getDb();
+  const targetProfile = typeof targetClass === 'object' && targetClass !== null ? targetClass : null;
+  if (targetProfile) targetClass = targetProfile.target_class;
 
   // Load all non-generated playbooks (include metadata for target_class extraction)
   const playbooks = db.prepare(
@@ -67,6 +69,9 @@ export function matchPlaybooks(scanResults, targetClass = null) {
       targetTypes: tryJson(pb.target_type),
       target_class: targetClass,
     };
+  }).filter(pb => {
+    const requiresDvwa = pb.target_class === 'dvwa' || pb.targetTypes.includes('dvwa') && !pb.targetTypes.some(type => ['any', 'web', 'web_url', 'local_ip'].includes(type));
+    return !requiresDvwa || targetProfile?.application?.name === 'dvwa' && targetProfile.application.confidence >= 0.85;
   });
 
   // Score each playbook
@@ -74,6 +79,7 @@ export function matchPlaybooks(scanResults, targetClass = null) {
   const reasons = new Map();
 
   for (const result of scanResults) {
+    if (['scan_error', 'raw_output'].includes(result.result_type)) continue;
     const sev = SEVERITY_WEIGHT[result.severity] || 1;
 
     // 1) MITRE exact match (highest priority)

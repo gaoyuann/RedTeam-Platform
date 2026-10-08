@@ -4,13 +4,14 @@
  */
 import { getDb } from '../db/connection.js';
 import { computeGrade } from './gradingEngine.js';
+import { formatMitreHits, getReportAssessment } from './reportAssessment.js';
 
 export function generateHtml(runId, options = {}) {
   const db = getDb();
 
   // 1. 查询数据
   const run = db.prepare(
-    `SELECT run_id, playbook_id, target, status, engine_type, final_summary, created_at, updated_at
+    `SELECT run_id, playbook_id, target, status, engine_type, final_summary, stop_reason, created_at, updated_at
      FROM execution_runs WHERE run_id = ?`
   ).get(runId);
   if (!run) return { ok: false, error: 'Run not found' };
@@ -83,6 +84,10 @@ export function generateHtml(runId, options = {}) {
     <p><span class="label">引擎类型：</span>${esc(run.engine_type === 'react' ? 'ReAct 智能引擎' : '机械执行引擎')}</p>
     <p><span class="label">运行状态：</span>${esc(run.status === 'COMPLETED' ? '已完成' : run.status === 'FAILED' ? '失败' : run.status)}</p>
     <p><span class="label">开始时间：</span>${esc(run.created_at)}</p>`;
+  const assessment = getReportAssessment(db, run, steps);
+  html += `<p>${esc(assessment.executionText)}</p>
+    <p><span class="label">停止原因：</span>${esc(assessment.stopReason)}</p>
+    <p>${esc(assessment.notice)}</p>`;
 
   // 二、测试环境
   const uniqueTools = [...new Set(steps.map(s => s.tool_id))];
@@ -136,7 +141,7 @@ export function generateHtml(runId, options = {}) {
   if (steps.length > 0) {
     html += `<table><tr><th>步骤</th><th>工具</th><th>参数</th><th>结果</th><th>得分</th></tr>`;
     steps.forEach(s => {
-      const success = s.success === 1;
+      const success = s.success === 1 && s.exit_code === 0;
       const sg = grade.ok ? grade.breakdown.find(b => b.stepIndex === s.step_index) : null;
       const earned = sg ? `${sg.earned}/${sg.score}` : '-';
       html += `<tr>
@@ -155,8 +160,7 @@ export function generateHtml(runId, options = {}) {
   if (evidence.length > 0) {
     html += `<table><tr><th>步骤</th><th>工具</th><th>类型</th><th>MITRE 命中</th></tr>`;
     evidence.forEach(e => {
-      let hits = '';
-      try { hits = JSON.parse(e.mitre_hits || '[]').join(', '); } catch {}
+      const hits = formatMitreHits(e.mitre_hits);
       html += `<tr><td>${e.step_index + 1}</td><td>${esc(e.tool_id)}</td><td>${esc(e.evidence_type)}</td><td>${esc(hits.slice(0, 60))}</td></tr>`;
     });
     html += `</table>`;
@@ -214,9 +218,7 @@ export function generateHtml(runId, options = {}) {
     html += `<p>暂无自动生成的修复建议。</p>`;
   }
   if (grade.ok) {
-    const riskLevel = grade.percent >= 80 ? '高风险' : grade.percent >= 50 ? '中风险' : '低风险';
-    const riskColor = grade.percent >= 80 ? '#cc0000' : grade.percent >= 50 ? '#ff8c00' : '#228b22';
-    html += `<p><span class="label">综合风险评级：</span><span style="color:${riskColor};font-weight:bold;font-size:18px">${esc(riskLevel)}</span></p>`;
+    html += `<p><span class="label">综合风险评级：</span>${esc(assessment.riskLevel)}</p>`;
   }
 
   // 签名

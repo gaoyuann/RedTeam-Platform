@@ -30,6 +30,7 @@ public:
                     const QString &username = "", QWidget *parent = nullptr);
 
   /// Expose embedded stage-tab pages for WebSocket wiring in MainWindow.
+  TopologyPage *topoTab() const;
   ScanPage *scanTab() const;
   ExecutionPage *execTab() const;
   EvaluatePage *evalTab() const;  // 评估页（用于 run:complete 时预加载评分）

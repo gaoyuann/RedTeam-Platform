@@ -1,7 +1,7 @@
 {
   "id": "golden_dvwa_max_tools",
   "name": "DVWA 黄金杀伤链 (10工具饱和打击版 v2)",
-  "description": "结合定制轻量字典，调用 10 款全武器库进行饱和式打击。完美点亮 MITRE 攻击图谱并触达 100 分满分。",
+  "description": "使用轻量教学字典验证 DVWA 执行链路，评分仅依据有效执行与证据，不保证漏洞发现或满分。",
   "target": "172.17.0.3",
   "rolesAllowed": [
     "admin",
@@ -79,7 +79,7 @@
         "-u",
         "<target>",
         "-w",
-        "config/wordlists/common_dirs.txt",
+        "/usr/share/wordlists/common_dirs.txt",
         "-q"
       ],
       "description": "利用自定义字典发现 DVWA 隐藏的敏感路径。",
@@ -92,17 +92,14 @@
     },
     {
       "id": "step_5_curl_login",
+      "outputs": ["dvwa_cookie", "auth_cookie"],
       "name": "获取有效登录会话",
       "toolId": "curl",
       "argsTemplate": [
         "-s",
-        "-c",
-        "/tmp/dvwa_cookies.txt",
-        "-b",
-        "/tmp/dvwa_cookies.txt",
         "--data",
         "username=admin&password=password&Login=Login",
-        "<target>/login.php"
+        "{{login_url}}"
       ],
       "description": "使用默认凭据登录 DVWA，获取有效 session cookie。",
       "status": "PENDING",
@@ -119,7 +116,7 @@
         "-l",
         "admin",
         "-P",
-        "config/wordlists/common_passwords.txt",
+        "/usr/share/wordlists/common_passwords.txt",
         "-t",
         "2",
         "-f",
@@ -138,13 +135,14 @@
     },
     {
       "id": "step_7_sqlmap",
+      "inputs": ["sqli_url", "dvwa_cookie"],
       "name": "SQL 注入探测",
       "toolId": "sqlmap",
       "argsTemplate": [
         "-u",
-        "<target>/vulnerabilities/sqli/?id=1&Submit=Submit",
+        "{{sqli_url}}",
         "--cookie",
-        "security=low; PHPSESSID=dvwa_sess",
+        "{{dvwa_cookie}}",
         "--batch",
         "--level",
         "1",
@@ -165,9 +163,9 @@
       "toolId": "ffuf",
       "argsTemplate": [
         "-u",
-        "<target>/FUZZ",
+        "{{base_url}}/FUZZ",
         "-w",
-        "config/wordlists/common_dirs.txt"
+        "/usr/share/wordlists/common_dirs.txt"
       ],
       "description": "并发探测可能存在的未授权访问路径。如果 ffuf 未安装则跳过。",
       "status": "PENDING",
@@ -183,7 +181,7 @@
       "toolId": "arjun",
       "argsTemplate": [
         "-u",
-        "<target>/login.php"
+        "{{login_url}}"
       ],
       "description": "针对登录页面进行 HTTP 参数挖掘。如果 arjun 未安装则跳过。",
       "status": "PENDING",

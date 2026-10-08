@@ -10,6 +10,7 @@ import {
 } from 'docx';
 import { getDb } from '../db/connection.js';
 import { computeGrade } from './gradingEngine.js';
+import { formatMitreHits, getReportAssessment } from './reportAssessment.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -105,7 +106,7 @@ export async function generateDocx(runId, options = {}) {
 
   // 1. 查询执行记录
   const run = db.prepare(
-    `SELECT run_id, playbook_id, target, status, engine_type, final_summary, created_at, updated_at
+    `SELECT run_id, playbook_id, target, status, engine_type, final_summary, stop_reason, created_at, updated_at
      FROM execution_runs WHERE run_id = ?`
   ).get(runId);
   if (!run) return { ok: false, error: 'Run not found' };
@@ -188,6 +189,10 @@ export async function generateDocx(runId, options = {}) {
   sections.push(labelValue('运行状态', run.status === 'COMPLETED' ? '已完成' : run.status === 'FAILED' ? '失败' : run.status));
   sections.push(labelValue('开始时间', run.created_at));
   sections.push(labelValue('结束时间', run.updated_at));
+  const assessment = getReportAssessment(db, run, steps);
+  sections.push(bodyPara(assessment.executionText));
+  sections.push(labelValue('停止原因', assessment.stopReason));
+  sections.push(bodyPara(assessment.notice));
 
   // ── 二、测试环境 ──────────────────────────────────────────────────
   const uniqueTools = [...new Set(steps.map(s => s.tool_id))];
@@ -270,7 +275,7 @@ export async function generateDocx(runId, options = {}) {
         tableHeader: true,
       }),
       ...steps.map((s, i) => {
-        const success = s.success === 1;
+        const success = s.success === 1 && s.exit_code === 0;
         const stepGrade = grade.ok && Array.isArray(grade.breakdown) ? grade.breakdown.find(b => b.stepIndex === s.step_index) : null;
         const earned = stepGrade ? `${stepGrade.earned}/${stepGrade.score}` : '-';
         return new TableRow({
@@ -309,8 +314,7 @@ export async function generateDocx(runId, options = {}) {
         tableHeader: true,
       }),
       ...evidence.map(e => {
-        let mitreHits = '';
-        try { mitreHits = JSON.parse(e.mitre_hits || '[]').join(', '); } catch {}
+        const mitreHits = formatMitreHits(e.mitre_hits);
         return new TableRow({
           children: [
             makeCell(String(e.step_index + 1), { width: { size: 700, type: WidthType.DXA } }),
@@ -341,8 +345,7 @@ export async function generateDocx(runId, options = {}) {
           indent: { left: 400 },
         }));
       }
-      let mitreHits = '';
-      try { mitreHits = JSON.parse(e.mitre_hits || '[]').join(', '); } catch {}
+      const mitreHits = formatMitreHits(e.mitre_hits);
       if (mitreHits) sections.push(labelValue('MITRE 命中', mitreHits));
       let recs = '';
       try { recs = JSON.parse(e.recommendations || '[]').map(r => typeof r === 'string' ? r : r.title || '').filter(Boolean).join('；'); } catch {}
@@ -419,17 +422,11 @@ export async function generateDocx(runId, options = {}) {
 
   // 综合风险评级
   if (grade.ok) {
-    const riskLevel = grade.percent >= 80 ? '高风险' : grade.percent >= 50 ? '中风险' : '低风险';
-    const riskColor = grade.percent >= 80 ? 'CC0000' : grade.percent >= 50 ? 'FF8C00' : '228B22';
     sections.push(bodyPara([
-      cnBold('综合风险评级：'), cn(riskLevel, { bold: true, size: 28, color: riskColor }),
+      cnBold('综合风险评级：'), cn(assessment.riskLevel, { bold: true, size: 28 }),
     ]));
     sections.push(bodyPara(
-      `目标系统 ${run.target} 在本次渗透测试中得分 ${grade.percent}%，` +
-      `覆盖 ${grade.mitre.covered} 项 MITRE ATT&CK 技术。` +
-      (grade.percent >= 80 ? '系统存在严重安全隐患，建议立即整改。' :
-       grade.percent >= 50 ? '系统存在一定安全隐患，建议尽快修复。' :
-       '系统安全状况较好，建议持续监测。')
+      `本次教学执行得分 ${grade.percent}%，有效证据覆盖 ${grade.mitre.covered} 项 MITRE ATT&CK 技术；目标风险需依据确认发现单独评级。`
     ));
   }
 

@@ -5,6 +5,7 @@
 import carbone from 'carbone';
 import { getDb } from '../db/connection.js';
 import { computeGrade } from './gradingEngine.js';
+import { formatMitreHits, getReportAssessment } from './reportAssessment.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -21,7 +22,7 @@ function collectReportData(runId) {
   const db = getDb();
 
   const run = db.prepare(
-    `SELECT run_id, playbook_id, target, status, engine_type, final_summary, created_at, updated_at
+    `SELECT run_id, playbook_id, target, status, engine_type, final_summary, stop_reason, created_at, updated_at
      FROM execution_runs WHERE run_id = ?`
   ).get(runId);
   if (!run) return null;
@@ -46,6 +47,7 @@ function collectReportData(runId) {
   }
 
   // Build flat data object for template
+  const assessment = getReportAssessment(db, run, steps);
   const data = {
     title: `渗透测试评估报告 - ${run.target}`,
     target: run.target || 'N/A',
@@ -73,21 +75,26 @@ function collectReportData(runId) {
     mitre_score: grade.ok ? grade.mitre.score : 0,
 
     // Risk
-    risk_level: grade.ok ? (grade.percent >= 80 ? '高风险' : grade.percent >= 50 ? '中风险' : '低风险') : 'N/A',
+    risk_level: assessment.riskLevel,
+    execution_summary: assessment.executionText,
+    assessment_notice: assessment.notice,
+    stop_reason: assessment.stopReason,
+    failed_steps: assessment.failed,
+    unexecuted_steps: assessment.unexecuted,
+    attempt_count: assessment.attempts,
 
     // Arrays for table rendering
     steps: steps.map((s, i) => ({
       index: i + 1,
       tool_id: s.tool_id,
       args: (s.args || '').slice(0, 100),
-      result: s.success === 1 ? '成功' : '失败',
+      result: s.success === 1 && s.exit_code === 0 ? '成功' : '失败',
       exit_code: s.exit_code,
       notes: (s.notes || '').slice(0, 200),
     })),
 
     evidence: evidence.map((e, i) => {
-      let mitreHits = '';
-      try { mitreHits = JSON.parse(e.mitre_hits || '[]').join(', '); } catch {}
+      const mitreHits = formatMitreHits(e.mitre_hits);
       let recs = '';
       try { recs = JSON.parse(e.recommendations || '[]').map(r => typeof r === 'string' ? r : r.title || '').filter(Boolean).join('；'); } catch {}
       return {
