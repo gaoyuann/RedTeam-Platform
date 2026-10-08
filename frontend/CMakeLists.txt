@@ -13,11 +13,9 @@ set(SOURCES
     src/SimpleMainWindow.cpp
     src/ApiClient.cpp
     src/WsClient.cpp
-    src/LiveActivityPanel.cpp
     src/ToastOverlay.cpp
     src/SplashDialog.cpp
     src/LoginDialog.cpp
-    src/CortexPanel.cpp
     src/pages/BasePage.cpp
     src/pages/FlowPage.cpp
     src/pages/DeployConfigPage.cpp
@@ -43,12 +41,13 @@ set(HEADERS
     src/SimpleMainWindow.h
     src/ApiClient.h
     src/WsClient.h
-    src/LiveActivityPanel.h
     src/ToastOverlay.h
     src/SplashDialog.h
     src/LoginDialog.h
     src/Theme.h
-    src/CortexPanel.h
+    src/widgets/WorkbenchTabs.h
+    src/widgets/MetricCard.h
+    src/widgets/ScanResultOverview.h
     src/pages/BasePage.h
     src/pages/FlowPage.h
     src/pages/DeployConfigPage.h

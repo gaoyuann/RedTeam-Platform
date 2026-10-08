@@ -1,3 +1,4 @@
+#include "../widgets/WorkbenchTabs.h"
 #include "PlaybookPage.h"
 #include "KnowledgeGraphPage.h"
 #include "PayloadPage.h"
@@ -36,7 +37,7 @@ void PlaybookPage::setupUI() {
   outerLayout->setContentsMargins(0, 0, 0, 0);
   outerLayout->setSpacing(0);
 
-  m_tabs = new QTabWidget(this);
+  m_tabs = new WorkbenchTabs(this);
 
   // ── Tab 0: Playbook 库 ───────────────────────────────────────────
   m_playbookTab = new QWidget(m_tabs);
@@ -174,7 +175,7 @@ void PlaybookPage::setupUI() {
   cardHead->addStretch();
   m_copyArgsBtn = new QPushButton("复制参数");
   m_copyArgsBtn->setToolTip("复制当前步骤的参数模板到剪贴板");
-  m_copyArgsBtn->setStyleSheet("padding:2px 10px; font-size:12px; min-height:0px;");
+  m_copyArgsBtn->setProperty("compact", true);
   cardHead->addWidget(m_copyArgsBtn);
   cardL->addLayout(cardHead);
   m_stepDetail = new QTextBrowser;
@@ -606,6 +607,8 @@ void PlaybookPage::onNewPlaybook() {
   form->addRow("目标类型:", targetEdit);
 
   auto *btnBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+
+  UiUtil::styleDialogButtons(btnBox);
   form->addRow(btnBox);
   connect(btnBox, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
   connect(btnBox, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);

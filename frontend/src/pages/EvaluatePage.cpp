@@ -1,3 +1,4 @@
+#include "../widgets/WorkbenchTabs.h"
 #include "EvaluatePage.h"
 #include "../ApiClient.h"
 #include "../Theme.h"
@@ -125,7 +126,7 @@ void EvaluatePage::setupUI() {
 
   auto *layout = new QVBoxLayout(this);
   layout->setContentsMargins(12, 8, 12, 8);
-  m_tabs = new QTabWidget;
+  m_tabs = new WorkbenchTabs;
 
   // ── Tab 1: Grading ────────────────────────────────────────────────
   auto *gradeW = new QWidget;
@@ -218,6 +219,7 @@ void EvaluatePage::setupUI() {
   m_reportStack = new QStackedWidget;
   m_reportDetail = new QTextEdit;
   m_reportDetail->setReadOnly(true);
+  m_reportDetail->setPlaceholderText("选择上方报告，查看报告内容；可切换预览或导出。");
   m_reportStack->addWidget(m_reportDetail);  // index 0 = JSON source
 
   m_reportPreview = new QTextBrowser;
@@ -350,7 +352,7 @@ void EvaluatePage::setupUI() {
   auto *capRightW = new QWidget;
   auto *capRightOuter = new QVBoxLayout(capRightW);
   capRightOuter->setContentsMargins(0, 0, 0, 0);
-  auto *captureDetails = new QTabWidget;
+  auto *captureDetails = new WorkbenchTabs;
   captureDetails->setObjectName("captureDetails");
   capRightOuter->addWidget(captureDetails);
   auto *captureConfig = new QWidget;

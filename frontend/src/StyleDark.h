@@ -3,17 +3,6 @@
 
 static const char *GLOBAL_STYLE_DARK = R"css(
 /* ── QPushButton ──────────────────────────────────────────────── */
-QPushButton {
-  background: #3a8fd6; color: #f8fafc; border: none; border-radius: 5px;
-  padding: 8px 20px; font-size: 14px; font-weight: bold; min-height: 32px;
-}
-QPushButton:hover { background: #4da3e8; }
-QPushButton:pressed { background: #2a7dd6; }
-QPushButton:disabled { background: #4a5568; color: #718096; }
-QPushButton#secondaryBtn { background: #2d3748; color: #e2e8f0; font-weight: normal; }
-QPushButton#secondaryBtn:hover { background: #4a5568; }
-QPushButton#dangerBtn { background: #e53e3e; color: #ffffff; }
-QPushButton#dangerBtn:hover { background: #c53030; }
 QPushButton#checkBtn {
   background: transparent; color: #a0aec0; border: 1px solid #4a5568;
   border-radius: 4px; padding: 4px 14px; font-weight: normal; min-height: 24px;

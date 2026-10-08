@@ -1,3 +1,4 @@
+#include "../UiUtil.h"
 #include "CampaignPage.h"
 #include "../Theme.h"
 #include "../ApiClient.h"
@@ -266,6 +267,8 @@ void CampaignPage::onNewCampaign() {
   form->addRow("自动推进:", autoAdvanceCb);
 
   auto *btnBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+
+  UiUtil::styleDialogButtons(btnBox);
   form->addRow(btnBox);
   connect(btnBox, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
   connect(btnBox, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);

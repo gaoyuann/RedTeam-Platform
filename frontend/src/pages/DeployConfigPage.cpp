@@ -600,13 +600,12 @@ void DeployConfigPage::loadLabList() {
       btnLayout->setContentsMargins(4, 2, 4, 2);
 
       // 紧凑按钮：默认按钮 + 单元行高会被裁切
-      const QString compactBtnCss = "padding:3px 10px; font-size:12px; min-height:0px;";
       auto *startBtn = new QPushButton("启动");
       auto *stopBtn = new QPushButton("停止");
       auto *verifyBtn = new QPushButton("自检");
-      startBtn->setStyleSheet(compactBtnCss);
-      stopBtn->setStyleSheet(compactBtnCss);
-      verifyBtn->setStyleSheet(compactBtnCss);
+      startBtn->setProperty("compact", true);
+      stopBtn->setProperty("compact", true);
+      verifyBtn->setProperty("compact", true);
 
       stopBtn->setProperty("danger", true);
       if (status == "running") {

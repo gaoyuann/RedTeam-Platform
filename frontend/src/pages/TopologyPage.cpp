@@ -1,3 +1,4 @@
+#include "../widgets/WorkbenchTabs.h"
 #include <QGraphicsItemGroup>
 #include <QStyleOptionGraphicsItem>
 #include "TopologyPage.h"
@@ -829,7 +830,7 @@ void TopologyPage::setupUI() {
     // Scanning and saved records are tools, not permanent columns around the canvas.
     auto *sourceDialog = makeDialog("topologySources", QStringLiteral("扫描与拓扑记录"));
     auto *sourceLayout = new QVBoxLayout(sourceDialog);
-    auto *sourceTabs = new QTabWidget;
+    auto *sourceTabs = new WorkbenchTabs;
     sourceLayout->addWidget(sourceTabs);
     auto *scanPage = new QWidget;
     auto *scanLayout = new QVBoxLayout(scanPage);
@@ -1005,7 +1006,7 @@ void TopologyPage::setupUI() {
     // Full editors live in a separate inspector with a scrollable property form.
     auto *inspector = makeDialog("topologyInspector", QStringLiteral("节点与连线"));
     auto *inspectorLayout = new QVBoxLayout(inspector);
-    auto *inspectorTabs = new QTabWidget;
+    auto *inspectorTabs = new WorkbenchTabs;
     inspectorLayout->addWidget(inspectorTabs);
     auto *nodesPage = new QWidget;
     auto *nodesLayout = new QVBoxLayout(nodesPage);
@@ -1163,8 +1164,17 @@ void TopologyPage::setupUI() {
         addEdge->setEnabled(m_addEdgeButton->isEnabled());
     });
     editButton->setMenu(editMenu);
+    editButton->setProperty("menuAction", true);
     m_saveTopologyButton = new QPushButton(QStringLiteral("保存"));
     m_saveTopologyButton->setProperty("primary", true);
+    for (auto *button : {sourcesButton, inspectorButton, infoButton, zoomOutButton,
+                         resetViewButton, zoomInButton, editButton, m_saveTopologyButton})
+        UiUtil::styleToolbarButton(button);
+    for (auto *button : {zoomOutButton, zoomInButton}) {
+        button->setProperty("iconOnly", true);
+        UiUtil::styleToolbarButton(button);
+        button->setFixedWidth(36);
+    }
     toolbar->addWidget(sourcesButton);
     toolbar->addWidget(inspectorButton);
     toolbar->addWidget(infoButton);

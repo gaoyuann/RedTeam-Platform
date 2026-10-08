@@ -1,8 +1,8 @@
+#include "../widgets/WorkbenchTabs.h"
 #include "ExecutionPage.h"
 #include "../Theme.h"
 #include "../UiUtil.h"
 #include "../ApiClient.h"
-#include "../CortexPanel.h"
 #include <QScrollArea>
 #include <QSplitter>
 #include <QFrame>
@@ -59,7 +59,7 @@ void ExecutionPage::setupUI() {
   mainLayout->setContentsMargins(12, 8, 12, 8);
 
   // ── Tab widget ─────────────────────────────────────────────────────
-  m_tabWidget = new QTabWidget(this);
+  m_tabWidget = new WorkbenchTabs(this);
 
   // ── Tab 1: 执行记录 ────────────────────────────────────────────────
   auto *tab1 = new QWidget;
@@ -145,14 +145,11 @@ void ExecutionPage::setupUI() {
 
   m_tabWidget->addTab(tab1, QStringLiteral("执行记录"));
 
-  // ── Tab 2: 执行详情 (左右分栏: Cortex + 步骤/证据) ─────────────────
+  // ── Tab 2: 执行详情（步骤 / 证据） ─────────────────────────────
   auto *tab2 = new QWidget;
   auto *tab2Layout = new QHBoxLayout(tab2);
   tab2Layout->setContentsMargins(0, 0, 0, 0);
   tab2Layout->setSpacing(0);
-
-  // ── Left: Cortex decision panel ────────────────────────────────────
-  m_cortexPanel = new CortexPanel(m_api);
 
   // ── Right: Step details + Evidence ─────────────────────────────────
   auto *rightWidget = new QWidget;
@@ -170,12 +167,7 @@ void ExecutionPage::setupUI() {
   m_stopBtn = new QPushButton(QStringLiteral("🛑 停止执行"));
   m_stopBtn->setMinimumWidth(110);
   m_stopBtn->setCursor(Qt::PointingHandCursor);
-  m_stopBtn->setStyleSheet(
-    "QPushButton { background: #ef4444; color: #ffffff; border: none; "
-    "border-radius: 6px; font-size: 12px; font-weight: bold; }"
-    "QPushButton:hover { background: #dc2626; }"
-    "QPushButton:pressed { background: #b91c1c; }"
-    "QPushButton:disabled { background: #fca5a5; color: #fef2f2; }");
+  m_stopBtn->setProperty("danger", true);
   m_stopBtn->setEnabled(false);  // disabled until a running run is loaded
   m_stopBtn->setToolTip(QStringLiteral("点击中止当前执行\n当前步骤完成后不再执行后续步骤"));
   statusRow->addWidget(m_stopBtn);
@@ -199,9 +191,9 @@ void ExecutionPage::setupUI() {
   // Step table
   auto *stepLabel = new QLabel("步骤执行详情"); stepLabel->setStyleSheet(Theme::SectionStyle);
   rightLayout->addWidget(stepLabel);
-  m_stepTable = new QTableWidget(0, 8);
+  m_stepTable = new QTableWidget(0, 7);
   UiUtil::EmptyHint::attach(m_stepTable, QStringLiteral("选择执行记录后展示步骤"));
-  m_stepTable->setHorizontalHeaderLabels({"步骤", "工具", "参数", "工具结果", "来源", "输出摘要", "载荷", "推理"});
+  m_stepTable->setHorizontalHeaderLabels({"步骤", "工具", "参数", "工具结果", "来源", "输出摘要", "载荷"});
   m_stepTable->setAlternatingRowColors(true);
   m_stepTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_stepTable->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -214,7 +206,6 @@ void ExecutionPage::setupUI() {
   m_stepTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
   m_stepTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
   m_stepTable->horizontalHeader()->setSectionResizeMode(6, QHeaderView::ResizeToContents);
-  m_stepTable->horizontalHeader()->setSectionResizeMode(7, QHeaderView::ResizeToContents);
   rightLayout->addWidget(m_stepTable, 1);
 
   // Evidence
@@ -237,12 +228,12 @@ void ExecutionPage::setupUI() {
   m_evidenceTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
   rightLayout->addWidget(m_evidenceTable, 1);
 
-  auto *detailTabs = new QTabWidget;
+  auto *detailTabs = new WorkbenchTabs;
   detailTabs->setObjectName("executionDetailTabs");
   auto *stepsPage = new QWidget;
   auto *stepsLayout = new QVBoxLayout(stepsPage);
   stepLabel->hide();
-  auto *stepHint = new QLabel(QStringLiteral("双击步骤查看完整参数、输出与推理。"));
+  auto *stepHint = new QLabel;
   stepHint->setStyleSheet("color:#64748b;");
   stepHint->setText(QStringLiteral("双击查看完整输出；工具执行成功不代表已确认漏洞，请结合证据判断。"));
   stepHint->setWordWrap(true);
@@ -256,7 +247,6 @@ void ExecutionPage::setupUI() {
   evidenceLayout->addWidget(m_evidenceTable, 1);
   detailTabs->addTab(stepsPage, QStringLiteral("执行步骤"));
   detailTabs->addTab(evidencePage, QStringLiteral("证据"));
-  detailTabs->addTab(m_cortexPanel, QStringLiteral("AI 记录"));
   rightLayout->addWidget(detailTabs, 1);
   auto *rightOuterLayout = new QVBoxLayout(rightWidget);
   rightOuterLayout->setContentsMargins(0, 0, 0, 0);
@@ -270,7 +260,7 @@ void ExecutionPage::setupUI() {
     table->setWordWrap(false);
     table->setTextElideMode(Qt::ElideRight);
   }
-  for (int col : {2, 4, 6, 7}) m_stepTable->setColumnHidden(col, true);
+  for (int col : {2, 4, 6}) m_stepTable->setColumnHidden(col, true);
   m_stepTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Fixed);
   m_stepTable->setColumnWidth(0, 60);
   m_stepTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Fixed);
@@ -419,7 +409,7 @@ void ExecutionPage::showRun(const QString &runId)
   // Refresh the run table so the target run appears, then load its details
   onRefreshRuns();
   loadRunDetails(runId);
-  // Switch to the detail tab so step progress / evidence / Cortex are visible
+  // Switch to the detail tab so step progress and evidence are visible
   m_tabWidget->setCurrentIndex(1);
 }
 
@@ -437,9 +427,6 @@ void ExecutionPage::clearRunContext() {
   m_evidenceTable->setRowCount(0);
   m_runTable->setRowCount(0);
   m_evidenceLabel->setText(QStringLiteral("暂无执行证据"));
-  m_cortexPanel->clearMessages();
-  m_injectedReactSteps.clear();
-  m_injectedPayloadSteps.clear();
   m_stopBtn->hide();
   m_statusLabel->setText(QStringLiteral("选择执行记录查看详情"));
 }
@@ -481,7 +468,7 @@ void ExecutionPage::setPipelineContext(const QString &pipelineId, const QString 
   m_pipelineHint->setText(status == "awaiting_approval"
       ? QStringLiteral("当前任务待确认。请使用顶部“确认预案并执行”；本页展示执行过程与结果。")
       : runId.isEmpty() ? QStringLiteral("当前任务尚无执行记录，请查看顶部任务进度。")
-      : QStringLiteral("仅显示当前任务关联的执行记录。点击记录可查看步骤、证据与 AI 记录。"));
+      : QStringLiteral("仅显示当前任务关联的执行记录。点击记录可查看执行步骤与证据。"));
   if (changed) {
     ++m_contextRevision;
     m_pollErrorCount = 0;
@@ -493,9 +480,6 @@ void ExecutionPage::setPipelineContext(const QString &pipelineId, const QString 
     m_evidenceTable->setRowCount(0);
     m_runTable->setRowCount(0);
     m_evidenceLabel->setText(QStringLiteral("暂无执行证据"));
-    m_cortexPanel->clearMessages();
-    m_injectedReactSteps.clear();
-    m_injectedPayloadSteps.clear();
     m_stopBtn->hide();
     m_statusLabel->setText(QStringLiteral("选择执行记录查看详情"));
     onRefreshRuns();
@@ -640,10 +624,6 @@ void ExecutionPage::onExecute() {
       m_runningRunId = runId;
       m_runningPlaybookId = playbookId;
       m_pollErrorCount = 0;
-      // Clear Cortex for new execution
-      m_cortexPanel->clearMessages();
-      m_injectedReactSteps.clear();
-      m_injectedPayloadSteps.clear();
       m_pollTimer->start();
       // Immediately load this run's details (don't wait for full refresh)
       loadRunDetails(runId);
@@ -709,46 +689,6 @@ void ExecutionPage::onRefreshRuns() {
   });
 }
 
-// ── Real-time ReAct reasoning from WebSocket (run:react) ─────────────
-void ExecutionPage::onRunReact(const QJsonObject &data) {
-  QString runId = data["run_id"].toString();
-  // Only display if this is the currently loaded/running run
-  if (runId != m_loadedRunId && runId != m_runningRunId) return;
-
-  int stepIdx = data["step_index"].toInt();
-  QString stepKey = QStringLiteral("react_%1").arg(stepIdx);
-  if (m_injectedReactSteps.contains(stepKey)) return;  // dedup
-  m_injectedReactSteps.insert(stepKey);
-
-  QString thought = data["thought"].toString();
-  if (thought.isEmpty()) return;
-
-  // Parse action
-  QString actionStr = data["action"].toString();
-  if (actionStr.isEmpty()) actionStr = QStringLiteral("continue");
-
-  // Map action to Chinese label
-  QString actionLabel;
-  if (actionStr == QStringLiteral("insert")) actionLabel = QStringLiteral("🔀 插入");
-  else if (actionStr == QStringLiteral("adjust")) actionLabel = QStringLiteral("🔧 调整");
-  else if (actionStr == QStringLiteral("parallel")) actionLabel = QStringLiteral("⚡ 并行");
-  else if (actionStr == QStringLiteral("pivot")) actionLabel = QStringLiteral("🔄 转向");
-  else if (actionStr == QStringLiteral("stop")) actionLabel = QStringLiteral("🛑 终止");
-  else actionLabel = QStringLiteral("▶ 继续");
-
-  // Observation = tool_id + step info
-  QString observation = QStringLiteral("Step %1 [%2]").arg(stepIdx).arg(data["tool_id"].toString());
-
-  // Determine if this step was dynamically inserted by ReAct
-  bool isDynamic = (m_lastReactAction == QStringLiteral("insert") ||
-                    m_lastReactAction == QStringLiteral("parallel") ||
-                    m_lastReactAction == QStringLiteral("pivot"));
-
-  m_cortexPanel->addReactThought(observation, thought, actionLabel, {},
-                                  stepIdx, data["tool_id"].toString(), isDynamic);
-  m_lastReactAction = actionStr;
-}
-
 // ── Run clicked: load steps + evidence ──────────────────────────────
 void ExecutionPage::onRunClicked(int row, int) {
   auto *runItem = m_runTable->item(row, 0);
@@ -769,10 +709,6 @@ void ExecutionPage::onRunClicked(int row, int) {
 void ExecutionPage::loadRunDetails(const QString &runId) {
   if (!m_pipelineId.isEmpty() && runId != m_pipelineRunId) return;
   if (runId != m_loadedRunId) {
-    m_cortexPanel->clearMessages();
-    m_injectedReactSteps.clear();
-    m_injectedPayloadSteps.clear();
-    m_lastReactAction.clear();
     m_loadedRunId = runId;
     emit runSelected(runId);
   }
@@ -828,7 +764,7 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
       evidenceByStep.insert(stepIdx, e);
     }
 
-    // ── Steps (8 columns: 步骤/工具/参数/成功/来源/输出摘要/载荷/推理) ──
+    // ── Steps (7 columns: 步骤/工具/参数/成功/来源/输出摘要/载荷) ──
     auto steps = d["steps"].toArray();
     m_stepTable->setRowCount(steps.size());
     QString prevActionType;  // track previous step's react_action to detect dynamic inserts
@@ -897,21 +833,6 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
       if (payloadDisplay == QStringLiteral("—"))
         payloadItem->setForeground(QColor("#94a3b8"));  // muted gray for no payload
       m_stepTable->setItem(i, 6, payloadItem);
-
-      // Column 7: ReAct thought summary, or step description as fallback
-      QString thought = s["react_thought"].toString();
-      if (!thought.isEmpty()) {
-        m_stepTable->setItem(i, 7, truncItem(thought, 40));
-      } else {
-        // Fallback: show step description as "reasoning"
-        QString stepDesc = s["description"].toString();
-        if (stepDesc.isEmpty()) stepDesc = s["notes"].toString();
-        if (!stepDesc.isEmpty()) {
-          m_stepTable->setItem(i, 7, truncItem(stepDesc, 40));
-        } else {
-          m_stepTable->setItem(i, 7, new QTableWidgetItem("—"));
-        }
-      }
 
       // Track this step's action type for next iteration's dynamic detection
       QString actionJson = s["react_action"].toString();
@@ -1011,11 +932,7 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
 
 
 
-    // ── Cortex panel: ReAct thoughts + Payload cards ──────────────────
-    // Update engine info and status in Cortex header
-    m_cortexPanel->setEngineInfo(engineType.isEmpty() ? QStringLiteral("mechanical") : engineType);
-    m_cortexPanel->setStatus(statusVal);
-    // Stop button: always visible, but only enabled for active runs.
+    // Stop button: visible and enabled only for active runs.
     // NOTE: statusVal has been converted to Chinese above (e.g. "运行中"),
     // so use the original raw status from the API for button logic.
     {
@@ -1035,132 +952,6 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
         m_stopBtn->setText(QStringLiteral("🛑 停止执行"));
     }
 
-    // Inject ReAct thoughts as structured cards (only new ones)
-    QString cortexPrevAction;  // track for dynamic step detection
-    for (int i = 0; i < steps.size(); i++) {
-      auto s = steps[i].toObject();
-      int stepIdx = s["step_index"].toInt();
-      QString thought = s["react_thought"].toString();
-      if (thought.isEmpty()) {
-        // Still track action for dynamic detection even if no thought
-        QString aj = s["react_action"].toString();
-        if (!aj.isEmpty()) {
-          QJsonDocument ad = QJsonDocument::fromJson(aj.toUtf8());
-          if (ad.isObject()) cortexPrevAction = ad.object()["type"].toString();
-        }
-        continue;
-      }
-
-      QString stepKey = QStringLiteral("react_%1").arg(stepIdx);
-
-      // Parse action (needed for both dynamic detection and display)
-      QString actionStr;
-      QString actionJson = s["react_action"].toString();
-      if (!actionJson.isEmpty()) {
-        QJsonDocument actDoc = QJsonDocument::fromJson(actionJson.toUtf8());
-        if (actDoc.isObject()) {
-          actionStr = actDoc.object()["type"].toString();
-        }
-      }
-      if (actionStr.isEmpty()) actionStr = QStringLiteral("continue");
-
-      // Skip if already injected, but still update cortexPrevAction for dynamic detection
-      if (m_injectedReactSteps.contains(stepKey)) {
-        cortexPrevAction = actionStr;
-        continue;
-      }
-      m_injectedReactSteps.insert(stepKey);
-
-      // Map action to Chinese label
-      QString actionLabel;
-      if (actionStr == QStringLiteral("insert")) actionLabel = QStringLiteral("🔀 插入");
-      else if (actionStr == QStringLiteral("adjust")) actionLabel = QStringLiteral("🔧 调整");
-      else if (actionStr == QStringLiteral("parallel")) actionLabel = QStringLiteral("⚡ 并行");
-      else if (actionStr == QStringLiteral("stop")) actionLabel = QStringLiteral("🛑 终止");
-      else actionLabel = QStringLiteral("▶ 继续");
-
-      // Extract observation from step notes (first line of output)
-      QString observation = s["notes"].toString().left(200);
-
-      // Determine if this step was dynamically inserted
-      bool isDynamic = (cortexPrevAction == QStringLiteral("insert") ||
-                        cortexPrevAction == QStringLiteral("parallel") ||
-                        cortexPrevAction == QStringLiteral("pivot"));
-
-      m_cortexPanel->addReactThought(observation, thought, actionLabel, {},
-                                      stepIdx, s["tool_id"].toString(), isDynamic);
-      cortexPrevAction = actionStr;
-    }
-
-    // Inject payload cards (only new ones, fetch details from API)
-    for (int i = 0; i < steps.size(); i++) {
-      auto s = steps[i].toObject();
-      int stepIdx = s["step_index"].toInt();
-
-      // Check evidence for payload_id
-      if (!evidenceByStep.contains(stepIdx)) continue;
-      auto evObj = evidenceByStep.value(stepIdx);
-      QString evDataStr = evObj["evidence_data"].toString();
-      QJsonDocument evDoc = QJsonDocument::fromJson(evDataStr.toUtf8());
-      if (!evDoc.isObject()) continue;
-
-      QString pId = evDoc.object()["payload_id"].toString();
-      if (pId.isEmpty()) continue;
-
-      QString stepKey = QStringLiteral("payload_%1_%2").arg(stepIdx).arg(pId);
-      if (m_injectedPayloadSteps.contains(stepKey)) continue;
-      m_injectedPayloadSteps.insert(stepKey);
-
-      // Fetch payload details and inject as card
-      m_api->get("/api/payloads/" + pId, 5000,
-        [this, pId, runId, stepIdx](const QJsonObject &pRes) {
-          if (runId != m_loadedRunId || pRes["status"].toString() != "ok") return;
-          auto pData = pRes["data"].toObject();
-          auto payloadData = pData["payload_data"].toObject();
-
-          // Build payload context text (same format as backend buildPayloadContext)
-          QString name = pData["name"].toObject()["zh"].toString();
-          if (name.isEmpty()) name = pData["name"].toString();
-          if (name.isEmpty()) name = pId;
-
-          QStringList contextLines;
-          QString principle = pData["description"].toObject()["zh"].toString();
-          if (principle.isEmpty()) principle = pData["description"].toString();
-          if (!principle.isEmpty()) contextLines << QStringLiteral("【载荷原理】") + principle;
-
-          QString defense = payloadData["defense"].toObject()["zh"].toString();
-          if (defense.isEmpty()) defense = payloadData["defense"].toString();
-          if (!defense.isEmpty()) contextLines << QStringLiteral("【防御手段】") + defense;
-
-          auto bypasses = payloadData["bypass_variants"].toArray();
-          if (bypasses.size() > 0) {
-            QStringList bypassLines;
-            for (const auto &b : bypasses) {
-              auto bo = b.toObject();
-              bypassLines << QStringLiteral("  - %1: %2")
-                .arg(bo["title"].toString())
-                .arg(bo["command"].toString().left(120));
-            }
-            contextLines << QStringLiteral("【绕过变体(WAF/EDR Bypass)】\n") + bypassLines.join("\n");
-          }
-
-          auto opsec = payloadData["opsec_tips"].toArray();
-          if (opsec.size() > 0) {
-            QStringList opsecLines;
-            for (const auto &tip : opsec) {
-              if (tip.isObject()) {
-                opsecLines << QStringLiteral("  - ") + (tip.toObject()["zh"].toString().isEmpty()
-                  ? tip.toObject()["en"].toString() : tip.toObject()["zh"].toString());
-              } else {
-                opsecLines << QStringLiteral("  - ") + tip.toString();
-              }
-            }
-            contextLines << QStringLiteral("【OPSEC建议】\n") + opsecLines.join("\n");
-          }
-
-          m_cortexPanel->addPayloadCard(name, contextLines.join("\n\n"), {}, stepIdx);
-        });
-    }
   });
 }
 
@@ -1192,8 +983,6 @@ void ExecutionPage::onPollRunning() {
     // Full reload of run details to keep step table, evidence, etc. in sync
     loadRunDetails(runId);
 
-    // Update Cortex status dot in real-time
-    m_cortexPanel->setStatus(status);
 
     // Stop button: always visible, enabled only for active runs
     {

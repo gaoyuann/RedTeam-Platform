@@ -5,9 +5,34 @@
 #include <QEvent>
 #include <QLabel>
 #include <QPointer>
+#include <QPushButton>
+#include <QDialogButtonBox>
+#include "Theme.h"
 
 // ── 纯视觉层小工具（不改数据流） ─────────────────────────────────────
 namespace UiUtil {
+
+inline void styleToolbarButton(QPushButton *button)
+{
+  button->setFixedHeight(36);
+  button->setCursor(Qt::PointingHandCursor);
+  button->setStyleSheet(Theme::ToolbarButtonStyle);
+}
+
+
+inline void styleDialogButtons(QDialogButtonBox *box)
+{
+  for (auto *button : box->buttons()) {
+    const auto role = box->buttonRole(button);
+    if (role == QDialogButtonBox::AcceptRole || role == QDialogButtonBox::ApplyRole)
+      button->setProperty("primary", true);
+    if (role == QDialogButtonBox::DestructiveRole)
+      button->setProperty("danger", true);
+  }
+  if (auto *cancel = box->button(QDialogButtonBox::Cancel))
+    cancel->setText(QStringLiteral("取消"));
+  box->setStyleSheet(Theme::ButtonStyle);
+}
 
 // 表格/树/列表空状态提示：model 无行时在视口居中显示一行浅色说明文字。
 // 用法：UiUtil::EmptyHint::attach(table, "暂无扫描任务");

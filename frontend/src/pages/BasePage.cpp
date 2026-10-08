@@ -17,6 +17,7 @@ QTableWidget* BasePage::createReadOnlyTable(int cols, const QStringList &headers
                                              bool alternating) {
   auto *table = new QTableWidget(0, cols);
   table->setHorizontalHeaderLabels(headers);
+  table->horizontalHeader()->setStretchLastSection(true);
   if (alternating) table->setAlternatingRowColors(true);
   table->setEditTriggers(QAbstractItemView::NoEditTriggers);
   return table;

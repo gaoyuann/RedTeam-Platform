@@ -1,3 +1,4 @@
+#include "../UiUtil.h"
 #include "PhasePanel.h"
 #include "../ApiClient.h"
 #include "../Theme.h"
@@ -52,9 +53,7 @@ void PhasePanel::setupUI() {
   m_removePbBtn = new QPushButton("移除");
   m_removePbBtn->setProperty("danger", true);
   m_skipBtn = new QPushButton("跳过此阶段");
-  m_skipBtn->setStyleSheet(
-    "background:#fff7ed; color:#b45309; border:1px solid #fed7aa; "
-    "border-radius:8px; padding:8px 14px; font-weight:600;");
+  m_skipBtn->setProperty("warning", true);
   btnH->addWidget(m_addPbBtn);
   btnH->addWidget(m_removePbBtn);
   btnH->addStretch();
@@ -281,6 +280,8 @@ void PhasePanel::onAddPlaybook() {
       dlgLayout->addWidget(combo);
 
       auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+
+      UiUtil::styleDialogButtons(buttons);
       dlgLayout->addWidget(buttons);
       connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
       connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);

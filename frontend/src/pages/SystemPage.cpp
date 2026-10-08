@@ -1,3 +1,4 @@
+#include "../widgets/WorkbenchTabs.h"
 #include "SystemPage.h"
 #include "DeployConfigPage.h"
 #include "DongleVerificationPage.h"
@@ -43,12 +44,14 @@ void SystemPage::setupUI() {
   scrollArea->setFrameShape(QFrame::NoFrame);
   auto *container = new QWidget;
   auto *layout = new QVBoxLayout(container);
-  m_tabs = new QTabWidget;
+  m_tabs = new WorkbenchTabs;
 
   // ── Users tab ─────────────────────────────────────────────────────
   auto *userW = new QWidget;
   auto *userL = new QVBoxLayout(userW);
   m_userTable = new QTableWidget(0, 4);
+  m_userTable->horizontalHeader()->setStretchLastSection(false);
+  m_userTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
   UiUtil::EmptyHint::attach(m_userTable, QStringLiteral("暂无用户"));
   m_userTable->setHorizontalHeaderLabels({"用户名", "角色", "状态", "创建时间"});
   m_userTable->setAlternatingRowColors(true);
@@ -133,6 +136,8 @@ void SystemPage::setupUI() {
   cfgHint->setStyleSheet("color:#64748b; font-size:13px;");
   cfgL->addWidget(cfgHint);
   m_configTable = new QTableWidget(0, 3);
+  m_configTable->horizontalHeader()->setStretchLastSection(false);
+  m_configTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
   UiUtil::EmptyHint::attach(m_configTable, QStringLiteral("暂无配置项"));
   m_configTable->setHorizontalHeaderLabels({"配置项", "值", "类别"});
   m_configTable->setAlternatingRowColors(true);
@@ -155,6 +160,8 @@ void SystemPage::setupUI() {
   auto *asgnLabel = new QLabel("任务管理"); asgnLabel->setStyleSheet(Theme::SectionStyle);
   asgnL->addWidget(asgnLabel);
   m_assignmentTable = new QTableWidget(0, 6);
+  m_assignmentTable->horizontalHeader()->setStretchLastSection(false);
+  m_assignmentTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
   UiUtil::EmptyHint::attach(m_assignmentTable, QStringLiteral("暂无任务分配"));
   m_assignmentTable->setHorizontalHeaderLabels({"任务编号", "班级", "标题", "预案", "截止时间", "创建时间"});
   m_assignmentTable->setAlternatingRowColors(true);
@@ -166,6 +173,8 @@ void SystemPage::setupUI() {
   auto *asgnSubLabel = new QLabel("提交记录"); asgnSubLabel->setStyleSheet(Theme::SectionStyle);
   asgnL->addWidget(asgnSubLabel);
   m_submissionTable = new QTableWidget(0, 6);
+  m_submissionTable->horizontalHeader()->setStretchLastSection(false);
+  m_submissionTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
   UiUtil::EmptyHint::attach(m_submissionTable, QStringLiteral("暂无提交记录"));
   m_submissionTable->setHorizontalHeaderLabels({"提交编号", "任务", "学生", "执行编号", "成绩", "提交时间"});
   m_submissionTable->setAlternatingRowColors(true);
@@ -252,7 +261,6 @@ void SystemPage::onRefreshUsers() {
     }
     m_userTable->setSortingEnabled(true);
     m_userTable->resizeColumnsToContents();
-    m_userTable->horizontalHeader()->setStretchLastSection(true);
   });
 }
 
@@ -372,7 +380,6 @@ void SystemPage::onRefreshConfig() {
       m_configTable->setItem(i, 2, new QTableWidgetItem(c["category"].toString()));
     }
     m_configTable->resizeColumnsToContents();
-    m_configTable->horizontalHeader()->setStretchLastSection(true);
   });
 }
 
@@ -416,7 +423,6 @@ void SystemPage::onRefreshAssignments() {
       m_assignmentTable->setItem(i, 5, new QTableWidgetItem(a["created_at"].toString()));
     }
     m_assignmentTable->resizeColumnsToContents();
-    m_assignmentTable->horizontalHeader()->setStretchLastSection(true);
   });
 }
 
@@ -451,7 +457,6 @@ void SystemPage::onRefreshSubmissions() {
       m_submissionTable->setItem(i, 5, new QTableWidgetItem(s["submitted_at"].toString()));
     }
     m_submissionTable->resizeColumnsToContents();
-    m_submissionTable->horizontalHeader()->setStretchLastSection(true);
   });
 }
 

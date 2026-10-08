@@ -10,11 +10,8 @@
 #include <QJsonObject>
 
 class ApiClient;
-class LiveActivityPanel;
 class QAction;
 class QTabWidget;
-class QSplitter;
-class QTextBrowser;
 class StepIndicator;
 class TopologyPage;
 class ScanPage;
@@ -31,9 +28,6 @@ class FlowPage : public QWidget {
 public:
   explicit FlowPage(ApiClient *api, const QString &role = "admin",
                     const QString &username = "", QWidget *parent = nullptr);
-
-  /// Expose the embedded activity panel for WebSocket wiring in MainWindow.
-  LiveActivityPanel *activityPanel() const;
 
   /// Expose embedded stage-tab pages for WebSocket wiring in MainWindow.
   ScanPage *scanTab() const;
@@ -53,7 +47,6 @@ public slots:
   void onPipelineCreated(const QJsonObject &data);
   void onPipelineStatus(const QJsonObject &data);
   void onPipelineStep(const QJsonObject &data);
-  void onPipelineLog(const QJsonObject &data);
   void onRunCompleted(const QString &runId);
 
 private slots:
@@ -108,8 +101,6 @@ private:
   QAction *m_deleteAction;
   QAction *m_reportAction;
   StepIndicator *m_stepIndicator;   // pipeline 四阶段进度（自绘节点+连线+摘要）
-  LiveActivityPanel *m_activityPanel;
-  QTextBrowser *m_reasoningPanel;   // left-column AI reasoning stream
 
   // Stage tabs (拓扑/扫描/攻击/评估) embedded in the workbench
   QTabWidget *m_stageTabs;

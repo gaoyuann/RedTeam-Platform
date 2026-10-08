@@ -1,12 +1,15 @@
+#include "../widgets/WorkbenchTabs.h"
 #include "ScanPage.h"
 #include "../ApiClient.h"
 #include "../Theme.h"
 #include "../UiUtil.h"
+#include "../widgets/ScanResultOverview.h"
 #include <QSplitter>
 #include <QGridLayout>
 #include <QTabBar>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QScrollArea>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QPushButton>
@@ -374,16 +377,30 @@ void ScanPage::setTaskScope(const QStringList &taskIds)
 }
 
 void ScanPage::setupUI() {
-  setStyleSheet(Theme::PageStyle);
+  setObjectName("scanPage");
+  // Local styling: do not alter other pages or the application theme.
+  setStyleSheet(Theme::PageStyle + QStringLiteral(
+      "QWidget#scanPage { background:#f3f6fb; }"
+      "QFrame#scanTasksPanel, QFrame#scanDetailsPanel { background:#ffffff; border:1px solid #dbe3ef; border-radius:14px; }"
+      "QLabel#scanPanelTitle { color:#172033; font-size:17px; font-weight:700; }"
+      "QLabel#scanPanelHint { color:#64748b; font-size:12px; }"
+      "QTabWidget#scanDetailTabs::pane { border:none; background:#ffffff; padding:0; }"
+      "QTableWidget, QTreeWidget { background:#ffffff; alternate-background-color:#f8fbff; border:1px solid #e2e8f0; border-radius:8px; }"
+      "QTableWidget::item, QTreeWidget::item { padding:7px 6px; border:none; }"
+      "QTableWidget::item:selected, QTreeWidget::item:selected { background:#dbeafe; color:#1e3a8a; }"
+      "QHeaderView::section { background:#f1f5f9; color:#475569; border:none; border-bottom:1px solid #e2e8f0; padding:8px 6px; font-weight:600; }"
+      "QSplitter::handle { background:transparent; }"
+      "QSplitter::handle:hover { background:#dbeafe; }"));
 
   auto *mainLayout = new QVBoxLayout(this);
   mainLayout->setContentsMargins(12, 12, 12, 12);
+  mainLayout->setSpacing(12);
 
   // ══ Left Panel ══════════════════════════════════════════════════════
   auto *left = new QVBoxLayout;
 
   // ── 4-Tab scan type layout ──────────────────────────────────────────
-  m_scanTypeTabs = new QTabWidget;
+  m_scanTypeTabs = new WorkbenchTabs;
 
   QSettings settings("RedTeam", "RedTeam-Platform");
   QStringList history = settings.value("history/targets").toStringList();
@@ -422,6 +439,7 @@ void ScanPage::setupUI() {
     headerH->addStretch();
     layout->addLayout(headerH);
     m_portScanTable = new QTableWidget(0, 3);
+    m_portScanTable->setObjectName("scanPortTasks");
     UiUtil::EmptyHint::attach(m_portScanTable, QStringLiteral("暂无端口扫描任务"));
     m_portScanTable->setHorizontalHeaderLabels({"目标", "状态", "时间"});
     m_portScanTable->setAlternatingRowColors(true);
@@ -485,6 +503,7 @@ void ScanPage::setupUI() {
     headerH->addStretch();
     layout->addLayout(headerH);
     m_vulnScanTable = new QTableWidget(0, 3);
+    m_vulnScanTable->setObjectName("scanVulnTasks");
     UiUtil::EmptyHint::attach(m_vulnScanTable, QStringLiteral("暂无漏洞扫描任务"));
     m_vulnScanTable->setHorizontalHeaderLabels({"目标", "状态", "时间"});
     m_vulnScanTable->setAlternatingRowColors(true);
@@ -550,6 +569,7 @@ void ScanPage::setupUI() {
     headerH->addStretch();
     layout->addLayout(headerH);
     m_webScanTable = new QTableWidget(0, 3);
+    m_webScanTable->setObjectName("scanWebTasks");
     UiUtil::EmptyHint::attach(m_webScanTable, QStringLiteral("暂无网站扫描任务"));
     m_webScanTable->setHorizontalHeaderLabels({"目标", "状态", "时间"});
     m_webScanTable->setAlternatingRowColors(true);
@@ -637,6 +657,7 @@ void ScanPage::setupUI() {
     headerH->addStretch();
     layout->addLayout(headerH);
     m_bruteForceTable = new QTableWidget(0, 3);
+    m_bruteForceTable->setObjectName("scanCredentialTasks");
     UiUtil::EmptyHint::attach(m_bruteForceTable, QStringLiteral("暂无弱口令扫描任务"));
     m_bruteForceTable->setHorizontalHeaderLabels({"目标", "状态", "时间"});
     m_bruteForceTable->setAlternatingRowColors(true);
@@ -670,7 +691,8 @@ void ScanPage::setupUI() {
     m_scanTypeTabs->addTab(tab, QStringLiteral("弱口令扫描"));
   }
 
-  left->setContentsMargins(0, 0, 0, 0);
+  left->setContentsMargins(14, 14, 14, 14);
+  left->setSpacing(10);
   auto *typePicker = new QComboBox(this);
   typePicker->setObjectName("scanTypePicker");
   for (int i = 0; i < m_scanTypeTabs->count(); ++i) {
@@ -694,11 +716,13 @@ void ScanPage::setupUI() {
     dialogLayout->setContentsMargins(20, 20, 20, 20);
     dialogLayout->addWidget(form);
     auto *cancel = new QDialogButtonBox(QDialogButtonBox::Cancel, formDialog);
+    UiUtil::styleDialogButtons(cancel);
     cancel->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("取消"));
     connect(cancel, &QDialogButtonBox::rejected, formDialog, &QDialog::reject);
     dialogLayout->addWidget(cancel);
     auto *newScan = new QPushButton(QStringLiteral("＋ 新建扫描"));
     newScan->setObjectName("scanCreateToggle");
+    newScan->setProperty("primary", true);
     connect(newScan, &QPushButton::clicked, formDialog, [formDialog]() {
       formDialog->show();
       formDialog->raise();
@@ -711,25 +735,39 @@ void ScanPage::setupUI() {
   m_scanTypeTabs->setStyleSheet("QTabWidget::pane { border:0; background:transparent; }");
   connect(typePicker, QOverload<int>::of(&QComboBox::currentIndexChanged), m_scanTypeTabs, &QTabWidget::setCurrentIndex);
   connect(m_scanTypeTabs, &QTabWidget::currentChanged, typePicker, &QComboBox::setCurrentIndex);
+  auto *taskTitle = new QLabel(QStringLiteral("扫描任务"));
+  taskTitle->setObjectName("scanPanelTitle");
+  auto *taskHint = new QLabel(QStringLiteral("按类型查看任务与扫描结果"));
+  taskHint->setObjectName("scanPanelHint");
+  left->addWidget(taskTitle);
+  left->addWidget(taskHint);
   left->addWidget(typePicker);
   left->addWidget(m_scanTypeTabs, 1);
 
-  auto *leftW = new QWidget;
+  auto *leftW = new QFrame;
+  leftW->setObjectName("scanTasksPanel");
   leftW->setLayout(left);
   leftW->setMinimumWidth(310);
 
   // ══ Right Panel ═════════════════════════════════════════════════════
   auto *detailLayout = new QVBoxLayout;
-  detailLayout->setContentsMargins(0, 0, 0, 0);
-  auto *detailTabs = new QTabWidget;
+  detailLayout->setContentsMargins(14, 14, 14, 14);
+  detailLayout->setSpacing(10);
+  auto *detailTabs = new WorkbenchTabs;
   detailTabs->setObjectName("scanDetailTabs");
   auto *resultsPage = new QWidget;
   auto *right = new QVBoxLayout(resultsPage);
+  right->setContentsMargins(0, 12, 0, 0);
+  right->setSpacing(10);
   auto *plansPage = new QWidget;
   auto *plansLayout = new QVBoxLayout(plansPage);
+  plansLayout->setContentsMargins(0, 12, 0, 0);
+  plansLayout->setSpacing(10);
 
   // ── Status label ──────────────────────────────────────────────────
   m_statusLabel = new QLabel("选择任务查看详情");
+  m_statusLabel->setObjectName("scanStatus");
+  m_statusLabel->setTextFormat(Qt::PlainText);
   m_statusLabel->setStyleSheet(Theme::StatusInfoStyle);
   m_statusLabel->setWordWrap(true);
   detailLayout->addWidget(m_statusLabel);
@@ -744,9 +782,18 @@ void ScanPage::setupUI() {
   connect(m_reexecBtn, &QPushButton::clicked, this, &ScanPage::onReexecScan);
 
   // ── Results (QTreeWidget grouped by result_type) ──────────────────
-  auto *resLabel = new QLabel("扫描结果"); resLabel->setStyleSheet(Theme::SectionStyle);
+  auto *resLabel = new QLabel(QStringLiteral("结果概览"));
+  resLabel->setStyleSheet(Theme::SectionStyle);
   right->addWidget(resLabel);
+  m_resultOverview = new ScanResultOverview(resultsPage);
+  right->addWidget(m_resultOverview);
+  auto *resultHint = new QLabel(QStringLiteral("完整结果  ·  右键复制内容 / 发起攻击，双击漏洞行进入攻击测试"));
+  resultHint->setObjectName("scanPanelHint");
+  resultHint->setWordWrap(true);
+  right->addWidget(resultHint);
   m_resultTree = new QTreeWidget;
+  m_resultTree->setMinimumHeight(180);
+  m_resultTree->setObjectName("scanResultTree");
   UiUtil::EmptyHint::attach(m_resultTree, QStringLiteral("扫描完成后在此展示结果"));
   m_resultTree->setHeaderLabels({"严重度", "数据", "工具"});
   m_resultTree->setAlternatingRowColors(true);
@@ -790,6 +837,8 @@ void ScanPage::setupUI() {
   auto *recLabel = new QLabel("推荐预案"); recLabel->setStyleSheet(Theme::SectionStyle);
   plansLayout->addWidget(recLabel);
   m_recTable = new QTableWidget(0, 4);
+  m_recTable->setMinimumHeight(140);
+  m_recTable->setObjectName("scanRecommendations");
   UiUtil::EmptyHint::attach(m_recTable, QStringLiteral("暂无推荐预案 · 先完成扫描"));
   m_recTable->setHorizontalHeaderLabels({"名称", "难度", "基线组", "匹配原因"});
   m_recTable->verticalHeader()->hide();
@@ -837,6 +886,8 @@ void ScanPage::setupUI() {
   genPreviewLayout->addWidget(m_genPreviewTitle);
 
   m_genStepTable = new QTableWidget(0, 4);
+  m_genStepTable->setMinimumHeight(140);
+  m_genStepTable->setObjectName("scanGeneratedSteps");
   UiUtil::EmptyHint::attach(m_genStepTable, QStringLiteral("生成预案后展示步骤"));
   m_genStepTable->setHorizontalHeaderLabels({"步骤", "工具", "目标参数", "描述"});
   m_genStepTable->setAlternatingRowColors(true);
@@ -866,9 +917,20 @@ void ScanPage::setupUI() {
     menu.exec(m_genStepTable->viewport()->mapToGlobal(pos));
   });
 
-  auto *rightW = new QWidget;
-  detailTabs->addTab(resultsPage, QStringLiteral("扫描结果"));
-  detailTabs->addTab(plansPage, QStringLiteral("推荐与生成方案"));
+  auto *rightW = new QFrame;
+  rightW->setObjectName("scanDetailsPanel");
+  auto scrollableDetail = [](QWidget *content) {
+    auto *scroll = new QScrollArea;
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setStyleSheet("QScrollArea { background:#ffffff; border:none; }");
+    content->setObjectName("scanScrollableContent");
+    content->setStyleSheet("QWidget#scanScrollableContent { background:#ffffff; }");
+    scroll->setWidget(content);
+    return scroll;
+  };
+  detailTabs->addTab(scrollableDetail(resultsPage), QStringLiteral("扫描结果"));
+  detailTabs->addTab(scrollableDetail(plansPage), QStringLiteral("推荐与生成方案"));
   detailLayout->addWidget(detailTabs, 1);
   rightW->setLayout(detailLayout);
   rightW->setMinimumWidth(350);
@@ -881,7 +943,7 @@ void ScanPage::setupUI() {
   splitter->setHandleWidth(12);
   splitter->setStretchFactor(0, 0);
   splitter->setStretchFactor(1, 1);
-  splitter->setSizes({330, 760});
+  splitter->setSizes({350, 760});
   mainLayout->addWidget(splitter);
 
   for (auto *table : {m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable}) {
@@ -968,6 +1030,7 @@ void ScanPage::updateStatusLabel(const QJsonObject &d) {
 
 // ── Render grouped results in QTreeWidget ─────────────────────────────
 void ScanPage::renderGroupedResults(const QJsonArray &results) {
+  m_resultOverview->setResults(results);
   m_resultTree->clear();
 
   // Group by result_type
@@ -1548,6 +1611,7 @@ void ScanPage::onDeleteTask() {
 
 // ── Clear detail panel ────────────────────────────────────────────────
 void ScanPage::clearDetailPanel() {
+  m_resultOverview->clear();
   m_statusLabel->setText("选择任务查看详情");
   m_statusLabel->setStyleSheet(Theme::StatusInfoStyle);
   m_resultTree->clear();

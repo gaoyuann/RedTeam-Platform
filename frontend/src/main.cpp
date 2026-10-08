@@ -3,6 +3,7 @@
 #include "SplashDialog.h"
 #include "LoginDialog.h"
 #include "ApiClient.h"
+#include "Theme.h"
 #include "services/dongle/DongleService.h"
 #include <QApplication>
 #include <QMessageBox>
@@ -21,17 +22,6 @@ static const char *GLOBAL_STYLE = R"css(
 QWidget { color: #172033; }
 QWidget#contentArea { background: #f3f6fb; }
 
-QPushButton {
-  background: #f8fafc; color: #1e293b; border: 1px solid #cbd5e1; border-radius: 8px;
-  padding: 7px 14px; font-size: 14px; font-weight: 600; min-height: 30px;
-}
-QPushButton:hover { background: #eef4ff; border-color: #93b4ed; }
-QPushButton:pressed { background: #dbeafe; }
-QPushButton:disabled { background: #f1f5f9; color: #94a3b8; border-color: #e2e8f0; }
-QPushButton[primary="true"] { background: #2563eb; color: #ffffff; border-color: #1d4ed8; }
-QPushButton[primary="true"]:hover { background: #1d4ed8; border-color: #1e40af; }
-QPushButton[danger="true"], QPushButton#dangerBtn { background: #fff1f2; color: #b42318; border-color: #fecdd3; }
-QPushButton[danger="true"]:hover, QPushButton#dangerBtn:hover { background: #ffe4e6; border-color: #fda4af; }
 QPushButton#checkBtn {
   background: transparent; color: #cbd5e1; border: 1px solid #41546e;
   border-radius: 7px; padding: 4px 12px; font-weight: 500; min-height: 22px;
@@ -40,7 +30,7 @@ QPushButton#checkBtn:hover { background: #253955; color: #ffffff; border-color: 
 
 QLineEdit, QComboBox, QSpinBox {
   border: 1px solid #cbd5e1; border-radius: 8px; padding: 6px 10px;
-  font-size: 14px; background: #ffffff; min-height: 28px;
+  font-size: 13px; background: #ffffff; min-height: 22px;
 }
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border-color: #3b82f6; background: #fefeff; }
 QComboBox::drop-down { border: none; width: 24px; }
@@ -223,9 +213,9 @@ int main(int argc, char *argv[])
     }
     if (useDark) {
         #include "StyleDark.h"
-        app.setStyleSheet(GLOBAL_STYLE_DARK);
+        app.setStyleSheet(QString::fromUtf8(GLOBAL_STYLE_DARK) + Theme::DarkButtonStyle + Theme::ItemViewStyle);
     } else {
-        app.setStyleSheet(GLOBAL_STYLE);
+        app.setStyleSheet(QString::fromUtf8(GLOBAL_STYLE) + Theme::ButtonStyle + Theme::ItemViewStyle);
     }
 
     // ── Splash (event-driven) ──────────────────────────────────────────

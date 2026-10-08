@@ -105,27 +105,28 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
     card->setStyleSheet(
       "QFrame#loginCard { background: #ffffff; border: 1px solid #dce1e8; border-radius: 20px; }");
   }
-  card->setFixedWidth(qMin(480, dlgW - 200));
+  card->setFixedWidth(qMin(480, dlgW - 48));
   card->setMinimumHeight(400);
 
   // 卡片投影 —— 在深色渐变底上形成悬浮层次
   auto *cardShadow = new QGraphicsDropShadowEffect(card);
-  cardShadow->setBlurRadius(48);
-  cardShadow->setOffset(0, 12);
+  cardShadow->setBlurRadius(36);
+  cardShadow->setOffset(0, 8);
   cardShadow->setColor(QColor(3, 10, 24, 180));
   card->setGraphicsEffect(cardShadow);
 
   auto *cardLayout = new QVBoxLayout(card);
-  cardLayout->setContentsMargins(44, 42, 44, 36);
+  cardLayout->setContentsMargins(36, 36, 36, 32);
   cardLayout->setSpacing(14);
 
-  // Title（22px：窄字体环境下 13 字仍在 480 卡片内不裁切）
+  // Keep the original centered title on one line at the normal card width.
   auto *titleLabel = new QLabel("信息系统渗透智能化测试平台");
   titleLabel->setAlignment(Qt::AlignCenter);
+  titleLabel->setWordWrap(true);
   if (dark) {
-    titleLabel->setStyleSheet("color: #e2e8f0; font-size: 22px; font-weight: bold;");
+    titleLabel->setStyleSheet("color: #e2e8f0; font-size: 20px; font-weight: bold;");
   } else {
-    titleLabel->setStyleSheet("color: #1a2a3a; font-size: 22px; font-weight: bold;");
+    titleLabel->setStyleSheet("color: #1a2a3a; font-size: 20px; font-weight: bold;");
   }
   cardLayout->addWidget(titleLabel);
 
@@ -154,20 +155,20 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
   // Form
   auto *formLayout = new QFormLayout;
   formLayout->setSpacing(18);
-  formLayout->setLabelAlignment(Qt::AlignRight);
+  formLayout->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
   // Input field style strings
   QString inputStyle, inputFocusStyle, labelStyle;
   if (dark) {
     inputStyle =
-      "QLineEdit { font-size: 15px; padding: 4px 14px; "
+      "QLineEdit { font-size: 15px; padding: 4px 14px; min-height:34px; "
       "background: #162236; color: #e2e8f0; border: 1px solid #2d4a6a; border-radius: 10px; }";
     inputFocusStyle =
       "QLineEdit:focus { border-color: #3a8fd6; background: #1a2a3a; }";
     labelStyle = "color: #a0aec0; font-size: 14px;";
   } else {
     inputStyle =
-      "QLineEdit { font-size: 15px; padding: 4px 14px; "
+      "QLineEdit { font-size: 15px; padding: 4px 14px; min-height:34px; "
       "background: #ffffff; color: #1a2a3a; border: 1px solid #dce1e8; border-radius: 10px; }";
     inputFocusStyle =
       "QLineEdit:focus { border-color: #2a7dd6; background: #f8fbff; }";
@@ -176,6 +177,7 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
 
   // Username
   m_usernameEdit = new QLineEdit;
+  m_usernameEdit->setObjectName("loginUsername");
   m_usernameEdit->setPlaceholderText("请输入用户名");
   m_usernameEdit->setFixedHeight(44);
   m_usernameEdit->setStyleSheet(inputStyle + inputFocusStyle);
@@ -183,6 +185,7 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
 
   // Password
   m_passwordEdit = new QLineEdit;
+  m_passwordEdit->setObjectName("loginPassword");
   m_passwordEdit->setPlaceholderText("请输入密码");
   m_passwordEdit->setEchoMode(QLineEdit::Password);
   m_passwordEdit->setFixedHeight(44);
@@ -220,7 +223,7 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
   } else {
     rememberCheck->setStyleSheet("color: #718096; font-size: 13px;");
   }
-  cardLayout->addWidget(rememberCheck);
+  formLayout->addRow(QString(), rememberCheck);
 
   // Load saved credentials
   QSettings savedSettings("RedTeam", "RedTeam-Platform");
@@ -236,8 +239,11 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
 
   // Error label
   m_errorLabel = new QLabel;
+  m_errorLabel->setObjectName("loginError");
   m_errorLabel->setAlignment(Qt::AlignCenter);
-  m_errorLabel->setStyleSheet("color: #fc8181; font-size: 13px; padding: 2px;");
+  m_errorLabel->setWordWrap(true);
+  m_errorLabel->setStyleSheet(QString("color:%1; font-size:13px; padding:2px;")
+                             .arg(dark ? "#fc8181" : "#b42318"));
   m_errorLabel->hide();
   cardLayout->addWidget(m_errorLabel);
 
@@ -248,28 +254,30 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
   btnLayout->setSpacing(24);
 
   auto *exitBtn = new QPushButton("退出");
+  exitBtn->setObjectName("loginExit");
   exitBtn->setAutoDefault(false);
   exitBtn->setDefault(false);
   exitBtn->setFixedSize(150, 46);
   // 幽灵样式 —— 弱化次要操作
   if (dark) {
     exitBtn->setStyleSheet(
-      "QPushButton { background: transparent; color: #8899aa; border: 1px solid #2d4a6a; border-radius: 10px; font-size: 15px; }"
+      "QPushButton { min-height:44px; max-height:44px; padding:0; background: transparent; color: #8899aa; border: 1px solid #2d4a6a; border-radius: 10px; font-size: 15px; }"
       "QPushButton:hover { background: #1a2a3a; color: #cbd5e0; border-color: #3a8fd6; }");
   } else {
     exitBtn->setStyleSheet(
-      "QPushButton { background: transparent; color: #64748b; border: 1px solid #cbd5e1; border-radius: 10px; font-size: 15px; }"
+      "QPushButton { min-height:44px; max-height:44px; padding:0; background: transparent; color: #64748b; border: 1px solid #cbd5e1; border-radius: 10px; font-size: 15px; }"
       "QPushButton:hover { background: #f1f5f9; color: #334155; border-color: #94a3b8; }");
   }
 
   m_loginBtn = new QPushButton("登  录");
+  m_loginBtn->setObjectName("loginSubmit");
   m_loginBtn->setAutoDefault(true);
   m_loginBtn->setDefault(true);
   m_loginBtn->setFixedSize(150, 46);
   // 品牌蓝渐变主按钮 —— 与全局 Primary #2563eb 同系
   m_loginBtn->setStyleSheet(
-    "QPushButton { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #2f6ff2,stop:1 #1d4ed8); "
-    "color: #ffffff; border: none; border-radius: 10px; font-size: 16px; font-weight: bold; }"
+    "QPushButton { min-height:44px; max-height:44px; padding:0; background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #2f6ff2,stop:1 #1d4ed8); "
+    "color: #ffffff; border:1px solid #1d4ed8; border-radius: 10px; font-size: 16px; font-weight: bold; }"
     "QPushButton:hover { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #3d7bf5,stop:1 #2563eb); }"
     "QPushButton:pressed { background: #1e40af; }"
     "QPushButton:disabled { background: #93b4ed; }");

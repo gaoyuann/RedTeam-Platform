@@ -504,6 +504,8 @@ void PayloadPage::onAiGenerate() {
   layout->addLayout(form);
 
   auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+
+  UiUtil::styleDialogButtons(buttons);
   layout->addWidget(buttons);
   connect(buttons, &QDialogButtonBox::accepted, dlg, &QDialog::accept);
   connect(buttons, &QDialogButtonBox::rejected, dlg, &QDialog::reject);
