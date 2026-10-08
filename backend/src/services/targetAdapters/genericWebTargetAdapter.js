@@ -19,9 +19,9 @@ export function buildWebContext(targetProfile) {
   const host = targetProfile.host || 'localhost';
   const port = targetProfile.port || 80;
   const raw = targetProfile.raw || '';
-  const scheme = raw.startsWith('https') ? 'https' : 'http';
+  const scheme = targetProfile.scheme || (raw.startsWith('https') ? 'https' : 'http');
   const portSuffix = (port === 80 || port === 443) ? '' : `:${port}`;
-  const base = `${scheme}://${host}${portSuffix}`;
+  const base = targetProfile.base_url || `${scheme}://${host}${portSuffix}`;
 
   // SSH/remote credentials for Linux targets — configurable via env vars
   // REDTEAM_SSH_USER / REDTEAM_SSH_PASS override the defaults
@@ -33,7 +33,7 @@ export function buildWebContext(targetProfile) {
     port: String(port),
     scheme,
     base_url: base,
-    target_url: base,
+    target_url: targetProfile.target_url || base,
     target_class: targetProfile.target_class || 'web_url',
     username,
     password,
@@ -63,13 +63,13 @@ export function buildWebContext(targetProfile) {
  * 检查目标是否适合通用 Web Playbook
  */
 export function checkWebCompatibility(targetProfile) {
-  const compatClasses = new Set(['web_url', 'local_ip', 'dvwa']);
+  const compatClasses = new Set(['web_url', 'local_ip', 'dvwa', 'web_app', 'rest_api', 'graphql_api', 'spa_app']);
   if (compatClasses.has(targetProfile.target_class)) {
     return { ok: true, reason: null };
   }
   return {
     ok: false,
-    reason: `Web Playbook requires target_class in [web_url, local_ip, dvwa], got '${targetProfile.target_class}'`,
+    reason: `Web Playbook requires an HTTP application target, got '${targetProfile.target_class}'`,
   };
 }
 

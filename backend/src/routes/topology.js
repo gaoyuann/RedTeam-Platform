@@ -9,14 +9,18 @@ function extractTopologyFromResults(target, results) {
   const nodes = new Map(); // ip -> node object
   const edges = [];
 
-  // Ensure target itself is a node
-  const targetIp = target.replace(/^https?:\/\//, '').replace(/\/.*$/, '').split(':')[0];
-  if (targetIp && /^\d+\.\d+\.\d+\.\d+$/.test(targetIp)) {
-    nodes.set(targetIp, {
-      id: `host-${targetIp.replace(/\./g, '-')}`,
-      displayName: targetIp,
-      ip: targetIp,
-      hostName: '',
+  const targetHost = String(target || '')
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/.*$/, '')
+    .split(':')[0]
+    .trim();
+  const targetIsIp = /^\d+\.\d+\.\d+\.\d+$/.test(targetHost);
+  if (targetHost) {
+    nodes.set(targetHost, {
+      id: `host-${targetHost.replace(/[^a-zA-Z0-9_-]/g, '-')}`,
+      displayName: targetHost,
+      ip: targetIsIp ? targetHost : '',
+      hostName: targetIsIp ? '' : targetHost,
       osName: '',
       osVersion: '',
       deviceType: 'host',
@@ -44,17 +48,17 @@ function extractTopologyFromResults(target, results) {
 
     // Extract IP from data
     const ip = data.host || data.ip || data.target || '';
-    const nodeIp = ip || targetIp;
+    const nodeIp = ip || targetHost;
 
     // Get or create node
     if (!nodeIp) continue;
     let node = nodes.get(nodeIp);
     if (!node) {
       node = {
-        id: `host-${nodeIp.replace(/\./g, '-')}`,
+        id: `host-${nodeIp.replace(/[^a-zA-Z0-9_-]/g, '-')}`,
         displayName: nodeIp,
-        ip: nodeIp,
-        hostName: '',
+        ip: /^\d+\.\d+\.\d+\.\d+$/.test(nodeIp) ? nodeIp : '',
+        hostName: /^\d+\.\d+\.\d+\.\d+$/.test(nodeIp) ? '' : nodeIp,
         osName: '',
         osVersion: '',
         deviceType: 'host',
@@ -212,7 +216,6 @@ export default function (db) {
     const results = ids.length ? db.prepare(
       `SELECT * FROM scan_results WHERE scan_task_id IN (${ids.map(() => '?').join(',')}) ORDER BY captured_at`
     ).all(...ids) : [];
-    if (!results.length) return res.json({ status: 'ok', data: { topology: null } });
     const topology = extractTopologyFromResults(pipeline.target, results);
     // Scan co-occurrence is not evidence of a physical network connection.
     topology.edges = [];
@@ -246,6 +249,13 @@ export default function (db) {
         });
       }
 
+      if (task.status !== 'COMPLETED') {
+        return res.status(409).json({
+          status: 'error',
+          error: { message: `Scan task is ${task.status}, topology requires a completed scan` },
+        });
+      }
+
       // Fetch associated scan results
       const results = db
         .prepare(
@@ -253,44 +263,39 @@ export default function (db) {
         )
         .all(scan_task_id);
 
-      if (results.length === 0) {
-        return res.status(400).json({
-          status: 'error',
-          error: { message: 'No scan results found for this scan task' },
-        });
-      }
-
       // ── Step 1: Rule-based extraction (always works) ────────────────
       const ruleBased = extractTopologyFromResults(task.target, results);
       const ruleNodeCount = ruleBased.nodes.size;
 
       // ── Step 2: Try LLM enhancement ──────────────────────────────────
       let topology = null;
-      const userPrompt = buildUserPrompt(task.target, results);
+      if (results.length > 0) {
+        const userPrompt = buildUserPrompt(task.target, results);
 
-      try {
-        const llmResult = await callLlm(
-          [
-            { role: 'system', content: SYSTEM_PROMPT },
-            { role: 'user', content: userPrompt },
-          ],
-          { temperature: 0.2, maxTokens: 8192 }
-        );
+        try {
+          const llmResult = await callLlm(
+            [
+              { role: 'system', content: SYSTEM_PROMPT },
+              { role: 'user', content: userPrompt },
+            ],
+            { temperature: 0.2, maxTokens: 8192 }
+          );
 
-        if (llmResult.ok) {
-          // Strip markdown fences if present
-          let content = llmResult.content.trim();
-          content = content.replace(/^```json?\n?/, '').replace(/\n?```$/, '').trim();
-          topology = JSON.parse(content);
+          if (llmResult.ok) {
+            // Strip markdown fences if present
+            let content = llmResult.content.trim();
+            content = content.replace(/^```json?\n?/, '').replace(/\n?```$/, '').trim();
+            topology = JSON.parse(content);
 
-          // Validate structure
-          if (!topology.summary || !topology.nodes || !topology.edges) {
-            topology = null;
+            // Validate structure
+            if (!topology.summary || !topology.nodes || !topology.edges) {
+              topology = null;
+            }
           }
+        } catch (err) {
+          // LLM failed or parse error — will fall back to rule-based
+          topology = null;
         }
-      } catch (err) {
-        // LLM failed or parse error — will fall back to rule-based
-        topology = null;
       }
 
       // ── Step 3: Merge or fallback ────────────────────────────────────
@@ -315,8 +320,13 @@ export default function (db) {
         }
       } else {
         // LLM failed or produced too few nodes — use rule-based result
+        const fallbackReason = results.length === 0
+          ? '（无结构化发现，保留扫描目标）'
+          : topology
+            ? '（LLM 增强不足，使用规则提取）'
+            : '（LLM 不可用，使用规则提取）';
         topology = {
-          summary: ruleBased.summary + (topology ? '（LLM 增强不足，使用规则提取）' : '（LLM 不可用，使用规则提取）'),
+          summary: ruleBased.summary + fallbackReason,
           nodes: [...ruleBased.nodes.values()],
           edges: ruleBased.edges,
         };

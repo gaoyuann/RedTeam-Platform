@@ -23,9 +23,9 @@ async function getLlmConfig() {
   const entry = cfg.default || Object.values(cfg)[0] || {};
 
   return {
-    apiKey: entry.key || process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || process.env.DEEPSEEK_API_KEY || '',
-    baseUrl: entry.url || process.env.LLM_BASE_URL || process.env.OPENAI_BASE_URL || DEFAULT_BASE_URL,
-    model: entry.model || process.env.LLM_MODEL || process.env.OPENAI_MODEL || DEFAULT_MODEL,
+    apiKey: process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || process.env.DEEPSEEK_API_KEY || entry.key || '',
+    baseUrl: process.env.LLM_BASE_URL || process.env.OPENAI_BASE_URL || entry.url || DEFAULT_BASE_URL,
+    model: process.env.LLM_MODEL || process.env.OPENAI_MODEL || entry.model || DEFAULT_MODEL,
   };
 }
 
@@ -83,6 +83,7 @@ export async function callLlmReact(prompt, options = {}) {
   const { apiKey, baseUrl, model } = await getLlmConfig();
   const timeoutMs = options.timeoutMs || 30_000;  // 30s default for ReAct
 
+  if (options.signal?.aborted) return 'Observation: 运行已中止\n<action type="continue" />';
   if (!apiKey) {
     return 'Observation: LLM未配置，自动继续\nThought: 无LLM分析能力，按原计划执行\n<action type="continue" />';
   }
@@ -99,7 +100,10 @@ export async function callLlmReact(prompt, options = {}) {
   };
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onAbort = () => controller.abort();
+  options.signal?.addEventListener('abort', onAbort, { once: true });
+  if (options.signal?.aborted) onAbort();
+  const timer = setTimeout(onAbort, timeoutMs);
 
   try {
     const res = await fetch(url, {
@@ -124,6 +128,7 @@ export async function callLlmReact(prompt, options = {}) {
 
   } catch (err) {
     if (err.name === 'AbortError') {
+      if (options.signal?.aborted) return 'Observation: 运行已中止\n<action type="continue" />';
       console.warn('[callLlmReact] Request timed out');
       return 'Observation: LLM请求超时，自动继续\n<action type="continue" />';
     }
@@ -131,5 +136,6 @@ export async function callLlmReact(prompt, options = {}) {
     return `Observation: LLM请求失败(${err.message})，自动继续\n<action type="continue" />`;
   } finally {
     clearTimeout(timer);
+    options.signal?.removeEventListener('abort', onAbort);
   }
 }

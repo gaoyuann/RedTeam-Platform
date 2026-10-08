@@ -2,6 +2,9 @@ import { spawn } from 'child_process';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getEngine } from './containerEngine.js';
+import { mkdirSync } from 'fs';
+import { randomUUID } from 'crypto';
+import { classifyToolResult, normalizeToolArgs, inspectToolWordlists } from './toolContracts.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..', '..', '..');
@@ -77,142 +80,59 @@ function getVolumeMounts(toolId) {
 }
 
 function ensureOutputDir() {
-  import('fs').then(fs => {
-    const dir = resolve(PROJECT_ROOT, 'data', 'output');
-    fs.mkdirSync(dir, { recursive: true });
-  });
+  mkdirSync(resolve(PROJECT_ROOT, 'data', 'output'), { recursive: true });
 }
 
-// ── Run tool directly on host (fallback) ────────────────────────────────
-function runDirect(bin, args, options = {}) {
-  return new Promise((resolve, reject) => {
+function runProcess(bin, args, options, executionMode, stopContainer) {
+  return new Promise((resolveResult) => {
     const timeout = options.timeout || 300_000;
-    const maxOutputKB = options.maxOutputKB || 2048;
-
+    const maxBytes = (options.maxOutputKB || 2048) * 1024;
+    let stdout = '', stderr = '';
+    let outputBytes = 0;
+    let timedOut = false, aborted = false, outputLimitExceeded = false;
+    let settled = false, killed = false;
+    let sigkillTimer;
+    let timer, hardTimer;
+    const started = Date.now();
     const child = spawn(bin, args, { shell: false });
-    let stdout = '', stderr = '';
-    let outputBytes = 0;
-    const maxBytes = maxOutputKB * 1024;
-    let killed = false;
-    let settled = false;
-    let sigkillTimer = null;
-
     function settle(result) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       clearTimeout(hardTimer);
-      if (sigkillTimer) clearTimeout(sigkillTimer);
-      resolve(result);
+      clearTimeout(sigkillTimer);
+      options.signal?.removeEventListener('abort', onAbort);
+      resolveResult(classifyToolResult(options.toolId, {
+        ...result, stdout: stdout.trim(), stderr: stderr.trim(), executionMode,
+        timedOut, aborted, outputLimitExceeded, durationMs: Date.now() - started,
+      }));
     }
-
-    // Send SIGTERM, then SIGKILL 5s later if the process ignores it.
     function forceKill() {
       if (killed) return;
       killed = true;
-      try { child.kill('SIGTERM'); } catch {}
-      sigkillTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 5000);
+      stopContainer?.();
+      child.kill('SIGTERM');
+      sigkillTimer = setTimeout(() => child.kill('SIGKILL'), 5000);
+      hardTimer = setTimeout(() => settle({ exitCode: -1 }), 15000);
     }
-
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (d) => { stdout += d; outputBytes += Buffer.byteLength(d); if (outputBytes > maxBytes) forceKill(); });
-    child.stderr.on('data', (d) => { stderr += d; outputBytes += Buffer.byteLength(d); if (outputBytes > maxBytes) forceKill(); });
-
-    const timer = setTimeout(forceKill, timeout);
-    // Hard resolve: if close never fires (zombie / D-state / SIGKILL ignored),
-    // resolve anyway so the caller never hangs forever.
-    const hardTimer = setTimeout(() => {
-      settle({ success: false, exitCode: -1, stdout: stdout.trim(), stderr: (stderr || 'Tool hard timeout — process did not exit').trim(), executionMode: 'host' });
-    }, timeout + 15_000);
-
-    child.on('close', (code) => {
-      settle({
-        success: code === 0 || stdout.length > 0,
-        exitCode: code,
-        stdout: stdout.trim(),
-        stderr: stderr.trim(),
-        executionMode: 'host',
-      });
-    });
-
-    child.on('error', (err) => {
-      settle({ success: false, exitCode: -1, stdout: '', stderr: err.message, executionMode: 'host' });
-    });
-  });
-}
-
-// ── Run tool in container ───────────────────────────────────────────────
-function runInContainer(engine, image, bin, args, options = {}) {
-  return new Promise((resolve, reject) => {
-    const timeout = options.timeout || 300_000;
-    const maxOutputKB = options.maxOutputKB || 2048;
-    const toolId = options.toolId || '';
-
-    ensureOutputDir();
-
-    const cmdArgs = [
-      'run', '--rm',
-      '--network', 'host',
-      ...getVolumeMounts(toolId),
-      ...(PRIVILEGED_TOOLS.has(toolId) ? ['--privileged'] : []),
-      image, bin, ...args,
-    ];
-
-    const child = spawn(engine, cmdArgs, { shell: false });
-    let stdout = '', stderr = '';
-    let outputBytes = 0;
-    const maxBytes = maxOutputKB * 1024;
-    let killed = false;
-    let settled = false;
-    let sigkillTimer = null;
-
-    function settle(result) {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      clearTimeout(hardTimer);
-      if (sigkillTimer) clearTimeout(sigkillTimer);
-      resolve(result);
+    function onAbort() {
+      aborted = true;
+      forceKill();
     }
-
-    // Send SIGTERM, then SIGKILL 5s later if the process ignores it.
-    function forceKill() {
-      if (killed) return;
-      killed = true;
-      try { child.kill('SIGTERM'); } catch {}
-      sigkillTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 5000);
+    function collect(data, isError) {
+      const remaining = Math.max(0, maxBytes - outputBytes);
+      const text = Buffer.from(data).subarray(0, remaining).toString('utf8');
+      if (isError) stderr += text; else stdout += text;
+      outputBytes += Buffer.byteLength(data);
+      if (outputBytes > maxBytes) { outputLimitExceeded = true; forceKill(); }
     }
-
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (d) => { stdout += d; outputBytes += Buffer.byteLength(d); if (outputBytes > maxBytes) forceKill(); });
-    child.stderr.on('data', (d) => { stderr += d; outputBytes += Buffer.byteLength(d); if (outputBytes > maxBytes) forceKill(); });
-
-    const timer = setTimeout(forceKill, timeout);
-    // Hard resolve: if close never fires (zombie / D-state / SIGKILL ignored),
-    // resolve anyway so the caller never hangs forever.
-    const hardTimer = setTimeout(() => {
-      settle({ success: false, exitCode: -1, stdout: stdout.trim(), stderr: (stderr || 'Tool hard timeout — process did not exit').trim(), executionMode: engine });
-    }, timeout + 15_000);
-
-    child.on('close', (code) => {
-      // For SSH/exploit tools, exit code is the authoritative success indicator
-      // (stdout may contain progress messages even on failure)
-      const isExploitTool = ['ssh-exec', 'evil-winrm', 'netexec'].includes(options.toolId);
-      const success = isExploitTool ? code === 0 : (code === 0 || stdout.length > 0);
-      settle({
-        success,
-        exitCode: code,
-        stdout: stdout.trim(),
-        stderr: stderr.trim(),
-        executionMode: engine,
-      });
-    });
-
-    child.on('error', (err) => {
-      settle({ success: false, exitCode: -1, stdout: '', stderr: err.message, executionMode: engine });
-    });
+    child.stdout.on('data', data => collect(data, false));
+    child.stderr.on('data', data => collect(data, true));
+    child.on('close', code => settle({ exitCode: code ?? -1 }));
+    child.on('error', error => { stderr += error.message; settle({ exitCode: -1 }); });
+    timer = setTimeout(() => { timedOut = true; forceKill(); }, timeout);
+    options.signal?.addEventListener('abort', onAbort, { once: true });
+    if (options.signal?.aborted) onAbort();
   });
 }
 
@@ -226,11 +146,28 @@ export async function runTool(toolId, args, options = {}) {
   const image = IMAGE_MAP[toolId];
   const bin = BIN_MAP[toolId] || toolId;
 
-  if (engine === 'host' || !image) {
-    return runDirect(bin, args, options);
+  try {
+    args = normalizeToolArgs(toolId, args, { projectRoot: PROJECT_ROOT, engine });
+    const resources = inspectToolWordlists(toolId, args, PROJECT_ROOT, engine);
+    if (!resources.passed) throw new Error(resources.issues.join('; '));
+  } catch (error) {
+    return { success: false, exitCode: -1, stdout: '', stderr: error.message, error: error.message, executionMode: engine };
   }
 
-  return runInContainer(engine, image, bin, args, { ...options, toolId });
+  if (engine === 'host' || !image) {
+    return runProcess(bin, args, { ...options, toolId }, 'host');
+  }
+
+  ensureOutputDir();
+  const name = `rt-tool-${randomUUID()}`;
+  const containerArgs = ['run', '--rm', '--name', name, '--network', 'host',
+    ...getVolumeMounts(toolId), ...(PRIVILEGED_TOOLS.has(toolId) ? ['--privileged'] : []), image, bin, ...args];
+  return runProcess(engine, containerArgs, { ...options, toolId }, engine, () => {
+    const cleanup = spawn(engine, ['rm', '-f', name], { stdio: 'ignore' });
+    cleanup.on('error', () => {});
+    const cleanupTimer = setTimeout(() => cleanup.kill('SIGKILL'), 10000);
+    cleanup.on('close', () => clearTimeout(cleanupTimer));
+  });
 }
 
 export { IMAGE_MAP, BIN_MAP, PRIVILEGED_TOOLS, VIRTUAL_TOOLS, CAPTURE_TOOLS };

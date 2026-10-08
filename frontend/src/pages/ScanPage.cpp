@@ -75,6 +75,9 @@ static QString formatResultType(const QString &type) {
   if (type == "credential")   return "凭据";
   if (type == "raw_output")   return "原始输出";
   if (type == "service_info") return "服务信息";
+  if (type == "http_probe") return "HTTP 探测";
+  if (type == "technology_detection") return "应用指纹";
+  if (type == "scan_error") return "工具失败";
   return type;
 }
 
@@ -84,12 +87,14 @@ QString ScanPage::formatScanType(const QString &type) {
   if (type == "port_scan")   return "端口扫描";
   if (type == "vuln_scan")   return "漏洞扫描";
   if (type == "web_scan")    return "网站扫描";
+  if (type == "app_discovery") return "应用发现";
   if (type == "brute_force") return "暴力破解";
   return type;
 }
 
 QString ScanPage::formatStatus(const QString &s, bool hasStructured) {
   if (s == "COMPLETED")  return hasStructured ? "已完成" : "无有效结果";
+  if (s == "PARTIAL")    return "部分完成";
   if (s == "RUNNING")    return "运行中";
   if (s == "PENDING")    return "待执行";
   if (s == "FAILED")     return "失败";
@@ -196,6 +201,12 @@ QString ScanPage::formatResultData(const QString &json, const QString &resultTyp
       return cn;
     }
 
+    if (resultType == "scan_error") return obj["error"].toString();
+    if (resultType == "http_probe" || resultType == "technology_detection") {
+      return QString("%1 [%2] %3").arg(obj["url"].toString())
+          .arg(obj["status_code"].toInt()).arg(obj["title"].toString());
+    }
+
     QStringList parts;
     for (auto it = obj.begin(); it != obj.end(); ++it) {
       QString val = it.value().isString() ? it.value().toString()
@@ -283,6 +294,7 @@ QString ScanPage::buildResultSummary(const QJsonArray &results, const QString &s
 static QColor statusColor(const QString &status, bool hasStructured = true) {
   QString sl = status.toLower();
   if (sl == "completed")  return hasStructured ? QColor("#22c55e") : QColor("#f59e0b");
+  if (sl == "partial")    return QColor("#f59e0b");
   if (sl == "running")    return QColor("#3b82f6");
   if (sl == "failed")     return QColor("#ef4444");
   if (sl == "pending")    return QColor("#f59e0b");
@@ -293,7 +305,7 @@ static QColor statusColor(const QString &status, bool hasStructured = true) {
 bool ScanPage::hasStructuredResults(const QJsonArray &results) {
   for (const auto &r : results) {
     QString type = r.toObject()["result_type"].toString();
-    if (type != "raw_output") return true;
+    if (type != "raw_output" && type != "scan_error") return true;
   }
   return false;
 }
@@ -304,7 +316,7 @@ static QTableWidget *tableForScanType(const QString &scanType,
                                        QTableWidget *web, QTableWidget *brute) {
   if (scanType == "port_scan")   return port;
   if (scanType == "vuln_scan")   return vuln;
-  if (scanType == "web_scan")    return web;
+  if (scanType == "web_scan" || scanType == "app_discovery") return web;
   if (scanType == "brute_force") return brute;
   return nullptr;
 }
@@ -1009,7 +1021,7 @@ void ScanPage::updateStatusLabel(const QJsonObject &d) {
 
   int structuredCount = 0;
   for (const auto &r : arr) {
-    if (r.toObject()["result_type"].toString() != "raw_output") structuredCount++;
+    if (r.toObject()["result_type"].toString() != "raw_output" && r.toObject()["result_type"].toString() != "scan_error") structuredCount++;
   }
   if (structuredCount > 0)
     parts << QString("有效结果: %1").arg(structuredCount);
@@ -1022,7 +1034,7 @@ void ScanPage::updateStatusLabel(const QJsonObject &d) {
   m_statusLabel->setText(parts.join(" | "));
   if (status == "FAILED")
     m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
-  else if (status == "COMPLETED" && !structured)
+  else if (status == "PARTIAL" || (status == "COMPLETED" && !structured))
     m_statusLabel->setStyleSheet(Theme::StatusWarningStyle);
   else
     m_statusLabel->setStyleSheet(Theme::StatusInfoStyle);
@@ -1037,7 +1049,7 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
   QMap<QString, QJsonArray> groups;
   // Define display order
   QStringList order = {"open_port", "vulnerability", "web_vuln", "sql_injection",
-                       "credential", "service_info", "raw_output"};
+                       "credential", "service_info", "http_probe", "technology_detection", "scan_error", "raw_output"};
 
   for (const auto &r : results) {
     QString type = r.toObject()["result_type"].toString();
@@ -1269,11 +1281,11 @@ void ScanPage::onRefreshTasks() {
 
       int row = table->rowCount();
       table->setRowCount(row + 1);
-      counts[scanType]++;
+      counts[scanType == "app_discovery" ? "web_scan" : scanType]++;
 
       auto *targetItem = new QTableWidgetItem(t["target"].toString());
       targetItem->setData(Qt::UserRole, taskId);
-      targetItem->setToolTip(t["target"].toString());
+      targetItem->setToolTip(formatScanType(scanType) + "\n" + t["target"].toString());
       table->setItem(row, 0, targetItem);
 
       auto *statusItem = new QTableWidgetItem(formatStatus(status));
@@ -1290,7 +1302,7 @@ void ScanPage::onRefreshTasks() {
       if (!m_selectedTaskId.isEmpty() && taskId == m_selectedTaskId) {
         selectTabIdx = (scanType == "port_scan") ? 0 :
                        (scanType == "vuln_scan") ? 1 :
-                       (scanType == "web_scan") ? 2 :
+                       (scanType == "web_scan" || scanType == "app_discovery") ? 2 :
                        (scanType == "brute_force") ? 3 : -1;
         selectRowInTab = row;
       }
@@ -1389,12 +1401,12 @@ void ScanPage::onTaskClicked(int row, int) {
     m_genStepTable->setRowCount(0);
 
     bool structured = hasStructuredResults(arr);
-    if (status == "COMPLETED" && structured) {
+    if ((status == "COMPLETED" || status == "PARTIAL") && structured) {
       m_genBtn->setEnabled(true);
-      m_reexecBtn->setVisible(false);
+      m_reexecBtn->setVisible(status == "PARTIAL");
       loadRecommendations(id);
       // 不再自动触发 AI 生成，需用户手动点击
-    } else if (status == "COMPLETED" && !structured) {
+    } else if ((status == "COMPLETED" || status == "PARTIAL") && !structured) {
       m_genBtn->setEnabled(false);
       m_reexecBtn->setVisible(true);
       m_recTable->setRowCount(0);
@@ -1704,12 +1716,12 @@ void ScanPage::onPollStatus() {
               QString status = d["status"].toString();
               auto arr = d["results"].toArray();
               bool structured = hasStructuredResults(arr);
-              if (status == "COMPLETED" && structured) {
+              if ((status == "COMPLETED" || status == "PARTIAL") && structured) {
                 m_genBtn->setEnabled(true);
-                m_reexecBtn->setVisible(false);
+                m_reexecBtn->setVisible(status == "PARTIAL");
                 loadRecommendations(m_selectedTaskId);
                 // 不再自动触发 AI 生成
-              } else if (status == "COMPLETED" && !structured) {
+              } else if ((status == "COMPLETED" || status == "PARTIAL") && !structured) {
                 m_genBtn->setEnabled(false);
                 m_reexecBtn->setVisible(true);
               } else if (status == "FAILED" || status == "CANCELLED") {

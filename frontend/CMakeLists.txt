@@ -13,6 +13,7 @@ set(SOURCES
     src/SimpleMainWindow.cpp
     src/ApiClient.cpp
     src/WsClient.cpp
+    src/CortexPanel.cpp
     src/ToastOverlay.cpp
     src/SplashDialog.cpp
     src/LoginDialog.cpp
@@ -41,6 +42,7 @@ set(HEADERS
     src/SimpleMainWindow.h
     src/ApiClient.h
     src/WsClient.h
+    src/CortexPanel.h
     src/ToastOverlay.h
     src/SplashDialog.h
     src/LoginDialog.h

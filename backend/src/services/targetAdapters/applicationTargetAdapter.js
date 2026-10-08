@@ -10,9 +10,9 @@ export function buildApplicationContext(targetProfile, appMetadata = {}) {
   const host = targetProfile.host || 'localhost';
   const port = targetProfile.port || 80;
   const raw = targetProfile.raw || '';
-  const scheme = raw.startsWith('https') ? 'https' : 'http';
-  const portSuffix = (port === 80 || port === 443) ? '' : `:${port}`;
-  const base = `${scheme}://${host}${portSuffix}`;
+  const scheme = targetProfile.scheme || (raw.startsWith('https') ? 'https' : 'http');
+  const portSuffix = (scheme === 'http' && port === 80 || scheme === 'https' && port === 443) ? '' : `:${port}`;
+  const base = targetProfile.base_url || `${scheme}://${host}${portSuffix}`;
 
   return {
     // 基础字段
@@ -20,7 +20,7 @@ export function buildApplicationContext(targetProfile, appMetadata = {}) {
     port: String(port),
     scheme,
     base_url: base,
-    target_url: base,
+    target_url: targetProfile.target_url || base,
     target_class: targetProfile.target_class || 'web_app',
 
     // 应用层通用字段

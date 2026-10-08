@@ -1,6 +1,7 @@
 # ── Build artifacts ──────────────────────────
 build/
 cmake-build-*/
+.client-update/
 dist/
 *.autosave
 *.user

@@ -38,6 +38,7 @@ export default function (db) {
     if (!row) return res.status(404).json({ status: 'error', error: { message: 'Run not found' } });
     row.steps = db.prepare('SELECT * FROM execution_steps WHERE run_id = ? ORDER BY step_index').all(req.params.runId);
     row.evidence = db.prepare('SELECT * FROM evidence_records WHERE run_id = ? ORDER BY recorded_at').all(req.params.runId);
+    row.attempts = db.prepare('SELECT * FROM execution_attempts WHERE run_id = ? ORDER BY id').all(req.params.runId);
     // Enrich with playbook name for display
     if (row.playbook_id) {
       const pb = db.prepare('SELECT name FROM playbooks WHERE playbook_id = ?').get(row.playbook_id);
@@ -194,14 +195,20 @@ export default function (db) {
 
   // ── Trigger Execution ───────────────────────────────────────────────
   router.post('/:runId/execute', async (req, res) => {
-    const run = db.prepare('SELECT run_id, status FROM execution_runs WHERE run_id = ?').get(req.params.runId);
+    const run = db.prepare('SELECT run_id, playbook_id, status, engine_type FROM execution_runs WHERE run_id = ?').get(req.params.runId);
     if (!run) return res.status(404).json({ status: 'error', error: { message: 'Run not found' } });
-    if (run.status === 'RUNNING') return res.status(409).json({ status: 'error', error: { message: 'Run is already executing' } });
-    if (run.status === 'COMPLETED') return res.status(409).json({ status: 'error', error: { message: 'Run already completed' } });
+    if (run.status !== 'PENDING') return res.status(409).json({ status: 'error', error: { message: `Run is ${run.status}, expected PENDING; create a new run to execute again` } });
+    if (!run.playbook_id || !db.prepare('SELECT 1 FROM playbook_steps WHERE playbook_id = ? LIMIT 1').get(run.playbook_id)) {
+      return res.status(400).json({ status: 'error', error: { message: 'Run has no executable playbook steps' } });
+    }
 
     // Optionally set engine_type before execution
-    const { engine_type } = req.body;
-    if (engine_type) {
+    const { engine_type } = req.body || {};
+    const requestedEngine = engine_type === undefined ? run.engine_type : engine_type;
+    if ((engine_type !== undefined || requestedEngine) && !['auto', 'playbook', 'mechanical', 'react'].includes(requestedEngine)) {
+      return res.status(400).json({ status: 'error', error: { message: 'Invalid engine_type; expected auto, playbook, mechanical or react' } });
+    }
+    if (engine_type !== undefined) {
       db.prepare("UPDATE execution_runs SET engine_type = ? WHERE run_id = ?").run(engine_type, req.params.runId);
     }
 
@@ -235,12 +242,14 @@ export default function (db) {
 
   // ── Preflight Check (without starting execution) ───────────────────────
   router.post('/:runId/preflight', async (req, res) => {
-    const run = db.prepare('SELECT run_id, playbook_id, target FROM execution_runs WHERE run_id = ?').get(req.params.runId);
+    const run = db.prepare('SELECT run_id, playbook_id, target, scan_task_id, plan_data FROM execution_runs WHERE run_id = ?').get(req.params.runId);
     if (!run) return res.status(404).json({ status: 'error', error: { message: 'Run not found' } });
     if (!run.playbook_id) return res.status(400).json({ status: 'error', error: { message: 'Run has no playbook_id assigned' } });
 
     try {
-      const preflight = await runPreflightChecks({ playbookId: run.playbook_id, target: run.target, db });
+      let scanTaskIds = run.scan_task_id ? [run.scan_task_id] : [];
+      try { scanTaskIds = JSON.parse(run.plan_data || '{}')._scan_task_ids || scanTaskIds; } catch {}
+      const preflight = await runPreflightChecks({ playbookId: run.playbook_id, target: run.target, db, scanTaskIds, runId: run.run_id });
       // Persist preflight data regardless of pass/fail
       db.prepare(
         "UPDATE execution_runs SET preflight_status = ?, preflight_data = ?, updated_at = datetime('now') WHERE run_id = ?"

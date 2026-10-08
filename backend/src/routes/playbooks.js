@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { chatGeneratePlaybook } from '../services/playbookAiChat.js';
+import { parseVariableContract } from '../services/executionVariables.js';
 
 export default function (db) {
   const router = Router();
@@ -70,40 +71,53 @@ export default function (db) {
   router.post('/', (req, res) => {
     const pb = req.body;
     if (!pb.playbook_id || !pb.name) return res.status(400).json({ status: 'error', error: { message: 'playbook_id, name are required' } });
+    let steps;
     try {
-      db.prepare(`INSERT INTO playbooks (playbook_id, name, description, author, difficulty, category,
-        estimated_time, target_type, not_suitable_for, baseline_group, expected_output_policy,
-        teaching_objective, roles_allowed, disable_auto_insert, enable_kg_context,
-        requires_teacher_review, mitre_techniques, metadata, is_generated, generated_from, generated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-        pb.playbook_id, pb.name, pb.description || null, pb.author || null,
-        pb.difficulty || null, pb.category || null, pb.estimated_time || null,
-        pb.target_type ? JSON.stringify(pb.target_type) : null,
-        pb.not_suitable_for ? JSON.stringify(pb.not_suitable_for) : null,
-        pb.baseline_group || null, pb.expected_output_policy || null,
-        pb.teaching_objective || null,
-        pb.roles_allowed ? JSON.stringify(pb.roles_allowed) : null,
-        pb.disable_auto_insert ? 1 : 0, pb.enable_kg_context ? 1 : 0,
-        pb.requires_teacher_review ? 1 : 0,
-        pb.mitre_techniques ? JSON.stringify(pb.mitre_techniques) : null,
-        pb.metadata ? JSON.stringify(pb.metadata) : null,
-        pb.is_generated ? 1 : 0, pb.generated_from || null, pb.generated_at || null
-      );
+      if (pb.steps !== undefined && !Array.isArray(pb.steps)) throw new Error('steps must be an array');
+      steps = (pb.steps || []).map(step => {
+        if (!step || typeof step !== 'object' || Array.isArray(step)) throw new Error('steps must contain step objects');
+        return { ...step, input_variables: parseVariableContract(step.inputs ?? step.input_variables),
+          output_variables: parseVariableContract(step.outputs ?? step.output_variables) };
+      });
+    } catch (error) {
+      return res.status(400).json({ status: 'error', error: { message: error.message } });
+    }
+    try {
+      db.transaction(() => {
+        db.prepare(`INSERT INTO playbooks (playbook_id, name, description, author, difficulty, category,
+          estimated_time, target_type, not_suitable_for, baseline_group, expected_output_policy,
+          teaching_objective, roles_allowed, disable_auto_insert, enable_kg_context,
+          requires_teacher_review, mitre_techniques, metadata, is_generated, generated_from, generated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+          pb.playbook_id, pb.name, pb.description || null, pb.author || null,
+          pb.difficulty || null, pb.category || null, pb.estimated_time || null,
+          pb.target_type ? JSON.stringify(pb.target_type) : null,
+          pb.not_suitable_for ? JSON.stringify(pb.not_suitable_for) : null,
+          pb.baseline_group || null, pb.expected_output_policy || null,
+          pb.teaching_objective || null,
+          pb.roles_allowed ? JSON.stringify(pb.roles_allowed) : null,
+          pb.disable_auto_insert ? 1 : 0, pb.enable_kg_context ? 1 : 0,
+          pb.requires_teacher_review ? 1 : 0,
+          pb.mitre_techniques ? JSON.stringify(pb.mitre_techniques) : null,
+          pb.metadata ? JSON.stringify(pb.metadata) : null,
+          pb.is_generated ? 1 : 0, pb.generated_from || null, pb.generated_at || null
+        );
 
-      const steps = pb.steps || [];
-      const insertStep = db.prepare(`INSERT INTO playbook_steps (playbook_id, step_index, step_id, name, tool_id,
-        args_template, description, score, expected_mitre, payload_id, payload_variables,
-        evidence_config, requires_teacher_review, optional) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-      for (let i = 0; i < steps.length; i++) {
-        const s = steps[i];
-        insertStep.run(pb.playbook_id, i, s.step_id || s.id, s.name, s.tool_id,
-          s.args_template ? JSON.stringify(s.args_template) : null,
-          s.description || null, s.score || 0,
-          s.expected_mitre ? JSON.stringify(s.expected_mitre) : null,
-          s.payload_id || null, s.payload_variables ? JSON.stringify(s.payload_variables) : null,
-          s.evidence_config ? JSON.stringify(s.evidence_config) : null,
-          s.requires_teacher_review ? 1 : 0, s.optional ? 1 : 0);
-      }
+        const insertStep = db.prepare(`INSERT INTO playbook_steps (playbook_id, step_index, step_id, name, tool_id,
+          args_template, description, score, expected_mitre, payload_id, payload_variables,
+          evidence_config, requires_teacher_review, optional, input_variables, output_variables) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+        for (let i = 0; i < steps.length; i++) {
+          const s = steps[i];
+          insertStep.run(pb.playbook_id, i, s.step_id || s.id, s.name, s.tool_id,
+            s.args_template ? JSON.stringify(s.args_template) : null,
+            s.description || null, s.score || 0,
+            s.expected_mitre ? JSON.stringify(s.expected_mitre) : null,
+            s.payload_id || null, s.payload_variables ? JSON.stringify(s.payload_variables) : null,
+            s.evidence_config ? JSON.stringify(s.evidence_config) : null,
+            s.requires_teacher_review ? 1 : 0, s.optional ? 1 : 0,
+            JSON.stringify(s.input_variables), JSON.stringify(s.output_variables));
+        }
+      })();
 
       const result = db.prepare('SELECT * FROM playbooks WHERE playbook_id = ?').get(pb.playbook_id);
       result.steps = db.prepare('SELECT * FROM playbook_steps WHERE playbook_id = ? ORDER BY step_index').all(pb.playbook_id);

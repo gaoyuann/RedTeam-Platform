@@ -5,6 +5,7 @@
  */
 import { getDb } from '../db/connection.js';
 import { computeGrade } from './gradingEngine.js';
+import { formatMitreHits, getReportAssessment } from './reportAssessment.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -21,7 +22,7 @@ export async function generatePdf(runId, options = {}) {
 
   // 1. 查询数据
   const run = db.prepare(
-    `SELECT run_id, playbook_id, target, status, engine_type, final_summary, created_at
+    `SELECT run_id, playbook_id, target, status, engine_type, final_summary, stop_reason, created_at
      FROM execution_runs WHERE run_id = ?`
   ).get(runId);
   if (!run) return { ok: false, error: 'Run not found' };
@@ -127,6 +128,15 @@ export async function generatePdf(runId, options = {}) {
   y -= 10; drawLine(y); y -= 20;
 
   // ── 评估概要 ──────────────────────────────────────────────────────
+  const assessment = getReportAssessment(db, run, steps);
+  for (const text of [assessment.executionText, `停止原因: ${assessment.stopReason}`, assessment.notice]) {
+    for (const line of text.match(/.{1,40}/gu) || []) {
+      ensureSpace(20);
+      drawText(line, 60, y, 10, cnFont);
+      y -= 16;
+    }
+  }
+  y -= 10;
   const CN_NUM = ['一', '二', '三', '四', '五', '六', '七', '八', '九'];
   let sectionIdx = 1; // 一 is already used for 测试概述
 
@@ -181,7 +191,7 @@ export async function generatePdf(runId, options = {}) {
   for (let i = 0; i < steps.length; i++) {
     ensureSpace(40);
     const s = steps[i];
-    const success = s.success === 1;
+    const success = s.success === 1 && s.exit_code === 0;
     const statusColor = success ? rgb(0.1, 0.6, 0.1) : rgb(0.8, 0.1, 0.1);
     const stepGrade = grade.ok ? grade.breakdown.find(b => b.stepIndex === s.step_index) : null;
 
@@ -211,8 +221,7 @@ export async function generatePdf(runId, options = {}) {
       drawText(`[${e.evidence_type}] 工具: ${e.tool_id}  步骤: ${e.step_index + 1}`, 60, y, 10, cnFont);
       y -= 16;
       if (e.mitre_hits) {
-        let hits = '';
-        try { hits = JSON.parse(e.mitre_hits).join(', '); } catch {}
+        const hits = formatMitreHits(e.mitre_hits);
         if (hits) { drawText(`MITRE: ${hits.slice(0, 80)}`, 80, y, 9, cnFont, rgb(0.4, 0.2, 0.6)); y -= 14; }
       }
       y -= 6;
@@ -267,8 +276,7 @@ export async function generatePdf(runId, options = {}) {
   }
   if (grade.ok) {
     ensureSpace(25);
-    const riskLevel = grade.percent >= 80 ? '高风险' : grade.percent >= 50 ? '中风险' : '低风险';
-    drawText(`综合风险评级: ${riskLevel}`, 60, y, 12, cnFont, rgb(0.8, 0.1, 0.1)); y -= 18;
+    drawText(`综合风险评级: ${assessment.riskLevel}`, 60, y, 12, cnFont, rgb(0.8, 0.1, 0.1)); y -= 18;
   }
   y -= 10; drawLine(y); y -= 20;
 

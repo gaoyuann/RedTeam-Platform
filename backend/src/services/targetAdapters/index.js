@@ -29,15 +29,12 @@ export function buildContextForTarget(targetProfile, dvwaProfile = {}) {
       return buildDvwaContext({
         host: targetProfile.host,
         port: targetProfile.port,
-        dvwaProfile,
+        scheme: targetProfile.scheme,
+        dvwaProfile: { security_level: dvwaProfile.security_level, base_url: targetProfile.base_url },
       });
     case 'local_ip':
     case 'linux_host':
     case 'web_url':
-      // 如果有 dvwa_profile，优先使用 DVWA 上下文
-      if (dvwaProfile && dvwaProfile.base_url) {
-        return buildDvwaContext({ host: targetProfile.host, port: targetProfile.port, dvwaProfile });
-      }
       return buildWebContext(targetProfile);
     case 'web_app':
     case 'rest_api':
@@ -64,10 +61,11 @@ export function buildContextForTarget(targetProfile, dvwaProfile = {}) {
 export function checkTargetCompatibility(requiredClass, targetProfile) {
   switch (requiredClass) {
     case 'dvwa':
+      return checkDvwaCompatibility(targetProfile);
     case 'local_ip':
     case 'linux_host':
     case 'web_url':
-      return checkDvwaCompatibility(targetProfile);
+      return checkWebCompatibility(targetProfile);
     case 'web_app':
     case 'rest_api':
     case 'graphql_api':

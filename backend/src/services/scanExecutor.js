@@ -4,6 +4,8 @@ import { getWsManager } from './wsManager.js';
 import { existsSync, readdirSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { normalizeTarget, probeTarget, buildDiscoveredProfile } from './targetDiscovery.js';
+import { classifyToolResult } from '../tools/toolContracts.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..', '..', '..');
@@ -110,17 +112,17 @@ const SCAN_TOOL_MAP = {
 };
 
 // ── Build tool arguments from scan parameters ─────────────────────────
-function buildArgs(scanType, target, parameters = {}) {
+export function buildArgs(scanType, target, parameters = {}) {
   const args = [];
   const { ports, timeout, extra_args, threads } = parameters;
 
   switch (scanType) {
     case 'port_scan': // nmap
       args.push('-Pn');  // skip host discovery — ICMP ping often fails in container networks
-      if (ports) args.push('-p', String(ports));
+      if (ports || /^https?:\/\//i.test(target) || /^[^/]+:\d+$/.test(target)) args.push('-p', String(ports || normalizeTarget(target).port));
       if (threads && threads > 1) args.push('--min-parallelism', String(threads));
       args.push('-sV'); // version detection
-      args.push(target);
+      args.push(/^https?:\/\//i.test(target) || /^[^/]+:\d+$/.test(target) ? normalizeTarget(target).host.replace(/^\[|\]$/g, '') : target);
       break;
 
     case 'vuln_scan': // nuclei
@@ -227,6 +229,7 @@ function buildArgs(scanType, target, parameters = {}) {
       args.push('-title');        // show page title
       args.push('-tech-detect'); // technology detection
       args.push('-sr');           // save response
+      args.push('-json');
       break;
 
     case 'api_fuzz_arjun': // arjun — URL parameter discovery
@@ -521,11 +524,13 @@ function parseResults(scanType, stdout) {
         const match = line.match(whatwebLine);
         if (!match) continue;
         const [, url, techStr] = match;
+        const status = techStr.match(/^\[(\d{3})(?:\s[^\]]*)?\]/);
+        if (!/^https?:\/\//i.test(url) || !status) continue;
         // Extract individual technologies: "Apache[2.4.41]" or just "PHP"
         const techs = [];
         const techPattern = /([A-Za-z0-9_/.-]+)(?:\[([^\]]*)\])?/g;
         let techMatch;
-        while ((techMatch = techPattern.exec(techStr)) !== null) {
+        while ((techMatch = techPattern.exec(techStr.slice(status[0].length))) !== null) {
           const name = techMatch[1].trim();
           const version = techMatch[2] || '';
           if (name && name !== url) {
@@ -535,7 +540,7 @@ function parseResults(scanType, stdout) {
         if (techs.length > 0) {
           results.push({
             result_type: 'technology_detection',
-            result_data: { url, technologies: techs, raw: techStr },
+            result_data: { url, status_code: Number(status[1]), technologies: techs, raw: techStr },
             severity: 'info',
             source_tool: 'whatweb',
           });
@@ -717,8 +722,8 @@ export async function executeScan(scanTaskId) {
 
   // Mark as RUNNING
   const now = new Date().toISOString();
-  db.prepare("UPDATE scan_tasks SET status = 'RUNNING', started_at = ? WHERE scan_task_id = ?")
-    .run(now, scanTaskId);
+  db.prepare("UPDATE scan_tasks SET status = 'RUNNING', started_at = ?, target_profile = NULL, target_class = ? WHERE scan_task_id = ?")
+    .run(now, normalizeTarget(task.target).target_class, scanTaskId);
 
   try {
     let parameters = {};
@@ -731,14 +736,37 @@ export async function executeScan(scanTaskId) {
       INSERT INTO scan_results (scan_task_id, result_type, result_data, severity, confidence, mitre_technique_id, source_tool, captured_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
+    const outcomes = [];
+
+    function recordFailure(toolId, error, result = {}) {
+      const details = { error, exit_code: result.exitCode ?? null, timed_out: !!result.timedOut };
+      insertResult.run(scanTaskId, 'scan_error', JSON.stringify(details), 'info', null, null, toolId, new Date().toISOString());
+      outcomes.push({ tool_id: toolId, success: false, ...details });
+    }
 
     async function runAndStore(scanType, toolId, target, params, timeout) {
       if (scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');
       const args = buildArgs(scanType, target, params);
-      const result = await raceScanWithAbort(runTool(toolId, args, { timeout }), scanTaskId);
+      let result;
+      try {
+        result = classifyToolResult(toolId, await raceScanWithAbort(runTool(toolId, args, { timeout }), scanTaskId));
+      } catch (error) {
+        recordFailure(toolId, error.message);
+        throw error;
+      }
       if (result.executionMode === 'aborted') throw new Error('扫描被操作员中止');
       const output = (result.stdout || '') + (result.stderr ? '\n' + result.stderr : '');
+      if (!result.success) {
+        recordFailure(toolId, result.error || `${toolId} failed`, result);
+        throw new Error(result.error || `${toolId} failed`);
+      }
+      outcomes.push({ tool_id: toolId, success: true, exit_code: result.exitCode, timed_out: false });
       const results = parseResults(scanType, output);
+      if (['app_discovery_httpx', 'app_discovery_whatweb'].includes(scanType) && !results.some(result => ['http_probe', 'technology_detection'].includes(result.result_type))) {
+        outcomes.pop();
+        recordFailure(toolId, 'HTTP probe returned no reachable endpoints', result);
+        throw new Error('HTTP probe returned no reachable endpoints');
+      }
       for (const r of results) {
         insertResult.run(
           scanTaskId, r.result_type,
@@ -758,19 +786,24 @@ export async function executeScan(scanTaskId) {
     }
 
     if (task.scan_type === 'web_scan') {
-      // ── Dual-step: nikto (general web scan) → sqlmap (SQL injection) ──
-      console.log(`[Scan] web_scan step 1/2: nikto for ${task.target}`);
+      // ── General web scan with optional explicit injection endpoint ──
+      console.log(`[Scan] web_scan: nikto for ${task.target}`);
       try {
         totalResults += await runAndStore('web_scan_nikto', 'nikto', task.target, parameters, 120_000);
       } catch (err) {
         console.warn(`[Scan] nikto failed: ${err.message}`);
       }
 
-      console.log(`[Scan] web_scan step 2/2: sqlmap for ${task.target}`);
-      try {
-        totalResults += await runAndStore('web_scan_sqlmap', 'sqlmap', task.target, parameters, timeoutMs);
-      } catch (err) {
-        console.warn(`[Scan] sqlmap failed: ${err.message}`);
+      if (parameters.sqli_url) {
+        console.log(`[Scan] web_scan SQL injection verification: ${parameters.sqli_url}`);
+        try {
+          const endpoint = new URL(parameters.sqli_url);
+          if (endpoint.origin !== normalizeTarget(task.target).origin) throw new Error('SQL injection endpoint is outside the selected target');
+          totalResults += await runAndStore('web_scan_sqlmap', 'sqlmap', endpoint.href, parameters, timeoutMs);
+        } catch (err) {
+          console.warn(`[Scan] sqlmap failed: ${err.message}`);
+          if (!outcomes.some(outcome => outcome.tool_id === 'sqlmap')) recordFailure('sqlmap', err.message);
+        }
       }
     } else if (task.scan_type === 'brute_force') {
       // ── Brute force: http-post-form → web-brute.py, others → hydra ──
@@ -806,6 +839,15 @@ export async function executeScan(scanTaskId) {
 
     // ── Application target scan types ─────────────────────────────────
     } else if (task.scan_type === 'app_discovery') {
+      try {
+        const probes = await probeTarget(task.target);
+        if (scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');
+        for (const probe of probes) insertResult.run(scanTaskId, probe.result_type, JSON.stringify(probe.result_data), 'info', null, null, probe.source_tool, new Date().toISOString());
+        totalResults += probes.length;
+        outcomes.push({ tool_id: 'http-discovery', success: true, exit_code: 0, timed_out: false });
+      } catch (err) {
+        recordFailure('http-discovery', err.message);
+      }
       // ── Dual-step: whatweb (tech fingerprint) + httpx (HTTP probe) ──
       console.log(`[Scan] app_discovery step 1/2: whatweb for ${task.target}`);
       try {
@@ -850,20 +892,26 @@ export async function executeScan(scanTaskId) {
       totalResults = await runAndStore(task.scan_type, toolId, task.target, parameters, timeoutMs);
     }
 
-    // Mark as COMPLETED
+    if (scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');
+    if (!outcomes.some(outcome => outcome.success)) throw new Error(outcomes.map(outcome => `${outcome.tool_id}: ${outcome.error}`).join('; ') || 'No scan tool succeeded');
+    const finalStatus = outcomes.some(outcome => !outcome.success) ? 'PARTIAL' : 'COMPLETED';
+    const warnings = outcomes.filter(outcome => !outcome.success).map(outcome => `${outcome.tool_id}: ${outcome.error}`).join('; ');
     const completedAt = new Date().toISOString();
-    db.prepare("UPDATE scan_tasks SET status = 'COMPLETED', completed_at = ? WHERE scan_task_id = ?")
-      .run(completedAt, scanTaskId);
+    const findings = db.prepare('SELECT * FROM scan_results WHERE scan_task_id = ?').all(scanTaskId);
+    const discovered = buildDiscoveredProfile(task.target, findings);
+    db.prepare('UPDATE scan_tasks SET status = ?, completed_at = ?, error_message = ?, target_class = ?, target_profile = ? WHERE scan_task_id = ?')
+      .run(finalStatus, completedAt, warnings || null, discovered.target_class, JSON.stringify(discovered), scanTaskId);
     // WebSocket: notify scan completed (include operator info)
     const ws = getWsManager();
     const taskInfo = db.prepare('SELECT created_by FROM scan_tasks WHERE scan_task_id = ?').get(scanTaskId);
     if (ws) ws.broadcast('scan:completed', {
-      scanTaskId, status: 'COMPLETED', resultsCount: totalResults,
+      scanTaskId, status: finalStatus, resultsCount: totalResults, error: warnings || null,
+      scanType: task.scan_type, target: task.target,
       userId: taskInfo?.created_by || null,
       username: taskInfo?.created_by || null,
     });
 
-    return { ok: true, scanTaskId, status: 'COMPLETED', resultsCount: totalResults };
+    return { ok: true, scanTaskId, status: finalStatus, resultsCount: totalResults, outcomes, targetProfile: discovered };
 
   } catch (err) {
     const isAbort = scanAbortFlags.get(scanTaskId);
@@ -876,11 +924,12 @@ export async function executeScan(scanTaskId) {
     const taskInfo = db.prepare('SELECT created_by FROM scan_tasks WHERE scan_task_id = ?').get(scanTaskId);
     if (ws) ws.broadcast('scan:completed', {
       scanTaskId, status: finalStatus, error: err.message,
+      scanType: task.scan_type, target: task.target,
       userId: taskInfo?.created_by || null,
       username: taskInfo?.created_by || null,
     });
 
-    return { ok: false, error: err.message };
+    return { ok: false, scanTaskId, status: finalStatus, error: err.message };
   } finally {
     scanAbortFlags.delete(scanTaskId);
     runningScans.delete(scanTaskId);

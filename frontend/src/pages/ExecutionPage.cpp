@@ -3,6 +3,7 @@
 #include "../Theme.h"
 #include "../UiUtil.h"
 #include "../ApiClient.h"
+#include "../CortexPanel.h"
 #include <QScrollArea>
 #include <QSplitter>
 #include <QFrame>
@@ -151,6 +152,9 @@ void ExecutionPage::setupUI() {
   tab2Layout->setContentsMargins(0, 0, 0, 0);
   tab2Layout->setSpacing(0);
 
+  m_cortexPanel = new CortexPanel(m_api);
+  m_cortexPanel->setObjectName(QStringLiteral("aiExecutionAnalysisPanel"));
+
   // ── Right: Step details + Evidence ─────────────────────────────────
   auto *rightWidget = new QWidget;
   auto *rightInner = new QWidget;
@@ -169,7 +173,7 @@ void ExecutionPage::setupUI() {
   m_stopBtn->setCursor(Qt::PointingHandCursor);
   m_stopBtn->setProperty("danger", true);
   m_stopBtn->setEnabled(false);  // disabled until a running run is loaded
-  m_stopBtn->setToolTip(QStringLiteral("点击中止当前执行\n当前步骤完成后不再执行后续步骤"));
+  m_stopBtn->setToolTip(QStringLiteral("中止当前工具进程，并停止后续步骤"));
   statusRow->addWidget(m_stopBtn);
   rightLayout->addLayout(statusRow);
 
@@ -251,7 +255,13 @@ void ExecutionPage::setupUI() {
   auto *rightOuterLayout = new QVBoxLayout(rightWidget);
   rightOuterLayout->setContentsMargins(0, 0, 0, 0);
   rightOuterLayout->addWidget(rightInner);
-  tab2Layout->addWidget(rightWidget);
+  auto *splitter = new QSplitter(Qt::Horizontal);
+  splitter->addWidget(m_cortexPanel);
+  splitter->addWidget(rightWidget);
+  splitter->setStretchFactor(0, 2);
+  splitter->setStretchFactor(1, 3);
+  splitter->setSizes({380, 570});
+  tab2Layout->addWidget(splitter);
 
   for (auto *table : {m_runTable, m_stepTable, m_evidenceTable}) {
     table->verticalHeader()->hide();
@@ -396,7 +406,7 @@ void ExecutionPage::attackFromVuln(const QString &target, const QString &vulnTex
 }
 
 // ── Show a specific run (public, used by FlowPage workbench) ──────────
-void ExecutionPage::showRun(const QString &runId)
+void ExecutionPage::showRun(const QString &runId, bool focus)
 {
   if (!m_pipelineId.isEmpty() && runId != m_pipelineRunId) return;
   if (runId.isEmpty()) return;
@@ -409,8 +419,19 @@ void ExecutionPage::showRun(const QString &runId)
   // Refresh the run table so the target run appears, then load its details
   onRefreshRuns();
   loadRunDetails(runId);
-  // Switch to the detail tab so step progress and evidence are visible
+  if (focus) focusDetails();
+}
+
+void ExecutionPage::focusDetails() {
   m_tabWidget->setCurrentIndex(1);
+}
+
+void ExecutionPage::showExecutionError(const QString &message) {
+  m_statusLabel->setTextFormat(Qt::PlainText);
+  m_statusLabel->setText(message);
+  m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
+  m_stopBtn->setEnabled(false);
+  m_cortexPanel->setStatus(QStringLiteral("FAILED"));
 }
 
 void ExecutionPage::clearRunContext() {
@@ -419,6 +440,16 @@ void ExecutionPage::clearRunContext() {
   m_runningRunId.clear();
   m_runningPlaybookId.clear();
   m_loadedRunId.clear();
+  ++m_runSelectionRevision;
+  ++m_runDetailsRequestRevision;
+  ++m_pollRequestRevision;
+  m_pollRequestInFlight = false;
+  m_cortexPanel->clearMessages();
+  m_cortexPanel->setEngineInfo({});
+  m_cortexPanel->setStatus({});
+  m_reactEventIds.clear();
+  m_payloadCardIds.clear();
+  m_lastReactAction.clear();
   m_pollErrorCount = 0;
   m_stopBtn->setEnabled(false);
   m_execBtn->setEnabled(m_pipelineId.isEmpty());
@@ -471,6 +502,10 @@ void ExecutionPage::setPipelineContext(const QString &pipelineId, const QString 
       : QStringLiteral("仅显示当前任务关联的执行记录。点击记录可查看执行步骤与证据。"));
   if (changed) {
     ++m_contextRevision;
+    ++m_runSelectionRevision;
+    ++m_runDetailsRequestRevision;
+    ++m_pollRequestRevision;
+    m_pollRequestInFlight = false;
     m_pollErrorCount = 0;
     m_pollTimer->stop();
     m_runningRunId.clear();
@@ -480,6 +515,12 @@ void ExecutionPage::setPipelineContext(const QString &pipelineId, const QString 
     m_evidenceTable->setRowCount(0);
     m_runTable->setRowCount(0);
     m_evidenceLabel->setText(QStringLiteral("暂无执行证据"));
+    m_cortexPanel->clearMessages();
+    m_cortexPanel->setEngineInfo({});
+    m_cortexPanel->setStatus({});
+    m_reactEventIds.clear();
+    m_payloadCardIds.clear();
+    m_lastReactAction.clear();
     m_stopBtn->hide();
     m_statusLabel->setText(QStringLiteral("选择执行记录查看详情"));
     onRefreshRuns();
@@ -569,6 +610,7 @@ void ExecutionPage::onExecute() {
 
   m_execBtn->setEnabled(false);
   m_execBtn->setText("创建中...");
+  m_tabWidget->setCurrentIndex(1);
 
   // Save to history
   {
@@ -595,7 +637,6 @@ void ExecutionPage::onExecute() {
       m_execBtn->setText("执行");
       m_statusLabel->setText("创建执行任务失败：" + res["error"].toObject()["message"].toString());
       m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
-      m_tabWidget->setCurrentIndex(1);
       return;
     }
     QString runId = res["data"].toObject()["run_id"].toString();
@@ -615,7 +656,6 @@ void ExecutionPage::onExecute() {
       if (execRes["status"].toString() != "ok") {
         m_statusLabel->setText("启动执行失败：" + execRes["error"].toObject()["message"].toString());
         m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
-        m_tabWidget->setCurrentIndex(1);
         onRefreshRuns();
         return;
       }
@@ -627,8 +667,6 @@ void ExecutionPage::onExecute() {
       m_pollTimer->start();
       // Immediately load this run's details (don't wait for full refresh)
       loadRunDetails(runId);
-      // Switch to detail tab to show execution progress
-      m_tabWidget->setCurrentIndex(1);
       // Refresh run list in background
       onRefreshRuns();
     });
@@ -706,21 +744,110 @@ void ExecutionPage::onRunClicked(int row, int) {
 }
 
 // ── Load run details by ID (shared by onRunClicked and onExecute) ────
+void ExecutionPage::onRunReact(const QJsonObject &data) {
+  const QString runId = data.value(QStringLiteral("run_id")).toString();
+  if (runId.isEmpty() || runId != m_loadedRunId) return;
+  const QString thought = data.value(QStringLiteral("thought")).toString();
+  if (thought.isEmpty()) return;
+  const int callIndex = data.value(QStringLiteral("react_call_count")).toInt();
+  const int stepIndex = data.value(QStringLiteral("step_index")).toInt();
+  const QString attemptId = data.value(QStringLiteral("attempt_id")).toVariant().toString();
+  const QString toolId = data.value(QStringLiteral("tool_id")).toString();
+  const QString action = data.value(QStringLiteral("action")).toString();
+  const bool hasStableId = callIndex > 0 && !attemptId.isEmpty();
+  const QString contentId = QStringLiteral("%1:%2:%3:%4")
+      .arg(stepIndex).arg(toolId, action, thought);
+  const QString eventId = hasStableId
+      ? QStringLiteral("event:%1:%2").arg(attemptId).arg(callIndex)
+      : QStringLiteral("legacy:%1").arg(contentId);
+  const QString oppositeContentId = (hasStableId ? QStringLiteral("legacy-content:")
+                                                 : QStringLiteral("stable-content:")) + contentId;
+  if (m_reactEventIds.contains(eventId) || m_reactEventIds.contains(oppositeContentId)) return;
+  m_reactEventIds.insert(eventId);
+  m_reactEventIds.insert((hasStableId ? QStringLiteral("stable-content:")
+                                     : QStringLiteral("legacy-content:")) + contentId);
+  const QMap<QString, QString> actionLabels{
+    {QStringLiteral("insert"), QStringLiteral("插入")},
+    {QStringLiteral("adjust"), QStringLiteral("调整")},
+    {QStringLiteral("parallel"), QStringLiteral("并行")},
+    {QStringLiteral("pivot"), QStringLiteral("转向")},
+    {QStringLiteral("stop"), QStringLiteral("终止")},
+    {QStringLiteral("continue"), QStringLiteral("继续")}
+  };
+  QString observation = data.value(QStringLiteral("observation")).toString();
+  if (observation.isEmpty()) observation = data.value(QStringLiteral("reason")).toString();
+  const QString source = data.value(QStringLiteral("source")).toString();
+  const bool isDynamic = source == QStringLiteral("react") ||
+      (source.isEmpty() && (m_lastReactAction == QStringLiteral("insert") ||
+       m_lastReactAction == QStringLiteral("parallel") ||
+       m_lastReactAction == QStringLiteral("pivot")));
+  m_cortexPanel->addReactThought(observation, thought,
+      actionLabels.value(action, action.isEmpty() ? QStringLiteral("继续") : action),
+      data.value(QStringLiteral("timestamp")).toString(), stepIndex,
+      toolId, isDynamic);
+  m_lastReactAction = action;
+}
+
 void ExecutionPage::loadRunDetails(const QString &runId) {
   if (!m_pipelineId.isEmpty() && runId != m_pipelineRunId) return;
   if (runId != m_loadedRunId) {
+    ++m_runSelectionRevision;
+    ++m_pollRequestRevision;
+    m_pollRequestInFlight = false;
+    m_cortexPanel->clearMessages();
+    m_reactEventIds.clear();
+    m_payloadCardIds.clear();
+    m_lastReactAction.clear();
     m_loadedRunId = runId;
     emit runSelected(runId);
   }
 
-  m_api->get("/api/runs/" + runId, 5000, [this, runId](const QJsonObject &res) {
-    if (runId != m_loadedRunId || res["status"].toString() != "ok") return;
-    auto d = res["data"].toObject();
+  const int selectionRevision = m_runSelectionRevision;
+  const int requestRevision = ++m_runDetailsRequestRevision;
+  m_api->get("/api/runs/" + runId, 5000,
+    [this, runId, selectionRevision, requestRevision](const QJsonObject &res) {
+    if (selectionRevision != m_runSelectionRevision ||
+        requestRevision != m_runDetailsRequestRevision ||
+        runId != m_loadedRunId || res["status"].toString() != "ok") return;
+    applyRunDetails(runId, res["data"].toObject(), selectionRevision);
+  });
+}
+
+void ExecutionPage::applyRunDetails(const QString &runId, const QJsonObject &data,
+                                    int selectionRevision) {
+    if (selectionRevision != m_runSelectionRevision || runId != m_loadedRunId) return;
+    const auto d = data;
+    QJsonArray thoughts;
+    const auto thoughtsValue = d.value(QStringLiteral("react_thoughts"));
+    if (thoughtsValue.isArray()) {
+      thoughts = thoughtsValue.toArray();
+    } else if (thoughtsValue.isString()) {
+      const auto thoughtsDocument = QJsonDocument::fromJson(thoughtsValue.toString().toUtf8());
+      if (thoughtsDocument.isArray()) thoughts = thoughtsDocument.array();
+    }
+    for (int thoughtIndex = 0; thoughtIndex < thoughts.size(); ++thoughtIndex) {
+      const auto thought = thoughts[thoughtIndex].toObject();
+      onRunReact(QJsonObject{
+        {QStringLiteral("run_id"), runId},
+        {QStringLiteral("step_index"), thought.value(QStringLiteral("stepIndex"))},
+        {QStringLiteral("tool_id"), thought.value(QStringLiteral("toolId"))},
+        {QStringLiteral("attempt_id"), thought.value(QStringLiteral("attemptId"))},
+        {QStringLiteral("react_call_count"), thought.value(QStringLiteral("callIndex")).toInt(thoughtIndex + 1)},
+        {QStringLiteral("thought"), thought.value(QStringLiteral("thought"))},
+        {QStringLiteral("action"), thought.value(QStringLiteral("action"))},
+        {QStringLiteral("source"), thought.value(QStringLiteral("source"))},
+        {QStringLiteral("timestamp"), thought.value(QStringLiteral("timestamp"))},
+        {QStringLiteral("observation"), thought.value(QStringLiteral("observation"))},
+        {QStringLiteral("reason"), thought.value(QStringLiteral("decision")).toObject().value(QStringLiteral("reason"))},
+      });
+    }
 
     // ── Status line with engine type ────────────────────────────────
     QString engineType = d["engine_type"].toString();
     QString stopReason = d["stop_reason"].toString();
     QString statusVal = d["status"].toString();
+    m_cortexPanel->setEngineInfo(engineType.isEmpty() ? QStringLiteral("mechanical") : engineType);
+    m_cortexPanel->setStatus(statusVal);
     // If this run is still running, ensure polling is active for live updates.
     // This covers onRunClicked (user clicking a running run in the list) —
     // without this, the detail page would freeze at the initial snapshot.
@@ -786,9 +913,10 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
       m_stepTable->setItem(i, 3, resultItem);
 
       // Column 4: 来源 — mark dynamic steps inserted by ReAct
-      bool isDynamic = (prevActionType == QStringLiteral("insert") ||
+      bool isDynamic = s["source"].toString() == QStringLiteral("react") ||
+                       (s["source"].toString().isEmpty() && (prevActionType == QStringLiteral("insert") ||
                         prevActionType == QStringLiteral("parallel") ||
-                        prevActionType == QStringLiteral("pivot"));
+                        prevActionType == QStringLiteral("pivot")));
       auto *sourceItem = new QTableWidgetItem(isDynamic ? QStringLiteral("AI 插入") : QStringLiteral("预案"));
       if (isDynamic) {
         sourceItem->setForeground(QColor("#7c3aed"));
@@ -845,6 +973,17 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
         }
       } else {
         prevActionType.clear();
+      }
+      if (thoughts.isEmpty()) {
+        onRunReact(QJsonObject{
+          {QStringLiteral("run_id"), runId},
+          {QStringLiteral("step_index"), stepIdx},
+          {QStringLiteral("tool_id"), s["tool_id"]},
+          {QStringLiteral("thought"), s["react_thought"]},
+          {QStringLiteral("action"), prevActionType},
+          {QStringLiteral("observation"), s["notes"].toString().left(200)},
+          {QStringLiteral("source"), isDynamic ? QStringLiteral("react") : QStringLiteral("playbook")}
+        });
       }
     }
 
@@ -928,6 +1067,50 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
       auto *recItem = new QTableWidgetItem(recDisplay.length() > 40 ? recDisplay.left(40) + QStringLiteral("…") : recDisplay);
       recItem->setData(Qt::UserRole, recFull.isEmpty() ? recDisplay : recFull);
       m_evidenceTable->setItem(i, 4, recItem);
+
+      const QString payloadId = evDoc.object()["payload_id"].toString();
+      const int stepIndex = e["step_index"].toInt();
+      const QString cardId = QStringLiteral("%1:%2").arg(stepIndex).arg(payloadId);
+      if (payloadId.isEmpty() || m_payloadCardIds.contains(cardId)) continue;
+      m_payloadCardIds.insert(cardId);
+      const int revision = m_contextRevision;
+      m_api->get("/api/payloads/" + payloadId, 5000,
+        [this, runId, payloadId, stepIndex, cardId, revision, selectionRevision](const QJsonObject &payloadResponse) {
+          if (runId != m_loadedRunId || revision != m_contextRevision ||
+              selectionRevision != m_runSelectionRevision) return;
+          if (payloadResponse["status"].toString() != "ok") {
+            m_payloadCardIds.remove(cardId);
+            return;
+          }
+          const auto payload = payloadResponse["data"].toObject();
+          const auto payloadData = payload["payload_data"].toObject();
+          const auto localizedText = [](const QJsonValue &value) {
+            if (value.isString()) return value.toString();
+            const auto object = value.toObject();
+            return object["zh"].toString(object["en"].toString());
+          };
+          QString name = localizedText(payload["name"]);
+          if (name.isEmpty()) name = payloadId;
+          QStringList context;
+          const QString principle = localizedText(payload["description"]);
+          const QString defense = localizedText(payloadData["defense"]);
+          if (!principle.isEmpty()) context << QStringLiteral("【载荷原理】") + principle;
+          if (!defense.isEmpty()) context << QStringLiteral("【防御手段】") + defense;
+          QStringList bypasses;
+          for (const auto &value : payloadData["bypass_variants"].toArray()) {
+            const auto variant = value.toObject();
+            bypasses << QStringLiteral("%1: %2")
+                .arg(localizedText(variant["title"]), variant["command"].toString());
+          }
+          if (!bypasses.isEmpty()) context << QStringLiteral("【绕过变体】\n") + bypasses.join('\n');
+          QStringList tips;
+          for (const auto &value : payloadData["opsec_tips"].toArray()) {
+            const QString tip = localizedText(value);
+            if (!tip.isEmpty()) tips << tip;
+          }
+          if (!tips.isEmpty()) context << QStringLiteral("【OPSEC建议】\n") + tips.join('\n');
+          m_cortexPanel->addPayloadCard(name, context.join(QStringLiteral("\n\n")), {}, stepIndex);
+        });
     }
 
 
@@ -952,7 +1135,6 @@ void ExecutionPage::loadRunDetails(const QString &runId) {
         m_stopBtn->setText(QStringLiteral("🛑 停止执行"));
     }
 
-  });
 }
 
 // ── Poll running execution for real-time updates ─────────────────────
@@ -961,10 +1143,20 @@ void ExecutionPage::onPollRunning() {
     m_pollTimer->stop();
     return;
   }
+  if (m_pollRequestInFlight) return;
 
   const QString runId = m_runningRunId;
-  m_api->get("/api/runs/" + runId, 5000, [this, runId](const QJsonObject &res) {
-    if (m_runningRunId != runId) return;
+  const int contextRevision = m_contextRevision;
+  const int selectionRevision = m_runSelectionRevision;
+  const int pollRequestRevision = ++m_pollRequestRevision;
+  m_pollRequestInFlight = true;
+  m_api->get("/api/runs/" + runId, 5000,
+    [this, runId, contextRevision, selectionRevision, pollRequestRevision](const QJsonObject &res) {
+    if (pollRequestRevision != m_pollRequestRevision) return;
+    m_pollRequestInFlight = false;
+    if (contextRevision != m_contextRevision ||
+        selectionRevision != m_runSelectionRevision ||
+        m_runningRunId != runId) return;
     if (res["status"].toString() != "ok") {
       // API error — tolerate transient failures, then stop polling to avoid spin
       if (++m_pollErrorCount >= 10) {
@@ -980,8 +1172,10 @@ void ExecutionPage::onPollRunning() {
     auto d = res["data"].toObject();
     QString status = d["status"].toString();
 
-    // Full reload of run details to keep step table, evidence, etc. in sync
-    loadRunDetails(runId);
+    // The polling response already contains the full run details. Render it
+    // directly so terminal handling cannot race with a second GET.
+    ++m_runDetailsRequestRevision;
+    applyRunDetails(runId, d, selectionRevision);
 
 
     // Stop button: always visible, enabled only for active runs

@@ -6,7 +6,7 @@
  * Adapted: wordlist paths use container mount points (/usr/share/wordlists/)
  *
  * 输出的标准上下文（Standard Context）用于 commandTemplateRenderer 渲染变量。
- * 适用于 target_class = 'dvwa' 或 'local_ip' 的目标。
+ * 适用于扫描证据确认 target_class = 'dvwa' 的目标。
  */
 
 /**
@@ -40,7 +40,8 @@ export function buildDvwaContext({ host, port, scheme = 'http', dvwaCookie, dvwa
     dvwa_login_url: dvwaProfile.login_url || `${base}/login.php`,
     sqli_url: dvwaProfile.sqli_url || `${base}/vulnerabilities/sqli/?id=1&Submit=Submit`,
     dvwa_sqli_url: dvwaProfile.sqli_url || `${base}/vulnerabilities/sqli/?id=1&Submit=Submit`,
-    dvwa_cookie: dvwaCookie || dvwaProfile.dvwa_cookie || 'PHPSESSID=placeholder; security=low',
+    dvwa_cookie: dvwaCookie || '',
+    auth_cookie: dvwaCookie || '',
     security_level: dvwaProfile.security_level || 'low',
 
     // 字典路径（容器挂载点）
@@ -64,13 +65,12 @@ export function buildDvwaContext({ host, port, scheme = 'http', dvwaCookie, dvwa
  * @returns {{ ok: boolean, reason: string|null }}
  */
 export function checkDvwaCompatibility(targetProfile) {
-  const compatClasses = new Set(['dvwa', 'local_ip', 'web_url']);
-  if (compatClasses.has(targetProfile.target_class)) {
+  if (targetProfile.target_class === 'dvwa' && targetProfile.application?.name === 'dvwa' && targetProfile.application.confidence >= 0.85) {
     return { ok: true, reason: null };
   }
   return {
     ok: false,
-    reason: `DVWA Playbook requires target_class in [dvwa, local_ip, web_url], got '${targetProfile.target_class}'`,
+    reason: `DVWA Playbook requires a verified DVWA fingerprint, got '${targetProfile.target_class}'`,
   };
 }
 

@@ -6,7 +6,7 @@
  * Migrated from RedTeam-Edu: backend/src/runtime/targetProfileResolver.js
  *
  * Target classes:
- *   dvwa       — localhost / 127.0.0.1 / known DVWA ports
+ *   dvwa       — verified application fingerprint (scan refinement)
  *   local_ip   — private IP ranges (10.x, 192.168.x, 172.16-31.x)
  *   web_url    — http/https URL pointing to a web server
  *   local_hash — local file path (hash cracking)
@@ -16,13 +16,6 @@
  *   unknown    — cannot be classified
  */
 
-// DVWA 靶场主机集合。默认含 172.17.0.2（Docker 默认桥接网第一个容器 IP，常见本地 DVWA 部署位置）。
-// 可通过环境变量 DVWA_HOSTS 覆盖/扩展（逗号分隔）。
-const DVWA_HOSTS = new Set([
-  'localhost', '127.0.0.1', '0.0.0.0', '172.17.0.2',
-  ...(process.env.DVWA_HOSTS ? process.env.DVWA_HOSTS.split(',').map(s => s.trim()).filter(Boolean) : []),
-]);
-const DVWA_PORTS = new Set([8080, 80, 3000]);
 
 const PRIVATE_IP_PATTERNS = [
   /^10\.\d+\.\d+\.\d+$/,
@@ -87,13 +80,8 @@ export function resolveTargetProfile(target, hints = {}) {
 
   // Preferred class override (trust playbook context over heuristic)
   // e.g. cloud playbook targeting localstack at 127.0.0.1:4566
-  if (preferredClass === 'cloud' && DVWA_HOSTS.has(host)) {
+  if (preferredClass === 'cloud' && ['localhost', '127.0.0.1', '0.0.0.0'].includes(host)) {
     return { target_class: 'cloud', host, port, is_dvwa: false, raw };
-  }
-
-  // DVWA check
-  if (DVWA_HOSTS.has(host) || (DVWA_PORTS.has(port) && DVWA_HOSTS.has(host))) {
-    return { target_class: 'dvwa', host, port, is_dvwa: true, raw };
   }
 
   // If the playbook hints that this is a Windows/AD or Cloud target,
@@ -193,9 +181,8 @@ export function checkTargetTypeCompatibility(targetTypes, targetClass) {
   const compatible = targetTypes.some(t =>
     t === targetClass ||
     t === 'any' ||
-    (t === 'dvwa' && (targetClass === 'dvwa' || targetClass === 'local_ip')) ||
-    (t === 'web' && (targetClass === 'dvwa' || targetClass === 'web_url' || targetClass === 'local_ip')) ||
-    (t === 'web_url' && (targetClass === 'dvwa' || targetClass === 'web_url' || targetClass === 'local_ip')) ||
+    (t === 'dvwa' && targetClass === 'dvwa') ||
+    (['web', 'web_url'].includes(t) && ['dvwa', 'web_url', 'local_ip', 'web_app', 'rest_api', 'graphql_api', 'spa_app'].includes(targetClass)) ||
     (t === 'local_file' && targetClass === 'local_hash') ||
     (['windows_host', 'ad_domain', 'windows_ad'].includes(t) && ['windows_ad', 'local_ip'].includes(targetClass)) ||
     (t === 'cloud' && ['cloud', 'local_ip'].includes(targetClass)) ||
@@ -227,8 +214,9 @@ export function refineTargetProfile(initialProfile, scanResults) {
   let source = 'initial';
 
   for (const result of scanResults) {
-    const data = result.result_data || {};
-    const detail = (data.detail || data.output || '').toLowerCase();
+    let data;
+    try { data = typeof result.result_data === 'string' ? JSON.parse(result.result_data) : result.result_data || {}; } catch { continue; }
+    const detail = [data.detail, data.title, data.raw, JSON.stringify(data.technologies || [])].filter(Boolean).join(' ').toLowerCase();
 
     // whatweb detected Swagger/OpenAPI  -> rest_api
     if (/swagger|openapi|\/v3\/api-docs/.test(detail)) {

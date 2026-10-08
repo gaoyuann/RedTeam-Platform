@@ -459,9 +459,9 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
             || step["status"].toString() == "cancelled";
     }
     m_topoTab->setPipelineContext(pipelineId, target,
-        p["scan_task_id"].toString().split(',', Qt::SkipEmptyParts), scanFinished);
+        p["scan_task_id"].toString().split(',', QString::SkipEmptyParts), scanFinished);
     m_scanTab->setTarget(target);
-    m_scanTab->setTaskScope(p["scan_task_id"].toString().split(',', Qt::SkipEmptyParts));
+    m_scanTab->setTaskScope(p["scan_task_id"].toString().split(',', QString::SkipEmptyParts));
     m_execTab->setPipelineContext(pipelineId, status, p["run_id"].toString());
     m_execTab->setTarget(target);
     m_evalTab->setTarget(target);
@@ -486,7 +486,7 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     }
     if (!runId.isEmpty() && runId != m_lastLoadedRunId) {
       m_lastLoadedRunId = runId;
-      m_execTab->showRun(runId);
+      m_execTab->showRun(runId, false);
     }
 
     // 评估 Tab：pipeline 完成后预加载该 run 的评分（兜底，不切 stage tab —
@@ -745,13 +745,16 @@ void FlowPage::approveFlow(const QString &preferredPlaybookId)
   if (m_selectedPipelineId.isEmpty() || m_approvalInFlight) return;
   m_approvalInFlight = true;
   QString pid = m_selectedPipelineId;
+  const int approvalStage = m_stageTabs->currentIndex();
 
   m_approveBtn->setEnabled(false);
   m_approveBtn->setText(QStringLiteral("加载预案..."));
 
   // Fetch playbooks for the selection dialog
-  m_api->get("/api/playbooks?includeGenerated=true", 5000, [this, pid, preferredPlaybookId](const QJsonObject &res) {
-    if (pid != m_selectedPipelineId || res["status"].toString() != "ok") {
+  m_api->get("/api/playbooks?includeGenerated=true", 5000, [this, pid, preferredPlaybookId, approvalStage](const QJsonObject &res) {
+    if (pid != m_selectedPipelineId || m_stack->currentIndex() != 1 || !isVisible() ||
+        m_stageTabs->currentIndex() != approvalStage ||
+        res["status"].toString() != "ok") {
       m_approvalInFlight = false;
       m_approveBtn->setEnabled(true);
       m_approveBtn->setText(QStringLiteral("确认预案并执行"));
@@ -808,6 +811,7 @@ void FlowPage::approveFlow(const QString &preferredPlaybookId)
     }
 
     QString selectedPlaybookId = combo->currentData().toString();
+    m_stageTabs->setCurrentIndex(2);
 
     m_approveBtn->setText(QStringLiteral("审批中..."));
 
@@ -818,13 +822,16 @@ void FlowPage::approveFlow(const QString &preferredPlaybookId)
       m_approvalInFlight = false;
       m_approveBtn->setEnabled(true);
       m_approveBtn->setText(QStringLiteral("确认预案并执行"));
-      if (approveRes["status"].toString() == "ok") {
-        if (pid == m_selectedPipelineId) m_stageTabs->setCurrentIndex(2);
-        refreshFlows();
-        loadFlowDetail(pid);
-      } else {
+      const bool approvalContextIsActive = pid == m_selectedPipelineId
+          && m_stack->currentIndex() == 1
+          && isVisible();
+      if (approveRes["status"].toString() != "ok"
+          && approvalContextIsActive && m_stageTabs->currentIndex() == 2) {
         QMessageBox::warning(this, QStringLiteral("执行未启动"),
             approveRes["error"].toObject()["message"].toString());
+      }
+      refreshFlows();
+      if (pid == m_selectedPipelineId) {
         loadFlowDetail(pid);
       }
     });
@@ -856,6 +863,11 @@ void FlowPage::onPipelineStep(const QJsonObject &data)
     loadFlowDetail(pid);
 
   }
+}
+
+TopologyPage *FlowPage::topoTab() const
+{
+  return m_topoTab;
 }
 
 ScanPage *FlowPage::scanTab() const

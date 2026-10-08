@@ -1,6 +1,6 @@
 import { getDb } from '../db/connection.js';
 import { callLlm } from './llmClient.js';
-import { resolveTargetProfile } from './targetProfileResolver.js';
+import { loadTargetProfile } from './targetDiscovery.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -14,7 +14,7 @@ function buildFindingsSummary(scanResults) {
   const lines = [];
 
   for (const r of scanResults) {
-    if (r.result_type === 'raw_output') continue; // skip raw tool noise
+    if (['raw_output', 'scan_error'].includes(r.result_type)) continue;
 
     let dataStr = '';
     try {
@@ -127,7 +127,7 @@ export async function analyzeScanResults(scanTaskIds, options = {}) {
   const target = options.target || tasks[0].target;
 
   // Resolve target profile for context
-  const targetProfile = resolveTargetProfile(target);
+  const targetProfile = loadTargetProfile(db, target, ids);
 
   // Gather all scan results
   const results = getScanResults(db, ids);
@@ -135,7 +135,7 @@ export async function analyzeScanResults(scanTaskIds, options = {}) {
 
   // Determine which scan types were run
   const scanTypesRun = [...new Set(tasks.map(t => t.scan_type))];
-  const targetClass = tasks[0].target_class || targetProfile.target_class;
+  const targetClass = targetProfile.target_class;
 
   // ── LLM Prompt (Chinese) ─────────────────────────────────────────────
 
@@ -221,6 +221,7 @@ ${findingsSummary}
   const analysisResult = {
     target,
     target_class: targetClass,
+    target_profile: targetProfile,
     scan_types: scanTypesRun,
     findings_count: results.length,
     ...validated,

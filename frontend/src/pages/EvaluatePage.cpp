@@ -50,7 +50,7 @@ void EvaluatePage::showRun(const QString &runId, bool focus) {
   m_runLoadPending = true;
   const int revision = ++m_runRequestRevision;
   m_scoreLabel->setText(QStringLiteral("正在加载执行记录：%1").arg(runId));
-  m_api->get("/api/runs", 5000, [this, runId, revision, focus](const QJsonObject &res) {
+  m_api->get("/api/runs", 5000, [this, runId, revision](const QJsonObject &res) {
     if (revision != m_runRequestRevision) return;
     m_runLoadPending = false;
     if (res["status"].toString() != "ok") {
@@ -78,7 +78,6 @@ void EvaluatePage::showRun(const QString &runId, bool focus) {
     // Select the pipeline's run and trigger grading
     if (targetIndex >= 0) {
       m_runCombo->setCurrentIndex(targetIndex);
-      if (focus) m_tabs->setCurrentIndex(0);  // Only explicit navigation changes tabs.
       onGradeRun();
     } else {
       m_runCombo->setCurrentIndex(-1);

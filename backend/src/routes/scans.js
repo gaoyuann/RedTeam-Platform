@@ -5,6 +5,7 @@ import { generatePlaybook } from '../services/playbookGenerator.js';
 import { executeScan, requestScanAbort } from '../services/scanExecutor.js';
 import { getWsManager } from '../services/wsManager.js';
 import { resolveTargetProfile } from '../services/targetProfileResolver.js';
+import { loadTargetProfile } from '../services/targetDiscovery.js';
 
 export default function (db) {
   const router = Router();
@@ -55,7 +56,7 @@ export default function (db) {
     if (status) {
       sets.push('status = ?'); params.push(status);
       if (status === 'RUNNING') { sets.push('started_at = ?'); params.push(new Date().toISOString()); }
-      if (status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED') { sets.push('completed_at = ?'); params.push(new Date().toISOString()); }
+      if (['COMPLETED', 'PARTIAL', 'FAILED', 'CANCELLED'].includes(status)) { sets.push('completed_at = ?'); params.push(new Date().toISOString()); }
     }
     if (error_message !== undefined) { sets.push('error_message = ?'); params.push(error_message); }
     if (sets.length === 0) return res.status(400).json({ status: 'error', error: { message: 'No fields to update' } });
@@ -82,7 +83,7 @@ export default function (db) {
 
   // ── Execute Scan ─────────────────────────────────────────────────────
   router.post('/:scanTaskId/execute', async (req, res) => {
-    const task = db.prepare('SELECT scan_task_id, status FROM scan_tasks WHERE scan_task_id = ?').get(req.params.scanTaskId);
+    const task = db.prepare('SELECT scan_task_id, target, scan_type, status FROM scan_tasks WHERE scan_task_id = ?').get(req.params.scanTaskId);
     if (!task) return res.status(404).json({ status: 'error', error: { message: 'Scan task not found' } });
     if (task.status === 'RUNNING') return res.status(409).json({ status: 'error', error: { message: 'Scan is already running' } });
 
@@ -102,6 +103,8 @@ export default function (db) {
     const ws = getWsManager();
     if (ws) ws.broadcast('scan:started', {
       scanTaskId: req.params.scanTaskId,
+      target: task.target,
+      scanType: task.scan_type,
       userId: req.user?.sub || null,
       username: req.user?.sub || null,
       role: req.user?.role || null,
@@ -116,8 +119,8 @@ export default function (db) {
     const results = db.prepare('SELECT * FROM scan_results WHERE scan_task_id = ?').all(req.params.scanTaskId);
     if (!results.length) return res.json({ status: 'ok', data: [] });
     // Resolve target class for better playbook matching
-    const targetProfile = resolveTargetProfile(task.target);
-    const recommendations = matchPlaybooks(results, targetProfile.target_class);
+    const targetProfile = loadTargetProfile(db, task.target);
+    const recommendations = matchPlaybooks(results, targetProfile);
     res.json({ status: 'ok', data: recommendations });
   });
 

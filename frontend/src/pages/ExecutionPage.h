@@ -10,8 +10,10 @@
 #include <QTimer>
 #include <QJsonArray>
 #include <QTabWidget>
+#include <QSet>
 
 class ApiClient;
+class CortexPanel;
 
 class ExecutionPage : public QWidget {
   Q_OBJECT
@@ -29,7 +31,9 @@ public:
 
   /// Load and display a specific run by ID (used by FlowPage workbench
   /// when a pipeline's execute step produces a run).
-  void showRun(const QString &runId);
+  void showRun(const QString &runId, bool focus = true);
+  void focusDetails();
+  void showExecutionError(const QString &message);
   void setPipelineContext(const QString &pipelineId, const QString &status, const QString &runId);
 
   void clearRunContext();
@@ -42,6 +46,7 @@ signals:
 
 public slots:
   void onRefreshRuns();
+  void onRunReact(const QJsonObject &data);
 
 private slots:
   void onRunClicked(int row, int col);
@@ -54,6 +59,7 @@ private:
   void loadPlaybooks();
   void loadPlaybooksByGroup(const QStringList &groups);
   void loadRunDetails(const QString &runId);
+  void applyRunDetails(const QString &runId, const QJsonObject &data, int selectionRevision);
   void showCellDetail(const QString &title, const QString &content);
 
   QString m_pipelineId;
@@ -70,6 +76,10 @@ private:
   QTableWidget *m_stepTable;
   QLabel *m_statusLabel;
   QPushButton *m_stopBtn;
+  CortexPanel *m_cortexPanel;
+  QSet<QString> m_reactEventIds;
+  QSet<QString> m_payloadCardIds;
+  QString m_lastReactAction;
 
   // Attack category filter
   QRadioButton *m_catAll;
@@ -89,6 +99,10 @@ private:
   QTimer *m_pollTimer;          // polls every 2s while a run is RUNNING
   int m_pollErrorCount = 0;     // consecutive poll failures (stop after threshold)
   int m_contextRevision = 0;
+  int m_runSelectionRevision = 0;
+  int m_runDetailsRequestRevision = 0;
+  int m_pollRequestRevision = 0;
+  bool m_pollRequestInFlight = false;
 
   // Cached playbook data
   QJsonArray m_allPlaybooks;

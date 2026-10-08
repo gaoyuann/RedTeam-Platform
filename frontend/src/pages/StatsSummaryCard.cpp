@@ -1,6 +1,7 @@
 #include "StatsSummaryCard.h"
 
 #include <QJsonObject>
+#include <QMap>
 #include <QPainter>
 #include <QPainterPath>
 #include <QtMath>

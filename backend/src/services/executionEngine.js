@@ -1,6 +1,6 @@
 import { getDb } from '../db/connection.js';
 import { runTool } from '../tools/toolRunner.js';
-import { reactDecide, isReactEngine, determineEngineType } from './reactEngine.js';
+import { reactDecide, determineEngineType } from './reactEngine.js';
 import { buildAppContextForStep } from './knowledgeEnricher.js';
 import { validateInsertion, recordBlock, getTelemetry } from './reactRuntimeGuard.js';
 import { applyBlueTeamPreExec, applyBlueTeamPostProcess } from './interventionGuards.js';
@@ -8,10 +8,19 @@ import { extractEvidence, evalAllRules } from './rulesEngine.js';
 import { runPreflightChecks } from './preflightGate.js';
 import { compilePlaybook } from './playbookCompiler.js';
 import { detectMappings } from './mappingDetector.js';
-import { resolveTargetProfile, derivePreferredClass } from './targetProfileResolver.js';
 import { buildContextForTarget } from './targetAdapters/index.js';
 import { renderCommand } from './commandTemplateRenderer.js';
 import { getWsManager } from './wsManager.js';
+import { createStepIndexAllocator, buildExecutionSummary } from './executionState.js';
+import { normalizeToolArgs, redactToolArgs } from '../tools/toolContracts.js';
+import { getEngine } from '../tools/containerEngine.js';
+import { establishDvwaSession } from './dvwaSession.js';
+import { validateStepVariables, isDvwaSessionProducer } from './executionVariables.js';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+const runControllers = new Map();
 
 // ── Module-level abort flags ───────────────────────────────────────────
 // Allows external API (POST /api/runs/:runId/abort) to cancel a running execution.
@@ -19,37 +28,7 @@ const abortFlags = new Map();
 
 export function requestAbort(runId) {
   abortFlags.set(runId, true);
-}
-
-// Race a tool promise against an external abort signal so that operator-initiated
-// abort is honoured even while a tool is mid-execution (not just between steps).
-// The underlying tool process is left to exit via its own SIGKILL fallback.
-function raceWithAbort(toolPromise, runId) {
-  return new Promise((resolve) => {
-    let done = false;
-    const interval = setInterval(() => {
-      if (abortFlags.get(runId)) {
-        if (!done) {
-          done = true;
-          clearInterval(interval);
-          resolve({ success: false, exitCode: -2, stdout: '', stderr: '操作员手动中止', executionMode: 'aborted' });
-        }
-      }
-    }, 500);
-    toolPromise.then((r) => {
-      if (!done) {
-        done = true;
-        clearInterval(interval);
-        resolve(r);
-      }
-    }).catch((err) => {
-      if (!done) {
-        done = true;
-        clearInterval(interval);
-        resolve({ success: false, exitCode: -1, stdout: '', stderr: err.message, executionMode: 'error' });
-      }
-    });
-  });
+  runControllers.get(runId)?.abort();
 }
 
 const MAX_OUTPUT_LENGTH = 4096;
@@ -84,11 +63,9 @@ function buildRecommendations(evidenceType, success) {
 }
 
 // ── Record evidence for a step ─────────────────────────────────────────
-function recordEvidence(db, runId, stepIndex, toolId, result, target, expectedMitre, payloadInfo) {
+function recordEvidence(db, runId, stepIndex, toolId, result, target, expectedMitre, payloadInfo, attemptId) {
   const evidenceType = EVIDENCE_TYPE_MAP[toolId] || 'tool_output';
-  let mitreHits = [];
-  try { mitreHits = JSON.parse(expectedMitre || '[]'); } catch {}
-  if (!Array.isArray(mitreHits)) mitreHits = [];
+  const mitreHits = [];
 
   const dataSummary = (result.stdout || '').split('\n')[0]?.slice(0, 200) || '';
   const recommendations = buildRecommendations(evidenceType, result.success);
@@ -110,7 +87,7 @@ function recordEvidence(db, runId, stepIndex, toolId, result, target, expectedMi
       stderr: result.stderr || '',
       target
     });
-    // Merge rule-based MITRE hits with expected MITRE
+    if (!result.success) ruleMatchResult = { matches: [] };
     for (const match of ruleMatchResult.matches) {
       const ruleMitre = (match.then?.mitre || []);
       for (const m of ruleMitre) {
@@ -133,12 +110,14 @@ function recordEvidence(db, runId, stepIndex, toolId, result, target, expectedMi
   db.prepare(`
     INSERT INTO evidence_records
       (run_id, step_index, tool_id, evidence_type, evidence_data, raw_stdout, raw_stderr,
-       target, mitre_hits, recommendations, rule_matches, structured_type, structured_data, recorded_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       target, mitre_hits, recommendations, rule_matches, structured_type, structured_data, recorded_at, attempt_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     runId, stepIndex, toolId, structuredEvidence?.type || evidenceType,
     JSON.stringify({
       ...(structuredEvidence?.data || { summary: dataSummary, success: result.success }),
+      success: result.success, exit_code: result.exitCode, error: result.error || null,
+      planned_mitre: tryJsonArr(expectedMitre),
       ...(payloadInfo ? { payload_id: payloadInfo.id, payload_name: payloadInfo.name } : {}),
     }),
     (result.stdout || '').slice(0, MAX_OUTPUT_LENGTH),
@@ -149,7 +128,7 @@ function recordEvidence(db, runId, stepIndex, toolId, result, target, expectedMi
     ruleMatchResult ? JSON.stringify(ruleMatchResult.matches) : null,
     structuredEvidence?.type || null,
     structuredEvidence ? JSON.stringify(structuredEvidence.data) : null,
-    now
+    now, attemptId
   );
 
   return { structuredEvidence, ruleMatchResult };
@@ -166,39 +145,49 @@ export async function executeRun(runId) {
 
   // Get run record
   const run = db.prepare(
-    'SELECT run_id, playbook_id, target, status, engine_type FROM execution_runs WHERE run_id = ?'
+    'SELECT run_id, playbook_id, target, status, engine_type, plan_data, user_sub, user_role, scan_task_id FROM execution_runs WHERE run_id = ?'
   ).get(runId);
   if (!run) return { ok: false, error: 'Run not found' };
   if (run.status !== 'PENDING') return { ok: false, error: `Run status is ${run.status}, expected PENDING` };
 
-  // Determine engine type: use stored value, or auto-detect
   let engineType = run.engine_type;
-  // 'playbook' is a legacy alias for 'mechanical' from migration 001.
-  // Migration 017 converts existing data, but the column default remains
-  // 'playbook' (SQLite can't change defaults via ALTER). Keep this compat
-  // check as a safety net for runs created before the code update.
-  if (!engineType || engineType === 'mechanical' || engineType === 'playbook') {
-    // Auto-detect: if LLM is available, upgrade to react
+  if (!engineType || engineType === 'auto' || engineType === 'playbook') {
     engineType = determineEngineType(db);
   }
+  if (!['mechanical', 'react'].includes(engineType)) return { ok: false, error: `Invalid engine type: ${engineType}` };
 
   // Get playbook steps (include payload_id and payload_variables for compiler)
   const steps = db.prepare(
     `SELECT step_index, step_id, name, tool_id, args_template, optional, expected_mitre,
-            payload_id, payload_variables
+            payload_id, payload_variables, input_variables, output_variables
      FROM playbook_steps WHERE playbook_id = ? ORDER BY step_index`
   ).all(run.playbook_id);
   if (!steps.length) return { ok: false, error: 'Playbook has no steps' };
 
   // ── Preflight checks ──────────────────────────────────────────────
-  const preflight = await runPreflightChecks({ playbookId: run.playbook_id, target: run.target, db });
+  runningRuns.add(runId);
+  const controller = new AbortController();
+  runControllers.set(runId, controller);
+  let deadlineTimer;
+  try {
+  db.prepare("UPDATE execution_runs SET status = 'RUNNING', engine_type = ?, stop_reason = NULL, updated_at = datetime('now') WHERE run_id = ?")
+    .run(engineType, runId);
+  run.status = 'RUNNING';
+  let scanTaskIds = run.scan_task_id ? [run.scan_task_id] : [];
+  try { scanTaskIds = JSON.parse(run.plan_data || '{}')._scan_task_ids || scanTaskIds; } catch {}
+  const preflight = await runPreflightChecks({ playbookId: run.playbook_id, target: run.target, db, scanTaskIds, runId, signal: controller.signal });
+  if (abortFlags.get(runId)) {
+    db.prepare("UPDATE execution_runs SET status = 'ABORTED', stop_reason = '操作员手动中止', updated_at = datetime('now') WHERE run_id = ?").run(runId);
+    return { ok: true, runId, status: 'ABORTED', completed: 0, failed: 0 };
+  }
   if (!preflight.passed) {
     const failedChecks = preflight.checks.filter(c => !c.passed).map(c => `${c.name}: ${c.message}`);
     db.prepare(
-      "UPDATE execution_runs SET status = 'FAILED', final_summary = ?, preflight_status = 'FAILED', preflight_data = ?, updated_at = datetime('now') WHERE run_id = ?"
+      "UPDATE execution_runs SET status = 'FAILED', final_summary = ?, preflight_status = 'FAILED', preflight_data = ?, stop_reason = ?, updated_at = datetime('now') WHERE run_id = ?"
     ).run(
       JSON.stringify({ preflightFailed: failedChecks }),
       JSON.stringify(preflight.checks),
+      `预检失败：${failedChecks.join('; ')}`,
       runId
     );
     return { ok: false, error: 'Preflight checks failed', checks: preflight.checks };
@@ -209,24 +198,28 @@ export async function executeRun(runId) {
     "UPDATE execution_runs SET preflight_status = 'PASSED', preflight_data = ?, updated_at = datetime('now') WHERE run_id = ?"
   ).run(JSON.stringify(preflight.checks), runId);
 
-  runningRuns.add(runId);
-
-  // Mark as RUNNING, set engine_type
-  db.prepare("UPDATE execution_runs SET status = 'RUNNING', engine_type = ?, updated_at = datetime('now') WHERE run_id = ?")
-    .run(engineType, runId);
-
   // ── Target resolution ──────────────────────────────────────────────
   let targetProfile = null;
   let targetContext = null;
+  let disableAutoInsert = false;
   {
-    const pbRow = db.prepare('SELECT target_type FROM playbooks WHERE playbook_id = ?').get(run.playbook_id);
+    const pbRow = db.prepare('SELECT target_type, metadata, disable_auto_insert FROM playbooks WHERE playbook_id = ?').get(run.playbook_id);
     if (pbRow) {
-      const targetTypes = tryJsonArr(pbRow.target_type);
-      const preferredClass = derivePreferredClass(targetTypes);
-      targetProfile = resolveTargetProfile(run.target, { preferredTargetClass: preferredClass });
-      targetContext = buildContextForTarget(targetProfile);
+      disableAutoInsert = !!pbRow.disable_auto_insert;
+      targetProfile = preflight.checks.find(check => check.name === 'target_class_compatibility').target_profile;
+      let metadata = {};
+      try { metadata = JSON.parse(pbRow.metadata || '{}'); } catch {}
+      const profile = { ...metadata.dvwa_profile };
+      delete profile.host;
+      delete profile.port;
+      delete profile.base_url;
+      delete profile.login_url;
+      delete profile.sqli_url;
+      delete profile.scheme;
+      delete profile.dvwa_cookie;
+      targetContext = buildContextForTarget(targetProfile, profile);
     } else {
-      targetProfile = resolveTargetProfile(run.target);
+      targetProfile = preflight.checks.find(check => check.name === 'target_class_compatibility').target_profile;
       targetContext = buildContextForTarget(targetProfile);
     }
     // Persist target info to execution_runs
@@ -256,7 +249,7 @@ export async function executeRun(runId) {
   }
 
   // ── Playbook compilation ────────────────────────────────────────────
-  const compiled = compilePlaybook({ steps, target: run.target, db });
+  const compiled = compilePlaybook({ steps, target: run.target, db, context: targetContext });
   if (!compiled.ok) {
     console.warn(`[executionEngine] Playbook compilation warnings: ${compiled.warnings.join('; ')}`);
   }
@@ -294,7 +287,7 @@ export async function executeRun(runId) {
         const analysis = planData._pipeline_analysis;
         pipelineAnalysis = analysis;  // Store for ReAct appContext enrichment
         const summaryParts = [];
-        if (analysis.tech_stack?.length) summaryParts.push(`Tech stack: ${analysis.tech_stack.join(', ')}`);
+        if (Array.isArray(analysis.tech_stack) && analysis.tech_stack.length) summaryParts.push(`Tech stack: ${analysis.tech_stack.map(tech => typeof tech === 'string' ? tech : tech.name).join(', ')}`);
         if (analysis.attack_surface?.length) {
           summaryParts.push(`Attack surface: ${analysis.attack_surface.slice(0, 5).map(a => a.type + ':' + (a.detail || a.path || a.port || '?')).join(', ')}`);
         }
@@ -319,16 +312,22 @@ export async function executeRun(runId) {
   const failedToolCounts = [];  // [{ toolId, count }] — blacklist for 3+ failures
   const stepRetryCount = new Map();  // stepIndex → retry count (max 2 per step)
   const failedNonOptionalSteps = new Set();  // step_index values of non-optional failures
+  let attempts = 0;
+  let reactStopped = false;
+  const sessionDirectory = resolve(PROJECT_ROOT, 'data/output', `run-${Buffer.from(runId).toString('hex')}`);
 
-  try {
+    const executionEnvironment = await getEngine();
     // Use mutable steps array (ReAct may insert new steps)
-    const mutableSteps = [...runnableSteps];
+    const mutableSteps = runnableSteps.map(step => ({ ...step, source: 'playbook' }));
+    const removedSteps = compiled.compiledSteps.filter(step => step.compile_status.startsWith('BLOCKED'));
+    const allocateStepIndex = createStepIndexAllocator(steps);
 
     // Global run deadline — prevents runaway execution from hanging forever.
     // Default 4h, configurable via RUN_TIMEOUT_MS env var (min 1 minute).
     const _parsedDeadline = parseInt(process.env.RUN_TIMEOUT_MS || '', 10);
     const RUN_DEADLINE_MS = _parsedDeadline >= 60_000 ? _parsedDeadline : (4 * 60 * 60 * 1000);
     const runStartTime = Date.now();
+    deadlineTimer = setTimeout(() => { timeoutAbort = true; controller.abort(); }, RUN_DEADLINE_MS);
 
     for (let i = 0; i < mutableSteps.length; i++) {
       if (aborted) break;
@@ -343,7 +342,7 @@ export async function executeRun(runId) {
       }
 
       // Global run deadline — stop runaway executions
-      if (Date.now() - runStartTime > RUN_DEADLINE_MS) {
+      if (timeoutAbort || Date.now() - runStartTime > RUN_DEADLINE_MS) {
         aborted = true;
         timeoutAbort = true;
         stopReason = `运行超时（${Math.round(RUN_DEADLINE_MS / 60000)}分钟）`;
@@ -352,6 +351,16 @@ export async function executeRun(runId) {
       }
 
       const step = mutableSteps[i];
+      const startedAt = new Date().toISOString();
+      const startedMs = Date.now();
+      let preparationError = step.compile_status?.startsWith('BLOCKED') ? step.compile_reason : null;
+      const isSessionProducer = isDvwaSessionProducer(step, targetContext);
+      if (isSessionProducer) {
+        targetContext.dvwa_cookie = '';
+        targetContext.auth_cookie = '';
+        targetContext.dvwa_session_verified = false;
+      }
+      preparationError ||= validateStepVariables(step, targetContext);
 
       // Resolve args: use compiler-resolved args if available, otherwise parse args_template
       let args = [];
@@ -372,8 +381,19 @@ export async function executeRun(runId) {
         args = rendered;
         if (unresolvedTokens.length > 0) {
           console.warn(`[executionEngine] Step ${step.step_index} has unresolved tokens: ${unresolvedTokens.join(', ')}`);
+          preparationError = `Unresolved tokens: ${unresolvedTokens.join(', ')}`;
         }
       }
+      try {
+        args = normalizeToolArgs(step.tool_id, args, { projectRoot: PROJECT_ROOT, engine: executionEnvironment, scheme: targetContext?.scheme });
+        if (targetProfile?.target_class === 'dvwa' && step.tool_id === 'sqlmap') {
+          const cookieIndex = args.indexOf('--cookie');
+          if (!targetContext.dvwa_session_verified || !targetContext.dvwa_cookie) {
+            preparationError = 'DVWA SQLMap requires a verified session; run the login step first';
+          } else if (cookieIndex >= 0) args[cookieIndex + 1] = targetContext.dvwa_cookie;
+          else args.push('--cookie', targetContext.dvwa_cookie);
+        }
+      } catch (error) { preparationError = error.message; }
 
       // ── Blue team pre-exec check ────────────────────────────────────
       const preExecResult = applyBlueTeamPreExec({
@@ -384,13 +404,13 @@ export async function executeRun(runId) {
       });
 
       let result;
-      if (!preExecResult.allowed) {
+      if (preparationError || !preExecResult.allowed) {
         // Blocked by blue team — skip execution entirely
         result = {
           success: false,
           exitCode: -2,
           stdout: '',
-          stderr: preExecResult.deniedReason || 'Blocked by blue team intervention',
+          stderr: preparationError || preExecResult.deniedReason || 'Blocked by blue team intervention',
           executionMode: 'blocked',
         };
       } else {
@@ -401,7 +421,25 @@ export async function executeRun(runId) {
 
         // Execute tool
         try {
-          result = await raceWithAbort(runTool(step.tool_id, args, { timeout: 300_000 }), runId);
+          const isDvwaLogin = isSessionProducer;
+          if (isDvwaLogin) {
+            targetContext.dvwa_cookie = '';
+            targetContext.dvwa_session_verified = false;
+            const dataIndex = args.findIndex(arg => ['--data', '-d', '--data-raw'].includes(arg));
+            const credentials = new URLSearchParams(args[dataIndex + 1] || '');
+            result = await establishDvwaSession({ baseUrl: targetContext.base_url,
+              username: credentials.get('username') || '', password: credentials.get('password') || '',
+              securityLevel: targetContext.security_level, outputDirectory: sessionDirectory,
+              signal: controller.signal,
+            });
+            if (result.success) {
+              targetContext.dvwa_cookie = result.cookie;
+              targetContext.auth_cookie = result.cookie;
+            }
+            targetContext.dvwa_session_verified = result.success;
+          } else {
+            result = await runTool(step.tool_id, args, { timeout: 300_000, signal: controller.signal });
+          }
         } catch (err) {
           result = { success: false, exitCode: -1, stdout: '', stderr: err.message, executionMode: 'error' };
         }
@@ -409,20 +447,41 @@ export async function executeRun(runId) {
 
       // Record step result
       // (DELETE first to handle retry case — adjust action may re-execute a step)
-      const output = (result.stdout || result.stderr || '').slice(0, MAX_OUTPUT_LENGTH);
+      if (abortFlags.get(runId)) { aborted = true; manualAbort = true; stopReason = '操作员手动中止'; }
+      if (timeoutAbort) { aborted = true; stopReason = '运行超时'; }
+      const output = [result.stdout, result.stderr, result.error].filter(Boolean).join('\n').slice(0, MAX_OUTPUT_LENGTH);
+      const source = step.source || 'react';
+      const durationMs = Date.now() - startedMs;
+      const attemptId = Number(db.prepare(`INSERT INTO execution_attempts
+        (run_id, step_index, step_id, source, tool_id, args, started_at, completed_at, success, exit_code, stdout, stderr, execution_mode, duration_ms)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        runId, step.step_index, step.step_id, source, step.tool_id, JSON.stringify(redactToolArgs(args, step.tool_id)),
+        startedAt, new Date().toISOString(), result.success ? 1 : 0, result.exitCode ?? -1,
+        (result.stdout || '').slice(0, MAX_OUTPUT_LENGTH), (result.stderr || '').slice(0, MAX_OUTPUT_LENGTH), result.executionMode || null, durationMs,
+      ).lastInsertRowid);
+      attempts++;
+      step.execution_finished = true;
+      step.execution_success = !!result.success;
       db.prepare('DELETE FROM execution_steps WHERE run_id = ? AND step_index = ?')
         .run(runId, step.step_index);
       db.prepare(`
-        INSERT INTO execution_steps (run_id, step_index, tool_id, args, success, exit_code, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO execution_steps (run_id, step_index, tool_id, args, success, exit_code, notes, step_id, source, attempt_id, executed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         runId, step.step_index, step.tool_id,
-        JSON.stringify(args), result.success ? 1 : 0, result.exitCode ?? -1, output
+        JSON.stringify(redactToolArgs(args, step.tool_id)), result.success ? 1 : 0, result.exitCode ?? -1, output,
+        step.step_id, source, attemptId, startedAt
       );
 
       // Record evidence (with structured parsing + rules engine)
       const evidenceResult = recordEvidence(db, runId, step.step_index, step.tool_id, result, run.target, step.expected_mitre,
-        step.payload_data ? { id: step.payload_data.id, name: step.payload_data.name } : null);
+        step.payload_data ? { id: step.payload_data.id, name: step.payload_data.name } : null, attemptId);
+      db.prepare(`INSERT INTO audit_log (type, execution_id, run_id, tool_id, args, user_role, target, execution_mode, success, exit_code, duration_ms, output_size, reasons, timestamp)
+        VALUES ('tool_execution', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        String(attemptId), runId, step.tool_id, JSON.stringify(redactToolArgs(args, step.tool_id)), run.user_role || null, run.target,
+        result.executionMode || null, result.success ? 1 : 0, result.exitCode ?? -1, durationMs,
+        Buffer.byteLength((result.stdout || '') + (result.stderr || '')), JSON.stringify({ error: result.error || (result.success ? null : 'Tool execution failed') }), new Date().toISOString(),
+      );
 
       // ── Detect candidate tool-to-technique mappings ──────────────────
       let detectedTechniques = [];
@@ -508,14 +567,10 @@ export async function executeRun(runId) {
       // In mechanical mode, the abort logic above already handles failures
       // (non-optional → abort, optional → continue), so ReAct is unnecessary
       // and would waste time building prompts just to get a 'continue' fallback.
+      evidenceHistory.push({ stepIndex: step.step_index, attemptId, toolId: step.tool_id, success: result.success,
+        output: output.slice(0, 2500), stderr: (result.stderr || '').slice(0, 1500), exitCode: result.exitCode });
       if (!aborted && engineType === 'react') {
         // Accumulate evidence
-        evidenceHistory.push({
-          stepIndex: step.step_index,
-          toolId: step.tool_id,
-          success: result.success,
-          output: output.slice(0, 2500),
-        });
 
         // Get remaining steps
         const remainingSteps = mutableSteps.slice(i + 1).map(s => ({
@@ -573,19 +628,30 @@ export async function executeRun(runId) {
           detectedTechniques,
           appContext,
           explorationMode,
+          signal: controller.signal,
         });
 
+        if (abortFlags.get(runId) || timeoutAbort) {
+          aborted = true;
+          manualAbort = !!abortFlags.get(runId);
+          stopReason = manualAbort ? '操作员手动中止' : '运行超时';
+          break;
+        }
         reactCallCount++;
 
         // Record thought in DB
         db.prepare("UPDATE execution_steps SET react_thought = ?, react_action = ? WHERE run_id = ? AND step_index = ?")
           .run(decision.thought, JSON.stringify({ type: decision.action }), runId, step.step_index);
 
-        reactThoughts.push({
+        const thoughtRecord = {
           stepIndex: step.step_index,
+          toolId: step.tool_id, attemptId, callIndex: reactCallCount,
+          source, timestamp: new Date().toISOString(), observation: output.slice(0, 200),
           thought: decision.thought,
           action: decision.action,
-        });
+          decision, guardBlocks: [],
+        };
+        reactThoughts.push(thoughtRecord);
 
         // ── WebSocket broadcast: ReAct reasoning (real-time) ──────────
         // Push the AI's thought + action to the frontend so the user can
@@ -599,6 +665,8 @@ export async function executeRun(runId) {
             action: decision.action,
             reason: decision.reason || null,
             react_call_count: reactCallCount,
+            attempt_id: attemptId,
+            source, timestamp: thoughtRecord.timestamp, observation: thoughtRecord.observation,
             completed_steps: completedSteps,
             failed_steps: failedSteps,
             total_steps: mutableSteps.length,
@@ -611,6 +679,7 @@ export async function executeRun(runId) {
         switch (decision.action) {
           case 'stop':
             aborted = true;
+            reactStopped = true;
             stopReason = decision.reason || 'LLM决定终止';
             console.log(`[ReAct] Run stopped: ${stopReason}`);
             break;
@@ -630,6 +699,7 @@ export async function executeRun(runId) {
             // Apply new args if provided; otherwise keep existing (simple retry)
             if (decision.newArgs) {
               targetStep.args_template = JSON.stringify(decision.newArgs);
+              targetStep.resolved_args = [];
             }
 
             // If target is the current step → re-execute (retry)
@@ -639,6 +709,8 @@ export async function executeRun(runId) {
               if (retries <= 2) {
                 // Undo the counter from this attempt so re-execution re-counts
                 if (result.success) completedSteps--; else failedSteps--;
+                targetStep.execution_finished = false;
+                targetStep.execution_success = false;
                 failedNonOptionalSteps.delete(adjustTargetIdx);  // clear this step's failure, re-eval on retry
                 i--;  // loop will i++ and re-execute this step
                 console.log(`[ReAct] Retrying step ${adjustTargetIdx} (attempt ${retries}/2)${decision.newArgs ? ' with adjusted args' : ''}`);
@@ -656,14 +728,15 @@ export async function executeRun(runId) {
             if (decision.toolId && decision.args) {
               // Guard: validate insertion before proceeding
               const guardState = { steps: mutableSteps, status: run.status, stopReason };
-              const guardResult = validateInsertion(guardState, 'insert', decision.toolId);
+              const guardResult = validateInsertion(guardState, 'insert', decision.toolId, disableAutoInsert);
               if (!guardResult.allowed) {
                 recordBlock(guardState, guardResult.category, decision.toolId);
+                thoughtRecord.guardBlocks.push(guardResult);
                 console.warn(`[ReAct Guard] ${guardResult.reason}`);
                 break;  // Skip insertion, continue to next step
               }
               // Insert new step after current position
-              const newStepIndex = mutableSteps[mutableSteps.length - 1].step_index + 1;
+              const newStepIndex = allocateStepIndex();
               const newStep = {
                 step_index: newStepIndex,
                 step_id: `react_insert_${newStepIndex}`,
@@ -680,13 +753,12 @@ export async function executeRun(runId) {
               if (decision.newTarget) {
                 try {
                   db.prepare(`
-                    INSERT INTO evidence_records (record_id, run_id, step_index, tool_id, result_type, result_data, created_at)
-                    VALUES (?, ?, ?, ?, 'discovered_target', ?, ?)
+                    INSERT INTO evidence_records (run_id, step_index, tool_id, evidence_type, evidence_data, target, recorded_at, attempt_id)
+                    VALUES (?, ?, ?, 'discovered_target', ?, ?, ?, ?)
                   `).run(
-                    `dt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
                     run.run_id, step.step_index, decision.toolId,
                     JSON.stringify({ target: decision.newTarget, source: 'react_insert' }),
-                    new Date().toISOString()
+                    decision.newTarget, new Date().toISOString(), attemptId
                   );
                   console.log(`[ReAct] Discovered new target: ${decision.newTarget}`);
                 } catch (e) {
@@ -700,16 +772,17 @@ export async function executeRun(runId) {
             if (decision.toolId && decision.args) {
               // Guard: validate insertion before proceeding
               const guardState = { steps: mutableSteps, status: run.status, stopReason };
-              const guardResult = validateInsertion(guardState, 'pivot', decision.toolId);
+              const guardResult = validateInsertion(guardState, 'pivot', decision.toolId, disableAutoInsert);
               if (!guardResult.allowed) {
                 recordBlock(guardState, guardResult.category, decision.toolId);
+                thoughtRecord.guardBlocks.push(guardResult);
                 console.warn(`[ReAct Guard] ${guardResult.reason}`);
                 break;
               }
               // Remove all remaining steps after current position
-              mutableSteps.splice(i + 1);
+              removedSteps.push(...mutableSteps.splice(i + 1));
               // Insert new pivot step
-              const newStepIndex = mutableSteps[mutableSteps.length - 1].step_index + 1;
+              const newStepIndex = allocateStepIndex();
               const newStep = {
                 step_index: newStepIndex,
                 step_id: `react_pivot_${newStepIndex}`,
@@ -732,13 +805,14 @@ export async function executeRun(runId) {
                 const pToolId = decision.toolIds[pi];
                 const pArgs = decision.argsList[pi] || [];
                 // Guard: validate each parallel insertion
-                const pGuard = validateInsertion(guardState, 'parallel', pToolId);
+                const pGuard = validateInsertion(guardState, 'parallel', pToolId, disableAutoInsert);
                 if (!pGuard.allowed) {
                   recordBlock(guardState, pGuard.category, pToolId);
+                  thoughtRecord.guardBlocks.push({ ...pGuard, toolId: pToolId });
                   console.warn(`[ReAct Guard] ${pGuard.reason}`);
                   continue;  // Skip this tool in the parallel group
                 }
-                const newStepIndex = mutableSteps[mutableSteps.length - 1].step_index + 1;
+                const newStepIndex = allocateStepIndex();
                 const newStep = {
                   step_index: newStepIndex,
                   step_id: `react_parallel_${newStepIndex}_${pi}`,
@@ -757,75 +831,53 @@ export async function executeRun(runId) {
 
           // 'continue' — no action needed
         }
+        const actionData = JSON.stringify({ type: decision.action, ...decision, guardBlocks: thoughtRecord.guardBlocks });
+        db.prepare('UPDATE execution_steps SET react_action = ? WHERE attempt_id = ?').run(actionData, attemptId);
+        db.prepare('UPDATE execution_attempts SET react_thought = ?, react_action = ? WHERE id = ?').run(decision.thought, actionData, attemptId);
+        db.prepare('UPDATE execution_runs SET evidence_history = ?, react_thoughts = ? WHERE run_id = ?')
+          .run(JSON.stringify(evidenceHistory), JSON.stringify(reactThoughts), runId);
       }
     }
 
-    // Update run status
-    // - Manual abort (operator) → ABORTED
-    // - Timeout (global deadline) → FAILED
-    // - ReAct "stop" (LLM decided) → COMPLETED
-    // - Not aborted but non-optional steps failed → FAILED
-    // - Not aborted, no non-optional failures → COMPLETED
-    const hasNonOptionalFailure = failedNonOptionalSteps.size > 0;
-    const finalStatus = manualAbort
-      ? 'ABORTED'
-      : timeoutAbort
-        ? 'FAILED'
-        : aborted  // ReAct "stop" — LLM decided to terminate
-          ? 'COMPLETED'
-          : (hasNonOptionalFailure ? 'FAILED' : 'COMPLETED');
-    const summary = JSON.stringify({
-      total: mutableSteps.length,
-      completed: completedSteps,
-      failed: failedSteps,
-      aborted,
-      hasNonOptionalFailure,
-      stopReason,
-      engineType,
-      reactCallCount,
-    });
-
-    // ── WebSocket broadcast: run completed ────────────────────────────
-    const wsEnd = getWsManager();
-    if (wsEnd) {
-      const runInfo = db.prepare('SELECT user_sub FROM execution_runs WHERE run_id = ?').get(runId);
-      wsEnd.broadcast('run:complete', {
-        run_id: runId,
-        status: finalStatus,
-        completed_steps: completedSteps,
-        failed_steps: failedSteps,
-        total_steps: mutableSteps.length,
-        stop_reason: stopReason,
-        userId: runInfo?.user_sub || null,
-        username: runInfo?.user_sub || null,
-      });
-    }
-
-    // Persist ReAct state (always — evidence history and thoughts are
-    // valuable for reporting even in mechanical mode)
-    db.prepare(`
-      UPDATE execution_runs SET status = ?, final_summary = ?, stop_reason = ?,
-        evidence_history = ?, react_thoughts = ?, updated_at = datetime('now')
-      WHERE run_id = ?
-    `).run(
-      finalStatus, summary, stopReason,
-      JSON.stringify(evidenceHistory),
-      JSON.stringify(reactThoughts),
-      runId
-    );
+    if (abortFlags.get(runId)) { manualAbort = true; stopReason = '操作员手动中止'; }
+    else if (timeoutAbort) stopReason = '运行超时';
+    const final = buildExecutionSummary({ steps: [...mutableSteps, ...removedSteps], completed: completedSteps,
+      failed: failedSteps, manualAbort, timeoutAbort, reactStopped, stopReason, engineType, reactCallCount, attempts });
+    const finalStatus = final.status;
+    const summary = JSON.stringify(final.summary);
+    db.prepare(`UPDATE execution_runs SET status = ?, final_summary = ?, stop_reason = ?,
+      evidence_history = ?, react_thoughts = ?, updated_at = datetime('now') WHERE run_id = ?`)
+      .run(finalStatus, summary, stopReason, JSON.stringify(evidenceHistory), JSON.stringify(reactThoughts), runId);
 
     return { ok: true, runId, status: finalStatus, completed: completedSteps, failed: failedSteps, engineType, stopReason };
 
   } catch (err) {
+    const wasAborted = !!abortFlags.get(runId);
+    const status = wasAborted ? 'ABORTED' : 'FAILED';
+    const reason = wasAborted ? '操作员手动中止' : err.message;
     db.prepare(`
-      UPDATE execution_runs SET status = 'FAILED', final_summary = ?, updated_at = datetime('now')
+      UPDATE execution_runs SET status = ?, final_summary = ?, stop_reason = ?, updated_at = datetime('now')
       WHERE run_id = ?
-    `).run(JSON.stringify({ error: err.message }), runId);
+    `).run(status, JSON.stringify({ error: err.message, aborted: wasAborted, stopReason: reason }), reason, runId);
 
-    return { ok: false, error: err.message };
+    return { ok: false, error: err.message, status, stopReason: reason };
   } finally {
+    clearTimeout(deadlineTimer);
+    runControllers.delete(runId);
     runningRuns.delete(runId);
     abortFlags.delete(runId);
+    const finalRun = db.prepare('SELECT status, final_summary, stop_reason, user_sub FROM execution_runs WHERE run_id = ?').get(runId);
+    const wsEnd = getWsManager();
+    if (wsEnd && finalRun && ['COMPLETED', 'FAILED', 'ABORTED'].includes(finalRun.status)) {
+      let summary = {};
+      try { summary = JSON.parse(finalRun.final_summary || '{}'); } catch {}
+      wsEnd.broadcast('run:complete', {
+        run_id: runId, status: finalRun.status,
+        completed_steps: summary.completed || 0, failed_steps: summary.failed || 0,
+        total_steps: summary.total ?? steps.length, stop_reason: finalRun.stop_reason,
+        userId: finalRun.user_sub || null, username: finalRun.user_sub || null,
+      });
+    }
   }
 }
 

@@ -5,6 +5,7 @@
 #include "ToastOverlay.h"
 #include "pages/BasePage.h"
 #include "pages/FlowPage.h"
+#include "pages/TopologyPage.h"
 #include "pages/PlaybookPage.h"
 #include "pages/ScanPage.h"
 #include "pages/ExecutionPage.h"
@@ -186,6 +187,11 @@ void MainWindow::setupWebSocket()
 
     // Wire WebSocket to FlowPage's embedded stage-tab pages
     if (m_flowPage) {
+        auto *embTopo = m_flowPage->topoTab();
+        if (embTopo) {
+            connect(m_ws, &WsClient::scanStarted, embTopo, &TopologyPage::onScanStarted);
+            connect(m_ws, &WsClient::scanCompleted, embTopo, &TopologyPage::onScanCompleted);
+        }
         auto *embScan = m_flowPage->scanTab();
         if (embScan) {
             connect(m_ws, &WsClient::scanCreated, embScan, &ScanPage::onRefreshTasks);
@@ -199,6 +205,7 @@ void MainWindow::setupWebSocket()
         }
         auto *embExec = m_flowPage->execTab();
         if (embExec) {
+            connect(m_ws, &WsClient::runReact, embExec, &ExecutionPage::onRunReact);
             connect(m_ws, &WsClient::runCompleted, embExec, &ExecutionPage::onRefreshRuns);
         }
         connect(m_ws, &WsClient::runCompleted, m_flowPage, [this](const QJsonObject &data) {

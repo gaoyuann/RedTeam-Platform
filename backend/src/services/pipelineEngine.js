@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { getWsManager } from './wsManager.js';
 import { resolveTargetProfile } from './targetProfileResolver.js';
 import { analyzeScanResults } from './scanAnalyzer.js';
+import { loadTargetProfile } from './targetDiscovery.js';
 
 // ── Track running pipelines for cancellation ──────────────────────────────
 const runningPipelines = new Set();
@@ -148,16 +149,17 @@ async function runPipelineScan(db, pipeline) {
 
   // Resolve target profile to determine scan types
   const profile = resolveTargetProfile(target);
-  const isWebLike = ['dvwa', 'local_ip', 'web_url'].includes(profile.target_class);
+  const isWebLike = ['dvwa', 'local_ip', 'web_url', 'web_app', 'rest_api', 'graphql_api', 'spa_app'].includes(profile.target_class);
 
   // Determine scan types to run
-  const scanTypes = isWebLike ? ['port_scan', 'web_scan'] : ['port_scan'];
+  const scanTypes = isWebLike ? ['port_scan', 'app_discovery', 'web_scan'] : ['port_scan'];
 
   // Insert step record
   ensureStep(db, pipelineId, 0, STEP_SCAN);
   updateStep(db, pipelineId, 0, 'running', { step_type: STEP_SCAN, input_data: { target, scan_types: scanTypes } });
 
   const scanTaskIds = [];
+  const scanOutcomes = [];
 
   try {
     for (const scanType of scanTypes) {
@@ -182,6 +184,7 @@ async function runPipelineScan(db, pipeline) {
       pipelineLog(pipelineId, `执行扫描: ${scanType} (${scanTaskId})`);
       const { executeScan } = await import('./scanExecutor.js');
       const scanResult = await executeScan(scanTaskId);
+      scanOutcomes.push({ scan_type: scanType, status: scanResult.status || 'FAILED', error: scanResult.error || null });
 
       if (isCancelled(pipelineId)) {
         updateStep(db, pipelineId, 0, 'cancelled', { step_type: STEP_SCAN });
@@ -197,6 +200,7 @@ async function runPipelineScan(db, pipeline) {
 
     // Store all scan task IDs in the pipeline record (comma-separated)
     updateStatus(db, pipelineId, 'running', { scan_task_id: scanTaskIds.join(',') });
+    if (!scanOutcomes.some(outcome => ['COMPLETED', 'PARTIAL'].includes(outcome.status))) throw new Error('所有扫描任务均失败，请检查目标地址和扫描错误');
 
     // Count total results
     const placeholders = scanTaskIds.map(() => '?').join(',');
@@ -208,6 +212,8 @@ async function runPipelineScan(db, pipeline) {
       scan_task_ids: scanTaskIds,
       scan_types_run: scanTypes,
       total_results: totalResults,
+      outcomes: scanOutcomes,
+      target_profile: loadTargetProfile(db, target, scanTaskIds),
     };
 
     updateStep(db, pipelineId, 0, 'completed', {
@@ -302,13 +308,15 @@ function createFallbackAnalysis(db, target, scanTaskIds) {
      GROUP BY result_type, severity ORDER BY cnt DESC`
   ).all(...ids);
 
-  const profile = resolveTargetProfile(target);
+  const profile = loadTargetProfile(db, target, ids);
 
   return {
     tech_stack: {
       note: 'LLM 不可用，基于扫描类型推断',
       detected_class: profile.target_class,
     },
+    target_profile: profile,
+    target_class: profile.target_class,
     attack_surface: findings.map(f => ({
       type: f.result_type,
       count: f.cnt,
@@ -355,7 +363,7 @@ async function runPipelineGeneration(db, pipeline, analysisData, scanTaskIds) {
       pipelineLog(pipelineId, '尝试 AI 生成 Playbook');
       try {
         const { generatePlaybook } = await import('./playbookGenerator.js');
-        const genResult = await generatePlaybook(primaryScanId);
+        const genResult = await generatePlaybook(primaryScanId, analysisData, { scanTaskIds });
 
         if (isCancelled(pipelineId)) {
           updateStep(db, pipelineId, 2, 'cancelled', { step_type: STEP_GENERATE });
@@ -388,8 +396,8 @@ async function runPipelineGeneration(db, pipeline, analysisData, scanTaskIds) {
          FROM scan_results WHERE scan_task_id IN (${placeholders})`
       ).all(...ids);
 
-      const profile = resolveTargetProfile(pipeline.target);
-      const ranked = matchPlaybooks(allResults, profile.target_class);
+      const profile = loadTargetProfile(db, pipeline.target, ids);
+      const ranked = matchPlaybooks(allResults, profile);
 
       if (ranked.length > 0) {
         const bestMatch = ranked[0];
@@ -476,16 +484,21 @@ async function runPipelineExecution(db, pipeline, playbookId, analysisData) {
 
     const planData = {
       _pipeline_source: pipelineId,
+      _scan_task_ids: String(db.prepare('SELECT scan_task_id FROM pipelines WHERE pipeline_id = ?').get(pipelineId).scan_task_id || '').split(',').filter(Boolean),
       _pipeline_analysis: analysisData ? {
         tech_stack: analysisData.tech_stack,
+        attack_surface: analysisData.attack_surface,
+        risk_assessment: analysisData.risk_assessment,
         recommended_strategy: analysisData.recommended_strategy,
       } : null,
     };
 
+    const targetProfile = loadTargetProfile(db, pipeline.target, planData._scan_task_ids);
     db.prepare(
-      `INSERT INTO execution_runs (run_id, playbook_id, user_sub, user_role, target, status, plan_data, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)`
-    ).run(runId, playbookId, userSub, userRole, pipeline.target, JSON.stringify(planData), now, now);
+      `INSERT INTO execution_runs (run_id, playbook_id, user_sub, user_role, target, scan_task_id, target_class, target_profile, status, plan_data, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)`
+    ).run(runId, playbookId, userSub, userRole, pipeline.target, planData._scan_task_ids[0] || null,
+      targetProfile.target_class, JSON.stringify(targetProfile), JSON.stringify(planData), now, now);
 
     // Store run_id in pipeline record
     updateStatus(db, pipelineId, 'running', { run_id: runId });
