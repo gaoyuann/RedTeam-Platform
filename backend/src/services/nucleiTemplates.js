@@ -123,5 +123,8 @@ export function normalizeNucleiTemplateArgs(args, templatesDir, engine) {
   if (!normalized.some(argument => /^--?(?:t|templates|w|workflows)(?:=|$)/.test(argument))) {
     normalized.push('-t', engine === 'host' ? templatesDir : CONTAINER_TEMPLATES_DIR);
   }
+  if (!normalized.some(argument => /^--?(?:duc|disable-update-check)(?:=|$)/.test(argument))) {
+    normalized.push('-duc');
+  }
   return normalized;
 }
