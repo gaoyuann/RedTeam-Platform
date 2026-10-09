@@ -13,8 +13,9 @@ export function computeGrade(runId) {
 
   // Get execution steps
   const execSteps = db.prepare(
-    'SELECT step_index, tool_id, success, exit_code, notes FROM execution_steps WHERE run_id = ? ORDER BY step_index'
+    'SELECT step_index, tool_id, success, exit_code, notes, source FROM execution_steps WHERE run_id = ? ORDER BY step_index'
   ).all(runId);
+  const attemptCount = db.prepare('SELECT COUNT(*) AS count FROM execution_attempts WHERE run_id = ?').get(runId).count;
 
   // Get playbook steps (with scores)
   let pbSteps = [];
@@ -109,6 +110,13 @@ export function computeGrade(runId) {
     percent,
     grade,
     stepScore: { total, earned },
+    executionScope: {
+      scoringBasis: pbSteps.length > 0 ? 'playbook' : 'execution',
+      plannedSteps: pbSteps.length,
+      executedSteps: execSteps.length,
+      aiAddedSteps: execSteps.filter(step => step.source === 'react').length,
+      attempts: attemptCount > 0 || execSteps.length === 0 ? attemptCount : null,
+    },
     breakdown,
     mitre: {
       covered: mitreCovered,

@@ -1,15 +1,8 @@
 import { getDb } from '../db/connection.js';
 import { runTool } from '../tools/toolRunner.js';
 import { getWsManager } from './wsManager.js';
-import { existsSync, readdirSync } from 'fs';
-import { resolve, dirname } from 'path';
-import { fileURLToPath } from 'url';
 import { normalizeTarget, probeTarget, buildDiscoveredProfile } from './targetDiscovery.js';
 import { classifyToolResult } from '../tools/toolContracts.js';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROJECT_ROOT = resolve(__dirname, '..', '..', '..');
-const NUCLEI_TEMPLATES_DIR = resolve(PROJECT_ROOT, 'data', 'nuclei-templates');
 
 const MAX_OUTPUT_LENGTH = 8192;
 
@@ -52,51 +45,6 @@ function raceScanWithAbort(toolPromise, scanTaskId) {
       }
     });
   });
-}
-
-// ── Ensure nuclei templates are available ──────────────────────────────
-let nucleiTemplatesChecked = false;
-
-async function ensureNucleiTemplates() {
-  if (nucleiTemplatesChecked) return;
-
-  // Check if templates directory has content
-  try {
-    if (existsSync(NUCLEI_TEMPLATES_DIR)) {
-      const files = readdirSync(NUCLEI_TEMPLATES_DIR);
-      if (files.length > 0) {
-        nucleiTemplatesChecked = true;
-        return;
-      }
-    }
-  } catch {}
-
-  // Download templates
-  console.log('[Nuclei] Templates not found, downloading...');
-  try {
-    const { getEngine } = await import('../tools/containerEngine.js');
-    const engine = await getEngine();
-    const { execFile } = await import('child_process');
-    const { promisify } = await import('util');
-    const execFileAsync = promisify(execFile);
-
-    if (engine === 'host') {
-      // Run nuclei -update-templates directly
-      await execFileAsync('nuclei', ['-update-templates', '-td', NUCLEI_TEMPLATES_DIR], { timeout: 120_000 });
-    } else {
-      // Run in container, mount templates dir
-      await execFileAsync(engine, [
-        'run', '--rm',
-        '-v', `${NUCLEI_TEMPLATES_DIR}:/root/nuclei-templates`,
-        'rt-vuln-scan',
-        'nuclei', '-update-templates', '-td', '/root/nuclei-templates',
-      ], { timeout: 120_000 });
-    }
-    console.log('[Nuclei] Templates downloaded successfully');
-  } catch (err) {
-    console.warn('[Nuclei] Failed to download templates:', err.message);
-  }
-  nucleiTemplatesChecked = true;
 }
 
 // ── Scan type → tool mapping ──────────────────────────────────────────
@@ -780,11 +728,6 @@ export async function executeScan(scanTaskId) {
 
     let totalResults = 0;
 
-    // Ensure nuclei templates are available before running vuln_scan
-    if (task.scan_type === 'vuln_scan') {
-      await ensureNucleiTemplates();
-    }
-
     if (task.scan_type === 'web_scan') {
       // ── General web scan with optional explicit injection endpoint ──
       console.log(`[Scan] web_scan: nikto for ${task.target}`);
@@ -882,7 +825,6 @@ export async function executeScan(scanTaskId) {
     } else if (task.scan_type === 'auth_audit') {
       // ── Single-step: nuclei with auth/vuln templates ──
       console.log(`[Scan] auth_audit: nuclei for ${task.target}`);
-      await ensureNucleiTemplates();
       totalResults = await runAndStore('auth_audit', 'nuclei', task.target, parameters, timeoutMs);
 
     } else {
