@@ -4,6 +4,7 @@ export default function up(db) {
   const definition = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'scan_tasks'").get().sql;
   if (!definition.includes("'PARTIAL'")) {
     const indexes = db.prepare("SELECT sql FROM sqlite_master WHERE tbl_name = 'scan_tasks' AND type IN ('index', 'trigger') AND sql IS NOT NULL").all();
+    const existingViolations = new Set(db.pragma('foreign_key_check').map(violation => JSON.stringify(violation)));
     const foreignKeys = db.pragma('foreign_keys', { simple: true });
     db.pragma('foreign_keys = OFF');
     try {
@@ -14,7 +15,11 @@ export default function up(db) {
         db.exec('DROP TABLE scan_tasks');
         db.exec('ALTER TABLE scan_tasks_updated RENAME TO scan_tasks');
         for (const index of indexes) db.exec(index.sql);
-        if (db.pragma('foreign_key_check').length) throw new Error('Foreign key validation failed during scan status migration');
+        const newViolations = db.pragma('foreign_key_check').filter(violation => !existingViolations.has(JSON.stringify(violation)));
+        if (newViolations.length) {
+          const tables = [...new Set(newViolations.map(violation => violation.table))].join(', ');
+          throw new Error(`Foreign key validation failed during scan status migration: ${newViolations.length} new violation(s) in ${tables}`);
+        }
       })();
     } finally { db.pragma(`foreign_keys = ${foreignKeys ? 'ON' : 'OFF'}`); }
   }
