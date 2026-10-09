@@ -19,6 +19,19 @@ QT_PLUGINS="$(qmake -query QT_INSTALL_PLUGINS 2>/dev/null || echo '/usr/lib/x86_
 echo "=== RedTeam Platform - Linux Portable Bundle ==="
 echo "Output: $DIST_DIR"
 
+# QLibrary dependencies are invisible to ldd. Validate the SDK before packaging.
+case "$(uname -m)" in
+  x86_64) ROCKEY_ARCH=linux-x86_64 ;;
+  i?86) ROCKEY_ARCH=linux-x86 ;;
+  aarch64|arm64) ROCKEY_ARCH=linux-aarch64 ;;
+  *) echo "ERROR: No bundled ROCKEY SDK for $(uname -m)" >&2; exit 1 ;;
+esac
+ROCKEY_SOURCE="$PROJECT_ROOT/third_party/rockey/$ROCKEY_ARCH/libRockeyARM.so.0.3"
+if [ ! -s "$ROCKEY_SOURCE" ]; then
+  echo "ERROR: Missing ROCKEY SDK: $ROCKEY_SOURCE" >&2
+  exit 1
+fi
+
 # ── Clean ──────────────────────────────────────────────────────────────
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"/{bin,lib/qt,lib/openssl,plugins/platforms,plugins/imageformats,plugins/iconengines,plugins/xcbglintegrations,backend,data,containers/tar,node,fonts}
@@ -32,6 +45,11 @@ fi
 cp "$BINARY" "$DIST_DIR/bin/RedTeam-Platform"
 strip "$DIST_DIR/bin/RedTeam-Platform" 2>/dev/null || true
 echo "[1/7] Copied binary ($(du -sh "$DIST_DIR/bin/RedTeam-Platform" | cut -f1))"
+
+# Keep the layout expected by DongleService for an executable under bin/.
+mkdir -p "$DIST_DIR/third_party/rockey/$ROCKEY_ARCH" "$DIST_DIR/scripts"
+cp "$ROCKEY_SOURCE" "$DIST_DIR/third_party/rockey/$ROCKEY_ARCH/" || exit 1
+cp "$SCRIPT_DIR/70-rockey-arm.rules" "$DIST_DIR/scripts/" || exit 1
 
 # ── 2. Copy Qt shared libraries (via ldd) ─────────────────────────────
 COPIED_LIBS=0
