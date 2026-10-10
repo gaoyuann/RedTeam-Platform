@@ -2,7 +2,7 @@
 # RedTeam Platform - ARM64 Client Package Script
 # Creates a portable client-only bundle for cloud laptops
 # Run on ARM64 cloud laptop after building
-set -uo pipefail
+set -euo pipefail
 shopt -s nullglob
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -18,6 +18,15 @@ echo "=== RedTeam Platform - ARM64 Client Bundle ==="
 echo "Architecture: $(uname -m)"
 echo "Output: $DIST_DIR"
 
+# Fail before touching an existing bundle when the vendor SDK is missing/wrong.
+case "$(uname -m)" in
+  aarch64|arm64) ;;
+  *) echo "ERROR: Run this packager on the ARM64 cloud laptop." >&2; exit 1 ;;
+esac
+ROCKEY_SOURCE="$PROJECT_ROOT/third_party/rockey/linux-aarch64/libRockeyARM.so.0.3"
+cmake "-DROCKEY_SDK_FILE=$ROCKEY_SOURCE" -DROCKEY_SDK_ARCH=linux-aarch64 \
+  -DROCKEY_SDK_REQUIRED=ON -P "$PROJECT_ROOT/cmake/ValidateRockeySdk.cmake"
+
 # ── Clean ──────────────────────────────────────────────────────────────
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"/{bin,lib/qt,lib/openssl,plugins/platforms,plugins/imageformats,plugins/iconengines,fonts}
@@ -32,16 +41,9 @@ cp "$BINARY" "$DIST_DIR/bin/RedTeam-Platform"
 strip "$DIST_DIR/bin/RedTeam-Platform" 2>/dev/null || true
 echo "[1/5] Copied binary ($(du -sh "$DIST_DIR/bin/RedTeam-Platform" | cut -f1))"
 
-# The repository currently has no ARM64 SDK. Never bundle an x86 SDK as ARM64.
-ROCKEY_SOURCE="$PROJECT_ROOT/third_party/rockey/linux-aarch64/libRockeyARM.so.0.3"
-mkdir -p "$DIST_DIR/scripts"
-cp "$SCRIPT_DIR/70-rockey-arm.rules" "$DIST_DIR/scripts/" || exit 1
-if [ -s "$ROCKEY_SOURCE" ]; then
-  mkdir -p "$DIST_DIR/third_party/rockey/linux-aarch64"
-  cp "$ROCKEY_SOURCE" "$DIST_DIR/third_party/rockey/linux-aarch64/" || exit 1
-else
-  echo "WARNING: ARM64 ROCKEY SDK missing; this client cannot enable dongle verification." >&2
-fi
+mkdir -p "$DIST_DIR/scripts" "$DIST_DIR/third_party/rockey/linux-aarch64"
+cp "$SCRIPT_DIR/70-rockey-arm.rules" "$DIST_DIR/scripts/"
+cp "$ROCKEY_SOURCE" "$DIST_DIR/third_party/rockey/linux-aarch64/"
 
 # ── 2. Copy Qt shared libraries (via ldd) ─────────────────────────────
 COPIED_LIBS=0

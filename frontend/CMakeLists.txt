@@ -85,11 +85,42 @@ endif()
 
 target_include_directories(RedTeam-Platform PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-# 把内置的 ROCKEY ARM SDK 动态库拷贝到可执行文件旁，使运行时
-# appDir/third_party/rockey/<plat>/<lib> 可解析（dev 构建与安装态均适用）。
-add_custom_command(TARGET RedTeam-Platform POST_BUILD
+# Choose by target architecture (also works with a cross-compilation toolchain).
+set(ROCKEY_SDK_ARCH "")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" ROCKEY_PROCESSOR)
+  if(ROCKEY_PROCESSOR MATCHES "^(aarch64|arm64)$")
+    set(ROCKEY_SDK_ARCH linux-aarch64)
+  elseif(ROCKEY_PROCESSOR MATCHES "^(x86_64|amd64)$")
+    set(ROCKEY_SDK_ARCH linux-x86_64)
+  elseif(ROCKEY_PROCESSOR MATCHES "^i[3-6]86$")
+    set(ROCKEY_SDK_ARCH linux-x86)
+  endif()
+endif()
+set(ROCKEY_SDK_VALIDATION_ARGS "")
+if(ROCKEY_SDK_ARCH)
+  set(ROCKEY_SDK_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/rockey/${ROCKEY_SDK_ARCH}/libRockeyARM.so.0.3")
+  include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/ValidateRockeySdk.cmake")
+  set(ROCKEY_SDK_VALIDATION_ARGS
+    COMMAND ${CMAKE_COMMAND}
+      "-DROCKEY_SDK_FILE=${ROCKEY_SDK_FILE}"
+      "-DROCKEY_SDK_ARCH=${ROCKEY_SDK_ARCH}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/ValidateRockeySdk.cmake")
+endif()
+
+# Run even when no C++ file changed: installing/updating an SDK must not require
+# relinking the application before the bundled runtime library is refreshed.
+# Avoid TARGET_FILE_DIR here: CMake 3.16 adds a reverse dependency for it.
+set(ROCKEY_RUNTIME_DIR "${CMAKE_CURRENT_BINARY_DIR}")
+if(CMAKE_CONFIGURATION_TYPES)
+  string(APPEND ROCKEY_RUNTIME_DIR "/$<CONFIG>")
+endif()
+set_target_properties(RedTeam-Platform PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ROCKEY_RUNTIME_DIR}")
+add_custom_target(copy_rockey_sdk
+  ${ROCKEY_SDK_VALIDATION_ARGS}
   COMMAND ${CMAKE_COMMAND} -E copy_directory
-  "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/rockey"
-  "$<TARGET_FILE_DIR:RedTeam-Platform>/third_party/rockey"
-  COMMENT "Copying bundled ROCKEY ARM SDK next to binary"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/rockey"
+    "${ROCKEY_RUNTIME_DIR}/third_party/rockey"
+  COMMENT "Validating and copying bundled ROCKEY SDK next to binary"
 )
+add_dependencies(RedTeam-Platform copy_rockey_sdk)
