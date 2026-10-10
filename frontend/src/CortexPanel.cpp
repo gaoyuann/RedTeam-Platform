@@ -71,15 +71,17 @@ void CortexPanel::setupUI() {
 
 void CortexPanel::addReactThought(const QString &observation, const QString &thought,
                                     const QString &action, const QString &timestamp,
-                                    int stepIndex, const QString &toolId, bool isDynamic) {
+                                    int stepIndex, const QString &toolId, bool isDynamic,
+                                    int executionIndex) {
   QString ts = timestamp.isEmpty() ? nowTime() : timestamp;
   m_emptyLabel->hide();
 
-  if (stepIndex >= 0 && !m_stepHeadersAdded.contains(stepIndex)) {
-    m_stepHeadersAdded.insert(stepIndex);
-    auto *sep = createStepSeparator(stepIndex, toolId, isDynamic);
-    m_msgLayout->insertWidget(m_msgLayout->count() - 1, sep);
-  }
+  const int sequence = executionIndex > 0 ? executionIndex : m_executionCounter + 1;
+  m_executionCounter = qMax(m_executionCounter, sequence);
+  const int retryCount = stepIndex >= 0 ? m_stepThoughtCounts.value(stepIndex) : 0;
+  if (stepIndex >= 0) m_stepThoughtCounts[stepIndex] = retryCount + 1;
+  auto *separator = createStepSeparator(sequence, stepIndex, toolId, isDynamic, retryCount);
+  m_msgLayout->insertWidget(m_msgLayout->count() - 1, separator);
 
   auto *widget = createReactWidget(observation, thought, action, ts);
   m_msgLayout->insertWidget(m_msgLayout->count() - 1, widget);
@@ -121,7 +123,8 @@ void CortexPanel::clearMessages() {
     }
     delete item;
   }
-  m_stepHeadersAdded.clear();
+  m_stepThoughtCounts.clear();
+  m_executionCounter = 0;
   m_payloadSectionAdded = false;
   m_expandedTexts.clear();
   m_widgetCounter = 0;
@@ -177,7 +180,7 @@ void CortexPanel::setStatus(const QString &status) {
 }
 
 
-QWidget *CortexPanel::createStepSeparator(int stepIndex, const QString &toolId, bool isDynamic) {
+QWidget *CortexPanel::createStepSeparator(int executionIndex, int stepIndex, const QString &toolId, bool isDynamic, int retryCount) {
   auto *frame = new QFrame;
   frame->setStyleSheet(
     "QFrame { background: #f1f5f9; border: none; border-left: 3px solid #3b82f6; "
@@ -186,10 +189,21 @@ QWidget *CortexPanel::createStepSeparator(int stepIndex, const QString &toolId, 
   layout->setContentsMargins(10, 4, 10, 4);
   layout->setSpacing(6);
 
-  auto *lbl = new QLabel(QStringLiteral("步骤 %1: %2").arg(stepIndex).arg(toolId));
+  const QString title = stepIndex >= 0
+      ? QStringLiteral("第 %1 次执行 · 步骤编号 %2: %3").arg(executionIndex).arg(stepIndex).arg(toolId)
+      : QStringLiteral("第 %1 次执行").arg(executionIndex);
+  auto *lbl = new QLabel(title);
   lbl->setTextFormat(Qt::PlainText);
+  lbl->setWordWrap(true);
+  lbl->setToolTip(QStringLiteral("执行次序来自决策调用编号；步骤编号是稳定标识，不代表执行先后。"));
   lbl->setStyleSheet("font-size: 12px; font-weight: bold; color: #1e40af;");
   layout->addWidget(lbl);
+
+  if (retryCount > 0) {
+    auto *retryTag = new QLabel(QStringLiteral("重试 %1").arg(retryCount));
+    retryTag->setStyleSheet("font-size: 10px; color: #92400e; background: #fffbeb; padding: 1px 6px;");
+    layout->addWidget(retryTag);
+  }
 
   if (isDynamic) {
     auto *dynTag = new QLabel(QStringLiteral("🔀 AI 动态插入"));

@@ -769,7 +769,7 @@ void ExecutionPage::onRunReact(const QJsonObject &data) {
   const QMap<QString, QString> actionLabels{
     {QStringLiteral("insert"), QStringLiteral("插入")},
     {QStringLiteral("adjust"), QStringLiteral("调整")},
-    {QStringLiteral("parallel"), QStringLiteral("并行")},
+    {QStringLiteral("parallel"), QStringLiteral("工具组插入（顺序执行）")},
     {QStringLiteral("pivot"), QStringLiteral("转向")},
     {QStringLiteral("stop"), QStringLiteral("终止")},
     {QStringLiteral("continue"), QStringLiteral("继续")}
@@ -784,7 +784,7 @@ void ExecutionPage::onRunReact(const QJsonObject &data) {
   m_cortexPanel->addReactThought(observation, thought,
       actionLabels.value(action, action.isEmpty() ? QStringLiteral("继续") : action),
       data.value(QStringLiteral("timestamp")).toString(), stepIndex,
-      toolId, isDynamic);
+      toolId, isDynamic, callIndex);
   m_lastReactAction = action;
 }
 

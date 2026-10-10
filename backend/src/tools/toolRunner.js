@@ -5,6 +5,7 @@ import { getEngine } from './containerEngine.js';
 import { mkdirSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { classifyToolResult, normalizeToolArgs, inspectToolWordlists } from './toolContracts.js';
+import { ensureNucleiTemplates, getRequiredNucleiTemplateIds, normalizeNucleiTemplateArgs } from '../services/nucleiTemplates.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..', '..', '..');
@@ -150,6 +151,10 @@ export async function runTool(toolId, args, options = {}) {
     args = normalizeToolArgs(toolId, args, { projectRoot: PROJECT_ROOT, engine });
     const resources = inspectToolWordlists(toolId, args, PROJECT_ROOT, engine);
     if (!resources.passed) throw new Error(resources.issues.join('; '));
+    if (NUCLEI_TOOLS.has(toolId)) {
+      const templates = await ensureNucleiTemplates({ projectRoot: PROJECT_ROOT, engine, requiredIds: getRequiredNucleiTemplateIds(args), signal: options.signal });
+      args = normalizeNucleiTemplateArgs(args, templates.templatesDir, engine);
+    }
   } catch (error) {
     return { success: false, exitCode: -1, stdout: '', stderr: error.message, error: error.message, executionMode: engine };
   }
