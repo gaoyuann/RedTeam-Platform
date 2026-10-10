@@ -6,7 +6,7 @@ import { generatePlaybook } from '../services/playbookGenerator.js';
 import { executeScan, requestScanAbort } from '../services/scanExecutor.js';
 import { getWsManager } from '../services/wsManager.js';
 import { resolveTargetProfile } from '../services/targetProfileResolver.js';
-import { loadTargetProfile } from '../services/targetDiscovery.js';
+import { buildDiscoveredProfile } from '../services/targetDiscovery.js';
 
 export default function (db) {
   const router = Router();
@@ -138,7 +138,7 @@ export default function (db) {
     const results = db.prepare('SELECT * FROM scan_results WHERE scan_task_id = ?').all(req.params.scanTaskId);
     if (!results.length) return res.json({ status: 'ok', data: [] });
     // Resolve target class for better playbook matching
-    const targetProfile = loadTargetProfile(db, task.target);
+    const targetProfile = buildDiscoveredProfile(task.target, results);
     const recommendations = matchPlaybooks(results, targetProfile);
     res.json({ status: 'ok', data: recommendations });
   });
