@@ -98,6 +98,7 @@ void EvaluatePage::clearRun() {
   m_runCombo->setCurrentIndex(-1);
   m_scoreLabel->setText(QStringLiteral("选择执行记录后点击评分"));
   m_mitreLabel->clear();
+  m_scopeLabel->setText(QStringLiteral("评分明细展示计分步骤；实际执行还可能包含 AI 新增步骤和重试。"));
   m_stepTable->setRowCount(0);
   m_gradeBtn->setEnabled(true);
   m_genReportBtn->setEnabled(false);
@@ -167,6 +168,7 @@ void EvaluatePage::setupUI() {
     m_runLoadPending = false;
     m_scoreLabel->setText(QStringLiteral("选择执行记录后点击评分"));
     m_mitreLabel->clear();
+    m_scopeLabel->setText(QStringLiteral("评分明细展示计分步骤；实际执行还可能包含 AI 新增步骤和重试。"));
     m_stepTable->setRowCount(0);
     m_gradeBtn->setEnabled(true);
     m_genReportBtn->setEnabled(false);
@@ -182,9 +184,15 @@ void EvaluatePage::setupUI() {
   m_mitreLabel->setWordWrap(true);
   gradeL->addWidget(m_mitreLabel);
 
+  m_scopeLabel = new QLabel(QStringLiteral("评分明细展示计分步骤；实际执行还可能包含 AI 新增步骤和重试。"));
+  m_scopeLabel->setWordWrap(true);
+  m_scopeLabel->setTextFormat(Qt::PlainText);
+  m_scopeLabel->setStyleSheet("color: #64748b; font-size: 12px;");
+  gradeL->addWidget(m_scopeLabel);
+
   m_stepTable = new QTableWidget(0, 5);
   UiUtil::EmptyHint::attach(m_stepTable, QStringLiteral("选择评分记录后展示步骤得分"));
-  m_stepTable->setHorizontalHeaderLabels({"步骤", "工具", "满分", "得分", "状态"});
+  m_stepTable->setHorizontalHeaderLabels({"步骤编号", "工具", "满分", "得分", "状态"});
   m_stepTable->setAlternatingRowColors(true);
   m_stepTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_stepTable->setSortingEnabled(true);
@@ -567,12 +575,18 @@ void EvaluatePage::onGradeRun() {
   m_genReportBtn->setEnabled(false);
   m_genReportBtn->setText(QStringLiteral("生成测试报告"));
 
+  m_scoreLabel->setText(QStringLiteral("正在评分…"));
+  m_mitreLabel->clear();
+  m_scopeLabel->setText(QStringLiteral("正在核对评分范围与执行次数…"));
+  m_stepTable->setRowCount(0);
+
   m_api->post("/api/runs/" + runId + "/grade", QJsonObject(), 5000, [this, runId, revision](const QJsonObject &res) {
     if (revision != m_gradeRequestRevision || runId != m_runCombo->currentData().toString()) return;
     m_gradingRunId.clear();
     m_gradeBtn->setEnabled(true);
     if (res["status"].toString() != "ok") {
       m_scoreLabel->setText(QStringLiteral("评分失败，请重试。"));
+      m_scopeLabel->clear();
       return;
     }
     m_gradedRunId = runId;
@@ -591,6 +605,22 @@ void EvaluatePage::onGradeRun() {
         .arg(mitre["total"].toInt())
         .arg(mitre["percent"].toDouble(), 0, 'f', 1)
         .arg(mitre["score"].toInt()));
+
+    const auto scope = d["executionScope"].toObject();
+    if (scope.isEmpty()) {
+      m_scopeLabel->setText(QStringLiteral("评分明细展示计分步骤；实际执行还可能包含 AI 新增步骤和重试。"));
+    } else {
+      const QString attempts = scope["attempts"].isDouble()
+          ? QStringLiteral("执行尝试 %1 次").arg(scope["attempts"].toInt())
+          : QStringLiteral("旧记录未记录重试次数");
+      const QString counts = QStringLiteral("原预案 %1 步 · 已执行 %2 个步骤（其中 AI 新增 %3 步）· %4")
+          .arg(scope["plannedSteps"].toInt()).arg(scope["executedSteps"].toInt())
+          .arg(scope["aiAddedSteps"].toInt()).arg(attempts);
+      const QString basis = scope["scoringBasis"].toString() == QStringLiteral("playbook")
+          ? QStringLiteral("本表按原预案固定步骤计分；AI 新增步骤不计固定步骤分，有效证据仍可计入 MITRE 覆盖。")
+          : QStringLiteral("本记录没有预案评分步骤，按实际执行步骤每步 10 分计分，并保留 MITRE 覆盖加分。");
+      m_scopeLabel->setText(counts + QStringLiteral("\n") + basis);
+    }
 
     auto breakdown = d["breakdown"].toArray();
     const bool sorting = m_stepTable->isSortingEnabled();

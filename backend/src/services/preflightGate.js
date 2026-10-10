@@ -15,6 +15,7 @@ import { inspectRuntimeResources, inspectWordlistFiles } from './resourceInspect
 import { ensureBuiltinWordlists } from './wordlistBootstrap.js';
 import { discoverTargetProfile, loadTargetProfile } from './targetDiscovery.js';
 import { validateVariablePlan } from './executionVariables.js';
+import { ensureNucleiTemplates, getRequiredNucleiTemplateIds, inspectNucleiTemplates } from './nucleiTemplates.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = dirname(__filename);
@@ -244,15 +245,20 @@ export async function runPreflightChecks({ playbookId, target, db, scanTaskIds =
 
   // ── Check 6: nuclei_templates ──────────────────────────────────────
   {
-    const templatesDir = join(PROJECT_ROOT, 'data', 'nuclei-templates');
-    const ok = existsSync(templatesDir);
-    checks.push({
-      name: 'nuclei_templates',
-      passed: ok,
-      message: ok
-        ? `Nuclei templates directory exists: ${templatesDir}`
-        : `Nuclei templates directory not found: ${templatesDir}`,
-    });
+    const nucleiSteps = steps.filter(step => step.tool_id === 'nuclei');
+    if (nucleiSteps.length === 0) {
+      checks.push({ name: 'nuclei_templates', passed: true, skipped: true, message: 'No Nuclei step in this playbook' });
+    } else {
+      const requiredIds = [...new Set(nucleiSteps.flatMap(step => getRequiredNucleiTemplateIds(tryJson(step.args_template))))];
+      try {
+        const resources = checks.find(check => check.name === 'tool_binaries')?.passed
+          ? await ensureNucleiTemplates({ projectRoot: PROJECT_ROOT, engine: executionEnvironment, requiredIds, signal })
+          : inspectNucleiTemplates(PROJECT_ROOT, requiredIds);
+        checks.push({ name: 'nuclei_templates', passed: resources.passed, message: resources.message });
+      } catch (error) {
+        checks.push({ name: 'nuclei_templates', passed: false, message: error.message });
+      }
+    }
   }
 
   // ── Check 7: kg_data ───────────────────────────────────────────────

@@ -20,7 +20,8 @@ public:
                         const QString &timestamp = {},
                         int stepIndex = -1,
                         const QString &toolId = {},
-                        bool isDynamic = false);
+                        bool isDynamic = false,
+                        int executionIndex = 0);
 
   void addPayloadCard(const QString &payloadName,
                        const QString &payloadContext,
@@ -39,7 +40,7 @@ private:
                               const QString &action, const QString &timestamp);
   QWidget *createPayloadWidget(const QString &name, const QString &context, const QString &timestamp);
   QWidget *createCollapsibleText(const QString &text, int collapseThreshold, const QString &key);
-  QWidget *createStepSeparator(int stepIndex, const QString &toolId, bool isDynamic);
+  QWidget *createStepSeparator(int executionIndex, int stepIndex, const QString &toolId, bool isDynamic, int retryCount);
   void scrollToBottom();
 
   ApiClient *m_api;
@@ -52,7 +53,8 @@ private:
   QScrollArea *m_scrollArea;
   QWidget *m_msgContainer;
 
-  QSet<int> m_stepHeadersAdded;
+  QMap<int, int> m_stepThoughtCounts;
+  int m_executionCounter = 0;
   bool m_payloadSectionAdded = false;
 
   QSet<QString> m_expandedTexts;

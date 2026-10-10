@@ -81,6 +81,7 @@ private:
   StatsSummaryCard *m_statsCard;  // 攻击结果统计（自绘环形+条形榜）
   QLabel *m_scoreLabel;
   QLabel *m_mitreLabel;
+  QLabel *m_scopeLabel;
   QTableWidget *m_stepTable;
   QPushButton *m_gradeBtn;
   QPushButton *m_genReportBtn;
