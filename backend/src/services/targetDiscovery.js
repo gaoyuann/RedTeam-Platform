@@ -53,7 +53,7 @@ export function buildDiscoveredProfile(target, results = []) {
   const initial = normalizeTarget(target);
   const scope = initial.target_url ? applicationPath(new URL(initial.target_url)) : '/';
   const valid = results.filter(result => {
-    if (['raw_output', 'scan_error'].includes(result.result_type)) return false;
+    if (['raw_output', 'scan_error', 'lan_scope', 'lan_host_discovery', 'scan_evidence', 'network_context', 'network_link'].includes(result.result_type)) return false;
     let data;
     try { data = typeof result.result_data === 'string' ? JSON.parse(result.result_data) : result.result_data || {}; } catch { return false; }
     if (!data || typeof data !== 'object' || Array.isArray(data)) return false;

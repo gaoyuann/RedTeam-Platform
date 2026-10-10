@@ -297,7 +297,7 @@ protected:
     }
 };
 
-// ── Custom QGraphicsEllipseItem for draggable topology nodes ────────────
+// ── Custom card item for draggable topology nodes ────────────
 
 class TopologyNodeItem : public QGraphicsRectItem {
 public:
@@ -325,15 +325,11 @@ protected:
         painter->drawRoundedRect(rect(), 12, 12);
         painter->setPen(Qt::NoPen);
         painter->setBrush(brush());
-        painter->drawEllipse(QPointF(99, -29), 4, 4);
+        painter->drawEllipse(QPointF(rect().right() - 12, rect().top() + 12), 4, 4);
+        const qreal iconX = rect().left() + 29;
         painter->setBrush(QColor(Theme::Surface));
-        painter->drawRoundedRect(QRectF(-104, -19, 34, 38), 8, 8);
-        painter->setPen(QColor(Theme::MutedText));
-        auto roleFont = painter->font();
-        roleFont.setPointSize(8);
-        painter->setFont(roleFont);
-        painter->drawText(QRectF(-60, 14, 165, 20), Qt::AlignLeft | Qt::AlignVCenter, data(3).toString());
-        painter->translate(-87, 0);
+        painter->drawRoundedRect(QRectF(iconX - 17, -19, 34, 38), 8, 8);
+        painter->translate(iconX, 0);
         painter->setBrush(Qt::NoBrush);
         painter->setPen(QPen(QColor(Theme::Primary), 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         const QString kind = data(2).toString().toLower();
@@ -422,6 +418,8 @@ QString edgeColor(const QString &type) {
 }
 
 QString edgeTypeLabel(const QString &type) {
+    if (type == QStringLiteral("task-request")) return QStringLiteral("任务请求");
+    if (type == QStringLiteral("reachability")) return QStringLiteral("目标响应");
     if (type == QStringLiteral("virtual-link")) return QStringLiteral("逻辑归属");
     if (type == QStringLiteral("connection")) return QStringLiteral("连接");
     if (type == QStringLiteral("gateway")) return QStringLiteral("网关");
@@ -560,7 +558,6 @@ QString topologyNodeSecondaryLabel(const TopologyNodeRecord &node,
     }
 
     const QStringList details{
-        node.deviceType.trimmed(),
         node.osName.trimmed(),
         node.vendor.trimmed(),
     };
@@ -572,9 +569,6 @@ QString topologyNodeSecondaryLabel(const TopologyNodeRecord &node,
         }
     }
 
-    if (!node.services.isEmpty()) {
-        return QStringLiteral("%1 个服务").arg(node.services.size());
-    }
     return {};
 }
 
@@ -1158,6 +1152,8 @@ void TopologyPage::setupUI() {
     m_edgeTypeCombo = new QComboBox(edgeFormPage);
     m_edgeTypeCombo->setEditable(true);
     m_edgeTypeCombo->addItem(QStringLiteral("连接"), QStringLiteral("connection"));
+    m_edgeTypeCombo->addItem(QStringLiteral("任务请求"), QStringLiteral("task-request"));
+    m_edgeTypeCombo->addItem(QStringLiteral("目标响应（路径未确认）"), QStringLiteral("reachability"));
     m_edgeTypeCombo->addItem(QStringLiteral("逻辑归属"), QStringLiteral("virtual-link"));
     m_edgeTypeCombo->addItem(QStringLiteral("网关"), QStringLiteral("gateway"));
     m_edgeTypeCombo->addItem(QStringLiteral("路由"), QStringLiteral("route"));
@@ -1283,7 +1279,7 @@ void TopologyPage::setupUI() {
         "<span style='color:#b45309'>● 告警</span>　"
         "<span style='color:#b91c1c'>● 离线</span>　"
         "<span style='color:#64748b'>● 未知</span>　"
-        "实线：路由观测/配置 · 虚线：范围归属（逻辑） · 单击查看证据，拖动调整"));
+        "点划线：任务请求 · 实线：探测路径 · 虚线：同网段归属 / 目标响应，非物理布线 · 单击查看证据"));
     legend->setObjectName("topologyLegend");
     legend->setWordWrap(true);
     legend->setStyleSheet("color:#52637a;font-size:12px;padding:2px 0;");
@@ -1801,7 +1797,7 @@ void TopologyPage::populateTopologyDocument() {
     }
     m_canvasTitleLabel->setText(
         m_topologyDocument.summary.isEmpty()
-            ? QStringLiteral("局域网网络拓扑")
+            ? QStringLiteral("源主机、服务器与目标路径")
             : m_topologyDocument.summary);
     const QString dirtySuffix = m_documentDirty
         ? QStringLiteral("当前有未保存修改。")
@@ -1927,40 +1923,6 @@ void TopologyPage::renderTopologyScene() {
         }
     }
 
-    // Draw edges first (below nodes)
-    for (const TopologyEdgeRecord &edge : m_topologyDocument.edges) {
-        if (!positions.contains(edge.sourceId) || !positions.contains(edge.targetId)) {
-            continue;
-        }
-        const QPointF source = positions.value(edge.sourceId);
-        const QPointF target = positions.value(edge.targetId);
-        auto anchor = [](const QPointF &from, const QPointF &to) {
-            const QPointF delta = to - from;
-            const qreal scale = qMax(qAbs(delta.x()) / 118.0, qAbs(delta.y()) / 46.0);
-            return scale > 1.0 ? from + delta / scale : from;
-        };
-        auto *line = new TopologyEdgeItem(edge.id, QLineF(anchor(source, target), anchor(target, source)));
-        const bool selected = edge.id == m_selectedEdgeId;
-        line->setPen(QPen(QColor(selected ? QString(Theme::Primary) : edgeColor(edge.type)),
-                          selected ? 3.2 : 2.2,
-                          edge.type == QStringLiteral("virtual-link") ? Qt::DashLine : Qt::SolidLine,
-                          Qt::RoundCap));
-        line->setToolTip(QStringLiteral("%1\n%2 -> %3\n%4")
-                             .arg(fallbackEdgeLabel(edge))
-                             .arg(edge.sourceId)
-                             .arg(edge.targetId)
-                             .arg(edge.note));
-        m_graphScene->addItem(line);
-        m_edgeItems.insert(edge.id, line);
-
-        auto *edgeText = m_graphScene->addSimpleText(fallbackEdgeLabel(edge));
-        edgeText->setBrush(QColor(selected ? Theme::Primary : Theme::MutedText));
-        edgeText->setPos((source.x() + target.x()) * 0.5 - edgeText->boundingRect().width() * 0.5,
-                         (source.y() + target.y()) * 0.5 - edgeText->boundingRect().height() - 4);
-        edgeText->setParentItem(line);  // 跟随连线淡入/拖动
-        edgeText->setZValue(1.2);
-    }
-
     // Draw nodes
     for (TopologyNodeRecord &node : m_topologyDocument.nodes) {
         const QPointF pos = positions.value(node.id);
@@ -1971,11 +1933,16 @@ void TopologyPage::renderTopologyScene() {
             node.id, QRectF(-116.0, -44.0, 232.0, 88.0));
         ellipse->setPos(pos);
         ellipse->setData(2, node.deviceType);
-        const QString role = node.deviceType == QStringLiteral("scanner") ? QStringLiteral("扫描源")
-            : node.deviceType == QStringLiteral("router") ? QStringLiteral("路由节点")
-            : node.deviceType == QStringLiteral("network_segment") ? QStringLiteral("探测范围 · 逻辑分组")
+        const QString role = node.tags.contains(QStringLiteral("local-request")) ? QStringLiteral("本机请求 · 地址未识别")
+            : node.tags.contains(QStringLiteral("source")) ? QStringLiteral("发起任务")
+            : node.deviceType == QStringLiteral("scanner")
+            ? (node.tags.contains(QStringLiteral("target")) ? QStringLiteral("执行扫描 · 任务目标") : QStringLiteral("执行扫描"))
+            : node.tags.contains(QStringLiteral("server")) ? QStringLiteral("接收任务")
+            : node.tags.contains(QStringLiteral("target")) ? QStringLiteral("任务目标")
+            : node.deviceType == QStringLiteral("router") ? QStringLiteral("响应跳点")
+            : node.deviceType == QStringLiteral("network_segment") ? QStringLiteral("逻辑分组 · 非实体设备")
+            : node.tags.contains(QStringLiteral("lan-host")) ? QStringLiteral("局域网主机")
             : QStringLiteral("目标资产");
-        ellipse->setData(3, role + (node.services.isEmpty() ? QString() : QStringLiteral(" · %1 项服务").arg(node.services.size())));
         ellipse->setBrush(QColor(nodeStatusColor(node.status)));
         ellipse->setPen(QPen(QColor(node.id == m_selectedNodeId
                                         ? QStringLiteral("#f8fafc")
@@ -1999,27 +1966,93 @@ void TopologyPage::renderTopologyScene() {
         m_graphScene->addItem(ellipse);
         m_nodeItems.insert(node.id, ellipse);
 
-        const QString primaryLabel = topologyNodePrimaryLabel(node);
-        const QString secondaryLabel = node.deviceType == QStringLiteral("network_segment")
-            ? QStringLiteral("CIDR 范围")
-            : topologyNodeSecondaryLabel(node, primaryLabel);
-
-        // Anchor labels to their host while retaining readable text at overview zoom.
-        auto *labels = new QGraphicsItemGroup(ellipse);
-        labels->setPos(-60, -27);
-        const QString visibleName = QFontMetrics(QApplication::font()).elidedText(primaryLabel, Qt::ElideRight, 155);
-        auto *text = new QGraphicsSimpleTextItem(visibleName, labels);
-        text->setBrush(QColor(Theme::Dark));
-        text->setPos(0, 0);
-        text->setToolTip(topologyNodeTooltip(node));
-
-        if (!secondaryLabel.isEmpty()) {
-            auto *subText = new QGraphicsSimpleTextItem(QFontMetrics(QApplication::font()).elidedText(secondaryLabel, Qt::ElideRight, 160), labels);
-            subText->setBrush(QColor(Theme::MutedText));
-            subText->setPos(0, text->boundingRect().height() + 2);
-            subText->setToolTip(topologyNodeTooltip(node));
+        QString primaryLabel = topologyNodePrimaryLabel(node);
+        // The generated scanner name used to combine its role and IP in one
+        // elided line. Keep the address independently readable instead.
+        if (node.deviceType == QStringLiteral("scanner")
+            && primaryLabel == QStringLiteral("扫描源 ") + node.ip.trimmed()) {
+            primaryLabel = QStringLiteral("服务器");
         }
+        const QString secondaryLabel = node.deviceType == QStringLiteral("network_segment")
+            ? (node.hostName.isEmpty() ? QStringLiteral("CIDR 范围") : node.hostName) : topologyNodeSecondaryLabel(node, primaryLabel);
+        QString footer = role == primaryLabel ? QString() : role;
+        if (!node.services.isEmpty()) {
+            if (!footer.isEmpty()) footer += QStringLiteral(" · ");
+            footer += QStringLiteral("%1 项服务").arg(node.services.size());
+        }
+
+        // All rows use the same font source and their actual graphics bounds.
+        // No separately painted footer can collide with a larger system font.
+        QFont titleFont = font();
+        titleFont.setBold(true);
+        const QFont detailFont = font();
+        const QFontMetricsF titleMetrics(titleFont), detailMetrics(detailFont);
+        const qreal addressWidth = node.ip.trimmed().isEmpty() ? 0
+            : qMax(titleMetrics.horizontalAdvance(node.ip.trimmed()),
+                   detailMetrics.horizontalAdvance(node.ip.trimmed()));
+        const qreal textWidth = qMax(180.0, qMax(addressWidth, detailMetrics.horizontalAdvance(footer)) + 4);
+        auto *labels = new QGraphicsItemGroup(ellipse);
+        qreal textHeight = 0;
+        auto addRow = [&](const QString &value, const QFont &rowFont, const QColor &color) {
+            if (value.isEmpty()) return;
+            if (textHeight > 0) textHeight += 5;
+            auto *text = new QGraphicsSimpleTextItem(
+                QFontMetricsF(rowFont).elidedText(value, Qt::ElideRight, textWidth), labels);
+            text->setFont(rowFont);
+            text->setBrush(color);
+            text->setPos(0, textHeight);
+            text->setToolTip(topologyNodeTooltip(node));
+            textHeight += text->boundingRect().height();
+        };
+        addRow(primaryLabel, titleFont, QColor(Theme::Dark));
+        addRow(secondaryLabel, detailFont, QColor(Theme::MutedText));
+        addRow(footer, detailFont, QColor(Theme::MutedText));
+        const qreal cardWidth = textWidth + 84;
+        const qreal cardHeight = qMax(88.0, textHeight + 28);
+        ellipse->setRect(-cardWidth / 2, -cardHeight / 2, cardWidth, cardHeight);
+        ellipse->setTransformOriginPoint(ellipse->rect().center());
+        labels->setPos(ellipse->rect().left() + 60, -textHeight / 2);
     }
+
+    // Connect the measured card boundaries; z-values keep edges below nodes.
+    for (const TopologyEdgeRecord &edge : m_topologyDocument.edges) {
+        if (!positions.contains(edge.sourceId) || !positions.contains(edge.targetId)) {
+            continue;
+        }
+        const QPointF source = positions.value(edge.sourceId);
+        const QPointF target = positions.value(edge.targetId);
+        auto anchor = [this](const QString &id, const QPointF &from, const QPointF &to) {
+            const QRectF bounds = m_nodeItems.value(id)->boundingRect();
+            const QPointF delta = to - from;
+            const qreal scale = qMax(qAbs(delta.x()) / (bounds.width() / 2 + 2),
+                                     qAbs(delta.y()) / (bounds.height() / 2 + 2));
+            return scale > 1.0 ? from + delta / scale : from;
+        };
+        auto *line = new TopologyEdgeItem(edge.id, QLineF(anchor(edge.sourceId, source, target),
+                                                        anchor(edge.targetId, target, source)));
+        const bool selected = edge.id == m_selectedEdgeId;
+        line->setPen(QPen(QColor(selected ? QString(Theme::Primary) : edgeColor(edge.type)),
+                          selected ? 3.2 : 2.2,
+                          edge.type == QStringLiteral("task-request") ? Qt::DashDotLine
+                            : (edge.type == QStringLiteral("virtual-link") || edge.type == QStringLiteral("reachability"))
+                              ? Qt::DashLine : Qt::SolidLine,
+                          Qt::RoundCap));
+        line->setToolTip(QStringLiteral("%1\n%2 -> %3\n%4")
+                             .arg(fallbackEdgeLabel(edge))
+                             .arg(edge.sourceId)
+                             .arg(edge.targetId)
+                             .arg(edge.note));
+        m_graphScene->addItem(line);
+        m_edgeItems.insert(edge.id, line);
+
+        auto *edgeText = m_graphScene->addSimpleText(fallbackEdgeLabel(edge));
+        edgeText->setBrush(QColor(selected ? Theme::Primary : Theme::MutedText));
+        edgeText->setPos((source.x() + target.x()) * 0.5 - edgeText->boundingRect().width() * 0.5,
+                         (source.y() + target.y()) * 0.5 - edgeText->boundingRect().height() - 4);
+        edgeText->setParentItem(line);  // 跟随连线淡入/拖动
+        edgeText->setZValue(1.2);
+    }
+
 
     m_graphScene->setSceneRect(
         m_graphScene->itemsBoundingRect().adjusted(-60, -60, 60, 60));

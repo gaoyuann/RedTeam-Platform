@@ -41,12 +41,14 @@ export function parseNmapResults(stdout = '', { assumedUp = false } = {}) {
       const ttl = Number(hop[1]);
       emit('host_discovery', {
         host: address, status: 'up', deviceType: address === host.host ? 'host' : 'router',
+        traceTarget: host.host, ttl, rttMs: Number(line.trim().split(/\s+/)[1]),
         evidence: 'Nmap traceroute to ' + host.host + ': ' + line.trim(),
       });
       // Missing TTLs break the path: do not invent direct links across them.
       if (previousHop && previousHop.ttl + 1 === ttl && previousHop.address !== address) {
         emit('network_link', {
           source: previousHop.address, target: address, type: 'route',
+          traceTarget: host.host, sourceTtl: previousHop.ttl, targetTtl: ttl,
           evidence: 'Nmap traceroute to ' + host.host + ', TTL ' + previousHop.ttl + ' → ' + ttl,
         });
       }
@@ -101,4 +103,49 @@ export function parseNmapInterfaces(stdout = '') {
     }
   }
   return { interfaces, routes };
+}
+
+// Select only the directly connected IPv4 LAN used to reach this target.
+// A routed destination must never expand discovery onto an unrelated LAN.
+export function selectLanDiscoveryScope(target, context, resolvedHosts = []) {
+  let value;
+  try { value = normalizeTopologyTarget(String(target).replace(/^([^/:]+):\d+$/, '$1')); } catch { return { reason: '目标地址无法用于局域网发现' }; }
+  const number = ip => ip.split('.').reduce((n, part) => ((n << 8) | Number(part)) >>> 0, 0);
+  const scopeOf = value => {
+    const [ip, bits] = value.split('/');
+    const prefix = Number(bits);
+    if (isIP(ip) !== 4 || bits === undefined || !Number.isInteger(prefix) || prefix < 0 || prefix > 32) return null;
+    const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+    const network = (number(ip) & mask) >>> 0;
+    return { prefix, mask, network, cidr: [24,16,8,0].map(n => (network >>> n) & 255).join('.') + '/' + prefix };
+  };
+  const requested = value.includes('/') ? scopeOf(value) : null;
+  const addresses = isIP(value) === 4 ? [value] : requested ? [value.split('/')[0]] : resolvedHosts.filter(ip => isIP(ip) === 4);
+  let routedReason = '';
+  for (const address of addresses) {
+    const route = (context?.routes || []).map(r => ({...r, scope: scopeOf(r.destination)}))
+      .filter(r => r.scope && ((number(address) & r.scope.mask) >>> 0) === r.scope.network)
+      .sort((a,b) => b.scope.prefix - a.scope.prefix || a.metric - b.metric)[0];
+    if (!route) continue;
+    if (route.gateway && route.gateway !== '0.0.0.0') {
+      const outgoing = (context.interfaces || []).find(i => i.device === route.device);
+      routedReason = '未执行局域网发现：扫描端 ' + (outgoing?.address || route.device)
+        + ' 通过网关 ' + route.gateway + ' 访问目标 ' + address
+        + '，未处于目标直连网段。当前仅展示探测路径；请在目标局域网内的服务器上运行扫描。';
+      continue;
+    }
+    const iface = (context.interfaces || []).find(i => {
+      const subnet = scopeOf(i.address + '/' + i.prefix);
+      return i.device === route.device && !i.address.startsWith('127.') && subnet
+        && ((number(address) & subnet.mask) >>> 0) === subnet.network;
+    });
+    if (!iface) continue;
+    const subnet = scopeOf(iface.address + '/' + iface.prefix);
+    if (requested && requested.prefix < subnet.prefix) continue;
+    const scope = requested || subnet;
+    // Bound automatic discovery; never silently substitute a guessed /24.
+    if (scope.prefix < 20) return { reason: '局域网范围 ' + scope.cidr + ' 超过自动发现上限 4096 个地址，请填写更小的目标网段' };
+    return { cidr: scope.cidr, serverAddress: iface.address, device: iface.device };
+  }
+  return { reason: routedReason || '未确认目标与服务器处于同一直连 IPv4 网段，未扩展局域网发现' };
 }
