@@ -42,8 +42,8 @@ DongleVerificationPage::DongleVerificationPage(const QString &configDir, QWidget
       m_registerButton(nullptr),
       m_destroyButton(nullptr) {
     buildUi();
-    loadPolicy();
     refreshDevices();
+    loadPolicy();
 }
 
 void DongleVerificationPage::buildUi() {
@@ -77,6 +77,9 @@ void DongleVerificationPage::buildUi() {
     titleFont.setBold(true);
     title->setFont(titleFont);
     headerLayout->addWidget(title);
+    auto *hint = new QLabel(QStringLiteral("将加密锁插入运行客户端的电脑。注册并启用后，登录前和运行期间都会校验设备；拔出后将锁定界面，重新插入后自动恢复。"), header);
+    hint->setWordWrap(true);
+    headerLayout->addWidget(hint);
     layout->addWidget(header);
 
     auto *policy = makePanel(content);
@@ -121,6 +124,7 @@ void DongleVerificationPage::buildUi() {
     devicesLayout->addWidget(m_deviceTable);
     auto *actions = new QHBoxLayout();
     m_statusLabel = new QLabel(QStringLiteral("尚未检测设备。"), devices);
+    m_statusLabel->setObjectName(QStringLiteral("dongleStatus"));
     m_statusLabel->setWordWrap(true);
     actions->addWidget(m_statusLabel, 1);
     m_verifyButton = new QPushButton(QStringLiteral("校验当前设备"), devices);
@@ -165,6 +169,7 @@ bool DongleVerificationPage::savePolicy(QString *errorMessage) {
 }
 
 void DongleVerificationPage::saveEnabledState(bool enabled) {
+    const bool previousEnabled = m_enabled;
     m_enabled = enabled;
     if (enabled && m_registeredHid.isEmpty()) {
         m_enabled = false;
@@ -174,8 +179,15 @@ void DongleVerificationPage::saveEnabledState(bool enabled) {
         return;
     }
     QString error;
+    if (enabled && !m_dongleService.verifyDeviceByHid(m_registeredHid, &error)) {
+        m_enabled = previousEnabled;
+        QSignalBlocker blocker(m_enabledCheckBox);
+        m_enabledCheckBox->setChecked(m_enabled);
+        setStatus(error, QStringLiteral("#b91c1c"));
+        return;
+    }
     if (!savePolicy(&error)) {
-        m_enabled = !enabled;
+        m_enabled = previousEnabled;
         QSignalBlocker blocker(m_enabledCheckBox);
         m_enabledCheckBox->setChecked(m_enabled);
         setStatus(error, QStringLiteral("#b91c1c"));
@@ -190,6 +202,11 @@ int DongleVerificationPage::selectedDeviceIndex() const {
     }
     QTableWidgetItem *indexItem = m_deviceTable->item(m_deviceTable->currentRow(), 0);
     return indexItem ? indexItem->data(Qt::UserRole).toInt() : -1;
+}
+
+QByteArray DongleVerificationPage::selectedDeviceHid() const {
+    if (selectedDeviceIndex() < 0) return {};
+    return m_deviceTable->item(m_deviceTable->currentRow(), 0)->data(Qt::UserRole + 1).toByteArray();
 }
 
 void DongleVerificationPage::refreshDevices() {
@@ -217,14 +234,17 @@ void DongleVerificationPage::populateDevices(const QVector<DongleDeviceInfo> &de
         m_deviceTable->insertRow(row);
         auto *index = new QTableWidgetItem(QString::number(device.index));
         index->setData(Qt::UserRole, device.index);
+        index->setData(Qt::UserRole + 1, device.hid);
         m_deviceTable->setItem(row, 0, index);
         m_deviceTable->setItem(row, 1, new QTableWidgetItem(hidText(device.hid)));
         m_deviceTable->setItem(row, 2, new QTableWidgetItem(QStringLiteral("0x%1").arg(device.pid, 8, 16, QLatin1Char('0')).toUpper()));
         m_deviceTable->setItem(row, 3, new QTableWidgetItem(protocolText(device.deviceType)));
         m_deviceTable->setItem(row, 4, new QTableWidgetItem(QStringLiteral("%1.%2").arg(device.version >> 8).arg(device.version & 0xff)));
         QString verifyError;
-        const bool valid = m_dongleService.verifyDevice(device.index, &verifyError);
-        m_deviceTable->setItem(row, 5, new QTableWidgetItem(valid ? QStringLiteral("已注册") : QStringLiteral("未注册")));
+        const bool valid = m_dongleService.verifyDevice(device.index, &verifyError, device.hid);
+        auto *state = new QTableWidgetItem(valid ? QStringLiteral("已注册") : QStringLiteral("未通过"));
+        state->setToolTip(verifyError);
+        m_deviceTable->setItem(row, 5, state);
     }
     m_verifyButton->setEnabled(!devices.isEmpty());
     m_registerButton->setEnabled(!devices.isEmpty());
@@ -238,7 +258,7 @@ void DongleVerificationPage::verifySelectedDevice() {
         return;
     }
     QString error;
-    if (m_dongleService.verifyDevice(index, &error)) {
+    if (m_dongleService.verifyDevice(index, &error, selectedDeviceHid())) {
         setStatus(QStringLiteral("校验成功：当前设备包含有效的本平台注册记录。"), QStringLiteral("#166534"));
     } else {
         setStatus(error, QStringLiteral("#b91c1c"));
@@ -251,49 +271,31 @@ void DongleVerificationPage::registerSelectedDevice() {
         setStatus(QStringLiteral("请先选择一把加密锁。"), QStringLiteral("#b45309"));
         return;
     }
+    const QByteArray selectedHid = selectedDeviceHid();
     if (QMessageBox::warning(this, QStringLiteral("确认注册校验"),
-                             QStringLiteral("这会在所选加密锁数据区偏移 3840 写入 256 字节本平台校验记录。是否继续？"),
-                             QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Yes) {
-        return;
-    }
+                             QStringLiteral("将在所选设备 %1 上写入本平台校验记录，并启用本机策略。是否继续？").arg(hidText(selectedHid)),
+                             QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Yes) return;
     QString error;
-    bool overwrite = false;
-    if (!m_dongleService.registerDevice(index, false, &error)) {
+    // Retry only when foreign data replacement is explicitly confirmed.
+    if (!m_dongleService.registerDevice(index, false, &error, selectedHid)) {
         if (!error.contains(QStringLiteral("已有非本平台数据"))) {
             setStatus(error, QStringLiteral("#b91c1c"));
             return;
         }
         if (QMessageBox::warning(this, QStringLiteral("发现其他数据"),
-                                 error + QStringLiteral("\n\n确定要覆盖这 256 字节区域吗？"),
-                                 QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Yes) {
+                                 error + QStringLiteral("\n\n这也可能是 PentAGI 的校验记录。覆盖后该记录将无法用于原应用。确定覆盖吗？"),
+                                 QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Yes) return;
+        if (!m_dongleService.registerDevice(index, true, &error, selectedHid)) {
+            setStatus(error, QStringLiteral("#b91c1c"));
             return;
         }
-        overwrite = true;
     }
-    if (!m_dongleService.registerDevice(index, overwrite, &error)) {
-        setStatus(error, QStringLiteral("#b91c1c"));
-        return;
-    }
-    QString readError;
-    const QVector<DongleDeviceInfo> devices = m_dongleService.enumerate(&readError);
-    for (const DongleDeviceInfo &device : devices) {
-        if (device.index == index) {
-            m_registeredHid = device.hid;
-            break;
-        }
-    }
-    m_enabled = true;
-    {
-        QSignalBlocker blocker(m_enabledCheckBox);
-        m_enabledCheckBox->setChecked(true);
-    }
-    if (!savePolicy(&error)) {
-        setStatus(QStringLiteral("设备已注册，但本机策略保存失败：%1").arg(error), QStringLiteral("#b45309"));
-    } else {
-        m_registeredLabel->setText(QStringLiteral("已注册设备 HID：%1").arg(hidText(m_registeredHid)));
-        setStatus(QStringLiteral("注册成功，已启用加密锁校验策略。"), QStringLiteral("#166534"));
-    }
+    const bool saved = DongleService::savePolicy(m_configDir, true, QString(), selectedHid, &error);
     refreshDevices();
+    loadPolicy();
+    setStatus(saved ? QStringLiteral("注册成功，已启用加密锁校验策略。")
+                    : QStringLiteral("设备已注册，但本机策略保存失败，仍沿用原策略：%1").arg(error),
+              saved ? QStringLiteral("#166534") : QStringLiteral("#b45309"));
 }
 
 void DongleVerificationPage::destroySelectedRegistration() {
@@ -302,29 +304,26 @@ void DongleVerificationPage::destroySelectedRegistration() {
         setStatus(QStringLiteral("请先选择一把加密锁。"), QStringLiteral("#b45309"));
         return;
     }
+    const QByteArray selectedHid = selectedDeviceHid();
     if (QMessageBox::critical(this, QStringLiteral("确认销毁校验"),
-                              QStringLiteral("这会清零本页面保留的 256 字节校验区域，不会恢复整个设备，也不会删除其他区域。此操作不可撤销，是否继续？"),
-                              QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Yes) {
-        return;
-    }
+                              QStringLiteral("将清除设备 %1 的本平台注册记录。此操作不可撤销，是否继续？").arg(hidText(selectedHid)),
+                              QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Yes) return;
     QString error;
-    if (!m_dongleService.destroyRegistration(index, &error)) {
+    if (!m_dongleService.destroyRegistration(index, &error, selectedHid)) {
         setStatus(error, QStringLiteral("#b91c1c"));
         return;
     }
-    m_registeredHid.clear();
-    m_enabled = false;
-    {
-        QSignalBlocker blocker(m_enabledCheckBox);
-        m_enabledCheckBox->setChecked(false);
-    }
-    if (!savePolicy(&error)) {
-        setStatus(QStringLiteral("设备校验已销毁，但本机策略保存失败：%1").arg(error), QStringLiteral("#b45309"));
-    } else {
-        m_registeredLabel->setText(QStringLiteral("已注册设备：无"));
-        setStatus(QStringLiteral("校验记录已销毁，校验策略已停用。"), QStringLiteral("#166534"));
-    }
+    // Deleting another device must not disable the currently bound device.
+    const bool wasBound = selectedHid == m_registeredHid;
+    const bool saved = !wasBound || DongleService::savePolicy(m_configDir, false, QString(), QByteArray(), &error);
     refreshDevices();
+    loadPolicy();
+    if (!saved) {
+        setStatus(QStringLiteral("设备校验已销毁，但本机策略保存失败；原策略仍生效，请重新注册设备后重试：%1").arg(error), QStringLiteral("#b45309"));
+    } else {
+        setStatus(wasBound ? QStringLiteral("校验记录已销毁，校验策略已停用。")
+                           : QStringLiteral("所选设备记录已销毁，当前绑定设备的策略保持不变。"), QStringLiteral("#166534"));
+    }
 }
 
 QString DongleVerificationPage::protocolText(quint32 deviceType) const {
