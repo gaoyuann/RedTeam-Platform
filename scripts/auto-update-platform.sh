@@ -330,37 +330,48 @@ update_once() (
       return 0
     fi
   fi
-  python3 - "$candidate" <<'PY'
-import subprocess
-import sys
-tracked = set(subprocess.check_output(['git', 'ls-tree', '-r', '-z', '--name-only', sys.argv[1]]).split(b'\0'))
-untracked = set(subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard', '-z']).split(b'\0'))
-tracked.discard(b'')
-untracked.discard(b'')
-
-def path_prefixes(path):
-    parts = path.split(b'/')
-    return [b'/'.join(parts[:index]) for index in range(1, len(parts) + 1)]
-
-collisions = set()
-for local_path in untracked:
-    for candidate_path in path_prefixes(local_path):
-        if candidate_path in tracked:
-            collisions.add((candidate_path, local_path))
-for candidate_path in tracked:
-    for local_path in path_prefixes(candidate_path):
-        if local_path in untracked:
-            collisions.add((candidate_path, local_path))
-
-if collisions:
-    preview = ', '.join(
-        f'{candidate_path.decode()} ↔ {local_path.decode()}'
-        for candidate_path, local_path in sorted(collisions)[:5]
-    )
-    raise SystemExit(f'Refusing to overwrite local files or deploy path collisions: {preview}')
-if b'.env' in tracked or any(name.startswith(b'data/') and name.endswith(b'.db') for name in tracked):
-    raise SystemExit('Refusing to overwrite local files or deploy tracked secrets/database files')
-PY
+  declare -A tracked_paths=() untracked_paths=() collision_paths=()
+  while IFS= read -r -d '' path; do tracked_paths["$path"]=1; done < <(git ls-tree -r -z --name-only "$candidate")
+  while IFS= read -r -d '' path; do untracked_paths["$path"]=1; done < <(git ls-files --others --exclude-standard -z)
+  record_collision() {
+    local candidate_path="$1" local_path="$2" key="$1\x00$2"
+    if [ -z "${collision_paths["$key"]+present}" ]; then
+      collision_paths["$key"]=1
+      collisions+=("$candidate_path ↔ $local_path")
+    fi
+  }
+  collisions=()
+  for local_path in "${!untracked_paths[@]}"; do
+    path="$local_path"
+    while :; do
+      if [ -n "${tracked_paths["$path"]+present}" ]; then record_collision "$path" "$local_path"; fi
+      [ "$path" = "${path%/*}" ] && break
+      path="${path%/*}"
+    done
+  done
+  for candidate_path in "${!tracked_paths[@]}"; do
+    path="$candidate_path"
+    while :; do
+      if [ -n "${untracked_paths["$path"]+present}" ]; then record_collision "$candidate_path" "$path"; fi
+      [ "$path" = "${path%/*}" ] && break
+      path="${path%/*}"
+    done
+  done
+  if [ "${#collisions[@]}" -gt 0 ]; then
+    preview=$(IFS=', '; printf '%s' "${collisions[*]:0:5}")
+    printf 'Refusing to overwrite local files or deploy path collisions: %s\n' "$preview" >&2
+    exit 1
+  fi
+  if [ -n "${tracked_paths[.env]+present}" ]; then
+    echo 'Refusing to overwrite local files or deploy tracked secrets/database files' >&2
+    exit 1
+  fi
+  for path in "${!tracked_paths[@]}"; do
+    if [[ "$path" == data/*.db ]]; then
+      echo 'Refusing to overwrite local files or deploy tracked secrets/database files' >&2
+      exit 1
+    fi
+  done
   if [ "$ROLE" = server ] && busy; then log 'Update deferred until running work finishes'; return 0; fi
   backup="$BACKUP_DIR/$(date +%Y%m%dT%H%M%S)-${previous:0:12}"
   mkdir -p "$backup"
