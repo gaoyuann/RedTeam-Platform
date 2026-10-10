@@ -3,6 +3,7 @@
 #include <QCryptographicHash>
 #include <QCoreApplication>
 #include <QDir>
+#include <QDebug>
 #include <QFile>
 #include <QFileInfo>
 #include <QLibrary>
@@ -113,12 +114,17 @@ bool DongleService::ensureLoaded(QString *errorMessage) {
     };
     clearFunctions();
     QStringList attempted;
+    bool foundLibrary = false;
     QStringList failures;
     for (const QString &path : candidateLibraryPaths()) {
         if (path.isEmpty() || attempted.contains(path)) {
             continue;
         }
         attempted << path;
+        if (!QFileInfo::exists(path)) {
+            continue;
+        }
+        foundLibrary = true;
         m_library->setFileName(path);
         if (!m_library->load()) {
             failures << m_library->errorString();
@@ -138,9 +144,19 @@ bool DongleService::ensureLoaded(QString *errorMessage) {
         m_library->unload();
         clearFunctions();
     }
+    qWarning().noquote() << "ROCKEY SDK load failed. Architecture:" << QSysInfo::buildCpuArchitecture()
+                         << "Paths:" << attempted.join(QStringLiteral(", "))
+                         << "Details:" << failures.join(QStringLiteral("; "));
     if (errorMessage) {
-        *errorMessage = QStringLiteral("无法加载当前架构（%1）的 ROCKEY ARM SDK。请确认随程序分发的 SDK 与架构匹配。尝试路径：%2。详情：%3")
-                            .arg(QSysInfo::buildCpuArchitecture(), attempted.join(QStringLiteral("、")), failures.join(QStringLiteral("；")));
+        if (attempted.isEmpty()) {
+            *errorMessage = QStringLiteral("当前程序架构（%1）暂不支持加密锁 SDK。").arg(QSysInfo::buildCpuArchitecture());
+        } else if (!foundLibrary) {
+            *errorMessage = QStringLiteral("缺少适用于当前系统及 %1 架构的加密锁组件。请联系部署人员补装厂商 SDK，完成后点击“刷新设备”。")
+                                .arg(QSysInfo::buildCpuArchitecture());
+        } else {
+            *errorMessage = QStringLiteral("加密锁 SDK 加载失败（%1）。请检查库的架构、依赖及接口版本；详细原因见客户端运行日志。")
+                                .arg(QSysInfo::buildCpuArchitecture());
+        }
     }
     return false;
 }

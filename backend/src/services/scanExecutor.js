@@ -1,3 +1,4 @@
+import { parseNmapResults, parseNmapInterfaces, topologyScanArgs } from './nmapTopology.js';
 import { getDb } from '../db/connection.js';
 import { runTool } from '../tools/toolRunner.js';
 import { getWsManager } from './wsManager.js';
@@ -102,6 +103,7 @@ async function ensureNucleiTemplates() {
 // ── Scan type → tool mapping ──────────────────────────────────────────
 const SCAN_TOOL_MAP = {
   port_scan: 'nmap',
+  topology_scan: 'nmap',
   vuln_scan: 'nuclei',
   // web_scan is handled specially: runs nikto then sqlmap (dual-step)
   brute_force: 'hydra',
@@ -113,6 +115,7 @@ const SCAN_TOOL_MAP = {
 
 // ── Build tool arguments from scan parameters ─────────────────────────
 export function buildArgs(scanType, target, parameters = {}) {
+  if (scanType === 'topology_scan') return topologyScanArgs(target);
   const args = [];
   const { ports, timeout, extra_args, threads } = parameters;
 
@@ -122,6 +125,7 @@ export function buildArgs(scanType, target, parameters = {}) {
       if (ports || /^https?:\/\//i.test(target) || /^[^/]+:\d+$/.test(target)) args.push('-p', String(ports || normalizeTarget(target).port));
       if (threads && threads > 1) args.push('--min-parallelism', String(threads));
       args.push('-sV'); // version detection
+      if (parameters.discover_topology) args.push('--traceroute');
       args.push(/^https?:\/\//i.test(target) || /^[^/]+:\d+$/.test(target) ? normalizeTarget(target).host.replace(/^\[|\]$/g, '') : target);
       break;
 
@@ -279,18 +283,8 @@ function parseResults(scanType, stdout) {
 
   switch (scanType) {
     case 'port_scan':
-      // Parse nmap output for open ports: "22/tcp  open  ssh"
-      for (const line of lines) {
-        const match = line.match(/^(\d+)\/(tcp|udp)\s+(open|filtered|closed)\s+(.+)/);
-        if (match) {
-          results.push({
-            result_type: 'open_port',
-            result_data: { port: Number(match[1]), protocol: match[2], state: match[3], service: match[4] },
-            severity: match[3] === 'open' ? 'medium' : 'info',
-            source_tool: 'nmap',
-          });
-        }
-      }
+    case 'topology_scan':
+      results.push(...parseNmapResults(stdout, { assumedUp: scanType === 'port_scan' }));
       break;
 
     case 'vuln_scan': {
@@ -755,6 +749,14 @@ export async function executeScan(scanTaskId) {
         throw error;
       }
       if (result.executionMode === 'aborted') throw new Error('扫描被操作员中止');
+      if (!result.success && scanType === 'port_scan' && params.discover_topology
+          && !result.timedOut && /traceroute|root|privileg|raw socket/i.test((result.stderr || '') + (result.error || ''))) {
+        // A missing traceroute capability must not break the original scan.
+        insertResult.run(scanTaskId, 'scan_warning', JSON.stringify({ message: '路由探测不可用，已回退到原端口扫描' }), 'info', null, null, toolId, new Date().toISOString());
+        const fallbackArgs = buildArgs(scanType, target, { ...params, discover_topology: false });
+        result = classifyToolResult(toolId, await raceScanWithAbort(runTool(toolId, fallbackArgs, { timeout }), scanTaskId));
+        if (result.executionMode === 'aborted') throw new Error('扫描被操作员中止');
+      }
       const output = (result.stdout || '') + (result.stderr ? '\n' + result.stderr : '');
       if (!result.success) {
         recordFailure(toolId, result.error || `${toolId} failed`, result);
@@ -785,7 +787,9 @@ export async function executeScan(scanTaskId) {
       await ensureNucleiTemplates();
     }
 
-    if (task.scan_type === 'web_scan') {
+    if (task.scan_type === 'topology_scan') {
+      totalResults = await runAndStore('topology_scan', 'nmap', task.target, parameters, timeoutMs);
+    } else if (task.scan_type === 'web_scan') {
       // ── General web scan with optional explicit injection endpoint ──
       console.log(`[Scan] web_scan: nikto for ${task.target}`);
       try {
@@ -890,6 +894,20 @@ export async function executeScan(scanTaskId) {
       const toolId = SCAN_TOOL_MAP[task.scan_type];
       if (!toolId) throw new Error(`Unknown scan type: ${task.scan_type}`);
       totalResults = await runAndStore(task.scan_type, toolId, task.target, parameters, timeoutMs);
+    }
+
+    if (scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');
+    if (task.scan_type === 'topology_scan' || (task.scan_type === 'port_scan' && parameters.discover_topology)) {
+      // Inspect the same tool/container networking context; the backend's host
+      // interfaces may belong to a different network namespace.
+      const context = await raceScanWithAbort(runTool('nmap', ['--iflist'], { timeout: 15000 }), scanTaskId);
+      if (context.success) {
+        const data = parseNmapInterfaces(context.stdout);
+        insertResult.run(scanTaskId, 'network_context', JSON.stringify(data), 'info', null, null, 'nmap', new Date().toISOString());
+        totalResults++;
+      } else if (context.executionMode !== 'aborted') {
+        insertResult.run(scanTaskId, 'scan_warning', JSON.stringify({ message: '未能读取扫描环境路由，仅展示探测结果' }), 'info', null, null, 'nmap', new Date().toISOString());
+      }
     }
 
     if (scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');

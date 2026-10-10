@@ -1,167 +1,7 @@
 import { Router } from 'express';
 import { callLlm } from '../services/llmClient.js';
 
-// ── Rule-based topology extraction from scan results ────────────────────
-// This runs BEFORE the LLM call, so we always have a baseline topology
-// even if the LLM fails or returns too few nodes.
-
-function extractTopologyFromResults(target, results) {
-  const nodes = new Map(); // ip -> node object
-  const edges = [];
-
-  const targetHost = String(target || '')
-    .replace(/^https?:\/\//i, '')
-    .replace(/\/.*$/, '')
-    .split(':')[0]
-    .trim();
-  const targetIsIp = /^\d+\.\d+\.\d+\.\d+$/.test(targetHost);
-  if (targetHost) {
-    nodes.set(targetHost, {
-      id: `host-${targetHost.replace(/[^a-zA-Z0-9_-]/g, '-')}`,
-      displayName: targetHost,
-      ip: targetIsIp ? targetHost : '',
-      hostName: targetIsIp ? '' : targetHost,
-      osName: '',
-      osVersion: '',
-      deviceType: 'host',
-      vendor: '',
-      status: 'up',
-      note: '扫描目标',
-      tags: [],
-      x: 0, y: 0,
-      services: [],
-    });
-  }
-
-  for (const row of results) {
-    let data = row.result_data;
-    try {
-      data = typeof data === 'string' ? JSON.parse(data) : data;
-    } catch { data = {}; }
-
-    if (!data || typeof data !== 'object') continue;
-    const tool = row.source_tool || '';
-    const type = row.result_type || '';
-
-    // Skip raw_output — too noisy
-    if (type === 'raw_output') continue;
-
-    // Extract IP from data
-    const ip = data.host || data.ip || data.target || '';
-    const nodeIp = ip || targetHost;
-
-    // Get or create node
-    if (!nodeIp) continue;
-    let node = nodes.get(nodeIp);
-    if (!node) {
-      node = {
-        id: `host-${nodeIp.replace(/[^a-zA-Z0-9_-]/g, '-')}`,
-        displayName: nodeIp,
-        ip: /^\d+\.\d+\.\d+\.\d+$/.test(nodeIp) ? nodeIp : '',
-        hostName: /^\d+\.\d+\.\d+\.\d+$/.test(nodeIp) ? '' : nodeIp,
-        osName: '',
-        osVersion: '',
-        deviceType: 'host',
-        vendor: '',
-        status: 'up',
-        note: '',
-        tags: [],
-        x: 0, y: 0,
-        services: [],
-      };
-      nodes.set(nodeIp, node);
-    }
-
-    // Extract service info from open_port results
-    if (type === 'open_port' && data.port) {
-      const service = {
-        port: String(data.port),
-        protocol: data.protocol || 'tcp',
-        service: (data.service || '').split(/\s+/)[0] || '',
-        product: '',
-        version: '',
-        state: data.state || 'open',
-        note: '',
-      };
-      // Parse "Apache httpd 2.4.25 ((Debian))" from service field
-      const svcStr = data.service || '';
-      const parts = svcStr.match(/^(\S+)\s+(.*)/);
-      if (parts) {
-        service.service = parts[1];
-        const productMatch = parts[2].match(/^(\S+)\s+(.*)/);
-        if (productMatch) {
-          service.product = productMatch[1];
-          service.version = productMatch[2].replace(/[()]/g, '').trim();
-        } else {
-          service.product = parts[2];
-        }
-      }
-      // Dedup
-      if (!node.services.some(s => s.port === service.port && s.protocol === service.protocol)) {
-        node.services.push(service);
-      }
-      // Detect OS from service strings
-      if (svcStr.includes('Debian') && !node.osName) { node.osName = 'Debian'; }
-      if (svcStr.includes('Ubuntu') && !node.osName) { node.osName = 'Ubuntu'; }
-      if (svcStr.includes('CentOS') && !node.osName) { node.osName = 'CentOS'; }
-      if (svcStr.includes('Windows') && !node.osName) { node.osName = 'Windows'; }
-    }
-
-    // Extract from vulnerability results
-    if (type === 'vulnerability' || type === 'web_vuln') {
-      const vulnName = data.name || data.finding || '';
-      if (vulnName) {
-        if (!node.note) {
-          node.note = `发现漏洞: ${vulnName}`;
-        } else if (node.note.length < 200) {
-          node.note += `; ${vulnName.slice(0, 60)}`;
-        }
-      }
-      // Infer HTTP service from web vuln results
-      if (tool === 'nikto' || tool === 'nuclei') {
-        if (!node.services.some(s => s.port === '80')) {
-          node.services.push({ port: '80', protocol: 'tcp', service: 'http', product: '', version: '', state: 'open', note: '由Web扫描推断' });
-        }
-      }
-    }
-
-    // Extract from credential results
-    if (type === 'credential') {
-      node.note = node.note ? node.note + '; 凭证发现' : '凭证发现';
-    }
-  }
-
-  // Assign positions in a circle if multiple nodes
-  const nodeArr = [...nodes.values()];
-  if (nodeArr.length > 1) {
-    const radius = Math.max(200, nodeArr.length * 60);
-    for (let i = 0; i < nodeArr.length; i++) {
-      const angle = (2 * Math.PI * i) / nodeArr.length;
-      nodeArr[i].x = Math.round(Math.cos(angle) * radius);
-      nodeArr[i].y = Math.round(Math.sin(angle) * radius);
-    }
-  }
-
-  // Create edges between nodes (gateway connections)
-  if (nodeArr.length > 1) {
-    for (let i = 1; i < nodeArr.length; i++) {
-      edges.push({
-        id: `edge-${i}`,
-        sourceId: nodeArr[0].id,
-        targetId: nodeArr[i].id,
-        label: '网络连接',
-        type: 'connection',
-        note: '',
-      });
-    }
-  }
-
-  return {
-    summary: `扫描发现 ${nodeArr.length} 台主机`,
-    nodes: nodeArr,
-    edges,
-  };
-}
+import { extractTopologyFromResults, mergeTopologyEnhancement } from '../services/topologyBuilder.js';
 
 const SYSTEM_PROMPT =
   '你是一个网络拓扑结构化分析助手。请严格输出 JSON，不要输出 markdown，不要输出解释。' +
@@ -173,7 +13,7 @@ const SYSTEM_PROMPT =
   'port 字段必须输出字符串，例如 "80"，不要输出数字。' +
   'edges 每项字段：id, sourceId, targetId, label, type, note。' +
   '如果缺少位置坐标，请为每个节点补充 x/y 数值。' +
-  '只根据输入报告内容提取，不要编造不存在的主机。';
+  '只补充输入中已有主机的系统和厂商描述；不要编造主机、服务或连接关系。';
 
 function buildUserPrompt(target, results) {
   const lines = [`扫描目标: ${target || '未知'}\n`];
@@ -213,16 +53,18 @@ export default function (db) {
       return res.status(403).json({ status: 'error', error: { message: '没有权限查看此任务' } });
     }
     const ids = [...new Set((pipeline.scan_task_id || '').split(',').map(id => id.trim()).filter(Boolean))];
+    const discoveries = db.prepare(
+      "SELECT scan_task_id FROM scan_tasks WHERE scan_type = 'topology_scan' AND json_valid(parameters) AND json_extract(parameters, '$.pipeline_id') = ?"
+    ).all(pipeline.pipeline_id);
+    ids.push(...discoveries.map(row => row.scan_task_id).filter(id => !ids.includes(id)));
     const results = ids.length ? db.prepare(
-      `SELECT * FROM scan_results WHERE scan_task_id IN (${ids.map(() => '?').join(',')}) ORDER BY captured_at`
+      'SELECT r.*, t.target AS scan_target FROM scan_results r JOIN scan_tasks t ON t.scan_task_id = r.scan_task_id WHERE r.scan_task_id IN ('
+        + ids.map(() => '?').join(',') + ') ORDER BY r.captured_at'
     ).all(...ids) : [];
     const topology = extractTopologyFromResults(pipeline.target, results);
-    // Scan co-occurrence is not evidence of a physical network connection.
-    topology.edges = [];
     topology.flowId = pipeline.pipeline_id;
     topology.target = pipeline.target;
     topology.generatedAt = new Date().toISOString();
-    topology.summary = `已有扫描记录 · ${topology.nodes.length} 台主机（未提供连接关系）`;
     res.json({ status: 'ok', data: { topology } });
   });
 
@@ -249,6 +91,11 @@ export default function (db) {
         });
       }
 
+      if (task.scan_type === 'topology_scan' && task.created_by
+          && req.user.role !== 'admin' && req.user.sub !== task.created_by) {
+        return res.status(403).json({ status: 'error', error: { message: '没有权限查看此拓扑探测' } });
+      }
+
       if (task.status !== 'COMPLETED') {
         return res.status(409).json({
           status: 'error',
@@ -265,11 +112,10 @@ export default function (db) {
 
       // ── Step 1: Rule-based extraction (always works) ────────────────
       const ruleBased = extractTopologyFromResults(task.target, results);
-      const ruleNodeCount = ruleBased.nodes.size;
 
       // ── Step 2: Try LLM enhancement ──────────────────────────────────
       let topology = null;
-      if (results.length > 0) {
+      if (results.length > 0 && task.scan_type !== 'topology_scan') {
         const userPrompt = buildUserPrompt(task.target, results);
 
         try {
@@ -298,39 +144,11 @@ export default function (db) {
         }
       }
 
-      // ── Step 3: Merge or fallback ────────────────────────────────────
-      if (topology && topology.nodes && topology.nodes.length >= ruleNodeCount) {
-        // LLM produced enough nodes — use it, but merge in any rule-based services
-        // that the LLM might have missed
-        const llmNodeMap = new Map();
-        for (const n of topology.nodes) {
-          const key = n.ip || n.displayName || n.id;
-          llmNodeMap.set(key, n);
-        }
-        for (const [, ruleNode] of ruleBased.nodes) {
-          const llmNode = llmNodeMap.get(ruleNode.ip) || llmNodeMap.get(ruleNode.displayName);
-          if (llmNode && ruleNode.services.length > 0) {
-            // Add missing services from rule-based extraction
-            for (const svc of ruleNode.services) {
-              if (!llmNode.services.some(s => s.port === svc.port && s.protocol === svc.protocol)) {
-                llmNode.services.push(svc);
-              }
-            }
-          }
-        }
-      } else {
-        // LLM failed or produced too few nodes — use rule-based result
-        const fallbackReason = results.length === 0
-          ? '（无结构化发现，保留扫描目标）'
-          : topology
-            ? '（LLM 增强不足，使用规则提取）'
-            : '（LLM 不可用，使用规则提取）';
-        topology = {
-          summary: ruleBased.summary + fallbackReason,
-          nodes: [...ruleBased.nodes.values()],
-          edges: ruleBased.edges,
-        };
-      }
+      // Keep observed hosts, services and edges regardless of model output.
+      topology = mergeTopologyEnhancement(ruleBased, topology);
+      topology.flowId = task.scan_task_id;
+      topology.target = task.target;
+      topology.generatedAt = new Date().toISOString();
 
       res.json({ status: 'ok', data: { topology } });
     } catch (err) {

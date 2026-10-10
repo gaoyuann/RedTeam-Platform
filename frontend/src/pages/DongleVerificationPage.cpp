@@ -126,7 +126,10 @@ void DongleVerificationPage::buildUi() {
     m_statusLabel = new QLabel(QStringLiteral("尚未检测设备。"), devices);
     m_statusLabel->setObjectName(QStringLiteral("dongleStatus"));
     m_statusLabel->setWordWrap(true);
-    actions->addWidget(m_statusLabel, 1);
+    m_statusLabel->setTextFormat(Qt::PlainText);
+    m_statusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    devicesLayout->addWidget(m_statusLabel);
+    actions->addStretch();
     m_verifyButton = new QPushButton(QStringLiteral("校验当前设备"), devices);
     m_registerButton = new QPushButton(QStringLiteral("注册校验"), devices);
     m_destroyButton = new QPushButton(QStringLiteral("销毁校验"), devices);
