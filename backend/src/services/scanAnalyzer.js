@@ -54,6 +54,7 @@ function getScanResults(db, scanTaskIds) {
   return db.prepare(
     `SELECT result_type, result_data, severity, mitre_technique_id, source_tool
      FROM scan_results WHERE scan_task_id IN (${placeholders})
+     AND result_type NOT IN ('lan_scope', 'lan_host_discovery', 'scan_evidence', 'network_context', 'network_link')
      ORDER BY CASE severity
        WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2
        WHEN 'low' THEN 3 ELSE 4 END

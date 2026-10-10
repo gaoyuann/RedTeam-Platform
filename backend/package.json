@@ -8,7 +8,7 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "test:topology": "node --test test/topology.test.js test/topology-api.test.js",
-    "test:topology:pipeline": "node --experimental-test-module-mocks --test test/topology-pipeline.test.js"
+    "test:topology:pipeline": "node --experimental-test-module-mocks --test test/topology-pipeline.test.js test/topology-analysis.test.js"
   },
   "dependencies": {
     "@pdf-lib/fontkit": "^1.1.1",
