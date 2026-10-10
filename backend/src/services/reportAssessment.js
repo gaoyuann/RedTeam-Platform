@@ -16,7 +16,7 @@ export function getReportAssessment(db, run, steps) {
     stopReason,
     riskLevel: '未评级（需人工复核证据）',
     executionText: `计划 ${total} 步，已执行 ${steps.length} 步，成功 ${succeeded} 步，失败 ${failed} 步，未执行 ${unexecuted} 步；执行尝试 ${attempted || summary.attempts || steps.length} 次。`,
-    notice: '教学得分仅反映执行与证据覆盖，不代表目标风险评级。工具成功退出不等于漏洞利用成功；自动提取发现需人工确认，失败或未执行项不得视为安全。历史记录保留原始状态，未按新逻辑回写。',
+    notice: '教学得分仅反映执行与证据覆盖，不代表目标风险评级。工具成功退出不等于漏洞利用成功；自动提取发现需人工确认，失败或未执行项不得视为安全。历史记录仅在原摘要明确记录失败或未执行时校正完成状态，缺少可靠摘要时保留原始记录。',
   };
 }
 

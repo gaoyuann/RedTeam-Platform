@@ -12,6 +12,7 @@ import { buildContextForTarget } from './targetAdapters/index.js';
 import { renderCommand } from './commandTemplateRenderer.js';
 import { getWsManager } from './wsManager.js';
 import { createStepIndexAllocator, buildExecutionSummary } from './executionState.js';
+import { validateExecutionScope } from './executionScope.js';
 import { normalizeToolArgs, redactToolArgs } from '../tools/toolContracts.js';
 import { getEngine } from '../tools/containerEngine.js';
 import { establishDvwaSession } from './dvwaSession.js';
@@ -386,6 +387,8 @@ export async function executeRun(runId) {
       }
       try {
         args = normalizeToolArgs(step.tool_id, args, { projectRoot: PROJECT_ROOT, engine: executionEnvironment, scheme: targetContext?.scheme });
+        const scope = validateExecutionScope({ target: run.target, toolId: step.tool_id, args });
+        if (!scope.allowed) preparationError = scope.reason;
         if (targetProfile?.target_class === 'dvwa' && step.tool_id === 'sqlmap') {
           const cookieIndex = args.indexOf('--cookie');
           if (!targetContext.dvwa_session_verified || !targetContext.dvwa_cookie) {
@@ -653,6 +656,26 @@ export async function executeRun(runId) {
         };
         reactThoughts.push(thoughtRecord);
 
+        const validateDynamicArgs = (toolId, dynamicArgs) => {
+          try {
+            if (!Array.isArray(dynamicArgs) || dynamicArgs.some(argument => typeof argument !== 'string')) {
+              throw new Error('工具参数必须为字符串数组');
+            }
+            const rendered = renderCommand(dynamicArgs.map(argument => typeof argument === 'string'
+              ? argument.replace(/<target>/g, run.target || '') : argument), targetContext || {});
+            if (rendered.unresolvedTokens.length) throw new Error('工具目标或参数仍含未解析变量');
+            const normalized = normalizeToolArgs(toolId, rendered.rendered,
+              { projectRoot: PROJECT_ROOT, engine: executionEnvironment, scheme: targetContext?.scheme });
+            const scope = validateExecutionScope({ target: run.target, toolId, args: normalized });
+            if (scope.allowed) return true;
+            throw new Error(scope.reason);
+          } catch (error) {
+            thoughtRecord.guardBlocks.push({ allowed: false, category: 'target_scope', toolId, reason: error.message });
+            console.warn(`[ReAct Guard] ${error.message}`);
+            return false;
+          }
+        };
+
         // ── WebSocket broadcast: ReAct reasoning (real-time) ──────────
         // Push the AI's thought + action to the frontend so the user can
         // see the reasoning chain as it happens, not just after completion.
@@ -696,6 +719,8 @@ export async function executeRun(runId) {
               break;
             }
 
+            if (decision.newArgs && !validateDynamicArgs(targetStep.tool_id, decision.newArgs)) break;
+
             // Apply new args if provided; otherwise keep existing (simple retry)
             if (decision.newArgs) {
               targetStep.args_template = JSON.stringify(decision.newArgs);
@@ -726,6 +751,7 @@ export async function executeRun(runId) {
 
           case 'insert':
             if (decision.toolId && decision.args) {
+              if (!validateDynamicArgs(decision.toolId, decision.args)) break;
               // Guard: validate insertion before proceeding
               const guardState = { steps: mutableSteps, status: run.status, stopReason };
               const guardResult = validateInsertion(guardState, 'insert', decision.toolId, disableAutoInsert);
@@ -770,6 +796,7 @@ export async function executeRun(runId) {
 
           case 'pivot':
             if (decision.toolId && decision.args) {
+              if (!validateDynamicArgs(decision.toolId, decision.args)) break;
               // Guard: validate insertion before proceeding
               const guardState = { steps: mutableSteps, status: run.status, stopReason };
               const guardResult = validateInsertion(guardState, 'pivot', decision.toolId, disableAutoInsert);
@@ -804,6 +831,7 @@ export async function executeRun(runId) {
               for (let pi = 0; pi < decision.toolIds.length; pi++) {
                 const pToolId = decision.toolIds[pi];
                 const pArgs = decision.argsList[pi] || [];
+                if (!validateDynamicArgs(pToolId, pArgs)) continue;
                 // Guard: validate each parallel insertion
                 const pGuard = validateInsertion(guardState, 'parallel', pToolId, disableAutoInsert);
                 if (!pGuard.allowed) {
@@ -849,7 +877,8 @@ export async function executeRun(runId) {
       evidence_history = ?, react_thoughts = ?, updated_at = datetime('now') WHERE run_id = ?`)
       .run(finalStatus, summary, stopReason, JSON.stringify(evidenceHistory), JSON.stringify(reactThoughts), runId);
 
-    return { ok: true, runId, status: finalStatus, completed: completedSteps, failed: failedSteps, engineType, stopReason };
+    return { ok: true, runId, status: finalStatus, error: final.error, completed: final.summary.completed,
+      failed: final.summary.failed, engineType, stopReason };
 
   } catch (err) {
     const wasAborted = !!abortFlags.get(runId);

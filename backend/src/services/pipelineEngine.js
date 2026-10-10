@@ -521,6 +521,8 @@ async function runPipelineExecution(db, pipeline, playbookId, analysisData) {
 
     const execSuccess = execResult.ok && runRecord && runRecord.status === 'COMPLETED';
     const stepStatus = execSuccess ? 'completed' : 'failed';
+    const executionError = execSuccess ? null : execResult.error || runRecord?.stop_reason
+      || `执行未成功（状态：${runRecord?.status || 'UNKNOWN'}）`;
 
     const stepOutput = {
       run_id: runId,
@@ -532,12 +534,13 @@ async function runPipelineExecution(db, pipeline, playbookId, analysisData) {
     updateStep(db, pipelineId, 3, stepStatus, {
       step_type: STEP_EXECUTE,
       output_data: stepOutput,
-      error_message: execResult.ok ? null : (execResult.error || 'Execution failed'),
+      error_message: executionError,
     });
 
-    pipelineLog(pipelineId, `执行阶段${execSuccess ? '完成' : '失败'} (${runRecord?.status || 'ERROR'})`);
+    pipelineLog(pipelineId, `执行阶段${execSuccess ? '完成' : '失败'} (${runRecord?.status || 'ERROR'})${executionError ? `: ${executionError}` : ''}`,
+      execSuccess ? 'info' : 'error');
 
-    return { ok: execSuccess, runId, status: runRecord?.status };
+    return { ok: execSuccess, runId, status: runRecord?.status, error: executionError };
   } catch (err) {
     updateStep(db, pipelineId, 3, 'failed', {
       step_type: STEP_EXECUTE,
