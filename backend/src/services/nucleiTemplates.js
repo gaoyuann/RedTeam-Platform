@@ -1,4 +1,4 @@
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { mkdirSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
@@ -7,6 +7,7 @@ import { promisify } from 'util';
 const execFileAsync = promisify(execFile);
 const pendingUpdates = new Map();
 const CONTAINER_TEMPLATES_DIR = '/root/nuclei-templates';
+const TEMPLATE_COMMAND_TIMEOUT = 120_000;
 
 export function getRequiredNucleiTemplateIds(args = []) {
   if (!Array.isArray(args)) return [];
@@ -64,7 +65,7 @@ export function inspectNucleiTemplates(projectRoot, requiredIds = []) {
 async function downloadNucleiTemplates(templatesDir, engine) {
   mkdirSync(templatesDir, { recursive: true });
   if (engine === 'host') {
-    await execFileAsync('nuclei', ['-update-templates', '-ud', templatesDir], { timeout: 120_000 });
+    await execFileAsync('nuclei', ['-update-templates', '-ud', templatesDir], { timeout: TEMPLATE_COMMAND_TIMEOUT });
     return;
   }
   const containerName = `rt-nuclei-templates-${randomUUID()}`;
@@ -73,10 +74,77 @@ async function downloadNucleiTemplates(templatesDir, engine) {
       'run', '--rm', '--name', containerName,
       '-v', `${templatesDir}:${CONTAINER_TEMPLATES_DIR}`, 'rt-vuln-scan',
       'nuclei', '-update-templates', '-ud', CONTAINER_TEMPLATES_DIR,
-    ], { timeout: 120_000 });
+    ], { timeout: TEMPLATE_COMMAND_TIMEOUT });
   } catch (error) {
     await execFileAsync(engine, ['rm', '-f', containerName], { timeout: 10_000 }).catch(() => {});
     throw error;
+  }
+}
+
+function commandErrorMessage(error) {
+  return [error?.stderr, error?.stdout, error?.message]
+    .filter(Boolean)
+    .join('\n')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .slice(0, 2000);
+}
+
+function runNucleiValidation(command, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      settled = true;
+      const error = new Error(`command timed out after ${TEMPLATE_COMMAND_TIMEOUT}ms`);
+      error.stdout = stdout;
+      error.stderr = stderr;
+      reject(error);
+    }, TEMPLATE_COMMAND_TIMEOUT);
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve();
+    };
+    child.once('error', finish);
+    child.once('close', (code, signal) => {
+      if (code === 0) finish();
+      else {
+        const error = new Error(`process exited with ${signal || `code ${code}`}`);
+        error.stdout = stdout;
+        error.stderr = stderr;
+        finish(error);
+      }
+    });
+  });
+}
+
+export async function validateNucleiTemplates(templatesDir, engine) {
+  try {
+    if (engine === 'host') {
+      await runNucleiValidation('nuclei', [
+        '-validate', '-duc', '-no-color', '-t', templatesDir,
+      ]);
+      return;
+    }
+    if (!['docker', 'podman'].includes(engine)) {
+      throw new Error(`Unsupported Nuclei execution engine: ${engine || 'unknown'}`);
+    }
+    await runNucleiValidation(engine, [
+      'run', '--rm',
+      '-v', `${templatesDir}:${CONTAINER_TEMPLATES_DIR}`,
+      'rt-vuln-scan', 'nuclei',
+      '-validate', '-duc', '-no-color', '-t', CONTAINER_TEMPLATES_DIR,
+    ]);
+  } catch (error) {
+    throw new Error(`Nuclei template validation failed: ${commandErrorMessage(error)}`);
   }
 }
 
@@ -98,7 +166,10 @@ async function waitForUpdate(update, signal) {
 export async function ensureNucleiTemplates({ projectRoot, engine, requiredIds = [], signal }) {
   signal?.throwIfAborted();
   let resources = inspectNucleiTemplates(projectRoot, requiredIds);
-  if (resources.passed) return resources;
+  if (resources.passed) {
+    await validateNucleiTemplates(resources.templatesDir, engine);
+    return resources;
+  }
   if (!['host', 'docker', 'podman'].includes(engine)) throw new Error(`${resources.message}; execution engine unavailable`);
   let update = pendingUpdates.get(resources.templatesDir);
   if (!update) {
@@ -114,6 +185,7 @@ export async function ensureNucleiTemplates({ projectRoot, engine, requiredIds =
   signal?.throwIfAborted();
   resources = inspectNucleiTemplates(projectRoot, requiredIds);
   if (!resources.passed) throw new Error(resources.message);
+  await validateNucleiTemplates(resources.templatesDir, engine);
   return resources;
 }
 

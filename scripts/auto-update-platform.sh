@@ -330,16 +330,37 @@ update_once() (
       return 0
     fi
   fi
-  python3 -c "$(cat <<'PY'
+  python3 - "$candidate" <<'PY'
 import subprocess
 import sys
-tracked = set(subprocess.check_output(['git', 'ls-tree', '-rz', '--name-only', sys.argv[1]]).split(b'\0'))
+tracked = set(subprocess.check_output(['git', 'ls-tree', '-r', '-z', '--name-only', sys.argv[1]]).split(b'\0'))
 untracked = set(subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard', '-z']).split(b'\0'))
-collisions = (tracked & untracked) - {b''}
-if collisions or b'.env' in tracked or any(name.startswith(b'data/') and name.endswith(b'.db') for name in tracked):
+tracked.discard(b'')
+untracked.discard(b'')
+
+def path_prefixes(path):
+    parts = path.split(b'/')
+    return [b'/'.join(parts[:index]) for index in range(1, len(parts) + 1)]
+
+collisions = set()
+for local_path in untracked:
+    for candidate_path in path_prefixes(local_path):
+        if candidate_path in tracked:
+            collisions.add((candidate_path, local_path))
+for candidate_path in tracked:
+    for local_path in path_prefixes(candidate_path):
+        if local_path in untracked:
+            collisions.add((candidate_path, local_path))
+
+if collisions:
+    preview = ', '.join(
+        f'{candidate_path.decode()} ↔ {local_path.decode()}'
+        for candidate_path, local_path in sorted(collisions)[:5]
+    )
+    raise SystemExit(f'Refusing to overwrite local files or deploy path collisions: {preview}')
+if b'.env' in tracked or any(name.startswith(b'data/') and name.endswith(b'.db') for name in tracked):
     raise SystemExit('Refusing to overwrite local files or deploy tracked secrets/database files')
 PY
-  )" "$candidate"
   if [ "$ROLE" = server ] && busy; then log 'Update deferred until running work finishes'; return 0; fi
   backup="$BACKUP_DIR/$(date +%Y%m%dT%H%M%S)-${previous:0:12}"
   mkdir -p "$backup"
