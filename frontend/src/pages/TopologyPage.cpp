@@ -411,6 +411,9 @@ QString edgeColor(const QString &type) {
     if (type == QStringLiteral("gateway") || type == QStringLiteral("route")) {
         return QStringLiteral("#2563eb");
     }
+    if (type == QStringLiteral("virtual-link")) {
+        return QStringLiteral("#7c3aed");
+    }
     if (type == QStringLiteral("uplink") || type == QStringLiteral("trunk")) {
         return QStringLiteral("#f59e0b");
     }
@@ -1240,6 +1243,22 @@ void TopologyPage::setupUI() {
     }
     toolbar->addWidget(sourcesButton);
     sourcesButton->setToolTip(QStringLiteral("查看自动扫描记录，或重新汇总已有结果"));
+    auto *updateTopologyButton = new QPushButton(QStringLiteral("更新拓扑"));
+    UiUtil::styleToolbarButton(updateTopologyButton);
+    updateTopologyButton->setToolTip(QStringLiteral("用当前任务的已有扫描证据更新拓扑，不重新扫描；已保存的展示修改会被替换"));
+    toolbar->addWidget(updateTopologyButton);
+    connect(updateTopologyButton, &QPushButton::clicked, this, [this]() {
+        if (m_documentDirty || m_editorDirty) {
+            setStatusMessage(QStringLiteral("请先保存当前拓扑修改，再更新已有扫描结果。"), infoStatusStyle());
+            return;
+        }
+        if (m_pipelineId.isEmpty()) {
+            onGenerateTopology();
+            return;
+        }
+        m_autoLoadAttempted = false;
+        loadExistingScanTopology(true);
+    });
 
     toolbar->addWidget(inspectorButton);
     toolbar->addWidget(infoButton);
@@ -1279,7 +1298,7 @@ void TopologyPage::setupUI() {
         "<span style='color:#b45309'>● 告警</span>　"
         "<span style='color:#b91c1c'>● 离线</span>　"
         "<span style='color:#64748b'>● 未知</span>　"
-        "点划线：任务请求 · 实线：探测路径 · 虚线：同网段归属 / 目标响应，非物理布线 · 单击查看证据"));
+        "点划线：任务请求 · 实线：探测路径 · 虚线：同网段归属 / 目标响应，非物理布线 · 上下分组不表示网络隔离 · 单击查看证据"));
     legend->setObjectName("topologyLegend");
     legend->setWordWrap(true);
     legend->setStyleSheet("color:#52637a;font-size:12px;padding:2px 0;");
@@ -1939,8 +1958,17 @@ void TopologyPage::renderTopologyScene() {
             ? (node.tags.contains(QStringLiteral("target")) ? QStringLiteral("执行扫描 · 任务目标") : QStringLiteral("执行扫描"))
             : node.tags.contains(QStringLiteral("server")) ? QStringLiteral("接收任务")
             : node.tags.contains(QStringLiteral("target")) ? QStringLiteral("任务目标")
+            : node.tags.contains(QStringLiteral("default-gateway")) ? QStringLiteral("默认网关 · 路由配置")
+            : node.tags.contains(QStringLiteral("configured-gateway")) ? QStringLiteral("配置网关 · 路由配置")
             : node.deviceType == QStringLiteral("router") ? QStringLiteral("响应跳点")
-            : node.deviceType == QStringLiteral("network_segment") ? QStringLiteral("逻辑分组 · 非实体设备")
+            : node.deviceType == QStringLiteral("network_segment")
+            ? (node.tags.contains(QStringLiteral("lan-segment"))
+                ? QStringLiteral("共享局域网 · 非实体设备")
+                : node.tags.contains(QStringLiteral("test-segment"))
+                ? QStringLiteral("测试设备逻辑交换机 · 非实体设备")
+                : node.tags.contains(QStringLiteral("other-segment"))
+                    ? QStringLiteral("其他发现主机逻辑交换机 · 非实体设备")
+                    : QStringLiteral("逻辑分组 · 非实体设备"))
             : node.tags.contains(QStringLiteral("lan-host")) ? QStringLiteral("局域网主机")
             : QStringLiteral("目标资产");
         ellipse->setBrush(QColor(nodeStatusColor(node.status)));

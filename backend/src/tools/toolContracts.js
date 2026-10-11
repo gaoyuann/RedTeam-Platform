@@ -11,8 +11,10 @@ const FILE_FLAGS = {
   ffuf: ['-w'], john: ['--wordlist'], 'web-brute': ['--wordlist'],
 };
 
-export function normalizeToolArgs(toolId, args, { projectRoot, engine = 'docker', scheme = 'http' } = {}) {
+export function normalizeToolArgs(toolId, args, { projectRoot, engine = 'docker', scheme = 'http', target } = {}) {
   if (!Array.isArray(args)) throw new Error('Tool arguments must be an array');
+  let scopeUrl = null;
+  try { scopeUrl = target ? new URL(/^https?:\/\//i.test(target) ? target : `${scheme}://${target}`) : null; } catch {}
   function normalizeWordlist(value) {
     const prefix = WORDLIST_PREFIXES.find(candidate => value.startsWith(candidate));
     if (!prefix) return value;
@@ -31,8 +33,19 @@ export function normalizeToolArgs(toolId, args, { projectRoot, engine = 'docker'
     const isUrl = URL_FLAGS[toolId]?.includes(args[index - 1]) ||
       (toolId === 'whatweb' && !arg.startsWith('-') && index === 0) ||
       (toolId === 'curl' && index === args.length - 1 && !arg.startsWith('-'));
-    if (isUrl && !/^https?:\/\//i.test(arg)) return `${scheme}://${arg}`;
-    return arg;
+    if (!isUrl) return arg;
+    let normalizedUrl = /^https?:\/\//i.test(arg) ? arg : `${scheme}://${arg}`;
+    if (scopeUrl) {
+      try {
+        const candidate = new URL(normalizedUrl);
+        if (candidate.hostname !== scopeUrl.hostname || candidate.port !== scopeUrl.port || candidate.protocol !== scopeUrl.protocol) {
+          candidate.protocol = scopeUrl.protocol;
+          candidate.host = scopeUrl.host;
+          normalizedUrl = candidate.toString();
+        }
+      } catch {}
+    }
+    return normalizedUrl;
   });
   if (['nmap', 'hydra'].includes(toolId)) {
     for (let index = 0; index < normalizedArgs.length; index++) {
@@ -41,10 +54,34 @@ export function normalizeToolArgs(toolId, args, { projectRoot, engine = 'docker'
       normalizedArgs[index] = targetUrl.hostname.replace(/^\[|\]$/g, '');
       const port = targetUrl.port || (targetUrl.protocol === 'https:' ? '443' : '80');
       const flag = toolId === 'nmap' ? '-p' : '-s';
+      if (toolId === 'nmap' && normalizedArgs.includes('-F') && !['80', '443'].includes(port)) {
+        normalizedArgs.splice(normalizedArgs.indexOf('-F'), 1);
+      }
       const portIndex = normalizedArgs.indexOf(flag);
       if (portIndex < 0) normalizedArgs.push(flag, port);
-      else if (toolId === 'nmap' && !normalizedArgs[portIndex + 1].split(',').includes(port)) normalizedArgs[portIndex + 1] += `,${port}`;
+      else if (toolId === 'nmap') {
+        const currentPorts = normalizedArgs[portIndex + 1] || '';
+        if (!currentPorts.split(',').includes(port)) normalizedArgs[portIndex + 1] = `${currentPorts},${port}`.replace(/^,/, '');
+      } else if (normalizedArgs[portIndex + 1] !== port) {
+        normalizedArgs[portIndex + 1] = port;
+      }
+      const inlinePortIndex = normalizedArgs.findIndex(arg => arg.startsWith(`${flag}=`));
+      if (toolId === 'hydra' && inlinePortIndex >= 0) normalizedArgs[inlinePortIndex] = `${flag}=${port}`;
       if (toolId === 'hydra' && targetUrl.protocol === 'https:' && !normalizedArgs.includes('-S')) normalizedArgs.push('-S');
+    }
+    if (toolId === 'hydra') {
+      const targetIndex = normalizedArgs.findIndex((arg, index) =>
+        index > 0 && !arg.startsWith('-') && normalizedArgs[index + 1] &&
+        /^(https?|ftp|ssh|rdp|http-post-form|http-get-form|http-post|http-get)$/i.test(normalizedArgs[index + 1])
+      );
+      if (targetIndex >= 0) {
+        const trailingOptions = [];
+        for (const [flag, width] of [['-s', 2], ['-S', 1]]) {
+          const optionIndex = normalizedArgs.indexOf(flag);
+          if (optionIndex > targetIndex) trailingOptions.push(...normalizedArgs.splice(optionIndex, width));
+        }
+        if (trailingOptions.length > 0) normalizedArgs.splice(targetIndex, 0, ...trailingOptions);
+      }
     }
   }
   return normalizedArgs;
@@ -97,6 +134,7 @@ export function classifyToolResult(toolId, result) {
   const semanticFailure = toolId === 'arjun' && /is not a valid URL|Skipped .* due to errors/i.test(output) ||
     toolId === 'ffuf' && /Errors:\s*[1-9]\d*/.test(output) ||
     toolId === 'nmap' && /Unable to split netmask|No targets were specified|Failed to resolve/i.test(output) ||
+    toolId === 'system-tools' && /(?:^|\n)\s*(?:FATAL|VERIFY_FAILED|FILE_TAMPER_FAILED|UPLOAD_RESULT:\s*check|ERROR):/im.test(output) ||
     ['nikto', 'sqlmap', 'httpx'].includes(toolId) && /unable to connect|connection (?:refused|timed out)|no web server found|\[CRITICAL\]/i.test(output);
   const success = result.exitCode === 0 && !result.timedOut && !result.aborted && !result.outputLimitExceeded && !semanticFailure;
   return { ...result, success, error: success ? null : result.error ||

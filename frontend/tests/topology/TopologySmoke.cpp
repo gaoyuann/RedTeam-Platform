@@ -78,15 +78,18 @@ int main(int argc, char **argv) {
         n.x=x; n.y=y; n.status="up"; n.tags.append(tag);
         lan.nodes.append(n);
     };
-    addLanNode("source","192.168.1.20","client",QStringLiteral("源主机"),80,-85,"source");
-    addLanNode("server","192.168.1.5","scanner",QStringLiteral("服务器"),80,85,"server");
-    addLanNode("lan","","network_segment",QStringLiteral("虚拟交换机"),440,0,"virtual-switch");
+    addLanNode("source","192.168.1.20","client",QStringLiteral("源主机"),140,-220,"source");
+    addLanNode("server","192.168.1.5","scanner",QStringLiteral("服务器"),440,-220,"server");
+    addLanNode("lan","","network_segment",QStringLiteral("局域网逻辑交换机"),440,0,"virtual-switch");
     lan.nodes.last().hostName="192.168.1.0/24";
     lan.nodes.last().status="unknown";
-    addLanNode("target","192.168.1.111","host",QStringLiteral("目标主机"),800,-170,"target");
-    addLanNode("neighbor1","192.168.1.30","host",QStringLiteral("192.168.1.30"),800,0,"lan-host");
-    addLanNode("neighbor2","192.168.1.40","host",QStringLiteral("192.168.1.40"),800,170,"lan-host");
-    for (const auto &id : {"source","server","target","neighbor1","neighbor2"}) {
+    lan.nodes.last().tags.append("lan-segment");
+    addLanNode("target","192.168.1.111","host",QStringLiteral("目标主机"),740,-220,"target");
+    addLanNode("neighbor1","192.168.1.30","host",QStringLiteral("192.168.1.30"),290,220,"lan-host");
+    addLanNode("neighbor2","192.168.1.40","host",QStringLiteral("192.168.1.40"),590,220,"lan-host");
+    addLanNode("lan-gateway","192.168.1.254","router",QStringLiteral("默认网关"),-60,0,"configured-gateway");
+    lan.nodes.last().tags.append("default-gateway");
+    for (const auto &id : {"source","server","target","neighbor1","neighbor2","lan-gateway"}) {
         TopologyEdgeRecord e;
         e.id=QStringLiteral("member-")+id; e.sourceId="lan"; e.targetId=id;
         e.type="virtual-link"; e.label=QStringLiteral("同网段");
@@ -100,10 +103,11 @@ int main(int argc, char **argv) {
     page.populateTopologyDocument();
     page.onResetView();
     app.processEvents();
-    if (page.m_nodeItems.size()!=6 || page.m_edgeItems.size()!=6) return 16;
+    if (page.m_nodeItems.size()!=7 || page.m_edgeItems.size()!=7) return 16;
     for (auto *line : page.m_edgeItems) {
         if (line == page.m_edgeItems.value("request")) continue;
         if (line->pen().style()!=Qt::DashLine) return 17;
+        if (line->pen().color()!=QColor("#7c3aed")) return 20;
     }
     bool subnetVisible=false;
     for (auto *group : page.m_nodeItems.value("lan")->childItems()) for (auto *child : group->childItems()) {
@@ -111,6 +115,33 @@ int main(int argc, char **argv) {
         if (text && text->text()=="192.168.1.0/24") subnetVisible=true;
     }
     if (!subnetVisible) return 18;
+    const auto cardLabels = [&](const QString &nodeId) {
+        QStringList labels;
+        for (auto *group : page.m_nodeItems.value(nodeId)->childItems()) {
+            for (auto *child : group->childItems()) {
+                auto *text = dynamic_cast<QGraphicsSimpleTextItem *>(child);
+                if (text) labels.append(text->text());
+            }
+        }
+        return labels;
+    };
+    if (!cardLabels("lan-gateway").contains(QStringLiteral("默认网关 · 路由配置"))) return 21;
+    if (cardLabels("lan-gateway").contains(QStringLiteral("响应跳点"))) return 22;
+    if (!cardLabels("lan").contains(QStringLiteral("共享局域网 · 非实体设备"))) return 23;
+    QPushButton *updateButton = nullptr;
+    for (auto *button : page.findChildren<QPushButton *>()) {
+        if (button->text() == QStringLiteral("更新拓扑")) updateButton = button;
+    }
+    if (!updateButton) return 24;
+    page.m_autoLoadAttempted = true;
+    page.m_documentDirty = true;
+    updateButton->click();
+    if (!page.m_documentDirty || !page.m_autoLoadAttempted || page.m_topologyDocument.nodes.size()!=7) return 25;
+    page.m_documentDirty = false;
+    page.m_editorDirty = true;
+    updateButton->click();
+    if (!page.m_editorDirty || !page.m_autoLoadAttempted || page.m_topologyDocument.nodes.size()!=7) return 26;
+    page.m_editorDirty = false;
     if (argc>1 && !page.grab().save(QString::fromLocal8Bit(argv[1]))) return 19;
     // Reproduce the two-node report with generated scanner names and a target
     // that has services. Check real text bounds at normal and enlarged fonts.

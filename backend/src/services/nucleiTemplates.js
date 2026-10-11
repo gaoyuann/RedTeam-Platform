@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'child_process';
 import { mkdirSync, readdirSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { join, relative } from 'path';
 import { randomUUID } from 'crypto';
 import { promisify } from 'util';
 
@@ -27,6 +27,7 @@ export function inspectNucleiTemplates(projectRoot, requiredIds = []) {
   const templatesDir = join(projectRoot, 'data', 'nuclei-templates');
   const directories = [templatesDir];
   const missingIds = new Set(requiredIds);
+  const templatePaths = new Map();
   let available = false;
   while (directories.length > 0) {
     const directory = directories.pop();
@@ -46,16 +47,17 @@ export function inspectNucleiTemplates(projectRoot, requiredIds = []) {
           const templateId = readFileSync(filePath, 'utf8').match(/^(?:\uFEFF)?id:\s*["']?([\w.-]+)["']?\s*(?:#.*)?$/m)?.[1];
           if (!templateId) continue;
           available = true;
+          if (missingIds.has(templateId)) templatePaths.set(templateId, filePath);
           missingIds.delete(templateId);
           if (missingIds.size === 0) {
-            return { passed: true, available, templatesDir, missingIds: [], message: `Readable Nuclei templates available: ${templatesDir}${requiredIds.length ? `; required IDs: ${requiredIds.join(', ')}` : ''}` };
+            return { passed: true, available, templatesDir, templatePaths: [...templatePaths.values()], missingIds: [], message: `Readable Nuclei templates available: ${templatesDir}${requiredIds.length ? `; required IDs: ${requiredIds.join(', ')}` : ''}` };
           }
         } catch {}
       }
     }
   }
   return {
-    passed: false, available, templatesDir, missingIds: [...missingIds],
+    passed: false, available, templatesDir, templatePaths: [...templatePaths.values()], missingIds: [...missingIds],
     message: available
       ? `Required Nuclei template IDs not found: ${[...missingIds].join(', ')}; directory: ${templatesDir}`
       : `No readable Nuclei YAML templates found: ${templatesDir}`,
@@ -126,11 +128,18 @@ function runNucleiValidation(command, args) {
   });
 }
 
-export async function validateNucleiTemplates(templatesDir, engine) {
+function getNucleiTemplateSelection(templatesDir, engine, templatePaths) {
+  const selectedPaths = templatePaths.length ? templatePaths : [templatesDir];
+  return selectedPaths.map(filePath => engine === 'host'
+    ? filePath : join(CONTAINER_TEMPLATES_DIR, relative(templatesDir, filePath))).join(',');
+}
+
+export async function validateNucleiTemplates(templatesDir, engine, templatePaths = []) {
+  const selection = getNucleiTemplateSelection(templatesDir, engine, templatePaths);
   try {
     if (engine === 'host') {
       await runNucleiValidation('nuclei', [
-        '-validate', '-duc', '-no-color', '-t', templatesDir,
+        '-validate', '-duc', '-no-color', '-t', selection,
       ]);
       return;
     }
@@ -141,7 +150,7 @@ export async function validateNucleiTemplates(templatesDir, engine) {
       'run', '--rm',
       '-v', `${templatesDir}:${CONTAINER_TEMPLATES_DIR}`,
       'rt-vuln-scan', 'nuclei',
-      '-validate', '-duc', '-no-color', '-t', CONTAINER_TEMPLATES_DIR,
+      '-validate', '-duc', '-no-color', '-t', selection,
     ]);
   } catch (error) {
     throw new Error(`Nuclei template validation failed: ${commandErrorMessage(error)}`);
@@ -167,7 +176,7 @@ export async function ensureNucleiTemplates({ projectRoot, engine, requiredIds =
   signal?.throwIfAborted();
   let resources = inspectNucleiTemplates(projectRoot, requiredIds);
   if (resources.passed) {
-    await validateNucleiTemplates(resources.templatesDir, engine);
+    await validateNucleiTemplates(resources.templatesDir, engine, resources.templatePaths);
     return resources;
   }
   if (!['host', 'docker', 'podman'].includes(engine)) throw new Error(`${resources.message}; execution engine unavailable`);
@@ -185,15 +194,15 @@ export async function ensureNucleiTemplates({ projectRoot, engine, requiredIds =
   signal?.throwIfAborted();
   resources = inspectNucleiTemplates(projectRoot, requiredIds);
   if (!resources.passed) throw new Error(resources.message);
-  await validateNucleiTemplates(resources.templatesDir, engine);
+  await validateNucleiTemplates(resources.templatesDir, engine, resources.templatePaths);
   return resources;
 }
 
-export function normalizeNucleiTemplateArgs(args, templatesDir, engine) {
+export function normalizeNucleiTemplateArgs(args, templatesDir, engine, templatePaths = []) {
   const normalized = args.map(argument => engine === 'host' && (argument === CONTAINER_TEMPLATES_DIR || argument.startsWith(`${CONTAINER_TEMPLATES_DIR}/`))
     ? `${templatesDir}${argument.slice(CONTAINER_TEMPLATES_DIR.length)}` : argument);
   if (!normalized.some(argument => /^--?(?:t|templates|w|workflows)(?:=|$)/.test(argument))) {
-    normalized.push('-t', engine === 'host' ? templatesDir : CONTAINER_TEMPLATES_DIR);
+    normalized.push('-t', getNucleiTemplateSelection(templatesDir, engine, templatePaths));
   }
   if (!normalized.some(argument => /^--?(?:duc|disable-update-check)(?:=|$)/.test(argument))) {
     normalized.push('-duc');

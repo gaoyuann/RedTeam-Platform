@@ -51,6 +51,7 @@
       "description": "gobuster 目录枚举，发现 DVWA 文件上传入口 /vulnerabilities/upload/",
       "toolId": "gobuster",
       "argsTemplate": [
+        "dir",
         "-u",
         "<target>",
         "-w",

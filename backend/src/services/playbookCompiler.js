@@ -7,6 +7,7 @@
 import { IMAGE_MAP, VIRTUAL_TOOLS } from '../tools/toolRunner.js';
 import { buildKGContextForStep } from './knowledgeEnricher.js';
 import { isContextControlledVariable } from './executionVariables.js';
+import { replaceTargetPlaceholder } from './commandTemplateRenderer.js';
 import {
   getPayloadById,
   extractPayloadData,
@@ -157,7 +158,7 @@ export function compilePlaybook({ steps, target, db, context = {} }) {
 
       args = args.map(a => {
         if (typeof a !== 'string') return a;
-        let result = a.replace(/<target>/g, target || '');
+        let result = replaceTargetPlaceholder(a, target || '');
         // Replace payload_variables in template (escape key for regex safety)
         for (const [key, value] of Object.entries(payloadVars)) {
           if (isContextControlledVariable(key, context)) continue;
