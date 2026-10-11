@@ -9,6 +9,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getEngine } from '../tools/containerEngine.js';
 import { IMAGE_MAP, BIN_MAP } from '../tools/toolRunner.js';
+import { validateToolArgs } from '../tools/toolContracts.js';
 import { resolveTargetProfile, derivePreferredClass, checkTargetTypeCompatibility } from './targetProfileResolver.js';
 import { buildContextForTarget } from './targetAdapters/index.js';
 import { inspectRuntimeResources, inspectWordlistFiles } from './resourceInspection.js';
@@ -48,6 +49,7 @@ function isValidTarget(target) {
  */
 export async function runPreflightChecks({ playbookId, target, db, scanTaskIds = [], runId, signal }) {
   const checks = [];
+  const owner = runId ? db.prepare('SELECT user_sub FROM execution_runs WHERE run_id = ?').get(runId)?.user_sub || null : undefined;
   try {
     const created = ensureBuiltinWordlists(PROJECT_ROOT);
     if (created.length) console.log(`[Preflight] Created builtin wordlists: ${created.join(', ')}`);
@@ -71,7 +73,7 @@ export async function runPreflightChecks({ playbookId, target, db, scanTaskIds =
   {
     // Fetch playbook metadata for target type info
     const pb = db.prepare('SELECT target_type, not_suitable_for FROM playbooks WHERE playbook_id = ?').get(playbookId);
-    let targetProfile = loadTargetProfile(db, target, scanTaskIds);
+    let targetProfile = loadTargetProfile(db, target, scanTaskIds, owner);
     let compatOk = true;
     let compatMsg = 'No target type restriction';
 
@@ -82,7 +84,11 @@ export async function runPreflightChecks({ playbookId, target, db, scanTaskIds =
       if (preferredClass && !targetProfile.application) targetProfile = { ...targetProfile, ...resolveTargetProfile(target, { preferredTargetClass: preferredClass }) };
       if (isValidTarget(target) && (/^https?:\/\//i.test(target) || playbookTargetTypes.some(type => ['dvwa', 'web', 'web_url'].includes(type)))) {
         try {
-          const discovered = await discoverTargetProfile(db, target, scanTaskIds, { signal });
+          const discovered = await discoverTargetProfile(db, target, scanTaskIds, {
+            signal,
+            owner,
+            probePaths: playbookTargetTypes.includes('dvwa') ? ['login.php'] : [],
+          });
           targetProfile = preferredClass && !discovered.application
             ? { ...discovered, ...resolveTargetProfile(target, { preferredTargetClass: preferredClass }) } : discovered;
           checks.push({ name: 'target_discovery', passed: true, message: targetProfile.application
@@ -146,6 +152,27 @@ export async function runPreflightChecks({ playbookId, target, db, scanTaskIds =
       message: ok
         ? `All ${seenToolIds.size} tool(s) found in IMAGE_MAP`
         : `Missing tool(s) in IMAGE_MAP: ${missingTools.join(', ')}`,
+    });
+  }
+
+  {
+    const issues = [];
+    for (const step of steps) {
+      let args;
+      try {
+        args = JSON.parse(step.args_template || '[]');
+      } catch (error) {
+        issues.push(`step ${step.step_index}: invalid argument JSON (${error.message})`);
+        continue;
+      }
+      for (const issue of validateToolArgs(step.tool_id, args)) {
+        issues.push(`step ${step.step_index} (${step.tool_id}): ${issue}`);
+      }
+    }
+    checks.push({
+      name: 'tool_args',
+      passed: issues.length === 0,
+      message: issues.length === 0 ? 'Tool argument contracts validated' : issues.join('; '),
     });
   }
 
@@ -249,12 +276,17 @@ export async function runPreflightChecks({ playbookId, target, db, scanTaskIds =
     if (nucleiSteps.length === 0) {
       checks.push({ name: 'nuclei_templates', passed: true, skipped: true, message: 'No Nuclei step in this playbook' });
     } else {
-      const requiredIds = [...new Set(nucleiSteps.flatMap(step => getRequiredNucleiTemplateIds(tryJson(step.args_template))))];
       try {
-        const resources = checks.find(check => check.name === 'tool_binaries')?.passed
-          ? await ensureNucleiTemplates({ projectRoot: PROJECT_ROOT, engine: executionEnvironment, requiredIds, signal })
-          : inspectNucleiTemplates(PROJECT_ROOT, requiredIds);
-        checks.push({ name: 'nuclei_templates', passed: resources.passed, message: resources.message });
+        const results = [];
+        for (const step of nucleiSteps) {
+          const args = tryJson(step.args_template);
+          const requiredIds = getRequiredNucleiTemplateIds(args);
+          const resources = checks.find(check => check.name === 'tool_binaries')?.passed
+            ? await ensureNucleiTemplates({ projectRoot: PROJECT_ROOT, engine: executionEnvironment, requiredIds, args, signal })
+            : inspectNucleiTemplates(PROJECT_ROOT, requiredIds);
+          results.push(resources);
+        }
+        checks.push({ name: 'nuclei_templates', passed: results.every(resources => resources.passed), message: results.map(resources => resources.message).join('; ') });
       } catch (error) {
         checks.push({ name: 'nuclei_templates', passed: false, message: error.message });
       }
