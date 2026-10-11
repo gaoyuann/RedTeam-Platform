@@ -29,6 +29,9 @@ const MAX_THOUGHT_LEN = 500; // Truncate LLM thought for display
 const HIGH_RISK_ACTIONS = ['stop', 'pivot'];
 // Tools that are high-risk to insert (exploitation vs scanning)
 const HIGH_RISK_TOOLS = new Set(['sqlmap', 'hydra', 'metasploit', 'john', 'hashcat', 'msfconsole']);
+const SAFE_REVIEW_ACTIONS = new Set([
+  'check_authorization', 'verify_scope', 'check_scope', 'verify_authorization',
+]);
 
 // ── Clean LLM output: strip English boilerplate, keep Chinese ──────────
 // Ported from old system's cleanThoughtText (playbookRuntime.js L423-501)
@@ -129,7 +132,7 @@ function cleanThoughtText(text) {
 
 // ── Parse Action XML from LLM response ────────────────────────────────
 
-function parseAction(llmResponse) {
+export function parseAction(llmResponse) {
   // Extract thought (everything before <action>)
   const rawThought = llmResponse.split(/<action/)[0]?.trim() || '';
 
@@ -256,8 +259,23 @@ function parseAction(llmResponse) {
       return { action: 'continue', thought: 'LLM API 错误，跳过 AI 决策继续执行' };
 
     default:
-      console.warn(`[ReAct] Unknown action type: ${actionType}, falling back to continue`);
-      return { action: 'continue', thought };
+      if (SAFE_REVIEW_ACTIONS.has(actionType)) {
+        console.warn(`[ReAct] Review-only action ignored: ${actionType}`);
+        return {
+          action: 'continue',
+          thought,
+          ignoredAction: actionType,
+          reason: `忽略非控制流审查动作：${actionType}`,
+        };
+      }
+      console.warn(`[ReAct] Unknown action type: ${actionType}, stopping with an auditable decision`);
+      return {
+        action: 'stop',
+        thought,
+        unsupportedAction: actionType,
+        reason: `不支持的 ReAct Action 类型：${actionType}`,
+        finalSummary: '模型返回了平台不支持的动作，已停止本次执行，避免静默跳过控制流。',
+      };
   }
 }
 
@@ -518,7 +536,7 @@ function buildReflectionPrompt({ stepIndex, toolId, proposedDecision, evidenceHi
  * Parse the LLM's reflection response.
  * Returns { confirmed: boolean, alternative: decision|null }
  */
-function parseReflection(llmResponse) {
+export function parseReflection(llmResponse) {
   const verdictMatch = llmResponse.match(/<verdict>\s*(\w+)\s*<\/verdict>/i);
   if (!verdictMatch) {
     return { confirmed: true, alternative: null };
@@ -531,6 +549,9 @@ function parseReflection(llmResponse) {
 
   // Extract alternative action from the response
   const altDecision = parseAction(llmResponse);
+  if (altDecision.ignoredAction || altDecision.unsupportedAction) {
+    return { confirmed: true, alternative: null };
+  }
   if (altDecision.action === 'continue' && !llmResponse.includes('<action')) {
     // No alternative action found in reconsider response — fall back to confirm
     return { confirmed: true, alternative: null };

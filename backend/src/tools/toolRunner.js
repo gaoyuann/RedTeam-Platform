@@ -153,7 +153,7 @@ export async function runTool(toolId, args, options = {}) {
     if (!resources.passed) throw new Error(resources.issues.join('; '));
     if (NUCLEI_TOOLS.has(toolId)) {
       const templates = await ensureNucleiTemplates({ projectRoot: PROJECT_ROOT, engine, requiredIds: getRequiredNucleiTemplateIds(args), signal: options.signal });
-      args = normalizeNucleiTemplateArgs(args, templates.templatesDir, engine);
+      args = normalizeNucleiTemplateArgs(args, templates.templatesDir, engine, templates.templatePaths);
     }
   } catch (error) {
     return { success: false, exitCode: -1, stdout: '', stderr: error.message, error: error.message, executionMode: engine };
