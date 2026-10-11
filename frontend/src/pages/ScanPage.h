@@ -10,6 +10,7 @@
 #include <QJsonArray>
 #include <QTabWidget>
 
+class QCheckBox;
 class ApiClient;
 class ScanResultOverview;
 
@@ -50,6 +51,9 @@ private:
   void startPollingIfNeeded();
   void renderGroupedResults(const QJsonArray &results);
   void enableCurrentTabDelBtn(bool enabled);
+  void loadSourceConnections();
+  void showSourceEvidence(QTreeWidgetItem *item);
+  void reviewSourceFinding(int findingId);
 
   // Formatting helpers
   static QString formatScanType(const QString &type);
@@ -66,16 +70,20 @@ private:
 
   ApiClient *m_api;
 
-  // ── Left panel: 4-Tab scan type layout ──
+  // ── Left panel: 5-Tab scan type layout ──
   QTabWidget *m_scanTypeTabs;
   QTableWidget *m_portScanTable;
   QTableWidget *m_vulnScanTable;
   QTableWidget *m_webScanTable;
   QTableWidget *m_bruteForceTable;
+  QTableWidget *m_sourceScanTable;
   QLineEdit *m_portTargetInput;
   QLineEdit *m_vulnTargetInput;
   QLineEdit *m_webTargetInput;
   QLineEdit *m_bruteTargetInput;
+  QLineEdit *m_sourceTargetInput;
+  QComboBox *m_sourceConnectionCombo;
+  QCheckBox *m_sourceAiCheck;
   QLineEdit *m_portsInput;         // port_scan specific
   QLineEdit *m_cookieInput;        // web_scan specific
   QComboBox *m_serviceCombo;       // brute_force service selector
@@ -84,6 +92,7 @@ private:
   QLabel *m_vulnScanCount;
   QLabel *m_webScanCount;
   QLabel *m_bruteForceCount;
+  QLabel *m_sourceScanCount;
 
   // ── Right panel ──
   ScanResultOverview *m_resultOverview;
@@ -97,6 +106,7 @@ private:
   QPushButton *m_vulnDelBtn;
   QPushButton *m_webDelBtn;
   QPushButton *m_bruteDelBtn;
+  QPushButton *m_sourceDelBtn;
 
   // Recommendations
   QTableWidget *m_recTable;

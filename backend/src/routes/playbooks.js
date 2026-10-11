@@ -1,3 +1,4 @@
+import {canAccessProgramPlaybook} from '../services/programAccess.js';
 import { Router } from 'express';
 import { chatGeneratePlaybook } from '../services/playbookAiChat.js';
 import { parseVariableContract } from '../services/executionVariables.js';
@@ -38,7 +39,7 @@ export default function (db) {
     if (category) { sql += ' AND category = ?'; params.push(category); }
     if (!includeGenerated || includeGenerated === 'false') { sql += ' AND is_generated = 0'; }
     sql += ' ORDER BY name';
-    const rows = db.prepare(sql).all(...params);
+    const rows = db.prepare(sql).all(...params).filter(row=>canAccessProgramPlaybook(db,req.user,row));
     // Attach step count and promote target_class from metadata to top-level
     const stepCountStmt = db.prepare('SELECT COUNT(*) as cnt FROM playbook_steps WHERE playbook_id = ?');
     for (const row of rows) {
@@ -54,6 +55,11 @@ export default function (db) {
     res.json({ status: 'ok', data: rows, meta: { total: rows.length } });
   });
 
+  router.use('/:playbookId',(req,res,next)=>{
+    const row=db.prepare('SELECT metadata FROM playbooks WHERE playbook_id=?').get(req.params.playbookId);
+    if(row && !canAccessProgramPlaybook(db,req.user,row)) return res.status(403).json({status:'error',error:{message:'没有权限访问此源码验证预案'}});
+    next();
+  });
   router.get('/:playbookId', (req, res) => {
     const row = db.prepare('SELECT * FROM playbooks WHERE playbook_id = ?').get(req.params.playbookId);
     if (!row) return res.status(404).json({ status: 'error', error: { message: 'Playbook not found' } });

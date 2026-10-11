@@ -18,6 +18,8 @@ export function isReadableFile(path) {
 export async function inspectRuntimeResources({ engine, toolIds, imageMap, binMap,
   inspect = execFileAsync, searchPath = process.env.PATH || '' }) {
   const missing = [];
+  toolIds = toolIds.filter(tool => imageMap[tool] !== 'builtin');
+  if (!toolIds.length) return { passed: true, missing };
   if (engine === 'docker' || engine === 'podman') {
     const images = new Set(toolIds.map(tool => imageMap[tool]).filter(Boolean));
     for (const image of images) {

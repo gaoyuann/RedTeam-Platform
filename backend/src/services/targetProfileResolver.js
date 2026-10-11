@@ -60,6 +60,14 @@ export function resolveTargetProfile(target, hints = {}) {
 
   const raw = target.trim();
   const preferredClass = hints.preferredTargetClass || null;
+  if (/^tcp:\/\//i.test(raw)) {
+    try {
+      const url = new URL(raw);
+      if (url.port && !url.username && !url.password && (!url.pathname || url.pathname === '/') && !url.search && !url.hash)
+        return {target_class:'tcp_service',host:url.hostname.replace(/^\[|\]$/g,''),port:Number(url.port),is_dvwa:false,raw,scheme:'tcp'};
+    } catch {}
+    return {target_class:'unknown',host:'',port:null,is_dvwa:false,raw};
+  }
 
   // Local file path (hash cracking)
   if (raw.startsWith('/') || raw.startsWith('./') || raw.match(/^[A-Za-z]:\\/)) {

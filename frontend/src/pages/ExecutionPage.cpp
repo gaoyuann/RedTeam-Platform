@@ -21,6 +21,7 @@
 #include <QClipboard>
 #include <QDialog>
 #include <QTextEdit>
+#include <QPlainTextEdit>
 #include <QRegularExpression>
 #include <QMessageBox>
 
@@ -251,6 +252,10 @@ void ExecutionPage::setupUI() {
   evidenceLayout->addWidget(m_evidenceTable, 1);
   detailTabs->addTab(stepsPage, QStringLiteral("执行步骤"));
   detailTabs->addTab(evidencePage, QStringLiteral("证据"));
+  m_programReport=new QPlainTextEdit;
+  m_programReport->setReadOnly(true);
+  m_programReport->setPlaceholderText("程序测试结束后显示 Agent 观察、证据引用和待复核评估");
+  detailTabs->addTab(m_programReport,QStringLiteral("程序测试报告"));
   rightLayout->addWidget(detailTabs, 1);
   auto *rightOuterLayout = new QVBoxLayout(rightWidget);
   rightOuterLayout->setContentsMargins(0, 0, 0, 0);
@@ -397,7 +402,11 @@ void ExecutionPage::attackFromVuln(const QString &target, const QString &vulnTex
     }
     if (!matched.isEmpty()) break;
   }
-  if (matched.isEmpty()) matched = "web_vuln_exploit";  // web 漏洞通用兜底
+  if (resultType == "source_vuln" || resultType == "source_finding") {
+    m_statusLabel->setText("请从程序测试任务根据源码发现生成验证预案；静态分析结果不能直接视为漏洞验证。");
+    return;
+  }
+  if (matched.isEmpty()) matched = "web_vuln_exploit";
 
   selectPlaybook(matched, target);
   m_statusLabel->setText(QString("已从扫描漏洞转入攻击：目标 %1 · 匹配预案 %2（可手动调整后执行）")
@@ -456,6 +465,7 @@ void ExecutionPage::clearRunContext() {
   m_execBtn->setText(QStringLiteral("执行"));
   m_stepTable->setRowCount(0);
   m_evidenceTable->setRowCount(0);
+  m_programReport->clear();
   m_runTable->setRowCount(0);
   m_evidenceLabel->setText(QStringLiteral("暂无执行证据"));
   m_stopBtn->hide();
@@ -875,6 +885,38 @@ void ExecutionPage::applyRunDetails(const QString &runId, const QJsonObject &dat
         .arg(pbName, statusVal).arg(succeeded + failed).arg(allSteps.size())
         .arg(succeeded).arg(failed).arg(d["evidence"].toArray().size());
     if (!stopReason.isEmpty()) statusText += "\n停止原因：" + stopReason;
+    const auto finalSummary=d["final_summary"].isObject() ? d["final_summary"].toObject()
+      : QJsonDocument::fromJson(d["final_summary"].toString().toUtf8()).object();
+    const auto agent=finalSummary["program_agent"].toObject();
+    QString agentText;
+    if(!agent.isEmpty()) {
+      const QString state=agent["status"].toString();
+      QString stateText=state;
+      if(state=="evidence_collected") stateText="已收集证据，结论待复核";
+      else if(state=="plan_finished") stateText="预定步骤已结束";
+      else if(state=="unavailable") stateText="模型不可用，仅执行已有预案";
+      else if(state=="invalid_decision") stateText="无效决策已拒绝，仅执行已有预案";
+      else if(state=="budget_exhausted") stateText="已达到分析预算";
+      else if(state=="needs_information") stateText="缺少验证条件";
+      else if(state=="no_progress") stateText="没有更多有效进展";
+      agentText=QString("测试端集中执行 · %1\n请求 %2 次，Agent 决策 %3 次\n%4\n\n")
+        .arg(stateText).arg(agent["requests"].toInt()).arg(agent["decisions"].toInt()).arg(agent["reason"].toString());
+      agentText+="执行成功不等于漏洞成立。以下内容为 Agent 观察和待复核评估。\n\n";
+      auto appendItems=[&agentText](const QJsonArray &items,bool finding) {
+        for(const auto &value:items) {
+          const auto item=value.toObject();
+          QStringList ids;for(const auto &id:item["evidence_ids"].toArray()) ids<<QString::number(id.toInt());
+          agentText+=(finding ? QString("源码发现 #%1 · %2").arg(item["finding_id"].toInt()).arg(item["status"].toString())
+                             : item["title"].toString())
+            +"\n"+item["reason"].toString()+"\n引用证据 ID："+ids.join(", ")+"\n\n";
+        }
+      };
+      appendItems(agent["observations"].toArray(),false);
+      appendItems(agent["assessments"].toArray(),true);
+      statusText+="\nAgent："+stateText+"；漏洞结论请复核证据。";
+    } else agentText="本次执行按预案步骤运行，未启用动态追加请求。请在“执行步骤”和“证据”中查看结果；源码分析依据和复核结论在扫描结果中查看。执行完成不等于漏洞成立。";
+    if(m_programReport->toPlainText()!=agentText) m_programReport->setPlainText(agentText);
+
     m_statusLabel->setTextFormat(Qt::PlainText);
     m_statusLabel->setToolTip(QString("执行编号：%1\n引擎：%2").arg(runId, engineType));
     m_statusLabel->setText(statusText);

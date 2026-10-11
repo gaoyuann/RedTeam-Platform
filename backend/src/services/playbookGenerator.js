@@ -1,4 +1,5 @@
 import { getDb } from '../db/connection.js';
+import { generateSourceVerification } from './sourceVerification.js';
 import { callLlm } from './llmClient.js';
 import { loadTargetProfile } from './targetDiscovery.js';
 import { parseVariableContract, validateVariablePlan } from './executionVariables.js';
@@ -19,14 +20,15 @@ const TOOL_LIST = [
  * @param {object} [analysisResult] - Optional pipeline analysis result (tech_stack, attack_surface, risk_assessment, recommended_strategy)
  *   When provided, the LLM prompt includes structured analysis for more targeted playbook generation.
  */
-export async function generatePlaybook(scanTaskId, analysisResult = null, { scanTaskIds = null } = {}) {
+export async function generatePlaybook(scanTaskId, analysisResult = null, { scanTaskIds = null, findingIds = [] } = {}) {
   const db = getDb();
 
   // Get scan task + results
   const task = db.prepare(
-    'SELECT scan_task_id, target, scan_type FROM scan_tasks WHERE scan_task_id = ?'
+    'SELECT scan_task_id, target, scan_type, status FROM scan_tasks WHERE scan_task_id = ?'
   ).get(scanTaskId);
   if (!task) return { ok: false, error: 'Scan task not found' };
+  if(task.scan_type==='source_scan') return generateSourceVerification(db,task,findingIds);
   const ids = Array.isArray(scanTaskIds) && scanTaskIds.length ? scanTaskIds : [scanTaskId];
 
   const results = db.prepare(

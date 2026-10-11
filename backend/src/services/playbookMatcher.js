@@ -6,6 +6,7 @@ const RESULT_TYPE_MAP = {
   open_port: 'recon',
   vulnerability: 'vuln_scan',
   web_vuln: 'vuln_scan',        // nikto findings
+  source_vuln: 'vuln_scan',     // cppcheck/flawfinder 源码审计发现
   sql_injection: 'exploit',     // sqlmap findings
   credential: 'brute',          // hydra findings
   weak_credential: 'brute',

@@ -1,4 +1,6 @@
+import {canAccessProgramRun} from '../services/programAccess.js';
 import { Router } from 'express';
+import { sourceTarget } from '../services/sourceScanConnections.js';
 import { randomUUID } from 'crypto';
 import { executeRun, requestAbort } from '../services/executionEngine.js';
 import { computeGrade } from '../services/gradingEngine.js';
@@ -20,7 +22,7 @@ export default function (db) {
     sql += ' ORDER BY created_at DESC';
     if (limit) { sql += ' LIMIT ?'; params.push(Number(limit)); }
     if (offset) { sql += ' OFFSET ?'; params.push(Number(offset)); }
-    const rows = db.prepare(sql).all(...params);
+    const rows = db.prepare(sql).all(...params).filter(row=>canAccessProgramRun(db,req.user,row));
     // Enrich each row with playbook_name for display
     for (const row of rows) {
       if (row.playbook_id) {
@@ -33,6 +35,11 @@ export default function (db) {
     res.json({ status: 'ok', data: rows, meta: { total: rows.length } });
   });
 
+  router.use('/:runId',(req,res,next)=>{
+    const run=db.prepare('SELECT playbook_id FROM execution_runs WHERE run_id=?').get(req.params.runId);
+    if(run && !canAccessProgramRun(db,req.user,run)) return res.status(403).json({status:'error',error:{message:'没有权限访问此程序验证执行'}});
+    next();
+  });
   router.get('/:runId', (req, res) => {
     const row = db.prepare('SELECT * FROM execution_runs WHERE run_id = ?').get(req.params.runId);
     if (!row) return res.status(404).json({ status: 'error', error: { message: 'Run not found' } });
@@ -50,7 +57,18 @@ export default function (db) {
   });
 
   router.post('/', (req, res) => {
-    const { run_id, playbook_id, user_sub, user_role, target, scan_task_id } = req.body;
+    let { run_id, playbook_id, user_sub, user_role, target, scan_task_id } = req.body;
+    const pb=db.prepare('SELECT metadata FROM playbooks WHERE playbook_id=?').get(playbook_id || '');
+    let source;
+    try {source=JSON.parse(pb?.metadata || '{}').source_verification;} catch {}
+    if(source) {
+      try {
+        if(sourceTarget(target)!==source.target) throw new Error('验证目标必须与生成预案时一致，请重新生成预案');
+        const task=db.prepare('SELECT created_by FROM scan_tasks WHERE scan_task_id=?').get(source.scan_task_id);
+        if(!task || req.user?.role!=='admin' && task.created_by!==req.user?.sub) return res.status(403).json({status:'error',error:{message:'没有权限执行此源码任务的预案'}});
+        scan_task_id=source.scan_task_id;
+      } catch(error) {return res.status(400).json({status:'error',error:{message:error.message}});}
+    }
     const rid = run_id || `run_${randomUUID().slice(0, 12)}`;
     try {
       const now = new Date().toISOString();

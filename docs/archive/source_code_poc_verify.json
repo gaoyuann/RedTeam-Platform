@@ -1,0 +1,69 @@
+{
+  "id": "source_code_poc_verify",
+  "name": "源代码漏洞 PoC 验证",
+  "description": "针对本地源代码目录的 C/C++ 漏洞利用测试流程：cppcheck 深度静态分析定位内存类缺陷（缓冲区溢出、资源泄漏等），flawfinder 基于危险函数 CWE 规则审计高危调用点，最终由测试人员结合运行上下文人工确认并验证漏洞可利用性（PoC）。目标为已同步到平台 data/source-targets/ 下的源码目录名。",
+  "target": "/src/<target>",
+  "author": "RedTeam-Platform",
+  "difficulty": "中级",
+  "estimatedTimeMinutes": 10,
+  "rolesAllowed": ["operator", "admin", "teacher"],
+  "steps": [
+    {
+      "id": "step1_cppcheck_locate",
+      "name": "cppcheck 深度静态分析",
+      "toolId": "cppcheck",
+      "argsTemplate": [
+        "-q",
+        "--enable=warning,portability,performance",
+        "--xml",
+        "--xml-version=2",
+        "/src/<target>"
+      ],
+      "description": "使用 cppcheck 对源码目录做深度静态分析，输出 XML 格式的缺陷报告（缓冲区越界、资源泄漏、未初始化变量等），定位可疑漏洞点的文件与行号。",
+      "status": "PENDING",
+      "score": 20,
+      "expectedMitre": ["T1595"],
+      "payload_id": null
+    },
+    {
+      "id": "step2_flawfinder_audit",
+      "name": "flawfinder 危险函数审计",
+      "toolId": "flawfinder",
+      "argsTemplate": [
+        "--csv",
+        "--minlevel=1",
+        "/src/<target>"
+      ],
+      "description": "使用 flawfinder 按 CWE 危险函数规则库审计源码（strcpy/printf/system 等高危调用），输出 CSV 结果并与 cppcheck 发现交叉印证，评估漏洞可利用性。",
+      "status": "PENDING",
+      "score": 20,
+      "expectedMitre": ["T1595"],
+      "payload_id": null
+    }
+  ],
+  "rubric": {
+    "items": [
+      {
+        "id": "cppcheck_locate_done",
+        "desc": "cppcheck 静态分析成功执行并输出结构化 XML 结果",
+        "points": 20,
+        "predicate": { "kind": "stdout_contains", "pattern": "<error|<results" }
+      },
+      {
+        "id": "flawfinder_audit_done",
+        "desc": "flawfinder 危险函数审计成功执行并输出 CSV 结果",
+        "points": 20,
+        "predicate": { "kind": "stdout_contains", "pattern": "File,Line|CWE" }
+      }
+    ]
+  },
+  "targetType": ["source_code"],
+  "notSuitableFor": ["windows_host", "ad_domain"],
+  "baselineGroup": "vuln_scan",
+  "expectedOutputPolicy": "expect_output",
+  "emptyOutputExplanation": "源码静态审计，需要目标为已同步到 data/source-targets/ 的源码目录名",
+  "applicableTargetType": ["source_code"],
+  "teachingObjective": "演示源代码漏洞静态定位流程：cppcheck 深度分析 → flawfinder 危险函数审计 → 人工确认验证",
+  "target_class": "source_code",
+  "disableAutoInsert": false
+}

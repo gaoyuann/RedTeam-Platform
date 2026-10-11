@@ -5,6 +5,8 @@
  */
 
 import { existsSync } from 'fs';
+import { parseTargetRequest } from '../tools/targetRequest.js';
+import { sourceTarget } from './sourceScanConnections.js';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getEngine } from '../tools/containerEngine.js';
@@ -29,6 +31,7 @@ const CIDR_PATTERN   = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$/;
 
 function isValidTarget(target) {
   if (!target || typeof target !== 'string') return false;
+  if (target.startsWith('tcp://')) { try { sourceTarget(target); return true; } catch { return false; } }
   return IP_PATTERN.test(target) ||
          CIDR_PATTERN.test(target) ||
          URL_PATTERN.test(target) ||
@@ -48,6 +51,27 @@ function isValidTarget(target) {
  */
 export async function runPreflightChecks({ playbookId, target, db, scanTaskIds = [], runId, signal }) {
   const checks = [];
+  if(playbookId==='source_code_poc_verify') return {passed:false,checks:[{name:'retired_source_template',passed:false,message:'旧模板仅执行静态工具，已停用；请从程序测试任务按真实证据生成验证预案'}]};
+  let source;
+  try {source=JSON.parse(db.prepare('SELECT metadata FROM playbooks WHERE playbook_id=?').get(playbookId)?.metadata || '{}').source_verification;} catch {}
+  if(source) {
+    // These plans need only the built-in transport; HTTP discovery can change ports
+    // through redirects and unrelated wordlists/images are not prerequisites.
+    const profile=resolveTargetProfile(target);
+    const steps=db.prepare('SELECT tool_id,args_template FROM playbook_steps WHERE playbook_id=? ORDER BY step_index').all(playbookId);
+    try {
+      if(sourceTarget(target)!==source.target || !steps.length) throw new Error('预案目标不一致或没有步骤');
+      for(const step of steps) {
+        if(step.tool_id!=='target-request') throw new Error('程序验证只支持有界的目标请求');
+        parseTargetRequest(JSON.parse(step.args_template),target);
+      }
+      checks.push({name:'source_verification_scope',passed:true,message:'运行地址与每一步请求的协议、主机、端口已核对'});
+    } catch(error) {checks.push({name:'source_verification_scope',passed:false,message:error.message});}
+    checks.push({name:'target_class_compatibility',passed:true,message:'保留部署程序的协议类型',target_profile:profile});
+    checks.push({name:'tool_binaries',passed:true,message:'使用后端内置 HTTP/TCP 请求工具'});
+    if(runId) db.prepare('UPDATE execution_runs SET target_class=?,target_profile=? WHERE run_id=?').run(profile.target_class,JSON.stringify(profile),runId);
+    return {passed:checks.every(c=>c.passed),checks};
+  }
   try {
     const created = ensureBuiltinWordlists(PROJECT_ROOT);
     if (created.length) console.log(`[Preflight] Created builtin wordlists: ${created.join(', ')}`);

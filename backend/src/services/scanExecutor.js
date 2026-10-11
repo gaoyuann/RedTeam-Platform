@@ -4,8 +4,10 @@ import { runTool } from '../tools/toolRunner.js';
 import { getWsManager } from './wsManager.js';
 import { normalizeTarget, probeTarget, buildDiscoveredProfile } from './targetDiscovery.js';
 import { classifyToolResult } from '../tools/toolContracts.js';
+import { auditSources } from './sourceAudit.js';
 
 const MAX_OUTPUT_LENGTH = 8192;
+
 
 // Track running scans to prevent duplicates
 const runningScans = new Set();
@@ -60,6 +62,7 @@ const SCAN_TOOL_MAP = {
   cloud_scan: 'cloudmapper', // Cloud security audit
   // app_discovery and api_fuzz are handled specially (dual-step)
   auth_audit: 'nuclei',      // Nuclei with auth templates
+  // source_scan is handled specially: runs cppcheck then flawfinder (dual-step)
 };
 
 // ── Build tool arguments from scan parameters ─────────────────────────
@@ -67,6 +70,19 @@ export function buildArgs(scanType, target, parameters = {}) {
   if (scanType === 'topology_scan') return topologyScanArgs(target);
   const args = [];
   const { ports, timeout, extra_args, threads } = parameters;
+
+  // 源码目标名 → 容器内路径（getVolumeMounts 将 data/source-targets 挂载到 /src:ro）
+  if (scanType === 'source_scan_cppcheck' || scanType === 'source_scan_flawfinder') {
+    if (!/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$/.test(String(target))) throw new Error('源码项目名称无效');
+    const safeName = String(target);
+    const srcPath = `/src/${safeName}`;
+    if (scanType === 'source_scan_cppcheck') {
+      args.push('-q', '--enable=warning,portability,performance', '--xml', '--xml-version=2', srcPath);
+    } else {
+      args.push('--csv', '--minlevel=1', srcPath);
+    }
+    return args;
+  }
 
   switch (scanType) {
     case 'port_scan': // nmap
@@ -226,7 +242,30 @@ export function buildArgs(scanType, target, parameters = {}) {
 }
 
 // ── Simple result parsers per scan type ────────────────────────────────
-function parseResults(scanType, stdout) {
+// 引号感知的单行 CSV 拆分（flawfinder 输出的 Warning/Context 字段含逗号）
+function splitCsvLine(line) {
+  const cells = [];
+  let cur = '';
+  let inQuote = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuote) {
+      if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+      else if (ch === '"') inQuote = false;
+      else cur += ch;
+    } else if (ch === '"') {
+      inQuote = true;
+    } else if (ch === ',') {
+      cells.push(cur); cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  cells.push(cur);
+  return cells;
+}
+
+export function parseResults(scanType, stdout) {
   const results = [];
   const lines = stdout.split('\n').filter(l => l.trim());
 
@@ -626,6 +665,65 @@ function parseResults(scanType, stdout) {
       }
       break;
     }
+
+    case 'source_scan_cppcheck': {
+      // cppcheck --xml 结果在 stderr（已并入 output），逐个 <error> 块提取
+      const blocks = stdout.split(/<error\s+/).slice(1);
+      for (const block of blocks) {
+        const attr = (name) => {
+          const m = block.match(new RegExp(`${name}="([^"]*)"`));
+          return m ? m[1] : '';
+        };
+        const loc = block.match(/<location\s+file="([^"]*)"\s+line="(\d+)"/);
+        const sevMap = { error: 'high', warning: 'medium', performance: 'low', portability: 'low', style: 'low', information: 'info', debug: 'info' };
+        const msg = attr('msg');
+        if (!msg) continue;
+        results.push({
+          result_type: 'source_vuln',
+          result_data: {
+            file: loc ? loc[1] : attr('file0'),
+            line: loc ? parseInt(loc[2], 10) : 0,
+            rule: attr('id'),
+            cwe: attr('cwe'),
+            message: msg,
+            tool: 'cppcheck',
+          },
+          severity: sevMap[attr('severity')] || 'info',
+          source_tool: 'cppcheck',
+        });
+      }
+      break;
+    }
+
+    case 'source_scan_flawfinder': {
+      // CSV（带引号字段含逗号，需按引号解析）
+      // 表头: File,Line,Column,DefaultLevel,Level,Category,Name,Warning,...,CWEs,...
+      const linesCsv = stdout.split(/\r?\n/);
+      let header = null;
+      for (const line of linesCsv) {
+        const cells = splitCsvLine(line);
+        if (!cells.length) continue;
+        if (!header) {
+          if (/^"?file"?$/i.test(cells[0].trim())) header = cells.map((c) => c.trim().toLowerCase());
+          continue;
+        }
+        const col = (name) => header.indexOf(name);
+        const file = cells[col('file')] || '';
+        const lineNo = parseInt(cells[col('line')], 10) || 0;
+        const level = parseInt(cells[col('level')] || cells[col('defaultlevel')], 10) || 0;
+        const cwes = cells[col('cwes')] || '';
+        const message = cells[col('warning')] || cells[col('name')] || '';
+        if (!file || !message) continue;
+        const sevMap = { 5: 'critical', 4: 'high', 3: 'medium', 2: 'low' };
+        results.push({
+          result_type: 'source_vuln',
+          result_data: { file, line: lineNo, cwe: cwes, message, tool: 'flawfinder' },
+          severity: sevMap[level] || 'info',
+          source_tool: 'flawfinder',
+        });
+      }
+      break;
+    }
   }
 
   if (results.length === 0 && stdout.length > 0) {
@@ -790,6 +888,15 @@ export async function executeScan(scanTaskId) {
         console.log(`[Scan] brute_force ${service}: hydra for ${task.target}`);
         totalResults = await runAndStore('brute_force', 'hydra', task.target, parameters, timeoutMs);
       }
+    } else if (task.scan_type === 'source_scan') {
+      db.prepare('DELETE FROM source_audits WHERE scan_task_id=?').run(scanTaskId);
+      const controller = new AbortController();
+      const audit = await raceScanWithAbort(auditSources(task, {
+        db, parameters, signal: controller.signal, runTool, parseResults,
+      }), scanTaskId, controller);
+      if (!audit.outcomes) throw new Error(audit.stderr || '程序审计失败');
+      totalResults += audit.count;
+      outcomes.push(...audit.outcomes);
     } else if (task.scan_type === 'ad_scan') {
       // ── AD scan: netexec SMB enumeration ──
       console.log(`[Scan] ad_scan: netexec SMB for ${task.target}`);

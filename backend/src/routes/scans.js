@@ -7,9 +7,38 @@ import { executeScan, requestScanAbort } from '../services/scanExecutor.js';
 import { getWsManager } from '../services/wsManager.js';
 import { resolveTargetProfile } from '../services/targetProfileResolver.js';
 import { loadTargetProfile } from '../services/targetDiscovery.js';
+import { loadSourceConnections, publicSourceConnection, resolveSourceConnection, sourceTarget } from '../services/sourceScanConnections.js';
+import { recordSourceVerification } from '../services/sourceVerification.js';
 
 export default function (db) {
   const router = Router();
+  const sourceAccess = (req, task) => task.scan_type !== 'source_scan' || req.user?.role === 'admin' || task.created_by === req.user?.sub;
+  router.get('/source-connections', async (req,res) => {
+    try { res.json({status:'ok',data:(await loadSourceConnections()).map(publicSourceConnection)}); }
+    catch(error) {res.status(400).json({status:'error',error:{message:error.message}});}
+  });
+  router.use('/:scanTaskId', (req,res,next)=>{
+    const task=db.prepare('SELECT * FROM scan_tasks WHERE scan_task_id=?').get(req.params.scanTaskId);
+    if(task && !sourceAccess(req,task)) return res.status(403).json({status:'error',error:{message:'没有权限操作源码任务'}});
+    next();
+  });
+  router.get('/:scanTaskId/source-verifications', (req,res) => {
+    const task=db.prepare('SELECT * FROM scan_tasks WHERE scan_task_id=?').get(req.params.scanTaskId);
+    if(!task || !sourceAccess(req,task)) return res.status(404).json({status:'error',error:{message:'任务不存在或无权查看'}});
+    const runs=db.prepare('SELECT r.run_id,r.status,r.target FROM execution_runs r JOIN playbooks p ON r.playbook_id=p.playbook_id WHERE p.generated_from=? ORDER BY r.created_at DESC LIMIT 30').all(task.scan_task_id);
+    for(const run of runs) run.evidence=db.prepare('SELECT id,step_index,raw_stdout,raw_stderr,evidence_data FROM evidence_records WHERE run_id=? ORDER BY id').all(run.run_id);
+    const reviews=db.prepare('SELECT v.* FROM source_verifications v JOIN scan_results f ON v.finding_id=f.id WHERE f.scan_task_id=? ORDER BY v.id DESC').all(task.scan_task_id);
+    res.json({status:'ok',data:{runs,reviews}});
+  });
+  router.post('/:scanTaskId/source-verifications', (req,res) => {
+    const task=db.prepare('SELECT * FROM scan_tasks WHERE scan_task_id=?').get(req.params.scanTaskId);
+    if(!task || !sourceAccess(req,task)) return res.status(404).json({status:'error',error:{message:'任务不存在或无权复核'}});
+    try {
+      const row=db.prepare('SELECT scan_task_id FROM scan_results WHERE id=?').get(req.body.finding_id);
+      if(row?.scan_task_id!==task.scan_task_id) throw new Error('发现不属于当前任务');
+      res.json({status:'ok',data:recordSourceVerification(db,req.body.finding_id,req.body,req.user.sub)});
+    } catch(error) {res.status(400).json({status:'error',error:{message:error.message}});}
+  });
 
   router.get('/', (req, res) => {
     const { status, target, scan_type } = req.query;
@@ -19,20 +48,38 @@ export default function (db) {
     if (target) { sql += ' AND target = ?'; params.push(target); }
     if (scan_type) { sql += ' AND scan_type = ?'; params.push(scan_type); }
     sql += ' ORDER BY created_at DESC';
-    const rows = db.prepare(sql).all(...params);
+    const rows = db.prepare(sql).all(...params).filter(task=>sourceAccess(req,task));
     res.json({ status: 'ok', data: rows, meta: { total: rows.length } });
   });
 
   router.get('/:scanTaskId', (req, res) => {
     const row = db.prepare('SELECT * FROM scan_tasks WHERE scan_task_id = ?').get(req.params.scanTaskId);
     if (!row) return res.status(404).json({ status: 'error', error: { message: 'Scan task not found' } });
+    if (!sourceAccess(req,row)) return res.status(403).json({status:'error',error:{message:'没有权限查看源码任务'}});
     row.results = db.prepare('SELECT * FROM scan_results WHERE scan_task_id = ? ORDER BY captured_at').all(req.params.scanTaskId);
+    if(row.scan_type==='source_scan') {
+      for(const result of row.results) {
+        if(result.result_type!=='source_finding') continue;
+        const review=db.prepare('SELECT status,note,run_id,reviewed_by,created_at FROM source_verifications WHERE finding_id=? ORDER BY id DESC LIMIT 1').get(result.id);
+        if(review) result.result_data=JSON.stringify({...JSON.parse(result.result_data),review});
+      }
+    }
     res.json({ status: 'ok', data: row });
   });
 
-  router.post('/', (req, res) => {
+  router.post('/', async (req, res) => {
     let { target, scan_type, parameters, created_by } = req.body;
     if (!target || !scan_type) return res.status(400).json({ status: 'error', error: { message: 'target, scan_type are required' } });
+    if (scan_type === 'source_scan') {
+      try {
+        target=sourceTarget(target);
+        if(parameters?.connection_id) await resolveSourceConnection(parameters.connection_id,target);
+        const batches=parameters?.ai_batches ?? 12;
+        if(!Number.isInteger(batches) || batches<1 || batches>24) throw new Error('AI 分析批次数必须是 1 至 24 的整数');
+        parameters={connection_id:parameters?.connection_id || null,ai_analysis:parameters?.ai_analysis!==false,ai_batches:batches};
+        created_by=req.user?.sub || null;
+      } catch(error) {return res.status(400).json({status:'error',error:{message:error.message}});}
+    }
     if (scan_type === 'topology_scan') {
       try { target = normalizeTopologyTarget(target); }
       catch (error) { return res.status(400).json({ status: 'error', error: { message: error.message } }); }
@@ -54,6 +101,7 @@ export default function (db) {
     const scan_task_id = `scan_${randomUUID().slice(0, 12)}`;
     const now = new Date().toISOString();
     // Auto-resolve target_class for the new scan task
+    // Source-assisted tasks retain the deployment protocol and target class.
     const targetProfile = resolveTargetProfile(target);
     db.prepare(`INSERT INTO scan_tasks (scan_task_id, target, scan_type, target_class, parameters, created_by, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)`).run(scan_task_id, target, scan_type, targetProfile.target_class, parameters ? JSON.stringify(parameters) : null, created_by || null, now);
@@ -106,6 +154,7 @@ export default function (db) {
     if (!task) return res.status(404).json({ status: 'error', error: { message: 'Scan task not found' } });
     if (task.status === 'RUNNING') return res.status(409).json({ status: 'error', error: { message: 'Scan is already running' } });
 
+    if(task.scan_type==='source_scan' && task.status!=='PENDING') return res.status(409).json({status:'error',error:{message:'请新建程序测试任务以保留已有源码版本和复核证据'}});
     // Reset to PENDING if not already (allows re-execution of COMPLETED/FAILED/CANCELLED)
     if (task.status !== 'PENDING') {
       // Clear old results for re-execution
@@ -133,8 +182,10 @@ export default function (db) {
 
   // ── Playbook Recommendations ────────────────────────────────────────
   router.get('/:scanTaskId/recommendations', (req, res) => {
-    const task = db.prepare('SELECT scan_task_id, target, status FROM scan_tasks WHERE scan_task_id = ?').get(req.params.scanTaskId);
+    const task = db.prepare('SELECT scan_task_id, target, status, scan_type, created_by FROM scan_tasks WHERE scan_task_id = ?').get(req.params.scanTaskId);
     if (!task) return res.status(404).json({ status: 'error', error: { message: 'Scan task not found' } });
+    if (!sourceAccess(req,task)) return res.status(403).json({status:'error',error:{message:'没有权限查看源码任务'}});
+    if (task.scan_type==='source_scan') return res.json({status:'ok',data:db.prepare("SELECT playbook_id,name,difficulty,baseline_group FROM playbooks WHERE generated_from=? ORDER BY generated_at DESC LIMIT 10").all(task.scan_task_id).map(p=>({...p,match_reason:'根据本任务证据生成',match_score:0}))});
     const results = db.prepare('SELECT * FROM scan_results WHERE scan_task_id = ?').all(req.params.scanTaskId);
     if (!results.length) return res.json({ status: 'ok', data: [] });
     // Resolve target class for better playbook matching
@@ -146,7 +197,9 @@ export default function (db) {
   // ── AI Generate Playbook ────────────────────────────────────────────
   router.post('/:scanTaskId/generate-playbook', async (req, res) => {
     try {
-      const result = await generatePlaybook(req.params.scanTaskId);
+      const task=db.prepare('SELECT * FROM scan_tasks WHERE scan_task_id=?').get(req.params.scanTaskId);
+      if (!task || !sourceAccess(req,task)) return res.status(404).json({status:'error',error:{message:'任务不存在或无权操作'}});
+      const result = await generatePlaybook(req.params.scanTaskId, null, {findingIds:req.body.finding_ids || []});
       if (!result.ok) return res.status(400).json({ status: 'error', error: { message: result.error } });
       res.status(201).json({ status: 'ok', data: result });
     } catch (err) {

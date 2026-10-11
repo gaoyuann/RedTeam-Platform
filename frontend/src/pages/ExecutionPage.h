@@ -14,6 +14,7 @@
 
 class ApiClient;
 class CortexPanel;
+class QPlainTextEdit;
 
 class ExecutionPage : public QWidget {
   Q_OBJECT
@@ -91,6 +92,7 @@ private:
   // Evidence display
   QLabel *m_evidenceLabel;
   QTableWidget *m_evidenceTable;
+  QPlainTextEdit *m_programReport;
 
   // Real-time polling for running executions
   QString m_runningRunId;       // currently running run (auto-highlighted)

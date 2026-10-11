@@ -42,7 +42,7 @@ public:
     for (const auto &value : results) {
       const auto type = value.toObject().value("result_type").toString();
       if (type == "open_port") ++ports;
-      else if (type == "vulnerability" || type == "web_vuln" || type == "sql_injection") ++findings;
+      else if (type == "vulnerability" || type == "web_vuln" || type == "sql_injection" || type == "source_vuln" || type == "source_finding") ++findings;
       else if (type == "credential") ++credentials;
       else if (type == "raw_output") ++raw;
       else ++other;

@@ -9,7 +9,7 @@ OUTDIR="$PROJECT_ROOT/containers/tar"
 
 mkdir -p "$OUTDIR"
 
-IMAGES="rt-recon rt-vuln-scan rt-brute rt-system rt-exploit rt-web rt-credential rt-cloud"
+IMAGES="rt-recon rt-vuln-scan rt-brute rt-system rt-exploit rt-web rt-credential rt-cloud rt-sast-c"
 
 echo "=== Exporting images to $OUTDIR/ ==="
 

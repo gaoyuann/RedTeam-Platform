@@ -1,0 +1,32 @@
+[
+  {
+    "id": "vulnerable_webapp_113",
+    "name": "vulnerable-webapp 对应版本源码（112）",
+    "kind": "local",
+    "source_root": "/opt/redteam-source/vulnerable-webapp",
+    "targets": [
+      "http://192.168.1.113:8089/"
+    ],
+    "architecture": "arm64"
+  },
+  {
+    "id": "vuln_demo_113",
+    "name": "vuln-demo 对应版本源码（112）",
+    "kind": "local",
+    "source_root": "/opt/redteam-source/vuln-demo",
+    "targets": [
+      "http://192.168.1.113:8090/"
+    ],
+    "architecture": "arm64"
+  },
+  {
+    "id": "exploit_me_113",
+    "name": "exploit_me 对应版本源码（112）",
+    "kind": "local",
+    "source_root": "/opt/redteam-source/exploit_me",
+    "targets": [
+      "tcp://192.168.1.113:8091"
+    ],
+    "architecture": "arm64"
+  }
+]

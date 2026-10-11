@@ -69,6 +69,8 @@ export function buildDiscoveredProfile(target, results = []) {
     } catch { return false; }
   });
   const profile = refineTargetProfile(initial, valid);
+  // 源码审计结果：目标类归为 source_code（供 playbook 匹配的 target_type 兼容性判定）
+  if (valid.some(result => result.result_type === 'source_vuln')) profile.target_class = 'source_code';
   const observations = [];
   for (const result of valid) {
     let data;
