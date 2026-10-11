@@ -30,6 +30,19 @@ function isWithinPath(pathname, path) {
   return pathname === path.replace(/\/$/, '') || pathname.startsWith(path);
 }
 
+function scopedProbeUrl(profile, path) {
+  if (!profile?.origin || typeof path !== 'string' || !path.trim()) return null;
+  try {
+    const scope = profile.base_path || '/';
+    const base = `${profile.origin}${scope.endsWith('/') ? scope : `${scope}/`}`;
+    const candidate = new URL(path, base);
+    if (candidate.origin !== profile.origin || candidate.username || candidate.password) return null;
+    return isWithinPath(candidate.pathname, scope) ? candidate.href : null;
+  } catch {
+    return null;
+  }
+}
+
 export function normalizeTarget(target) {
   const raw = typeof target === 'string' ? target.trim() : '';
   const profile = resolveTargetProfile(raw.replace(/^https?:/i, scheme => scheme.toLowerCase()));
@@ -153,12 +166,14 @@ export async function probeTarget(target, { request = fetch, timeoutMs = 8000, s
   }
 }
 
-export function loadTargetProfile(db, target, scanTaskIds = []) {
+export function loadTargetProfile(db, target, scanTaskIds = [], owner) {
   const ids = (Array.isArray(scanTaskIds) ? scanTaskIds : String(scanTaskIds || '').split(',')).filter(Boolean);
   const fields = 'id, scan_task_id, target, scan_type, status, completed_at, started_at, created_at';
+  const scope = owner === undefined ? '' : ' AND created_by = ?';
+  const ownerParams = owner === undefined ? [] : [owner || null];
   const tasks = ids.length ? db.prepare(`SELECT ${fields} FROM scan_tasks
-    WHERE scan_task_id IN (${ids.map(() => '?').join(',')})`).all(...ids) : db.prepare(`SELECT ${fields} FROM scan_tasks
-    WHERE target = ? ORDER BY julianday(COALESCE(completed_at, started_at, created_at)) DESC, id DESC LIMIT 32`).all(target);
+    WHERE scan_task_id IN (${ids.map(() => '?').join(',')}) AND target = ?${scope}`).all(...ids, target, ...ownerParams) : db.prepare(`SELECT ${fields} FROM scan_tasks
+    WHERE target = ?${scope} ORDER BY julianday(COALESCE(completed_at, started_at, created_at)) DESC, id DESC LIMIT 32`).all(target, ...ownerParams);
   const timestamp = task => {
     const value = task.completed_at || task.started_at || task.created_at || '';
     return Date.parse(value + (/[zZ]|[+-]\d\d:\d\d$/.test(value) ? '' : 'Z'));
@@ -179,8 +194,22 @@ export function loadTargetProfile(db, target, scanTaskIds = []) {
 }
 
 export async function discoverTargetProfile(db, target, scanTaskIds = [], options = {}) {
-  const profile = loadTargetProfile(db, target, scanTaskIds);
+  const profile = loadTargetProfile(db, target, scanTaskIds, options.owner);
   if (profile.application || !profile.origin) return profile;
   const results = await probeTarget(target, options);
-  return buildDiscoveredProfile(target, results);
+  let discovered = buildDiscoveredProfile(target, results);
+  const probePaths = Array.isArray(options.probePaths) ? options.probePaths.slice(0, 3) : [];
+  const initial = normalizeTarget(target);
+  for (const path of probePaths) {
+    if (discovered.application) break;
+    const probeUrl = scopedProbeUrl(initial, path);
+    if (!probeUrl || probeUrl === initial.target_url) continue;
+    try {
+      results.push(...await probeTarget(probeUrl, options));
+      discovered = buildDiscoveredProfile(target, results);
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+    }
+  }
+  return discovered;
 }

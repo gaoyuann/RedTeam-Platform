@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 import { getEngine } from './containerEngine.js';
 import { mkdirSync } from 'fs';
 import { randomUUID } from 'crypto';
-import { classifyToolResult, normalizeToolArgs, inspectToolWordlists } from './toolContracts.js';
+import { classifyToolResult, normalizeToolArgs, inspectToolWordlists, validateToolArgs } from './toolContracts.js';
 import { ensureNucleiTemplates, getRequiredNucleiTemplateIds, normalizeNucleiTemplateArgs } from '../services/nucleiTemplates.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -33,7 +33,7 @@ const BIN_MAP = {
   httpx: 'httpx',
   'system-tools': 'sh',
   nikto: 'nikto.pl',
-  'web-brute': 'python3',
+  'web-brute': '/usr/local/bin/web-brute.py',
   netexec: '/opt/redteam/scripts/netexec-wrapper.sh',
   'evil-winrm': '/opt/redteam/scripts/evil-winrm-basic.rb',
   'ssh-exec': '/opt/redteam/scripts/ssh-exec.sh',
@@ -149,11 +149,13 @@ export async function runTool(toolId, args, options = {}) {
 
   try {
     args = normalizeToolArgs(toolId, args, { projectRoot: PROJECT_ROOT, engine });
+    const contractIssues = validateToolArgs(toolId, args);
+    if (contractIssues.length > 0) throw new Error(contractIssues.join('; '));
     const resources = inspectToolWordlists(toolId, args, PROJECT_ROOT, engine);
     if (!resources.passed) throw new Error(resources.issues.join('; '));
     if (NUCLEI_TOOLS.has(toolId)) {
-      const templates = await ensureNucleiTemplates({ projectRoot: PROJECT_ROOT, engine, requiredIds: getRequiredNucleiTemplateIds(args), signal: options.signal });
-      args = normalizeNucleiTemplateArgs(args, templates.templatesDir, engine, templates.templatePaths);
+      const templates = await ensureNucleiTemplates({ projectRoot: PROJECT_ROOT, engine, requiredIds: getRequiredNucleiTemplateIds(args), args, signal: options.signal });
+      args = normalizeNucleiTemplateArgs(args, templates.templatesDir, engine, templates.templatePaths, templates.selectionResolved);
     }
   } catch (error) {
     return { success: false, exitCode: -1, stdout: '', stderr: error.message, error: error.message, executionMode: engine };

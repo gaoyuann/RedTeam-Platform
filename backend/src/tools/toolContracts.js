@@ -8,11 +8,56 @@ const URL_FLAGS = {
 };
 const FILE_FLAGS = {
   hydra: ['-P', '-L', '-C'], gobuster: ['-w', '--wordlist'],
-  ffuf: ['-w'], john: ['--wordlist'], 'web-brute': ['--wordlist'],
+  ffuf: ['-w'], john: ['--wordlist'], 'web-brute': ['-P', '-L', '--users', '--passlist', '--wordlist'],
 };
+const GOBUSTER_SUBCOMMANDS = new Set(['dir', 'vhost', 'dns', 'fuzz', 'tftp', 's3', 'gcs']);
+const HYDRA_SERVICE_ALIASES = new Map([
+  ['http-form-post', 'http-post-form'],
+  ['http-form-get', 'http-get-form'],
+]);
+const HYDRA_SERVICES = new Set([
+  'http-post-form', 'http-get-form', 'http-post', 'http-get',
+  'https-post-form', 'https-get-form', 'https-post', 'https-get',
+  'ftp', 'ssh', 'rdp', 'smb', 'mysql', 'postgres', 'redis', 'telnet',
+]);
+
+function normalizeHydraServiceAliases(args) {
+  return args.map(argument => HYDRA_SERVICE_ALIASES.get(String(argument).toLowerCase()) || argument);
+}
+
+export function validateToolArgs(toolId, args) {
+  if (!Array.isArray(args)) return ['Tool arguments must be an array'];
+  if (args.some(argument => typeof argument !== 'string')) return ['Tool arguments must be strings'];
+  const issues = [];
+  if (toolId === 'gobuster') {
+    if (args[0] === '-m') {
+      issues.push('Gobuster legacy -m mode is unsupported; use a subcommand such as "dir"');
+    } else if (!GOBUSTER_SUBCOMMANDS.has(args[0])) {
+      issues.push(`Gobuster requires a subcommand (${[...GOBUSTER_SUBCOMMANDS].join(', ')})`);
+    }
+  }
+  if (toolId === 'hydra') {
+    const normalized = normalizeHydraServiceAliases(args);
+    const serviceIndex = normalized.findIndex(argument => HYDRA_SERVICES.has(String(argument).toLowerCase()));
+    if (serviceIndex < 0) {
+      issues.push('Hydra service module is missing or unsupported');
+    } else {
+      const targetIndex = serviceIndex - 1;
+      if (targetIndex < 0 || String(normalized[targetIndex]).startsWith('-')) {
+        issues.push('Hydra target must immediately precede the service module');
+      }
+      for (const flag of ['-s', '-S']) {
+        const flagIndex = normalized.indexOf(flag);
+        if (flagIndex > serviceIndex) issues.push(`Hydra ${flag} must appear before the service module`);
+      }
+    }
+  }
+  return issues;
+}
 
 export function normalizeToolArgs(toolId, args, { projectRoot, engine = 'docker', scheme = 'http', target } = {}) {
   if (!Array.isArray(args)) throw new Error('Tool arguments must be an array');
+  if (toolId === 'web-brute' && args[0] === '/usr/local/bin/web-brute.py') args = args.slice(1);
   let scopeUrl = null;
   try { scopeUrl = target ? new URL(/^https?:\/\//i.test(target) ? target : `${scheme}://${target}`) : null; } catch {}
   function normalizeWordlist(value) {
@@ -24,7 +69,7 @@ export function normalizeToolArgs(toolId, args, { projectRoot, engine = 'docker'
     }
     return engine === 'host' ? resolve(projectRoot, 'data', 'wordlists', relative) : posix.join('/usr/share/wordlists', relative);
   }
-  const normalizedArgs = args.map((arg, index) => {
+  let normalizedArgs = args.map((arg, index) => {
     if (typeof arg !== 'string') throw new Error('Tool arguments must be strings');
     const fileFlag = FILE_FLAGS[toolId]?.find(flag => arg.startsWith(`${flag}=`));
     if (fileFlag) return `${fileFlag}=${normalizeWordlist(arg.slice(fileFlag.length + 1))}`;
@@ -32,6 +77,7 @@ export function normalizeToolArgs(toolId, args, { projectRoot, engine = 'docker'
     if (normalized !== arg) return normalized;
     const isUrl = URL_FLAGS[toolId]?.includes(args[index - 1]) ||
       (toolId === 'whatweb' && !arg.startsWith('-') && index === 0) ||
+      (toolId === 'web-brute' && !arg.startsWith('-') && index === 0) ||
       (toolId === 'curl' && index === args.length - 1 && !arg.startsWith('-'));
     if (!isUrl) return arg;
     let normalizedUrl = /^https?:\/\//i.test(arg) ? arg : `${scheme}://${arg}`;
@@ -47,6 +93,10 @@ export function normalizeToolArgs(toolId, args, { projectRoot, engine = 'docker'
     }
     return normalizedUrl;
   });
+  if (toolId === 'gobuster' && normalizedArgs[0] === '-m' && normalizedArgs[1]) {
+    normalizedArgs = [normalizedArgs[1], ...normalizedArgs.slice(2)];
+  }
+  if (toolId === 'hydra') normalizedArgs = normalizeHydraServiceAliases(normalizedArgs);
   if (['nmap', 'hydra'].includes(toolId)) {
     for (let index = 0; index < normalizedArgs.length; index++) {
       if (!/^https?:\/\//i.test(normalizedArgs[index])) continue;
@@ -72,7 +122,7 @@ export function normalizeToolArgs(toolId, args, { projectRoot, engine = 'docker'
     if (toolId === 'hydra') {
       const targetIndex = normalizedArgs.findIndex((arg, index) =>
         index > 0 && !arg.startsWith('-') && normalizedArgs[index + 1] &&
-        /^(https?|ftp|ssh|rdp|http-post-form|http-get-form|http-post|http-get)$/i.test(normalizedArgs[index + 1])
+        /^(https?|ftp|ssh|rdp|http-post-form|http-get-form|http-post|http-get|https-post-form|https-get-form|https-post|https-get)$/i.test(normalizedArgs[index + 1])
       );
       if (targetIndex >= 0) {
         const trailingOptions = [];
