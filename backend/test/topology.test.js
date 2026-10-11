@@ -303,15 +303,22 @@ test('LAN graph groups only discovered members and deduplicates source without i
   const graph = extractTopologyFromResults('192.168.1.111',rows,{includeOrigin:true,
     origin:{sourceAddress:'192.168.1.20',serverAddress:'192.168.1.5',capturedAt:'now'}});
   assert.equal(graph.nodes.length,5);
-  const hub = graph.nodes.find(n => n.deviceType === 'network_segment');
-  assert.equal(hub.displayName,'虚拟交换机');
-  assert.equal(hub.status,'unknown');
-  assert.ok(hub.note.includes('并非发现的实体交换机'));
+  const switches = graph.nodes.filter(n => n.deviceType === 'network_segment');
+  assert.equal(switches.length,1);
+  const lanSwitch = switches[0];
+  assert.equal(lanSwitch.displayName,'局域网逻辑交换机');
+  assert.ok(lanSwitch.tags.includes('lan-segment'));
+  assert.equal(lanSwitch.status,'unknown');
+  assert.ok(lanSwitch.note.includes('并非发现的实体交换机'));
   assert.equal(graph.edges.filter(e => e.type === 'virtual-link').length,4);
   assert.equal(graph.edges.filter(e => e.type === 'route').length,0);
   assert.equal(graph.nodes.filter(n => n.ip === '192.168.1.20').length,1);
   assert.equal(graph.nodes.find(n => n.ip === '192.168.1.30').tags.includes('target'),false);
   assert.equal(graph.nodes.find(n => n.ip === '192.168.1.111').tags.includes('target'),true);
+  assert.ok(graph.edges.some(e => e.sourceId === lanSwitch.id && e.targetId === 'task-origin'));
+  assert.ok(graph.edges.some(e => e.sourceId === lanSwitch.id && e.targetId === 'host-192.168.1.30'));
+  assert.ok(graph.nodes.find(n => n.id === 'task-origin').y < lanSwitch.y);
+  assert.ok(graph.nodes.find(n => n.ip === '192.168.1.30').y > lanSwitch.y);
   assert.ok(!graph.nodes.some(n => n.ip === '192.168.2.10'));
   for (const e of graph.edges) for (const id of [e.sourceId,e.targetId]) assert.ok(graph.nodes.some(n => n.id === id));
   const incomplete = extractTopologyFromResults('192.168.1.111',[...rows,
@@ -319,6 +326,85 @@ test('LAN graph groups only discovered members and deduplicates source without i
   assert.ok(incomplete.summary.includes('局域网发现未完成'));
 });
 
+
+test('shared LAN and gateway roles adapt to addresses, interfaces and discovery evidence', () => {
+  for (const network of ['10.44.7', '172.22.8']) {
+    const cidr = network + '.0/24';
+    const serverAddress = network + '.14';
+    const targetAddress = network + '.87';
+    const sourceAddress = network + '.63';
+    const neighborAddress = network + '.202';
+    const gatewayAddress = network + '.254';
+    const rows = [
+      {result_type:'network_context',result_data:{interfaces:[{device:'ens7',address:serverAddress,prefix:24}],
+        routes:[{destination:cidr,device:'ens7',metric:0,gateway:''},
+          {destination:'0.0.0.0/0',device:'ens7',metric:100,gateway:gatewayAddress},
+          {destination:'203.0.113.0/24',device:'unrelated',metric:0,gateway:neighborAddress}]}},
+      {result_type:'lan_scope',result_data:{cidr,device:'ens7',serverAddress,complete:true}},
+      ...[sourceAddress,targetAddress,neighborAddress,gatewayAddress].map(host => ({result_type:'lan_host_discovery',
+        result_data:{host,status:'up',scope:cidr,hostName:host === neighborAddress ? 'neighbor.lab' : '',evidence:'ARP response'}})),
+    ].map(row => ({...row,scan_task_id:'dynamic-lan'}));
+    const graph = extractTopologyFromResults(targetAddress,rows,{includeOrigin:true,
+      origin:{sourceAddress,serverAddress,capturedAt:'now'}});
+    const switches = graph.nodes.filter(node => node.deviceType === 'network_segment');
+    assert.equal(switches.length,1);
+    const lanSwitch = switches[0];
+    const gateway = graph.nodes.find(node => node.ip === gatewayAddress);
+    assert.equal(gateway.deviceType,'router');
+    assert.equal(gateway.displayName,'默认网关');
+    assert.ok(gateway.tags.includes('default-gateway'));
+    assert.ok(!gateway.tags.includes('other-member'));
+    assert.ok(gateway.note.includes('不代表本次同网段通信经过此节点'));
+    const neighbor = graph.nodes.find(node => node.ip === neighborAddress);
+    assert.equal(neighbor.hostName,'neighbor.lab');
+    assert.equal(neighbor.displayName,'');
+    assert.ok(neighbor.tags.includes('other-member'));
+    assert.ok(!neighbor.tags.includes('configured-gateway'));
+    assert.ok(graph.nodes.find(node => node.ip === sourceAddress).y < lanSwitch.y);
+    assert.ok(neighbor.y > lanSwitch.y);
+    assert.equal(graph.edges.filter(edge => edge.type === 'route').length,0);
+    const connected = new Set([lanSwitch.id]);
+    for (const edge of graph.edges.filter(edge => edge.type === 'virtual-link')) {
+      assert.equal(edge.sourceId,lanSwitch.id);
+      connected.add(edge.targetId);
+    }
+    assert.equal(connected.size,graph.nodes.length);
+    assert.ok(!graph.nodes.some(node => node.ip.startsWith('192.168.1.')));
+    const withoutGateway = rows.filter(row => row.result_data?.host !== gatewayAddress);
+    assert.ok(!extractTopologyFromResults(targetAddress,withoutGateway).nodes.some(node => node.ip === gatewayAddress));
+    const mismatchedContext = rows.map(row => row.result_type === 'network_context'
+      ? {...row,scan_task_id:'unrelated-scan'} : row);
+    assert.ok(!extractTopologyFromResults(targetAddress,mismatchedContext).nodes.some(node => node.tags.includes('configured-gateway')));
+  }
+});
+
+test('separate observed scopes are not joined by a fabricated router', () => {
+  const rows = ['10.44.7','172.22.8'].flatMap((network, index) => [
+    {scan_task_id:'scope-' + index,result_type:'network_context',result_data:{
+      interfaces:[{device:'ens' + index,address:network + '.14',prefix:24}],
+      routes:[{destination:network + '.0/24',device:'ens' + index,metric:0,gateway:''}]}},
+    {scan_task_id:'scope-' + index,result_type:'lan_scope',result_data:{
+      cidr:network + '.0/24',device:'ens' + index,serverAddress:network + '.14',complete:true}},
+    {scan_task_id:'scope-' + index,result_type:'lan_host_discovery',result_data:{
+      host:network + '.202',scope:network + '.0/24',status:'up',evidence:'ARP response'}},
+  ]);
+  const graph = extractTopologyFromResults('10.44.7.202',rows);
+  const switches = graph.nodes.filter(node => node.deviceType === 'network_segment');
+  assert.equal(switches.length,2);
+  assert.ok(Math.abs(switches[0].x - switches[1].x) >= 1500);
+  assert.ok(!graph.edges.some(edge => switches.some(node => node.id === edge.sourceId)
+    && switches.some(node => node.id === edge.targetId)));
+});
+
+test('service banner distribution names are not host operating-system evidence', () => {
+  const graph = extractTopologyFromResults('10.44.7.87', [
+    {result_type:'open_port',result_data:{host:'10.44.7.87',port:8080,protocol:'tcp',state:'open',
+      service:'http Apache httpd 2.4.68 ((Debian))'}},
+  ]);
+  const host = graph.nodes.find(node => node.ip === '10.44.7.87');
+  assert.equal(host.osName,'');
+  assert.ok(host.services[0].version.includes('Debian'));
+});
 
 test('loopback request never claims the initiator LAN address or creates a LAN switch across WSL routing', () => {
   const context = {interfaces:[{device:'eth0',address:'172.23.255.129',prefix:20}], routes:[

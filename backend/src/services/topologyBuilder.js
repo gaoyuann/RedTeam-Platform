@@ -39,7 +39,7 @@ export function extractTopologyFromResults(target, results, { includeOrigin = fa
     const key = hostKey(value);
     if (!key) return null;
     if (!nodes.has(key)) nodes.set(key, {
-      id: 'host-' + key, displayName: key, ip: isIP(key) ? key : '',
+      id: 'host-' + key, displayName: isIP(key) ? '' : key, ip: isIP(key) ? key : '',
       hostName: isIP(key) ? '' : key, osName: '', osVersion: '', deviceType: 'host',
       vendor: '', status: 'unknown', note: '', tags: [], x: 0, y: 0, services: [],
     });
@@ -123,8 +123,6 @@ export function extractTopologyFromResults(target, results, { includeOrigin = fa
       else if (node.services[index].state !== 'open') node.services[index] = svc;
       // Filtered / open|filtered are not proof of a live host.
       if (['open', 'closed'].includes(svc.state)) node.status = 'up';
-      const os = String(data.service || '').match(/\b(Debian|Ubuntu|CentOS|Windows)\b/i);
-      if (os && !node.osName) node.osName = os[1];
     }
     if (['vulnerability', 'web_vuln'].includes(type)) appendNote(node, data.name || data.finding || '');
     if (type === 'credential') appendNote(node, '凭证发现');
@@ -212,8 +210,6 @@ export function extractTopologyFromResults(target, results, { includeOrigin = fa
     nodes.delete(alias);
   }
   for (const node of nodes.values()) {
-    if (node.deviceType === 'host' && !node.tags.includes('trace-hop') && !node.tags.includes('target'))
-      node.tags.push('target');
     if (node.tags.includes('target') && node.status === 'unknown')
       appendNote(node, '扫描目标；尚无已确认的响应。');
   }
@@ -311,41 +307,123 @@ export function extractTopologyFromResults(target, results, { includeOrigin = fa
         members.delete(discoveredOrigin.id); members.add(originNode.id);
       }
     }
-    const id = 'lan-' + scope.cidr;
-    nodes.set(id, { id, displayName: '虚拟交换机', ip: '', hostName: scope.cidr,
+    for (const route of dataOf(context).routes || []) {
+      if (route.device !== data.device || !inScope(route.gateway)) continue;
+      const gateway = [...nodes.values()].find(node => node.ip === route.gateway && members.has(node.id));
+      if (!gateway) continue;
+      const routeScope = cidrScope(route.destination);
+      if (!routeScope) continue;
+      const isDefault = routeScope.mask === 0;
+      for (const tag of ['configured-gateway', ...(isDefault ? ['default-gateway'] : [])]) {
+        if (!gateway.tags.includes(tag)) gateway.tags.push(tag);
+      }
+      if (gateway.deviceType === 'host') gateway.deviceType = 'router';
+      if (!gateway.displayName && !gateway.hostName) gateway.displayName = isDefault ? '默认网关' : '配置网关';
+      appendNote(gateway, 'Nmap --iflist：接口 ' + data.device + ' 的'
+        + (isDefault ? '默认路由' : '路由 ' + route.destination) + '配置下一跳为 ' + route.gateway
+        + '；网关角色来自路由配置，不代表本次同网段通信经过此节点。');
+    }
+    const scopeToken = scope.cidr.replace(/[^a-zA-Z0-9_.-]/g, '_');
+    const switchId = 'lan-' + scopeToken;
+    const testMembers = new Set();
+    for (const node of nodes.values()) {
+      if (members.has(node.id) && (node.tags.includes('source') || node.tags.includes('server')
+          || node.tags.includes('scanner') || node.tags.includes('target') || node.tags.includes('trace-hop'))) {
+        testMembers.add(node.id);
+      }
+    }
+    for (const edge of edges.values()) {
+      if (!['route', 'reachability'].includes(edge.type)) continue;
+      if (members.has(edge.sourceId)) testMembers.add(edge.sourceId);
+      if (members.has(edge.targetId)) testMembers.add(edge.targetId);
+    }
+    nodes.set(switchId, { id: switchId, displayName: '局域网逻辑交换机', ip: '', hostName: scope.cidr,
       osName: '', osVersion: '', vendor: '', deviceType: 'network_segment', status: 'unknown',
-      tags: ['virtual-switch'], services: [], x: 0, y: 0,
-      note: '逻辑分组：' + scope.cidr + '；依据服务器接口 ' + data.device
-        + ' 的网段配置及主机响应生成，并非发现的实体交换机，也不代表主机流量经过服务器。'
+      tags: ['virtual-switch', 'lan-segment'], services: [], x: 0, y: 0,
+      note: '同一局域网的共享逻辑连接点；测试设备与其他发现主机仅作上下展示分组，不表示网络隔离。'
+        + '依据服务器接口 ' + data.device + ' 的网段配置及主机响应生成，并非发现的实体交换机，也不代表主机流量经过服务器或默认网关。'
         + (data.complete ? '' : '\n局域网发现未完成，当前成员可能不完整。') });
     for (const member of members) {
-      const edgeId = 'lan:' + id + '>' + member;
-      edges.set(edgeId, { id: edgeId, sourceId: id, targetId: member,
-        type: 'virtual-link', label: '同网段', note: '属于发现范围 ' + scope.cidr + '；逻辑归属，不代表物理端口或网线连接。' });
-      lanMembership.set(member, id);
+      const node = [...nodes.values()].find(candidate => candidate.id === member);
+      const gateway = node.tags.includes('configured-gateway');
+      const memberTag = gateway ? 'gateway-member' : testMembers.has(member) ? 'test-member' : 'other-member';
+      if (!node.tags.includes(memberTag)) node.tags.push(memberTag);
+      const edgeId = 'lan:' + switchId + '>' + member;
+      edges.set(edgeId, { id: edgeId, sourceId: switchId, targetId: member,
+        type: 'virtual-link', label: gateway ? (node.tags.includes('default-gateway') ? '默认网关' : '配置网关')
+          : testMembers.has(member) ? '测试成员' : '其他发现主机',
+        note: '属于同一发现范围 ' + scope.cidr + '；逻辑归属，不代表物理端口、网线连接或网关转发路径。' });
+      lanMembership.set(member, switchId);
     }
   }
   const nodeArray = [...nodes.values()];
-  const maxHop = Math.max(0, ...nodeArray.filter(n => !n.tags.includes('target'))
-    .map(n => hopDepths.get(n.id) || (n.deviceType === 'router' ? 1 : 0)));
-  const lanes = new Map();
-  for (const node of nodeArray) {
-    const lane = node === originNode ? (lanMembership.has(node.id) ? 0 : -1) : node.tags.includes('virtual-switch') ? 1 : lanMembership.has(node.id) && !node.tags.includes('server') ? 2 : node.tags.includes('server') || node.deviceType === 'scanner' ? 0 : node.tags.includes('target') ? maxHop + 1
-      : hopDepths.get(node.id) || 1;
-    if (!lanes.has(lane)) lanes.set(lane, []);
-    lanes.get(lane).push(node);
-  }
-  for (const [lane, members] of lanes) {
-    members.sort((a, b) => a.id.localeCompare(b.id));
-    members.forEach((node, row) => {
-      node.x = 80 + lane * 360;
-      node.y = Math.round((row - (members.length - 1) / 2) * 170);
+  const segmentNodes = nodeArray.filter(node => node.deviceType === 'network_segment');
+  if (segmentNodes.length) {
+    segmentNodes.forEach((segment, segmentIndex) => {
+      segment.x = 440 + segmentIndex * 1500;
+      segment.y = 0;
+      const memberNodes = nodeArray.filter(node => lanMembership.get(node.id) === segment.id)
+        .sort((a, b) => {
+          const role = node => node.tags.includes('source') ? 0 : node.tags.includes('server') ? 1
+            : node.tags.includes('target') ? 2 : node.tags.includes('trace-hop') ? 3 : 4;
+          return role(a) - role(b) || a.id.localeCompare(b.id);
+        });
+      const gateways = memberNodes.filter(node => node.tags.includes('configured-gateway'));
+      const testNodes = memberNodes.filter(node => !gateways.includes(node) && node.tags.includes('test-member'));
+      const otherNodes = memberNodes.filter(node => !gateways.includes(node) && !testNodes.includes(node));
+      const layoutMembers = (members, above) => {
+        const columns = Math.min(4, Math.max(1, members.length));
+        const rows = Math.ceil(members.length / columns);
+        members.forEach((node, index) => {
+          node.x = segment.x + (index % columns - (columns - 1) / 2) * 300;
+          node.y = above ? -220 - (rows - 1 - Math.floor(index / columns)) * 145
+            : 220 + Math.floor(index / columns) * 145;
+        });
+      };
+      layoutMembers(testNodes, true);
+      layoutMembers(otherNodes, false);
+      gateways.forEach((node, index) => {
+        node.x = segment.x - 500;
+        node.y = (index - (gateways.length - 1) / 2) * 145;
+      });
     });
+    const positioned = new Set([...lanMembership.keys(), ...segmentNodes.map(node => node.id)]);
+    const remaining = nodeArray.filter(node => !positioned.has(node.id));
+    const maxHop = Math.max(0, ...remaining.filter(n => !n.tags.includes('target'))
+      .map(n => hopDepths.get(n.id) || (n.deviceType === 'router' ? 1 : 0)));
+    const lanes = new Map();
+    for (const node of remaining) {
+      const lane = node === originNode ? -1 : node.tags.includes('server') || node.deviceType === 'scanner' ? 0
+        : node.tags.includes('target') ? maxHop + 1 : hopDepths.get(node.id) || 1;
+      if (!lanes.has(lane)) lanes.set(lane, []);
+      lanes.get(lane).push(node);
+    }
+    for (const [lane, laneNodes] of lanes) {
+      laneNodes.sort((a, b) => a.id.localeCompare(b.id));
+      const center = (laneNodes.length - 1) / 2;
+      laneNodes.forEach((node, index) => { node.x = 80 + lane * 360; node.y = (index - center) * 170; });
+    }
+  } else {
+    const maxHop = Math.max(0, ...nodeArray.filter(n => !n.tags.includes('target'))
+      .map(n => hopDepths.get(n.id) || (n.deviceType === 'router' ? 1 : 0)));
+    const lanes = new Map();
+    for (const node of nodeArray) {
+      const lane = node === originNode ? (lanMembership.has(node.id) ? 0 : -1) : node.tags.includes('virtual-switch') ? 1 : lanMembership.has(node.id) && !node.tags.includes('server') ? 2 : node.tags.includes('server') || node.deviceType === 'scanner' ? 0 : node.tags.includes('target') ? maxHop + 1
+        : hopDepths.get(node.id) || 1;
+      if (!lanes.has(lane)) lanes.set(lane, []);
+      lanes.get(lane).push(node);
+    }
+    for (const [lane, laneNodes] of lanes) {
+      laneNodes.sort((a, b) => a.id.localeCompare(b.id));
+      const center = (laneNodes.length - 1) / 2;
+      laneNodes.forEach((node, index) => { node.x = 80 + lane * 360; node.y = (index - center) * 170; });
+    }
   }
   const serverCount = nodeArray.filter(n => n.tags.includes('server') || n.deviceType === 'scanner').length;
   const targetCount = nodeArray.filter(n => n.tags.includes('target')).length;
   const hopCount = nodeArray.filter(n => n.deviceType !== 'scanner' && !n.tags.includes('server')
-    && !n.tags.includes('source') && !n.tags.includes('target') && !n.tags.includes('lan-host') && n.deviceType !== 'network_segment').length;
+    && !n.tags.includes('source') && !n.tags.includes('target') && !n.tags.includes('lan-host')
+    && !n.tags.includes('configured-gateway') && n.deviceType !== 'network_segment').length;
   const observed = [...edges.values()].filter(e => e.type === 'route').length;
   const responses = [...edges.values()].filter(e => e.type === 'reachability').length;
   const lanCount = nodeArray.filter(n => n.tags.includes('lan-host')).length;
