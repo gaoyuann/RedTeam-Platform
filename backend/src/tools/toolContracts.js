@@ -8,11 +8,58 @@ const URL_FLAGS = {
 };
 const FILE_FLAGS = {
   hydra: ['-P', '-L', '-C'], gobuster: ['-w', '--wordlist'],
-  ffuf: ['-w'], john: ['--wordlist'], 'web-brute': ['--wordlist'],
+  ffuf: ['-w'], john: ['--wordlist'], 'web-brute': ['-P', '-L', '--users', '--passlist', '--wordlist'],
 };
+const GOBUSTER_SUBCOMMANDS = new Set(['dir', 'vhost', 'dns', 'fuzz', 'tftp', 's3', 'gcs']);
+const HYDRA_SERVICE_ALIASES = new Map([
+  ['http-form-post', 'http-post-form'],
+  ['http-form-get', 'http-get-form'],
+]);
+const HYDRA_SERVICES = new Set([
+  'http-post-form', 'http-get-form', 'http-post', 'http-get',
+  'https-post-form', 'https-get-form', 'https-post', 'https-get',
+  'ftp', 'ssh', 'rdp', 'smb', 'mysql', 'postgres', 'redis', 'telnet',
+]);
 
-export function normalizeToolArgs(toolId, args, { projectRoot, engine = 'docker', scheme = 'http' } = {}) {
+function normalizeHydraServiceAliases(args) {
+  return args.map(argument => HYDRA_SERVICE_ALIASES.get(String(argument).toLowerCase()) || argument);
+}
+
+export function validateToolArgs(toolId, args) {
+  if (!Array.isArray(args)) return ['Tool arguments must be an array'];
+  if (args.some(argument => typeof argument !== 'string')) return ['Tool arguments must be strings'];
+  const issues = [];
+  if (toolId === 'gobuster') {
+    if (args[0] === '-m') {
+      issues.push('Gobuster legacy -m mode is unsupported; use a subcommand such as "dir"');
+    } else if (!GOBUSTER_SUBCOMMANDS.has(args[0])) {
+      issues.push(`Gobuster requires a subcommand (${[...GOBUSTER_SUBCOMMANDS].join(', ')})`);
+    }
+  }
+  if (toolId === 'hydra') {
+    const normalized = normalizeHydraServiceAliases(args);
+    const serviceIndex = normalized.findIndex(argument => HYDRA_SERVICES.has(String(argument).toLowerCase()));
+    if (serviceIndex < 0) {
+      issues.push('Hydra service module is missing or unsupported');
+    } else {
+      const targetIndex = serviceIndex - 1;
+      if (targetIndex < 0 || String(normalized[targetIndex]).startsWith('-')) {
+        issues.push('Hydra target must immediately precede the service module');
+      }
+      for (const flag of ['-s', '-S']) {
+        const flagIndex = normalized.indexOf(flag);
+        if (flagIndex > serviceIndex) issues.push(`Hydra ${flag} must appear before the service module`);
+      }
+    }
+  }
+  return issues;
+}
+
+export function normalizeToolArgs(toolId, args, { projectRoot, engine = 'docker', scheme = 'http', target } = {}) {
   if (!Array.isArray(args)) throw new Error('Tool arguments must be an array');
+  if (toolId === 'web-brute' && args[0] === '/usr/local/bin/web-brute.py') args = args.slice(1);
+  let scopeUrl = null;
+  try { scopeUrl = target ? new URL(/^https?:\/\//i.test(target) ? target : `${scheme}://${target}`) : null; } catch {}
   function normalizeWordlist(value) {
     const prefix = WORDLIST_PREFIXES.find(candidate => value.startsWith(candidate));
     if (!prefix) return value;
@@ -22,7 +69,7 @@ export function normalizeToolArgs(toolId, args, { projectRoot, engine = 'docker'
     }
     return engine === 'host' ? resolve(projectRoot, 'data', 'wordlists', relative) : posix.join('/usr/share/wordlists', relative);
   }
-  const normalizedArgs = args.map((arg, index) => {
+  let normalizedArgs = args.map((arg, index) => {
     if (typeof arg !== 'string') throw new Error('Tool arguments must be strings');
     const fileFlag = FILE_FLAGS[toolId]?.find(flag => arg.startsWith(`${flag}=`));
     if (fileFlag) return `${fileFlag}=${normalizeWordlist(arg.slice(fileFlag.length + 1))}`;
@@ -30,10 +77,26 @@ export function normalizeToolArgs(toolId, args, { projectRoot, engine = 'docker'
     if (normalized !== arg) return normalized;
     const isUrl = URL_FLAGS[toolId]?.includes(args[index - 1]) ||
       (toolId === 'whatweb' && !arg.startsWith('-') && index === 0) ||
+      (toolId === 'web-brute' && !arg.startsWith('-') && index === 0) ||
       (toolId === 'curl' && index === args.length - 1 && !arg.startsWith('-'));
-    if (isUrl && !/^https?:\/\//i.test(arg)) return `${scheme}://${arg}`;
-    return arg;
+    if (!isUrl) return arg;
+    let normalizedUrl = /^https?:\/\//i.test(arg) ? arg : `${scheme}://${arg}`;
+    if (scopeUrl) {
+      try {
+        const candidate = new URL(normalizedUrl);
+        if (candidate.hostname !== scopeUrl.hostname || candidate.port !== scopeUrl.port || candidate.protocol !== scopeUrl.protocol) {
+          candidate.protocol = scopeUrl.protocol;
+          candidate.host = scopeUrl.host;
+          normalizedUrl = candidate.toString();
+        }
+      } catch {}
+    }
+    return normalizedUrl;
   });
+  if (toolId === 'gobuster' && normalizedArgs[0] === '-m' && normalizedArgs[1]) {
+    normalizedArgs = [normalizedArgs[1], ...normalizedArgs.slice(2)];
+  }
+  if (toolId === 'hydra') normalizedArgs = normalizeHydraServiceAliases(normalizedArgs);
   if (['nmap', 'hydra'].includes(toolId)) {
     for (let index = 0; index < normalizedArgs.length; index++) {
       if (!/^https?:\/\//i.test(normalizedArgs[index])) continue;
@@ -41,10 +104,34 @@ export function normalizeToolArgs(toolId, args, { projectRoot, engine = 'docker'
       normalizedArgs[index] = targetUrl.hostname.replace(/^\[|\]$/g, '');
       const port = targetUrl.port || (targetUrl.protocol === 'https:' ? '443' : '80');
       const flag = toolId === 'nmap' ? '-p' : '-s';
+      if (toolId === 'nmap' && normalizedArgs.includes('-F') && !['80', '443'].includes(port)) {
+        normalizedArgs.splice(normalizedArgs.indexOf('-F'), 1);
+      }
       const portIndex = normalizedArgs.indexOf(flag);
       if (portIndex < 0) normalizedArgs.push(flag, port);
-      else if (toolId === 'nmap' && !normalizedArgs[portIndex + 1].split(',').includes(port)) normalizedArgs[portIndex + 1] += `,${port}`;
+      else if (toolId === 'nmap') {
+        const currentPorts = normalizedArgs[portIndex + 1] || '';
+        if (!currentPorts.split(',').includes(port)) normalizedArgs[portIndex + 1] = `${currentPorts},${port}`.replace(/^,/, '');
+      } else if (normalizedArgs[portIndex + 1] !== port) {
+        normalizedArgs[portIndex + 1] = port;
+      }
+      const inlinePortIndex = normalizedArgs.findIndex(arg => arg.startsWith(`${flag}=`));
+      if (toolId === 'hydra' && inlinePortIndex >= 0) normalizedArgs[inlinePortIndex] = `${flag}=${port}`;
       if (toolId === 'hydra' && targetUrl.protocol === 'https:' && !normalizedArgs.includes('-S')) normalizedArgs.push('-S');
+    }
+    if (toolId === 'hydra') {
+      const targetIndex = normalizedArgs.findIndex((arg, index) =>
+        index > 0 && !arg.startsWith('-') && normalizedArgs[index + 1] &&
+        /^(https?|ftp|ssh|rdp|http-post-form|http-get-form|http-post|http-get|https-post-form|https-get-form|https-post|https-get)$/i.test(normalizedArgs[index + 1])
+      );
+      if (targetIndex >= 0) {
+        const trailingOptions = [];
+        for (const [flag, width] of [['-s', 2], ['-S', 1]]) {
+          const optionIndex = normalizedArgs.indexOf(flag);
+          if (optionIndex > targetIndex) trailingOptions.push(...normalizedArgs.splice(optionIndex, width));
+        }
+        if (trailingOptions.length > 0) normalizedArgs.splice(targetIndex, 0, ...trailingOptions);
+      }
     }
   }
   return normalizedArgs;
@@ -97,6 +184,7 @@ export function classifyToolResult(toolId, result) {
   const semanticFailure = toolId === 'arjun' && /is not a valid URL|Skipped .* due to errors/i.test(output) ||
     toolId === 'ffuf' && /Errors:\s*[1-9]\d*/.test(output) ||
     toolId === 'nmap' && /Unable to split netmask|No targets were specified|Failed to resolve/i.test(output) ||
+    toolId === 'system-tools' && /(?:^|\n)\s*(?:FATAL|VERIFY_FAILED|FILE_TAMPER_FAILED|UPLOAD_RESULT:\s*check|ERROR):/im.test(output) ||
     ['nikto', 'sqlmap', 'httpx'].includes(toolId) && /unable to connect|connection (?:refused|timed out)|no web server found|\[CRITICAL\]/i.test(output);
   const success = result.exitCode === 0 && !result.timedOut && !result.aborted && !result.outputLimitExceeded && !semanticFailure;
   return { ...result, success, error: success ? null : result.error ||
