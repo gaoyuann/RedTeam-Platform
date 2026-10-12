@@ -34,6 +34,15 @@ export function requestAbort(runId) {
 
 const MAX_OUTPUT_LENGTH = 4096;
 
+// Generic Nuclei scans need more time because they evaluate many templates.
+// Keep the longer timeout scoped to Nuclei so other tools retain their limit.
+export function getToolTimeout(toolId) {
+  if (toolId !== 'nuclei') return 300_000;
+  const configured = Number(process.env.NUCLEI_TIMEOUT_MS);
+  return Number.isSafeInteger(configured) && configured >= 300_000 && configured <= 2_147_483_647
+    ? configured : 900_000;
+}
+
 // Track running executions to prevent duplicates
 const runningRuns = new Set();
 
@@ -442,7 +451,7 @@ export async function executeRun(runId) {
             }
             targetContext.dvwa_session_verified = result.success;
           } else {
-            result = await runTool(step.tool_id, args, { timeout: 300_000, signal: controller.signal });
+            result = await runTool(step.tool_id, args, { timeout: getToolTimeout(step.tool_id), signal: controller.signal });
           }
         } catch (err) {
           result = { success: false, exitCode: -1, stdout: '', stderr: err.message, executionMode: 'error' };

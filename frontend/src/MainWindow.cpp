@@ -312,6 +312,11 @@ void MainWindow::setDongleLocked(bool locked, const QString &errorMessage) {
         m_navList->setEnabled(true);
     }
     switchToPage(m_pageBeforeDongleLock);
+    // The selected navigation row normally stays unchanged while locked, so
+    // setCurrentRow does not emit currentRowChanged when the dongle returns.
+    if (m_stackWidget && m_stackWidget->currentWidget() == m_dongleLockPage) {
+        onModuleChanged(m_pageBeforeDongleLock);
+    }
 }
 
 void MainWindow::onLogout()

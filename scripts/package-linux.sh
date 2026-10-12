@@ -26,11 +26,17 @@ case "$(uname -m)" in
   aarch64|arm64) ROCKEY_ARCH=linux-aarch64 ;;
   *) echo "ERROR: No bundled ROCKEY SDK for $(uname -m)" >&2; exit 1 ;;
 esac
-ROCKEY_SOURCE="$PROJECT_ROOT/third_party/rockey/$ROCKEY_ARCH/libRockeyARM.so.0.3"
+ROCKEY_LIBRARY=libRockeyARM.so.0.3
+if [ "$ROCKEY_ARCH" = linux-aarch64 ]; then
+  ROCKEY_LIBRARY=libRockeyARM.so.1.0
+fi
+ROCKEY_SOURCE="$PROJECT_ROOT/third_party/rockey/$ROCKEY_ARCH/$ROCKEY_LIBRARY"
 if [ ! -s "$ROCKEY_SOURCE" ]; then
   echo "ERROR: Missing ROCKEY SDK: $ROCKEY_SOURCE" >&2
   exit 1
 fi
+cmake "-DROCKEY_SDK_FILE=$ROCKEY_SOURCE" "-DROCKEY_SDK_ARCH=$ROCKEY_ARCH" \
+  -DROCKEY_SDK_REQUIRED=ON -P "$PROJECT_ROOT/cmake/ValidateRockeySdk.cmake" || exit 1
 
 # ── Clean ──────────────────────────────────────────────────────────────
 rm -rf "$DIST_DIR"

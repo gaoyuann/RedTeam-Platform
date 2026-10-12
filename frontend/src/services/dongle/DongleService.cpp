@@ -89,7 +89,11 @@ QStringList DongleService::candidateLibraryPaths() const {
         platformDirectory = QStringLiteral("linux-aarch64");
     else
         return paths;
-    const QString relativeLibrary = QStringLiteral("third_party/rockey/%1/libRockeyARM.so.0.3").arg(platformDirectory);
+    // The vendor ARM64 SDK uses its original 1.0 filename; x86 SDKs remain 0.3.
+    const QString libraryName = platformDirectory == QStringLiteral("linux-aarch64")
+                                    ? QStringLiteral("libRockeyARM.so.1.0")
+                                    : QStringLiteral("libRockeyARM.so.0.3");
+    const QString relativeLibrary = QStringLiteral("third_party/rockey/%1/%2").arg(platformDirectory, libraryName);
 #else
     return paths;
     const QString relativeLibrary;
@@ -367,7 +371,16 @@ bool DongleService::destroyRegistration(int index, QString *errorMessage, const 
         }
         return false;
     }
-    return writeRecord(index, QByteArray(RegistrationSize, '\0'), errorMessage);
+    const QByteArray cleared(RegistrationSize, '\0');
+    if (!writeRecord(index, cleared, errorMessage)) return false;
+    QByteArray actual;
+    DongleDeviceInfo current;
+    if (!readRecord(index, &actual, &current, errorMessage, device.hid)) return false;
+    if (actual != cleared) {
+        if (errorMessage) *errorMessage = QStringLiteral("销毁校验失败：设备回读内容与清除记录不一致。");
+        return false;
+    }
+    return true;
 }
 
 bool DongleService::verifyDevice(int index, QString *errorMessage, const QByteArray &expectedHid) {
@@ -404,7 +417,7 @@ bool DongleService::verifyDeviceByHid(const QByteArray &expectedHid, QString *er
 }
 
 QString DongleService::policyDir() {
-    // QStandardPaths::AppConfigLocation: Linux ~/.config/RedTeam/RedTeam-Platform/
+    // AppConfigLocation follows the application's organization/name settings.
     QString dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
     if (dir.isEmpty()) {
         dir = QDir::homePath() + QStringLiteral("/.config/RedTeam/RedTeam-Platform");

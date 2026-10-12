@@ -9,8 +9,9 @@ struct Info {
 };
 static unsigned char records[2][256];
 static int writes = 0, count = 2, closeError = 0, enumError = 0, pid = 100;
+static int readError = 0, writeError = 0, discardWrite = 0;
 extern "C" {
-void TestReset() { std::memset(records, 0, sizeof records); writes = 0; count = 2; closeError = 0; enumError = 0; pid = 100; }
+void TestReset() { std::memset(records, 0, sizeof records); writes = 0; count = 2; closeError = 0; enumError = 0; pid = 100; readError = writeError = discardWrite = 0; }
 int TestWrites() { return writes; }
 void TestSet(int field, int value) {
     if (field == 0) count = value;
@@ -18,6 +19,10 @@ void TestSet(int field, int value) {
     if (field == 2) enumError = value;
     if (field == 3) pid = value;
     if (field == 4) std::memset(records[0], value, 256);
+    if (field == 5) readError = value;
+    if (field == 6) writeError = value;
+    if (field == 7) discardWrite = value;
+    if (field == 8) records[0][value % 256] ^= 1;
 }
 unsigned int Dongle_Enum(Info *out, int *n) {
     if (enumError) return enumError;
@@ -38,13 +43,15 @@ unsigned int Dongle_Open(void **handle, int index) {
 unsigned int Dongle_ResetState(void *) { return 0; }
 unsigned int Dongle_Close(void *) { return closeError; }
 unsigned int Dongle_ReadData(void *h, int offset, unsigned char *out, int size) {
+    if (readError) return readError;
     if (offset != 3840 || size != 256) return 9;
     std::memcpy(out, records[reinterpret_cast<intptr_t>(h) - 1], 256);
     return 0;
 }
 unsigned int Dongle_WriteData(void *h, int offset, unsigned char *data, int size) {
+    if (writeError) return writeError;
     if (offset != 3840 || size != 256) return 9;
-    std::memcpy(records[reinterpret_cast<intptr_t>(h) - 1], data, 256);
+    if (!discardWrite) std::memcpy(records[reinterpret_cast<intptr_t>(h) - 1], data, 256);
     ++writes;
     return 0;
 }

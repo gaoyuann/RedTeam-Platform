@@ -4,6 +4,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QFile>
+#include <QDir>
 #include <QLabel>
 #include <QLibrary>
 #include <QMessageBox>
@@ -123,6 +124,125 @@ private slots:
         QCOMPARE(writes(), 1);
         QVERIFY(page.findChild<QLabel *>("dongleStatus")->text().contains(QStringLiteral("策略保存失败")));
         QVERIFY(!page.findChild<QCheckBox *>()->isChecked());
+    }
+    void ioFailuresAndReadback() {
+        DongleService service;
+        set(5, 11);
+        QVERIFY(!service.registerDevice(0, false));
+        QCOMPARE(writes(), 0);
+        set(5, 0); set(6, 12);
+        QVERIFY(!service.registerDevice(0, false));
+        QCOMPARE(writes(), 0);
+        set(6, 0); set(7, 1);
+        QVERIFY(!service.registerDevice(0, false));
+        set(7, 0);
+        QVERIFY(service.registerDevice(0, false));
+        set(7, 1);
+        QVERIFY(!service.destroyRegistration(0)); // SDK success alone is insufficient.
+        QVERIFY(service.verifyDevice(0));
+    }
+    void corruptRecord_data() {
+        QTest::addColumn<int>("offset");
+        for (int offset : {0, 24, 32, 48, 100, 224, 255})
+            QTest::newRow(qPrintable(QString::number(offset))) << offset;
+    }
+    void corruptRecord() {
+        QFETCH(int, offset);
+        DongleService service;
+        QVERIFY(service.registerDevice(0, false));
+        set(8, offset);
+        QVERIFY(!service.verifyDevice(0));
+        QVERIFY(!service.destroyRegistration(0));
+        QCOMPARE(writes(), 1);
+    }
+    void invalidPolicy_data() {
+        QTest::addColumn<QByteArray>("json");
+        QTest::newRow("broken-json") << QByteArray("{");
+        QTest::newRow("array") << QByteArray("[]");
+        QTest::newRow("no-fields") << QByteArray("{}");
+        QTest::newRow("missing-hid") << QByteArray("{\"enabled\":true,\"registeredHid\":\"\"}");
+        QTest::newRow("invalid-hid") << QByteArray("{\"enabled\":true,\"registeredHid\":\"zzzzzzzzzzzzzzzz\"}");
+    }
+    void invalidPolicy() {
+        QFETCH(QByteArray, json);
+        QTemporaryDir dir;
+        QFile file(DongleService::policyPath(dir.path()));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write(json), qint64(json.size()));
+        file.close();
+        QVERIFY(!DongleService::verifyPolicy(dir.path()));
+    }
+    void pageRejectsAbsentDeviceWhenEnabling() {
+        QTemporaryDir dir;
+        DongleService service;
+        QVERIFY(service.registerDevice(0, false));
+        QVERIFY(DongleService::savePolicy(dir.path(), false, {}, hid1));
+        DongleVerificationPage page(dir.path());
+        set(0, 0);
+        page.findChild<QCheckBox *>()->setChecked(true);
+        QVERIFY(!page.findChild<QCheckBox *>()->isChecked());
+        bool enabled = true;
+        QVERIFY(DongleService::loadPolicy(dir.path(), &enabled, nullptr, nullptr));
+        QVERIFY(!enabled);
+    }
+    void pageCancelDoesNotWrite() {
+        QTemporaryDir dir;
+        DongleVerificationPage page(dir.path());
+        QTimer::singleShot(0, [] {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            if (box) box->button(QMessageBox::Cancel)->click();
+        });
+        QVERIFY(QMetaObject::invokeMethod(&page, "registerSelectedDevice", Qt::DirectConnection));
+        QCOMPARE(writes(), 0);
+        QVERIFY(!QFile::exists(DongleService::policyPath(dir.path())));
+    }
+    void pageDestroyBoundDevice() {
+        QTemporaryDir dir;
+        DongleService service;
+        QVERIFY(service.registerDevice(0, false));
+        QVERIFY(DongleService::savePolicy(dir.path(), true, {}, hid1));
+        DongleVerificationPage page(dir.path());
+        confirm();
+        QVERIFY(QMetaObject::invokeMethod(&page, "destroySelectedRegistration", Qt::DirectConnection));
+        QVERIFY(!service.verifyDevice(0));
+        bool enabled = true;
+        QByteArray bound;
+        QVERIFY(DongleService::loadPolicy(dir.path(), &enabled, nullptr, &bound));
+        QVERIFY(!enabled);
+        QVERIFY(bound.isEmpty());
+        QVERIFY(DongleService::verifyPolicy(dir.path()));
+    }
+    void pageDoesNotEraseBeforePolicyCanBeDisabled() {
+        QTemporaryDir dir;
+        DongleService service;
+        QVERIFY(service.registerDevice(0, false));
+        QVERIFY(DongleService::savePolicy(dir.path(), true, {}, hid1));
+        DongleVerificationPage page(dir.path());
+        // A directory at the policy filename deterministically prevents atomic replacement.
+        QVERIFY(QFile::remove(DongleService::policyPath(dir.path())));
+        QVERIFY(QDir().mkdir(DongleService::policyPath(dir.path())));
+        confirm();
+        QVERIFY(QMetaObject::invokeMethod(&page, "destroySelectedRegistration", Qt::DirectConnection));
+        QCOMPARE(writes(), 1);
+        QVERIFY(service.verifyDevice(0));
+    }
+    void pageKeepsPolicyDisabledAfterEraseFailure() {
+        QTemporaryDir dir;
+        DongleService service;
+        QVERIFY(service.registerDevice(0, false));
+        QVERIFY(DongleService::savePolicy(dir.path(), true, {}, hid1));
+        DongleVerificationPage page(dir.path());
+        set(6, 12);
+        confirm();
+        QVERIFY(QMetaObject::invokeMethod(&page, "destroySelectedRegistration", Qt::DirectConnection));
+        QVERIFY(service.verifyDevice(0));
+        bool enabled = true;
+        QByteArray bound;
+        QVERIFY(DongleService::loadPolicy(dir.path(), &enabled, nullptr, &bound));
+        QVERIFY(!enabled);
+        QCOMPARE(bound, hid1);
+        QVERIFY(!page.findChild<QCheckBox *>()->isChecked());
+        QVERIFY(page.findChild<QLabel *>("dongleStatus")->text().contains(QStringLiteral("策略已停用")));
     }
 };
 QTEST_MAIN(DongleTests)

@@ -99,7 +99,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 set(ROCKEY_SDK_VALIDATION_ARGS "")
 if(ROCKEY_SDK_ARCH)
-  set(ROCKEY_SDK_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/rockey/${ROCKEY_SDK_ARCH}/libRockeyARM.so.0.3")
+  set(ROCKEY_SDK_LIBRARY libRockeyARM.so.0.3)
+  if(ROCKEY_SDK_ARCH STREQUAL "linux-aarch64")
+    set(ROCKEY_SDK_LIBRARY libRockeyARM.so.1.0)
+  endif()
+  set(ROCKEY_SDK_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/rockey/${ROCKEY_SDK_ARCH}/${ROCKEY_SDK_LIBRARY}")
   include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/ValidateRockeySdk.cmake")
   set(ROCKEY_SDK_VALIDATION_ARGS
     COMMAND ${CMAKE_COMMAND}

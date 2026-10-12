@@ -95,6 +95,8 @@
         "-no-color",
         "-no-interactsh",
         "-duc",
+        "-severity",
+        "medium,high,critical",
         "-timeout",
         "5"
       ],
