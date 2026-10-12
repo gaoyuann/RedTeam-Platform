@@ -58,7 +58,7 @@ int main(int argc, char **argv) {
     if (page.m_nodeItems.size() != 5 || page.m_edgeItems.size() != 4) return 2;
     if (page.m_edgeItems.value("a")->pen().style() != Qt::SolidLine) return 4;
     if (page.m_edgeItems.value("request")->pen().style() != Qt::DashDotLine) return 15;
-    if (page.m_graphView->backgroundBrush().color() != QColor("#f3f6fb")) return 5;
+    if (page.m_graphView->backgroundBrush().color() != QColor("#f5f7fa")) return 5;
     for (auto *node : page.m_nodeItems) {
         if (node->boundingRect().width() < 220) return 6;
     }
@@ -143,6 +143,35 @@ int main(int argc, char **argv) {
     if (!page.m_editorDirty || !page.m_autoLoadAttempted || page.m_topologyDocument.nodes.size()!=7) return 26;
     page.m_editorDirty = false;
     if (argc>1 && !page.grab().save(QString::fromLocal8Bit(argv[1]))) return 19;
+    // Navigation and selection stay inside the asset/topology workspace.
+    auto *sideTabs = page.findChild<QTabWidget *>("topologySideTabs");
+    auto *workspace = page.findChild<QSplitter *>("topologyWorkspace");
+    if (!sideTabs || !workspace || workspace->count() != 2) return 27;
+    for (const auto &name : {"topologySources", "topologyInspector", "topologyInfo"}) {
+        auto *panel = page.findChild<QWidget *>(name);
+        if (!panel || panel->isWindow()) return 28;
+    }
+    auto *sourcesButton = page.findChild<QPushButton *>("topologySourcesButton");
+    sourcesButton->click();
+    if (!page.m_scanTaskTable->isVisible() || !page.m_graphView->isVisible()) return 29;
+    page.m_nodeItems.value("target")->setSelected(true);
+    app.processEvents();
+    if (!page.m_nodeIpEdit->isVisible() || page.m_nodeIpEdit->text() != "192.168.1.111") return 30;
+    page.setStatusMessage(QStringLiteral("同页资产与拓扑 · 界面测试示例数据，不代表真实扫描结果"));
+    for (const QSize &size : {QSize(1360, 860), QSize(1024, 600)}) {
+        page.resize(size);
+        app.processEvents();
+        page.onResetView();
+        if (page.width() != size.width() || page.height() != size.height()
+            || page.m_graphView->width() < 300) return 31;
+        if (argc > 1 && !page.grab().save(QString::fromLocal8Bit(argv[1])
+            + QStringLiteral(".%1x%2.png").arg(size.width()).arg(size.height()))) return 32;
+        sourcesButton->click();
+        app.processEvents();
+        if (argc > 1 && !page.grab().save(QString::fromLocal8Bit(argv[1])
+            + QStringLiteral(".records-%1x%2.png").arg(size.width()).arg(size.height()))) return 33;
+        sideTabs->setCurrentIndex(0);
+    }
     // Reproduce the two-node report with generated scanner names and a target
     // that has services. Check real text bounds at normal and enlarged fonts.
     const QFont originalFont = page.font();
