@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { taskResultsSnapshot, createTaskReport, readTaskReport, taskReportHtml, recordTaskReportExport } from '../services/taskResults.js';
-import { transitionReportReview } from '../services/reportReview.js';
 import { requireActor } from '../middleware/recordAccess.js';
 
 export default function (db) {
@@ -20,16 +19,6 @@ export default function (db) {
     res.status(result.reused ? 200 : 201).json({ status: 'ok', data: result });
   });
   router.get('/reports/:reportId', (req, res) => res.json({ status: 'ok', data: readTaskReport(db, req.taskPipeline, req.params.reportId) }));
-  router.post('/reports/:reportId/review', (req, res) => {
-    const result = db.transaction(() => {
-      const pipeline = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(req.params.id);
-      if (!pipeline) throw Object.assign(new Error('任务不存在'), { status: 404 });
-      if (req.user.role !== 'admin' && req.user.sub !== pipeline.created_by)
-        throw Object.assign(new Error('没有权限审阅此任务报告'), { status: 403 });
-      return transitionReportReview(db, pipeline, readTaskReport(db, pipeline, req.params.reportId), req.user, req.body);
-    })();
-    res.status(201).json({ status: 'ok', data: result });
-  });
   router.get('/reports/:reportId/export', (req, res) => {
     const format = req.query.format || 'json';
     if (!['json', 'html'].includes(format)) return res.status(400).json({ status: 'error', error: { message: '任务追溯报告目前仅支持 JSON 或 HTML 导出' } });

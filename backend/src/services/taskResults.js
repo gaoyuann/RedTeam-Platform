@@ -2,7 +2,6 @@ import { createHash, randomUUID } from 'crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { taskExecutionSnapshot, taskDisplayText, taskDisplayValue } from './taskExecution.js';
 import { appendTaskLog } from './taskActivity.js';
-import { reportReview } from './reportReview.js';
 
 function json(value, fallback = null) {
   try { return typeof value === 'string' ? JSON.parse(value) : value ?? fallback; } catch { return fallback; }
@@ -54,13 +53,10 @@ function frozenContent(row, pipeline) {
 
 function reportMetadata(db, row, pipeline) {
   const content = frozenContent(row, pipeline);
-  const review = content ? reportReview(db, row.report_id, content.provenance.source_fingerprint) : null;
-  const summary = review ? Object.fromEntries(Object.entries(review).filter(([key]) => key !== 'history')) : null;
   return { report_id: row.report_id, run_id: row.run_id, title: taskDisplayText(row.title), status: row.status,
     generated_by: taskDisplayText(row.generated_by), created_at: row.created_at,
     kind: content ? 'trace_snapshot' : row.template === 'task_trace_v1' ? 'invalid' : 'legacy',
-    source_fingerprint: content?.provenance.source_fingerprint || null,
-    review: summary };
+    source_fingerprint: content?.provenance.source_fingerprint || null };
 }
 
 function reportRows(db, pipeline) {
@@ -147,7 +143,7 @@ export function createTaskReport(db, pipeline, actor, body) {
       provenance: { pipeline_id: pipeline.pipeline_id, owner: pipeline.created_by, target: snapshot.target,
         run_id: body.run_id, playbook_id: snapshot.execution.run.playbook_id, plan: snapshot.trace.plan,
         source_fingerprint: snapshot.source_fingerprint, captured_at: snapshot.captured_at },
-      notice: '此报告是脱敏、限长的来源快照草稿，不是完整原始证据、审批结论或风险评级；历史快照不随后续记录变化自动更新。', results }, 0, 200);
+      notice: '此报告是脱敏、限长的来源快照，不是完整原始证据、审批结论或风险评级；历史快照不随后续记录变化自动更新。', results }, 0, 200);
     const reportId = `task_rpt_${randomUUID()}`;
     const title = taskDisplayText(body.title?.trim() || `任务结果记录 - ${snapshot.task_name}`).slice(0, 120);
     const now = new Date().toISOString();
@@ -170,7 +166,7 @@ export function readTaskReport(db, pipeline, reportId) {
   const content = frozenContent(row, pipeline);
   if (!content && (row.run_id !== pipeline.run_id || row.template === 'task_trace_v1')) fail(409, '报告缺少有效任务来源，不能作为本任务追溯快照');
   return { pipeline_id: pipeline.pipeline_id, owner: pipeline.created_by, target: taskDisplayText(pipeline.target),
-    report: { ...reportMetadata(db, row, pipeline), review: content ? reportReview(db, row.report_id, content.provenance.source_fingerprint) : null,
+    report: { ...reportMetadata(db, row, pipeline),
       content: content || { schema_version: 0,
       notice: '旧报告只与当前 Run 关联，缺少完整任务及批准预案来源；原结论未重新验证，不支持追溯快照导出。',
       stored: taskDisplayValue(json(row.content, { notice: '原报告 JSON 不可解析' })) } } };
@@ -180,8 +176,7 @@ export function recordTaskReportExport(db, document, actor, format) {
   const report = document.report;
   db.prepare(`INSERT INTO audit_log (type, execution_id, run_id, user_role, target, reasons, timestamp)
     VALUES ('task_report_export', ?, ?, ?, ?, ?, ?)`).run(report.report_id, report.run_id, actor.role, document.target,
-      JSON.stringify({ pipeline_id: document.pipeline_id, actor: actor.sub, format, source_fingerprint: report.source_fingerprint,
-        review_revision: report.review?.revision ?? null, review_state: report.review?.state ?? null }), new Date().toISOString());
+      JSON.stringify({ pipeline_id: document.pipeline_id, actor: actor.sub, format, source_fingerprint: report.source_fingerprint }), new Date().toISOString());
   appendTaskLog(db, document.pipeline_id, `请求导出已保存的报告快照 · ${report.report_id} · ${format.toUpperCase()}`);
 }
 
@@ -197,7 +192,6 @@ export function taskReportHtml(document) {
   return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><title>${escapeHtml(report.title)}</title><style>body{font:15px sans-serif;max-width:1100px;margin:32px auto;padding:0 20px;color:#1e293b}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #dbe5f0;padding:8px;text-align:left}th{background:#eff6ff}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f8fafc;padding:16px}.notice{background:#fffbeb;padding:16px}</style></head><body>
     <h1>${escapeHtml(report.title)}</h1><p>报告 ${escapeHtml(report.report_id)} · ${escapeHtml(report.status)} · ${escapeHtml(report.generated_by)}</p>
     <p class="notice">${escapeHtml(content.notice)}<br>${escapeHtml(results.assessment.notice)}</p>
-    <h2>导出时的独立审阅记录（不改写冻结正文）</h2><pre>${escapeHtml(JSON.stringify(report.review, null, 2))}</pre>
     <h2>来源链</h2><pre>${escapeHtml(JSON.stringify(content.provenance, null, 2))}</pre>
     <p>Run 状态：${escapeHtml(results.execution.run.status)} · 风险：${escapeHtml(results.assessment.risk_level)} · 教学得分：${escapeHtml(results.assessment.teaching_score?.percent ?? '未记录')}</p>
     ${table('发现候选（未复核）', ['类别', '名称', '风险标签', '来源'], results.findings.map(row => [row.category, row.name, row.severity, row.source]))}

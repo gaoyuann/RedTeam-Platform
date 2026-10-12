@@ -240,32 +240,21 @@ test('isolated task closes the loop without crossing owner, target, or evidence 
   assert.match(JSON.stringify(result.data), /候选/);
 
   const reportFingerprint = result.data.data.report.source_fingerprint;
-  result = await request('POST', `/api/pipelines/${pipelineId}/results/reports/${reportId}/review`, 'alice', {
-    action: 'submit', revision: 0, source_fingerprint: reportFingerprint, note: '确认材料范围，不确认漏洞成立', acknowledged: true,
-  });
-  assert.equal(result.response.status, 201);
-  assert.equal(result.data.data.review.state, 'submitted');
-  result = await request('POST', `/api/pipelines/${pipelineId}/results/reports/${reportId}/review`, 'admin', {
-    action: 'approve', revision: 1, source_fingerprint: reportFingerprint, note: '管理员完成材料审阅', acknowledged: true,
-  });
-  assert.equal(result.response.status, 201);
-  assert.equal(result.data.data.review.state, 'reviewed');
+  assert.equal(result.data.data.report.review, undefined);
 
   result = await request('GET', `/api/pipelines/${pipelineId}/results/reports/${reportId}/export?format=html`, 'alice');
   assert.equal(result.response.status, 200);
   assert.match(result.response.headers.get('content-type'), /text\/html/);
   assert.match(result.data, /来源链/);
-  assert.match(result.data, /不代表漏洞已验证/);
+  assert.match(result.data, /不等于漏洞成立/);
 
   result = await request('GET', `/api/pipelines/${pipelineId}/logs`, 'alice');
   assert.equal(result.response.status, 200);
   assert.ok(result.data.data.some(row => row.message.includes('预案')));
-  assert.ok(result.data.data.some(row => row.message.includes('报告审阅')));
 
   const auditTypes = db.prepare('SELECT type FROM audit_log WHERE execution_id = ? ORDER BY id').all(pipelineId).map(row => row.type);
   assert.deepEqual(auditTypes, ['pipeline_create', 'task_plan_create', 'task_plan_submit', 'task_plan_approve']);
   assert.ok(db.prepare("SELECT 1 FROM audit_log WHERE type = 'task_report_generate' AND target = 'fixture.invalid'").get());
-  assert.ok(db.prepare("SELECT 1 FROM audit_log WHERE type = 'task_report_review' AND target = 'fixture.invalid'").get());
 
   await context.test('quick and full creation share identity and authorization contracts', async () => {
     const full = await request('POST', '/api/pipelines', 'alice', {
@@ -302,7 +291,6 @@ test('isolated task closes the loop without crossing owner, target, or evidence 
       ['POST', '/assistant', { message: 'fixture question' }],
       ['POST', '/plan/approve', { revision: approved.revision }],
       ['POST', '/results/reports', { run_id: 'run-closed-loop', source_fingerprint: reportFingerprint }],
-      ['POST', `/results/reports/${reportId}/review`, { action: 'approve' }],
     ]) {
       const denied = await request(method, `/api/pipelines/${pipelineId}${suffix}`, 'bob', body);
       assert.equal(denied.response.status, 403, `${method} ${suffix}`);
@@ -351,21 +339,14 @@ test('isolated task closes the loop without crossing owner, target, or evidence 
     db.prepare("UPDATE pipelines SET scan_task_id = 'scan-closed-loop' WHERE pipeline_id = ?").run(pipelineId);
   });
 
-  await context.test('review is versioned separately and never verifies candidates', async () => {
-    const beforeContent = db.prepare('SELECT content FROM test_reports WHERE report_id = ?').get(reportId).content;
-    const selfReview = await request('POST', `/api/pipelines/${pipelineId}/results/reports/${reportId}/review`, 'alice', {
-      action: 'approve', revision: 2, source_fingerprint: reportFingerprint, note: '不能自审', acknowledged: true,
-    });
-    assert.equal(selfReview.response.status, 403);
-    const staleReview = await request('POST', `/api/pipelines/${pipelineId}/results/reports/${reportId}/review`, 'admin', {
-      action: 'reopen', revision: 1, source_fingerprint: reportFingerprint, note: '过期审阅版本', acknowledged: true,
-    });
-    assert.equal(staleReview.response.status, 409);
-    const reviewed = await request('GET', `/api/pipelines/${pipelineId}/results/reports/${reportId}`, 'alice');
-    assert.equal(reviewed.data.data.report.review.state, 'reviewed');
-    assert.equal(reviewed.data.data.report.status, 'draft');
-    assert.ok(reviewed.data.data.report.content.results.findings.every(row => row.state === 'unreviewed'));
-    assert.equal(db.prepare('SELECT content FROM test_reports WHERE report_id = ?').get(reportId).content, beforeContent);
+  await context.test('reports are generated directly and the removed review endpoint is unavailable', async () => {
+    const document = await request('GET', `/api/pipelines/${pipelineId}/results/reports/${reportId}`, 'alice');
+    assert.equal(document.response.status, 200);
+    assert.equal(document.data.data.report.review, undefined);
+    assert.equal(document.data.data.report.status, 'draft');
+    assert.ok(document.data.data.report.content.results.findings.every(row => row.state === 'unreviewed'));
+    const removed = await request('POST', `/api/pipelines/${pipelineId}/results/reports/${reportId}/review`, 'admin', { action: 'approve' });
+    assert.equal(removed.response.status, 404);
   });
 
   await context.test('stale source fingerprints cannot overwrite frozen reports', async () => {
@@ -392,12 +373,12 @@ test('isolated task closes the loop without crossing owner, target, or evidence 
     const jsonExport = await request('GET', `/api/pipelines/${pipelineId}/results/reports/${reportId}/export?format=json`, 'alice');
     assert.equal(jsonExport.response.status, 200);
     assert.equal(jsonExport.response.headers.get('x-content-type-options'), 'nosniff');
-    assert.equal(jsonExport.data.report.review.state, 'reviewed');
+    assert.equal(jsonExport.data.report.review, undefined);
     assert.equal(jsonExport.data.report.source_fingerprint, reportFingerprint);
     const unsupported = await request('GET', `/api/pipelines/${pipelineId}/results/reports/${reportId}/export?format=pdf`, 'alice');
     assert.equal(unsupported.response.status, 400);
   });
   assert.deepEqual(db.pragma('foreign_key_check'), []);
-  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM task_report_reviews WHERE report_id = ?").get(reportId).count, 2);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM task_report_reviews WHERE report_id = ?").get(reportId).count, 0);
   assert.ok(db.prepare("SELECT 1 FROM audit_log WHERE type = 'task_report_export' AND execution_id = ?").get(reportId));
 });

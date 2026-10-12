@@ -11,8 +11,6 @@ class QTabWidget;
 class QTableWidget;
 class QTimer;
 class MetricCard;
-class QComboBox;
-class QCheckBox;
 
 class TaskResultsPanel : public QWidget {
   Q_OBJECT
@@ -38,8 +36,6 @@ private:
   void updateButtons();
   void generateReport();
   void exportReport(const QString &format);
-  void reviewReport();
-  bool validReview(const QJsonObject &review, const QString &fingerprint = {}) const;
   QString apiPath() const;
   ApiClient *m_api;
   QString m_role;
@@ -61,13 +57,6 @@ private:
   bool m_fresh = false;
   bool m_generating = false;
   bool m_exporting = false;
-  bool m_reviewing = false;
-  QWidget *m_reviewForm;
-  QLabel *m_reviewNotice;
-  QComboBox *m_reviewAction;
-  QCheckBox *m_reviewAcknowledged;
-  QPlainTextEdit *m_reviewNote;
-  QPushButton *m_reviewSubmit;
   QLabel *m_state;
   QLabel *m_identity;
   QLabel *m_assessment;
