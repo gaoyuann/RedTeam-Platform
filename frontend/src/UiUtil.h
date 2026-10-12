@@ -12,9 +12,21 @@
 // ── 纯视觉层小工具（不改数据流） ─────────────────────────────────────
 namespace UiUtil {
 
+inline QString taskStatusText(const QString &status)
+{
+  if (status == "created") return QStringLiteral("待运行");
+  if (status == "running") return QStringLiteral("进行中");
+  if (status == "paused") return QStringLiteral("已暂停");
+  if (status == "awaiting_approval") return QStringLiteral("待确认");
+  if (status == "completed") return QStringLiteral("已完成");
+  if (status == "failed") return QStringLiteral("失败");
+  if (status == "cancelled") return QStringLiteral("已取消");
+  return status.isEmpty() ? QStringLiteral("未知") : QStringLiteral("未知状态：%1").arg(status);
+}
+
 inline void styleToolbarButton(QPushButton *button)
 {
-  button->setFixedHeight(36);
+  button->setFixedHeight(Theme::ControlHeight);
   button->setCursor(Qt::PointingHandCursor);
   button->setStyleSheet(Theme::ToolbarButtonStyle);
 }
@@ -43,7 +55,15 @@ public:
   static void attach(QAbstractItemView *view, const QString &text)
   {
     if (!view || !view->model()) return;
+    if (auto *existing = view->viewport()->findChild<QLabel *>(QStringLiteral("itemViewEmptyHint"), Qt::FindDirectChildrenOnly)) {
+      existing->setProperty("emptyText", text);
+      reset(view);
+      return;
+    }
     auto *label = new QLabel(text, view->viewport());
+    label->setObjectName(QStringLiteral("itemViewEmptyHint"));
+    label->setProperty("emptyText", text);
+    label->setTextFormat(Qt::PlainText);
     auto *hint = new EmptyHint(label);
     hint->m_viewport = view->viewport();
     hint->m_label = label;
@@ -65,6 +85,23 @@ public:
     QObject::connect(model.data(), &QAbstractItemModel::modelReset, hint, update);
     QObject::connect(model.data(), &QAbstractItemModel::layoutChanged, hint, update);
     update();
+  }
+
+  static void setState(QAbstractItemView *view, const QString &text, bool error = false)
+  {
+    if (!view) return;
+    auto *label = view->viewport()->findChild<QLabel *>(QStringLiteral("itemViewEmptyHint"), Qt::FindDirectChildrenOnly);
+    if (!label) return;
+    label->setText(text);
+    label->setStyleSheet(QStringLiteral("color:%1; font-size:13px; background:transparent; padding:0 16px;")
+        .arg(error ? QStringLiteral("#b42318") : QStringLiteral("#64748b")));
+  }
+
+  static void reset(QAbstractItemView *view)
+  {
+    if (!view) return;
+    auto *label = view->viewport()->findChild<QLabel *>(QStringLiteral("itemViewEmptyHint"), Qt::FindDirectChildrenOnly);
+    if (label) setState(view, label->property("emptyText").toString());
   }
 
   bool eventFilter(QObject *obj, QEvent *ev) override

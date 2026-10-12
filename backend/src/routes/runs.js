@@ -1,4 +1,4 @@
-import {canAccessProgramRun} from '../services/programAccess.js';
+import {canAccessProgramRun,canAccessProgramTask} from '../services/programAccess.js';
 import { Router } from 'express';
 import { sourceTarget } from '../services/sourceScanConnections.js';
 import { randomUUID } from 'crypto';
@@ -8,21 +8,38 @@ import { buildAttackGraph, buildAttackGraphSummary } from '../services/graphBuil
 import { inferNextActions } from '../services/pathPlanner.js';
 import { runPreflightChecks } from '../services/preflightGate.js';
 import { getWsManager } from '../services/wsManager.js';
+import { requireActor, recordParam, checkRecordAccess, getRecord } from '../middleware/recordAccess.js';
+import { assertPlaybookUse } from '../services/playbookAccess.js';
+import { summarizeRunResultCounts } from '../services/runResultCounts.js';
 
 export default function (db) {
   const router = Router();
+  router.use(requireActor(db));
+  router.param('runId', recordParam(db, 'run'));
+  router.post(['/:runId/execute', '/:runId/preflight'], (req, res, next) => {
+    const run = getRecord(db, 'run', req.params.runId);
+    if (run?.playbook_id) {
+      try { assertPlaybookUse(db, run.playbook_id, req.user, run.user_sub); }
+      catch (error) { return res.status(error.status || 500).json({ status: 'error', error: { message: error.message } }); }
+    }
+    next();
+  });
 
   router.get('/', (req, res) => {
     const { status, playbook_id, user_sub, limit, offset } = req.query;
     let sql = 'SELECT * FROM execution_runs WHERE 1=1';
     const params = [];
+    if (req.user.role !== 'admin') { sql += ' AND user_sub = ?'; params.push(req.user.sub); }
     if (status) { sql += ' AND status = ?'; params.push(status); }
     if (playbook_id) { sql += ' AND playbook_id = ?'; params.push(playbook_id); }
     if (user_sub) { sql += ' AND user_sub = ?'; params.push(user_sub); }
     sql += ' ORDER BY created_at DESC';
-    if (limit) { sql += ' LIMIT ?'; params.push(Number(limit)); }
-    if (offset) { sql += ' OFFSET ?'; params.push(Number(offset)); }
-    const rows = db.prepare(sql).all(...params).filter(row=>canAccessProgramRun(db,req.user,row));
+    const pageLimit = limit === undefined ? null : Number(limit);
+    const pageOffset = offset === undefined ? 0 : Number(offset);
+    if ((pageLimit !== null && (!Number.isSafeInteger(pageLimit) || pageLimit < 1)) || !Number.isSafeInteger(pageOffset) || pageOffset < 0)
+      return res.status(400).json({ status: 'error', error: { message: 'limit 和 offset 必须为有效的分页整数' } });
+    if (pageLimit !== null || pageOffset) { sql += ' LIMIT ? OFFSET ?'; params.push(pageLimit ?? -1, pageOffset); }
+    const rows = db.prepare(sql).all(...params).filter(row => canAccessProgramRun(db, req.user, row));
     // Enrich each row with playbook_name for display
     for (const row of rows) {
       if (row.playbook_id) {
@@ -36,7 +53,7 @@ export default function (db) {
   });
 
   router.use('/:runId',(req,res,next)=>{
-    const run=db.prepare('SELECT playbook_id FROM execution_runs WHERE run_id=?').get(req.params.runId);
+    const run=db.prepare('SELECT playbook_id,scan_task_id FROM execution_runs WHERE run_id=?').get(req.params.runId);
     if(run && !canAccessProgramRun(db,req.user,run)) return res.status(403).json({status:'error',error:{message:'没有权限访问此程序验证执行'}});
     next();
   });
@@ -46,6 +63,10 @@ export default function (db) {
     row.steps = db.prepare('SELECT * FROM execution_steps WHERE run_id = ? ORDER BY step_index').all(req.params.runId);
     row.evidence = db.prepare('SELECT * FROM evidence_records WHERE run_id = ? ORDER BY recorded_at').all(req.params.runId);
     row.attempts = db.prepare('SELECT * FROM execution_attempts WHERE run_id = ? ORDER BY id').all(req.params.runId);
+    const planned = row.playbook_id
+      ? db.prepare('SELECT COUNT(*) AS count FROM playbook_steps WHERE playbook_id = ?').get(row.playbook_id).count
+      : 0;
+    row.result_counts = summarizeRunResultCounts(row.steps, row.status, { knownStepCount: planned });
     // Enrich with playbook name for display
     if (row.playbook_id) {
       const pb = db.prepare('SELECT name FROM playbooks WHERE playbook_id = ?').get(row.playbook_id);
@@ -57,7 +78,7 @@ export default function (db) {
   });
 
   router.post('/', (req, res) => {
-    let { run_id, playbook_id, user_sub, user_role, target, scan_task_id } = req.body;
+    let { run_id, playbook_id, target, scan_task_id } = req.body;
     const pb=db.prepare('SELECT metadata FROM playbooks WHERE playbook_id=?').get(playbook_id || '');
     let source;
     try {source=JSON.parse(pb?.metadata || '{}').source_verification;} catch {}
@@ -69,17 +90,28 @@ export default function (db) {
         scan_task_id=source.scan_task_id;
       } catch(error) {return res.status(400).json({status:'error',error:{message:error.message}});}
     }
+    if (!canAccessProgramTask(db,req.user,scan_task_id)) return res.status(403).json({status:'error',error:{message:'没有权限使用此源码任务'}});
+    if (playbook_id) {
+      try { assertPlaybookUse(db, playbook_id, req.user); }
+      catch (error) { return res.status(error.status || 500).json({ status: 'error', error: { message: error.message } }); }
+    }
+    if (scan_task_id) {
+      if (!checkRecordAccess(db, 'scan', scan_task_id, req, res)) return;
+      const scan = getRecord(db, 'scan', scan_task_id);
+      if (scan.created_by !== req.user.sub || scan.target !== target)
+        return res.status(409).json({ status: 'error', error: { message: '关联扫描必须属于当前用户且目标相同' } });
+    }
     const rid = run_id || `run_${randomUUID().slice(0, 12)}`;
     try {
       const now = new Date().toISOString();
       db.prepare(`INSERT INTO execution_runs (run_id, playbook_id, user_sub, user_role, target, scan_task_id, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)`).run(rid, playbook_id || null, user_sub || null, user_role || null, target || null, scan_task_id || null, now, now);
+        VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)`).run(rid, playbook_id || null, req.user.sub, req.user.role, target || null, scan_task_id || null, now, now);
       const row = db.prepare('SELECT * FROM execution_runs WHERE run_id = ?').get(rid);
       // WebSocket: notify run created
       const ws = getWsManager();
-      if (ws) ws.broadcast('run:created', {
+      if (ws) (source ? (event,data)=>ws.broadcastProgram(req.user.sub,event,data) : (event,data)=>ws.broadcast(event,data))('run:created', {
         runId: rid, playbookId: playbook_id || null, target: target || null,
-        userId: req.user?.sub || user_sub || null,
+        userId: req.user.sub,
         username: req.user?.sub || null,
         role: req.user?.role || null,
       });
@@ -104,9 +136,9 @@ export default function (db) {
     if (!run) return res.status(404).json({ status: 'error', error: { message: 'Run not found' } });
 
     const row = db.prepare(`
-      INSERT INTO blue_team_interventions (run_id, type, target, port, proto, path)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(req.params.runId, type, target || null, port || null, proto || 'tcp', path || null);
+      INSERT INTO blue_team_interventions (run_id, type, target, port, proto, path, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(req.params.runId, type, target || null, port || null, proto || 'tcp', path || null, req.user.sub);
 
     const intervention = db.prepare('SELECT * FROM blue_team_interventions WHERE id = ?').get(row.lastInsertRowid);
     res.status(201).json({ status: 'ok', data: intervention });
@@ -213,7 +245,7 @@ export default function (db) {
 
   // ── Trigger Execution ───────────────────────────────────────────────
   router.post('/:runId/execute', async (req, res) => {
-    const run = db.prepare('SELECT run_id, playbook_id, status, engine_type FROM execution_runs WHERE run_id = ?').get(req.params.runId);
+    const run = db.prepare('SELECT run_id, playbook_id, scan_task_id, user_sub, status, engine_type FROM execution_runs WHERE run_id = ?').get(req.params.runId);
     if (!run) return res.status(404).json({ status: 'error', error: { message: 'Run not found' } });
     if (run.status !== 'PENDING') return res.status(409).json({ status: 'error', error: { message: `Run is ${run.status}, expected PENDING; create a new run to execute again` } });
     if (!run.playbook_id || !db.prepare('SELECT 1 FROM playbook_steps WHERE playbook_id = ? LIMIT 1').get(run.playbook_id)) {
@@ -236,7 +268,8 @@ export default function (db) {
     });
     // WebSocket: notify run started
     const ws = getWsManager();
-    if (ws) ws.broadcast('run:started', {
+    const programTask=run.scan_task_id && db.prepare('SELECT scan_type FROM scan_tasks WHERE scan_task_id=?').get(run.scan_task_id);
+    if (ws) (programTask?.scan_type==='source_scan' ? (event,data)=>ws.broadcastProgram(run.user_sub,event,data) : (event,data)=>ws.broadcast(event,data))('run:started', {
       runId: req.params.runId,
       userId: req.user?.sub || null,
       username: req.user?.sub || null,

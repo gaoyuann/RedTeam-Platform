@@ -7,7 +7,7 @@ import {fileURLToPath} from 'node:url';
 import http from 'node:http';
 import net from 'node:net';
 import Database from 'better-sqlite3';
-import {sourceTarget,loadSourceConnections,resolveSourceConnection,publicSourceConnection} from '../src/services/sourceScanConnections.js';
+import {sourceTarget,loadSourceConnections,resolveSourceConnection,resolveSourceConnectionForTarget,publicSourceConnection} from '../src/services/sourceScanConnections.js';
 import {collectSource,createSourceSnapshot} from '../src/services/sourceSnapshot.js';
 import {createSourceContextIndex,relatedSourceContext} from '../src/services/sourceContext.js';
 import {buildProgramContext} from '../src/services/programAgent.js';
@@ -61,6 +61,38 @@ test('source projects bind exact deployment endpoints and do not expose credenti
   assert.throws(()=>parseTargetRequest(args({url:'tcp://host:8091',exchanges:[{send:'x'.repeat(9000)}]})),/8 KB/);
 });
 
+test('runtime address automatically selects the one matching source project', async () => {
+  const connections=[
+    {id:'a',targets:['http://192.0.2.10:8080/']},
+    {id:'b',targets:['tcp://192.0.2.10:8091']}
+  ];
+  assert.equal((await resolveSourceConnectionForTarget('http://192.0.2.10:8080',connections)).id,'a');
+  assert.equal(await resolveSourceConnectionForTarget('http://192.0.2.10:8081',connections),null);
+  await assert.rejects(resolveSourceConnectionForTarget('http://192.0.2.10:8080',connections.concat({id:'c',targets:['http://192.0.2.10:8080/']})),/多个源码项目/);
+});
+
+test('HTTP source directory follows same-origin index and freezes C/C++ files',async t=>{
+  const pages={
+    '/source/':'<a href="main.c">main.c</a><a href="sub/">sub/</a><a href="../outside.c">outside</a><a href="/source2/outside.c">outside</a><a href="large.c">large</a><a href="invalid.c">invalid</a>',
+    '/source/sub/':'<a href="helper.h">helper.h</a>',
+    '/source/main.c':'int main(){return 0;}',
+    '/source/sub/helper.h':'#define OK 1',
+    '/source/large.c':'x'.repeat(512*1024+1),
+    '/source/invalid.c':Buffer.from([0xff])
+  };
+  const requested=[];
+  const port=await listen(t,http.createServer((req,res)=>{
+    requested.push(req.url);
+    if(!(req.url in pages)){res.writeHead(404);return res.end();}
+    res.setHeader('content-type',req.url.endsWith('/')?'text/html':'text/plain');res.end(pages[req.url]);
+  }));
+  const connection={id:'web',kind:'http',source_url:`http://127.0.0.1:${port}/source/`,targets:[`http://127.0.0.1:${port}/`],architecture:'arm64'};
+  const snapshot=await createSourceSnapshot(connection,{snapshotRoot:await temp(t)});
+  assert.deepEqual(snapshot.documents.map(file=>file.path).sort(),['main.c','sub/helper.h']);
+  assert.equal(snapshot.skipped.length,2);
+  assert.ok(!requested.includes('/outside.c') && !requested.includes('/source2/outside.c'));
+});
+
 test('collector reads actual UTF-8 sources, excludes symlinks and bounds files; snapshot freezes evidence',async t=>{
   const path=await temp(t), source=join(path,'source');
   await mkdir(source); await mkdir(join(source,'build'));
@@ -81,6 +113,24 @@ test('collector reads actual UTF-8 sources, excludes symlinks and bounds files; 
   assert.throws(()=>normalizeSourceFinding({file:'else.c',start_line:2,title:'x',reason:'y'},snapshot.documents),/未读取/);
   assert.throws(()=>normalizeSourceFinding({file:'main.c',start_line:50,title:'x',reason:'y'},snapshot.documents),/未读取/);
   await assert.rejects(collectSource(connection,{execute:async()=>({stdout:JSON.stringify({files:[{path:'../outside.c',content:'x'}],skipped:[]})})}),/无效路径/);
+});
+
+test('task-supplied HTTP directory is read by the audit without a configured source project',async t=>{
+  const port=await listen(t,http.createServer((req,res)=>{
+    if(req.url==='/custom/') return res.end('<a href="main.c">main.c</a>');
+    if(req.url==='/custom/main.c') return res.end('int main(){return 0;}');
+    res.writeHead(404);res.end();
+  }));
+  const db=auditDb(t), snapshotRoot=await temp(t), target=`http://127.0.0.1:${port}/app/`;
+  const result=await auditSources({scan_task_id:'custom',target},{db,
+    parameters:{source_url:'/custom/',ai_analysis:false},
+    runTool:async()=>({success:true,stdout:'{}',stderr:''}),parseResults:()=>[],
+    snapshot:(connection,options)=>createSourceSnapshot(connection,{...options,snapshotRoot})});
+  assert.equal(result.outcomes.find(o=>o.tool_id==='source-reader').success,true);
+  const row=db.prepare('SELECT manifest FROM source_audits').get();
+  assert.equal(JSON.parse(row.manifest).source_url,`http://127.0.0.1:${port}/custom/`);
+  const coverage=JSON.parse(db.prepare("SELECT result_data FROM scan_results WHERE result_type='source_coverage'").get().result_data);
+  assert.equal(coverage.source_read,true);assert.equal(coverage.files,1);
 });
 
 test('SSH collector uses a fixed read-only program and strict host verification',async ()=>{

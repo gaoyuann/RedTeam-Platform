@@ -312,17 +312,25 @@ void DongleVerificationPage::destroySelectedRegistration() {
                               QStringLiteral("将清除设备 %1 的本平台注册记录。此操作不可撤销，是否继续？").arg(hidText(selectedHid)),
                               QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Yes) return;
     QString error;
+    // Persist disabling before erasing the bound key. Otherwise a failed
+    // policy save leaves the client requiring a record we have just erased.
+    const bool wasBound = selectedHid == m_registeredHid;
+    if (wasBound && !DongleService::savePolicy(m_configDir, false, QString(), m_registeredHid, &error)) {
+        setStatus(QStringLiteral("无法停用本机策略，未销毁设备记录：%1").arg(error), QStringLiteral("#b91c1c"));
+        return;
+    }
     if (!m_dongleService.destroyRegistration(index, &error, selectedHid)) {
-        setStatus(error, QStringLiteral("#b91c1c"));
+        loadPolicy();
+        setStatus(wasBound ? QStringLiteral("%1 本机校验策略已停用；请刷新设备后重试，或重新启用校验。").arg(error)
+                           : error, QStringLiteral("#b91c1c"));
         return;
     }
     // Deleting another device must not disable the currently bound device.
-    const bool wasBound = selectedHid == m_registeredHid;
     const bool saved = !wasBound || DongleService::savePolicy(m_configDir, false, QString(), QByteArray(), &error);
     refreshDevices();
     loadPolicy();
     if (!saved) {
-        setStatus(QStringLiteral("设备校验已销毁，但本机策略保存失败；原策略仍生效，请重新注册设备后重试：%1").arg(error), QStringLiteral("#b45309"));
+        setStatus(QStringLiteral("设备校验已销毁，策略已停用，但清除本机绑定信息失败：%1").arg(error), QStringLiteral("#b45309"));
     } else {
         setStatus(wasBound ? QStringLiteral("校验记录已销毁，校验策略已停用。")
                            : QStringLiteral("所选设备记录已销毁，当前绑定设备的策略保持不变。"), QStringLiteral("#166534"));

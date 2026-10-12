@@ -23,7 +23,7 @@ public:
     m_credentials->setObjectName("credentialMetric");
     for (auto *card : {m_ports, m_findings, m_credentials}) row->addWidget(card, 1);
     m_ports->setToolTip(QStringLiteral("开放端口结果记录数；同一端口的多条记录分别计数。"));
-    m_findings->setToolTip(QStringLiteral("漏洞、网站漏洞和 SQL 注入结果记录数；不代表去重后的漏洞数。"));
+    m_findings->setToolTip(QStringLiteral("漏洞、网站漏洞、SQL 注入及源码候选的记录数；未去重，源码候选需结合执行证据复核。"));
     m_credentials->setToolTip(QStringLiteral("凭据类型的结果记录数。"));
     layout->addLayout(row);
     m_note = new QLabel(this);
@@ -35,12 +35,14 @@ public:
   }
   void clear() {
     for (auto *card : {m_ports, m_findings, m_credentials}) card->setValue(QStringLiteral("—"));
+    m_findings->setCaption(QString());
     m_note->setText(QStringLiteral("选择扫描任务，查看发现概览与完整结果。"));
   }
   void setResults(const QJsonArray &results) {
-    int ports = 0, findings = 0, credentials = 0, raw = 0, other = 0;
+    int ports = 0, findings = 0, credentials = 0, raw = 0, other = 0, source = 0;
     for (const auto &value : results) {
       const auto type = value.toObject().value("result_type").toString();
+      if (type == "source_finding" || type == "source_vuln") ++source;
       if (type == "open_port") ++ports;
       else if (type == "vulnerability" || type == "web_vuln" || type == "sql_injection" || type == "source_vuln" || type == "source_finding") ++findings;
       else if (type == "credential") ++credentials;
@@ -49,6 +51,7 @@ public:
     }
     m_ports->setValue(QString::number(ports));
     m_findings->setValue(QString::number(findings));
+    m_findings->setCaption(source ? QStringLiteral("包含 %1 条源码候选，需证据复核").arg(source) : QString());
     m_credentials->setValue(QString::number(credentials));
     m_note->setText(results.isEmpty()
         ? QStringLiteral("尚无返回结果，请结合任务状态查看扫描进展。")

@@ -20,23 +20,23 @@ const TOOL_LIST = [
  * @param {object} [analysisResult] - Optional pipeline analysis result (tech_stack, attack_surface, risk_assessment, recommended_strategy)
  *   When provided, the LLM prompt includes structured analysis for more targeted playbook generation.
  */
-export async function generatePlaybook(scanTaskId, analysisResult = null, { scanTaskIds = null, findingIds = [] } = {}) {
+export async function generatePlaybook(scanTaskId, analysisResult = null, { scanTaskIds = null, findingIds = [], adaptive = true, demonstration = false } = {}) {
   const db = getDb();
 
   // Get scan task + results
   const task = db.prepare(
-    'SELECT scan_task_id, target, scan_type, status FROM scan_tasks WHERE scan_task_id = ?'
+    'SELECT scan_task_id, target, scan_type, status, created_by FROM scan_tasks WHERE scan_task_id = ?'
   ).get(scanTaskId);
   if (!task) return { ok: false, error: 'Scan task not found' };
-  if(task.scan_type==='source_scan') return generateSourceVerification(db,task,findingIds);
+  if(task.scan_type==='source_scan') return generateSourceVerification(db,task,findingIds,{adaptive,demonstration});
   const ids = Array.isArray(scanTaskIds) && scanTaskIds.length ? scanTaskIds : [scanTaskId];
 
   const results = db.prepare(
     `SELECT r.result_type, r.result_data, r.severity, r.mitre_technique_id, r.source_tool
      FROM scan_results r JOIN scan_tasks t ON t.scan_task_id = r.scan_task_id
-     WHERE r.scan_task_id IN (${ids.map(() => '?').join(',')}) AND t.target = ? AND t.status IN ('COMPLETED', 'PARTIAL')
+     WHERE r.scan_task_id IN (${ids.map(() => '?').join(',')}) AND t.target = ? AND t.created_by IS ? AND t.status IN ('COMPLETED', 'PARTIAL')
      ORDER BY r.severity DESC LIMIT 15`
-  ).all(...ids, task.target);
+  ).all(...ids, task.target, task.created_by);
 
   // Build findings summary — skip raw_output (tool output noise, not useful for playbook)
   // and truncate each entry to keep prompt within LLM context limits
@@ -63,7 +63,7 @@ export async function generatePlaybook(scanTaskId, analysisResult = null, { scan
   }
 
   // Resolve target class for intelligent target_type
-  const targetProfile = loadTargetProfile(db, task.target, scanTaskIds || []);
+  const targetProfile = loadTargetProfile(db, task.target, ids, task.created_by);
   const TARGET_CLASS_TO_TYPE = {
     dvwa: ['dvwa'],
     local_ip: ['web_url', 'local_ip'],

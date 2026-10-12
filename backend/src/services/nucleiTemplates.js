@@ -1,13 +1,59 @@
 import { execFile, spawn } from 'child_process';
-import { mkdirSync, readdirSync, readFileSync } from 'fs';
-import { join, relative } from 'path';
-import { randomUUID } from 'crypto';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
+import { isAbsolute, join, relative } from 'path';
+import { createHash, randomUUID } from 'crypto';
 import { promisify } from 'util';
 
 const execFileAsync = promisify(execFile);
 const pendingUpdates = new Map();
 const CONTAINER_TEMPLATES_DIR = '/root/nuclei-templates';
 const TEMPLATE_COMMAND_TIMEOUT = 120_000;
+const SELECTION_VALUE_OPTIONS = new Set([
+  't', 'templates', 'w', 'workflows', 'a', 'author', 'tags', 'etags', 'exclude-tags',
+  'itags', 'include-tags', 'id', 'template-id', 'eid', 'exclude-id',
+  'it', 'include-templates', 'et', 'exclude-templates', 's', 'severity',
+  'es', 'exclude-severity', 'pt', 'type', 'ept', 'exclude-type', 'tc', 'template-condition',
+]);
+const SELECTION_SWITCH_OPTIONS = new Set([
+  'code', 'headless', 'file', 'esc', 'enable-self-contained', 'egm', 'enable-global-matchers',
+  'dut', 'disable-unsigned-templates',
+  'dast', 'fuzz',
+]);
+const PATH_OPTIONS = new Set(['t', 'templates', 'w', 'workflows', 'it', 'include-templates', 'et', 'exclude-templates']);
+
+function selectionOptions(args, templatesDir, engine) {
+  const selected = [];
+  for (let index = 0; index < args.length; index++) {
+    const match = String(args[index]).match(/^--?([^=]+)(?:=(.*))?$/);
+    if (!match) continue;
+    const [, option, inlineValue] = match;
+    if (SELECTION_SWITCH_OPTIONS.has(option)) {
+      selected.push(args[index]);
+    } else if (SELECTION_VALUE_OPTIONS.has(option)) {
+      let value = inlineValue ?? args[++index];
+      if (value === undefined || String(value).startsWith('-')) throw new Error(`Missing value for Nuclei option ${option}`);
+      if (PATH_OPTIONS.has(option)) {
+        value = String(value).split(',').map(filePath => {
+          if (engine === 'host' && filePath.startsWith(CONTAINER_TEMPLATES_DIR)) {
+            return `${templatesDir}${filePath.slice(CONTAINER_TEMPLATES_DIR.length)}`;
+          }
+          if (engine !== 'host' && (filePath === templatesDir || filePath.startsWith(`${templatesDir}/`))) {
+            return `${CONTAINER_TEMPLATES_DIR}${filePath.slice(templatesDir.length)}`;
+          }
+          return filePath;
+        }).join(',');
+      }
+      selected.push(`-${option}`, String(value));
+    }
+  }
+  return selected;
+}
+
+function nucleiCommand(engine, templatesDir, args) {
+  if (engine === 'host') return ['nuclei', args];
+  if (!['docker', 'podman'].includes(engine)) throw new Error(`Unsupported Nuclei execution engine: ${engine || 'unknown'}`);
+  return [engine, ['run', '--rm', '-v', `${templatesDir}:${CONTAINER_TEMPLATES_DIR}`, 'rt-vuln-scan', 'nuclei', ...args]];
+}
 
 export function getRequiredNucleiTemplateIds(args = []) {
   if (!Array.isArray(args)) return [];
@@ -74,6 +120,8 @@ async function downloadNucleiTemplates(templatesDir, engine) {
   try {
     await execFileAsync(engine, [
       'run', '--rm', '--name', containerName,
+      '--user', `${process.getuid?.() ?? 0}:${process.getgid?.() ?? 0}`,
+      '-e', 'HOME=/tmp',
       '-v', `${templatesDir}:${CONTAINER_TEMPLATES_DIR}`, 'rt-vuln-scan',
       'nuclei', '-update-templates', '-ud', CONTAINER_TEMPLATES_DIR,
     ], { timeout: TEMPLATE_COMMAND_TIMEOUT });
@@ -113,7 +161,7 @@ function runNucleiValidation(command, args) {
       settled = true;
       clearTimeout(timer);
       if (error) reject(error);
-      else resolve();
+      else resolve(stdout);
     };
     child.once('error', finish);
     child.once('close', (code, signal) => {
@@ -130,28 +178,66 @@ function runNucleiValidation(command, args) {
 
 function getNucleiTemplateSelection(templatesDir, engine, templatePaths) {
   const selectedPaths = templatePaths.length ? templatePaths : [templatesDir];
-  return selectedPaths.map(filePath => engine === 'host'
-    ? filePath : join(CONTAINER_TEMPLATES_DIR, relative(templatesDir, filePath))).join(',');
+  const paths = selectedPaths.map(filePath => engine === 'host'
+    ? filePath : join(CONTAINER_TEMPLATES_DIR, relative(templatesDir, filePath)));
+  const selection = paths.join(',');
+  if (Buffer.byteLength(selection) < 16_000) return selection;
+  const digest = createHash('sha256').update(paths.join('\n')).digest('hex');
+  const directory = join(templatesDir, '.redteam-selections');
+  const manifest = join(directory, `${digest}.txt`);
+  mkdirSync(directory, { recursive: true });
+  const temporary = `${manifest}.${randomUUID()}.tmp`;
+  writeFileSync(temporary, `${paths.join('\n')}\n`);
+  renameSync(temporary, manifest);
+  return engine === 'host' ? manifest : join(CONTAINER_TEMPLATES_DIR, relative(templatesDir, manifest));
 }
 
-export async function validateNucleiTemplates(templatesDir, engine, templatePaths = []) {
+async function resolveNucleiTemplatePaths(templatesDir, engine, args) {
+  const options = selectionOptions(args, templatesDir, engine);
+  const enabled = new Set(options.filter(option => option.startsWith('-') && !/=(?:false|0)$/.test(option)).map(option => option.replace(/^--?/, '').split('=')[0]));
+  const disabledProtocols = ['code', 'headless', 'file'].filter(protocol => !enabled.has(protocol));
+  if (disabledProtocols.length) options.push('-ept', disabledProtocols.join(','));
+  if (!options.some(option => /^-(?:t|templates|w|workflows)$/.test(option))) {
+    options.push('-t', engine === 'host' ? templatesDir : CONTAINER_TEMPLATES_DIR);
+  }
+  try {
+    const [command, commandArgs] = nucleiCommand(engine, templatesDir, ['-tl', '-silent', '-duc', '-no-color', ...options]);
+    const output = await runNucleiValidation(command, commandArgs);
+    const paths = [...new Set(output.split(/\r?\n/).map(line => line.trim())
+      .filter(line => line && !/^Listing available\s+nuclei templates for /.test(line)).map(filePath => {
+      const hostPath = filePath.startsWith(`${CONTAINER_TEMPLATES_DIR}/`)
+        ? join(templatesDir, relative(CONTAINER_TEMPLATES_DIR, filePath))
+        : isAbsolute(filePath) ? filePath : join(templatesDir, filePath);
+      const location = relative(templatesDir, hostPath);
+      if (location.startsWith('../') || isAbsolute(location) || !/\.ya?ml$/i.test(hostPath)) {
+        throw new Error(`Selected Nuclei template is outside the mounted library or unavailable: ${filePath}`);
+      }
+      const category = location.split('/')[0];
+      if (disabledProtocols.includes(category)) return null;
+      if (category === 'dast' && !enabled.has('dast') && !enabled.has('fuzz')) return null;
+      if (category === 'cloud' && !enabled.has('esc') && !enabled.has('enable-self-contained')) return null;
+      if (!existsSync(hostPath)) throw new Error(`Selected Nuclei template is unavailable: ${filePath}`);
+      return hostPath;
+    }).filter(Boolean))].filter(filePath => {
+      const content = readFileSync(filePath, 'utf8');
+      if (disabledProtocols.some(protocol => new RegExp(`^${protocol}:`, 'm').test(content))) return false;
+      if (!enabled.has('esc') && !enabled.has('enable-self-contained') && /^\s*(?:-\s*)?self-contained:\s*true\b/im.test(content)) return false;
+      if (!enabled.has('egm') && !enabled.has('enable-global-matchers') && /^\s*(?:-\s*)?global-matchers:\s*true\b/im.test(content)) return false;
+      return enabled.has('dast') || enabled.has('fuzz') || !/^\s+(?:-\s*)?fuzzing:/m.test(content);
+    }).sort();
+    if (paths.length === 0) throw new Error('No Nuclei templates match the requested selection');
+    return paths;
+  } catch (error) {
+    throw new Error(`Nuclei template selection failed: ${commandErrorMessage(error)}`);
+  }
+}
+
+export async function validateNucleiTemplates(templatesDir, engine, templatePaths = [], args = []) {
   const selection = getNucleiTemplateSelection(templatesDir, engine, templatePaths);
   try {
-    if (engine === 'host') {
-      await runNucleiValidation('nuclei', [
-        '-validate', '-duc', '-no-color', '-t', selection,
-      ]);
-      return;
-    }
-    if (!['docker', 'podman'].includes(engine)) {
-      throw new Error(`Unsupported Nuclei execution engine: ${engine || 'unknown'}`);
-    }
-    await runNucleiValidation(engine, [
-      'run', '--rm',
-      '-v', `${templatesDir}:${CONTAINER_TEMPLATES_DIR}`,
-      'rt-vuln-scan', 'nuclei',
-      '-validate', '-duc', '-no-color', '-t', selection,
-    ]);
+    const switches = selectionOptions(args, templatesDir, engine).filter(option => SELECTION_SWITCH_OPTIONS.has(option.replace(/^--?/, '').split('=')[0]));
+    const [command, commandArgs] = nucleiCommand(engine, templatesDir, ['-validate', '-duc', '-no-color', '-t', selection, ...switches]);
+    await runNucleiValidation(command, commandArgs);
   } catch (error) {
     throw new Error(`Nuclei template validation failed: ${commandErrorMessage(error)}`);
   }
@@ -172,12 +258,11 @@ async function waitForUpdate(update, signal) {
   }
 }
 
-export async function ensureNucleiTemplates({ projectRoot, engine, requiredIds = [], signal }) {
+export async function ensureNucleiTemplates({ projectRoot, engine, requiredIds = [], args, signal }) {
   signal?.throwIfAborted();
   let resources = inspectNucleiTemplates(projectRoot, requiredIds);
   if (resources.passed) {
-    await validateNucleiTemplates(resources.templatesDir, engine, resources.templatePaths);
-    return resources;
+    return prepareNucleiSelection(resources, engine, args, signal);
   }
   if (!['host', 'docker', 'podman'].includes(engine)) throw new Error(`${resources.message}; execution engine unavailable`);
   let update = pendingUpdates.get(resources.templatesDir);
@@ -194,12 +279,29 @@ export async function ensureNucleiTemplates({ projectRoot, engine, requiredIds =
   signal?.throwIfAborted();
   resources = inspectNucleiTemplates(projectRoot, requiredIds);
   if (!resources.passed) throw new Error(resources.message);
-  await validateNucleiTemplates(resources.templatesDir, engine, resources.templatePaths);
-  return resources;
+  return prepareNucleiSelection(resources, engine, args, signal);
 }
 
-export function normalizeNucleiTemplateArgs(args, templatesDir, engine, templatePaths = []) {
-  const normalized = args.map(argument => engine === 'host' && (argument === CONTAINER_TEMPLATES_DIR || argument.startsWith(`${CONTAINER_TEMPLATES_DIR}/`))
+async function prepareNucleiSelection(resources, engine, args, signal) {
+  if (args !== undefined && resources.templatePaths.length > 0) {
+    await validateNucleiTemplates(resources.templatesDir, engine, resources.templatePaths, args);
+    signal?.throwIfAborted();
+  }
+  const templatePaths = args === undefined ? resources.templatePaths : await resolveNucleiTemplatePaths(resources.templatesDir, engine, args);
+  signal?.throwIfAborted();
+  await validateNucleiTemplates(resources.templatesDir, engine, templatePaths, args);
+  signal?.throwIfAborted();
+  return { ...resources, templatePaths, selectionResolved: args !== undefined,
+    message: `${resources.message}; validated templates: ${templatePaths.length || 'whole library'}` };
+}
+
+export function normalizeNucleiTemplateArgs(args, templatesDir, engine, templatePaths = [], selectionResolved = false) {
+  if (selectionResolved && templatePaths.length === 0) throw new Error('Resolved Nuclei template selection cannot be empty');
+  const selectedArgs = selectionResolved ? args.filter((argument, index) => {
+    if (/^--?(?:t|templates|w|workflows)(?:=|$)/.test(argument)) return false;
+    return index === 0 || !/^--?(?:t|templates|w|workflows)$/.test(args[index - 1]);
+  }) : args;
+  const normalized = selectedArgs.map(argument => engine === 'host' && (argument === CONTAINER_TEMPLATES_DIR || argument.startsWith(`${CONTAINER_TEMPLATES_DIR}/`))
     ? `${templatesDir}${argument.slice(CONTAINER_TEMPLATES_DIR.length)}` : argument);
   if (!normalized.some(argument => /^--?(?:t|templates|w|workflows)(?:=|$)/.test(argument))) {
     normalized.push('-t', getNucleiTemplateSelection(templatesDir, engine, templatePaths));

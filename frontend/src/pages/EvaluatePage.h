@@ -16,6 +16,7 @@
 
 class ApiClient;
 class StatsSummaryCard;
+class TaskResultsPanel;
 
 class EvaluatePage : public QWidget {
   Q_OBJECT
@@ -30,12 +31,16 @@ public:
   void showRun(const QString &runId, bool focus = true);
   void clearRun();
   void retryRun(const QString &runId);
+  void setPipelineContext(const QString &pipelineId, const QString &runId, const QString &target = {});
 
   /// Switch to the reports sub-tab and refresh the report list.
   void showReports();
 
   /// Select one report and preview it, without asking the user to find its run.
   void showReport(const QString &reportId);
+
+protected:
+  void showEvent(QShowEvent *event) override;
 
 private slots:
   void onLoadRuns();
@@ -74,6 +79,11 @@ private:
   void openFileInWps(const QString &filePath);
 
   ApiClient *m_api;
+  TaskResultsPanel *m_taskResults;
+  QString m_pipelineId;
+  QString m_pipelineRunId;
+  QString m_pipelineTarget;
+  bool m_standaloneLoaded = false;
   QTabWidget *m_tabs;
 
   // Grade tab

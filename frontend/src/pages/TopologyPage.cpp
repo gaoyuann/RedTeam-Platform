@@ -5,7 +5,6 @@
 #include "../ApiClient.h"
 #include "../Theme.h"
 #include "../UiUtil.h"
-#include "../AuxiliaryPanel.h"
 
 #include <QApplication>
 #include <QComboBox>
@@ -949,20 +948,19 @@ void TopologyPage::setupUI() {
     auto *rootLayout = new QVBoxLayout(this);
     rootLayout->setContentsMargins(12, 10, 12, 10);
     rootLayout->setSpacing(8);
-    auto openDialog = [](AuxiliaryPanel *dialog) {
-        dialog->present();
-    };
-    auto makeDialog = [this](const QString &name, const QString &title) {
-        auto *dialog = new AuxiliaryPanel(this);
-        dialog->setObjectName(name);
-        dialog->setWindowTitle(title);
-        dialog->resize(720, 540);
-        return dialog;
-    };
-
-    // Scanning and saved records are tools, not permanent columns around the canvas.
-    auto *sourceDialog = makeDialog("topologySources", QStringLiteral("扫描与拓扑记录"));
-    auto *sourceLayout = new QVBoxLayout(sourceDialog);
+    auto *workspace = new QSplitter(Qt::Horizontal, this);
+    workspace->setObjectName("topologyWorkspace");
+    workspace->setChildrenCollapsible(false);
+    auto *sideTabs = new WorkbenchTabs;
+    sideTabs->setObjectName("topologySideTabs");
+    sideTabs->setMinimumWidth(300);
+    auto *canvasPanel = new QWidget;
+    auto *canvasLayout = new QVBoxLayout(canvasPanel);
+    canvasLayout->setContentsMargins(0, 0, 0, 0);
+    canvasLayout->setSpacing(8);
+    auto *sourcePanel = new QWidget;
+    sourcePanel->setObjectName("topologySources");
+    auto *sourceLayout = new QVBoxLayout(sourcePanel);
     auto *sourceTabs = new WorkbenchTabs;
     sourceLayout->addWidget(sourceTabs);
     auto *scanPage = new QWidget;
@@ -977,9 +975,9 @@ void TopologyPage::setupUI() {
     m_scanTypeCombo->addItem(QStringLiteral("网站扫描"), "web_scan");
     m_createScanBtn = new QPushButton(QStringLiteral("开始探测"));
     form->addWidget(new QLabel(QStringLiteral("目标")), 0, 0);
-    form->addWidget(m_targetInput, 0, 1);
-    form->addWidget(m_scanTypeCombo, 0, 2);
-    form->addWidget(m_createScanBtn, 0, 3);
+    form->addWidget(m_targetInput, 0, 1, 1, 2);
+    form->addWidget(m_scanTypeCombo, 1, 1);
+    form->addWidget(m_createScanBtn, 1, 2);
     form->setColumnStretch(1, 1);
     scanLayout->addLayout(form);
     auto *sourceHint = new QLabel(QStringLiteral("当前任务会随原有扫描自动采集拓扑并展示结果，无需另行启动。此处用于查看记录和必要时重新汇总；单个 IP 不会自动扩展为网段。"));
@@ -1066,8 +1064,9 @@ void TopologyPage::setupUI() {
     });
     sourceTabs->addTab(recentPage, QStringLiteral("最近记录"));
 
-    // Full editors live in a separate inspector with a scrollable property form.
-    auto *inspector = makeDialog("topologyInspector", QStringLiteral("节点与连线"));
+    // Asset lists and their property editor remain beside the canvas.
+    auto *inspector = new QWidget;
+    inspector->setObjectName("topologyInspector");
     auto *inspectorLayout = new QVBoxLayout(inspector);
     auto *inspectorTabs = new WorkbenchTabs;
     inspectorLayout->addWidget(inspectorTabs);
@@ -1113,6 +1112,8 @@ void TopologyPage::setupUI() {
     nodeFormLayout->setFormAlignment(Qt::AlignTop);
     nodeFormLayout->setHorizontalSpacing(8);
     nodeFormLayout->setVerticalSpacing(4);
+    nodeFormLayout->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    nodeFormLayout->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     m_nodeNameEdit = new QLineEdit(nodeFormPage);
     m_nodeIpEdit = new QLineEdit(nodeFormPage);
     m_nodeHostNameEdit = new QLineEdit(nodeFormPage);
@@ -1149,6 +1150,8 @@ void TopologyPage::setupUI() {
     edgeFormLayout->setFormAlignment(Qt::AlignTop);
     edgeFormLayout->setHorizontalSpacing(8);
     edgeFormLayout->setVerticalSpacing(4);
+    edgeFormLayout->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    edgeFormLayout->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     m_edgeSourceCombo = new QComboBox(edgeFormPage);
     m_edgeTargetCombo = new QComboBox(edgeFormPage);
     m_edgeLabelEdit = new QLineEdit(edgeFormPage);
@@ -1188,8 +1191,9 @@ void TopologyPage::setupUI() {
     connect(m_nodeListWidget, &QListWidget::itemDoubleClicked, this, [inspectorTabs]() { inspectorTabs->setCurrentIndex(2); });
     connect(m_edgeListWidget, &QListWidget::itemDoubleClicked, this, [inspectorTabs]() { inspectorTabs->setCurrentIndex(2); });
 
-    auto *infoDialog = makeDialog("topologyInfo", QStringLiteral("拓扑信息"));
-    auto *infoLayout = new QFormLayout(infoDialog);
+    auto *infoPanel = new QWidget;
+    infoPanel->setObjectName("topologyInfo");
+    auto *infoLayout = new QFormLayout(infoPanel);
     auto addValue = [infoLayout](const QString &title, QLabel **label) {
         *label = new QLabel("--");
         (*label)->setWordWrap(true);
@@ -1204,6 +1208,19 @@ void TopologyPage::setupUI() {
     addValue(QStringLiteral("文件"), &m_summaryLabel);
     addValue(QStringLiteral("范围"), &m_scopeLabel);
     addValue(QStringLiteral("说明"), &m_canvasSubtitleLabel);
+
+    sideTabs->addTab(inspector, QStringLiteral("资产"));
+    sideTabs->addTab(sourcePanel, QStringLiteral("记录"));
+    auto *infoScroll = new QScrollArea;
+    infoScroll->setWidgetResizable(true);
+    infoScroll->setFrameShape(QFrame::NoFrame);
+    infoScroll->setWidget(infoPanel);
+    sideTabs->addTab(infoScroll, QStringLiteral("信息"));
+    workspace->addWidget(sideTabs);
+    workspace->addWidget(canvasPanel);
+    workspace->setStretchFactor(0, 0);
+    workspace->setStretchFactor(1, 1);
+    workspace->setSizes({340, 900});
 
     auto *toolbar = new QHBoxLayout;
     auto *sourcesButton = new QPushButton(QStringLiteral("扫描记录"));
@@ -1269,9 +1286,9 @@ void TopologyPage::setupUI() {
     toolbar->addWidget(editButton);
     toolbar->addWidget(m_saveTopologyButton);
     rootLayout->addLayout(toolbar);
-    connect(sourcesButton, &QPushButton::clicked, this, [=]() { openDialog(sourceDialog); });
-    connect(inspectorButton, &QPushButton::clicked, this, [=]() { openDialog(inspector); });
-    connect(infoButton, &QPushButton::clicked, this, [=]() { openDialog(infoDialog); });
+    connect(sourcesButton, &QPushButton::clicked, this, [=]() { sideTabs->setCurrentIndex(1); });
+    connect(inspectorButton, &QPushButton::clicked, this, [=]() { sideTabs->setCurrentIndex(0); });
+    connect(infoButton, &QPushButton::clicked, this, [=]() { sideTabs->setCurrentIndex(2); });
 
     auto *titleRow = new QHBoxLayout;
     m_canvasTitleLabel = new QLabel(QStringLiteral("等待拓扑文件"));
@@ -1281,7 +1298,7 @@ void TopologyPage::setupUI() {
     m_statsLabel = new QLabel(QStringLiteral("节点 -- | 连线 --"));
     titleRow->addWidget(m_canvasTitleLabel, 1);
     titleRow->addWidget(m_statsLabel);
-    rootLayout->addLayout(titleRow);
+    canvasLayout->addLayout(titleRow);
     m_graphScene = new QGraphicsScene(this);
     m_graphView = new TopologyGraphicsView(this);
     m_graphView->setObjectName("topologyCanvas");
@@ -1292,7 +1309,7 @@ void TopologyPage::setupUI() {
     m_graphView->setMinimumSize(0, 160);
     m_graphView->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     m_graphView->setViewportUpdateMode(QGraphicsView::SmartViewportUpdate);
-    rootLayout->addWidget(m_graphView, 1);
+    canvasLayout->addWidget(m_graphView, 1);
     auto *legend = new QLabel(QStringLiteral(
         "<span style='color:#15803d'>● 在线</span>　"
         "<span style='color:#b45309'>● 告警</span>　"
@@ -1302,11 +1319,18 @@ void TopologyPage::setupUI() {
     legend->setObjectName("topologyLegend");
     legend->setWordWrap(true);
     legend->setStyleSheet("color:#52637a;font-size:12px;padding:2px 0;");
-    rootLayout->addWidget(legend);
+    canvasLayout->addWidget(legend);
+    rootLayout->addWidget(workspace, 1);
     m_statusLabel = new QLabel(QStringLiteral("准备就绪。"));
     m_statusLabel->setWordWrap(true);
     m_statusLabel->setStyleSheet(infoStatusStyle());
     rootLayout->addWidget(m_statusLabel);
+    connect(m_graphScene, &QGraphicsScene::selectionChanged, this, [=]() {
+        if (!m_graphScene->selectedItems().isEmpty()) {
+            sideTabs->setCurrentIndex(0);
+            inspectorTabs->setCurrentIndex(2);
+        }
+    });
     // ── Connect signals ───────────────────────────────────────────────
     connect(m_refreshBtn, &QPushButton::clicked,
             this, &TopologyPage::onRefreshScans);

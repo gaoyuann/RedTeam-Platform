@@ -1,13 +1,26 @@
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
-import { getWsManager } from '../services/wsManager.js';
+import { askTaskAssistant } from '../services/taskAssistant.js';
+import taskPlanRoutes from './taskPlans.js';
+import { appendTaskLog, broadcastTaskEvent, taskSummary } from '../services/taskActivity.js';
+import { taskExecutionSnapshot } from '../services/taskExecution.js';
+import taskResultsRoutes from './taskResults.js';
+import { assertPlaybookUse } from '../services/playbookAccess.js';
+import { requireActor } from '../middleware/recordAccess.js';
+import { taskAnalysisIndex } from '../services/taskAnalysisIndex.js';
+import { recommendForScans } from '../services/playbookRecommendations.js';
 import { captureTopologyOrigin, readTopologyOrigin } from '../services/topologyOrigin.js';
+import { sourceTarget, httpSourceConnection, resolveSourceConnection } from '../services/sourceScanConnections.js';
 
 // ── Validation helpers ────────────────────────────────────────────────────
+const asyncRoute = handler => (req,res,next) => Promise.resolve().then(()=>handler(req,res,next)).catch(next);
 
-/** Validate target: IP, CIDR, or hostname. Reject protocol prefixes (SSRF). */
+/** Validate supported network target formats. Program URLs receive stricter validation below. */
 function validateTarget(target) {
-  if (!target || target.length > 256) return false;
+  if (typeof target !== 'string' || !target || target.length > 256) return false;
+  if (/^tcp:\/\//i.test(target)) {
+    try { sourceTarget(target); return true; } catch { return false; }
+  }
   // Allow URLs (http://, https://) — pipelines target web applications
   if (/^https?:\/\//i.test(target)) {
     try { new URL(target); return true; } catch { return false; }
@@ -15,6 +28,15 @@ function validateTarget(target) {
   const ipCidr = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/;
   const hostname = /^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$/;
   return ipCidr.test(target) || hostname.test(target);
+}
+
+async function normalizeProgramConfig(config, target) {
+  if (config.scan_mode !== 'source_assisted' && config.test_type !== 'source' && !/^tcp:\/\//i.test(target)) return {config,target};
+  target=sourceTarget(target);
+  const source=config.source_url ? httpSourceConnection(target,config.source_url) : null;
+  if(!source && config.source_connection_id) await resolveSourceConnection(config.source_connection_id,target);
+  return {target,config:{...config,test_type:'source',scan_mode:'source_assisted',require_approval:true,
+    source_url:source?.source_url || null,source_connection_id:source ? null : config.source_connection_id || null}};
 }
 
 /** Only creator or admin can modify a pipeline. */
@@ -67,6 +89,16 @@ const STEP_TYPE_CN = {
 
 export default function (db) {
   const router = Router();
+  const assistantRequests = new Set();
+  router.use('/:id/results', taskResultsRoutes(db));
+
+  router.get('/analysis-index', requireActor(db), (req, res, next) => {
+    try {
+      res.json({ status: 'ok', data: taskAnalysisIndex(db, { username: req.user.sub, role: req.user.role }, req.query) });
+    } catch (error) {
+      next(error);
+    }
+  });
 
   // ── Pipeline CRUD ──────────────────────────────────────────────────────
 
@@ -110,17 +142,84 @@ export default function (db) {
       try { step.output_data = JSON.parse(step.output_data || '{}'); } catch {}
     }
 
+    pipeline.summary = taskSummary(db, pipeline);
+
     res.json({ status: 'ok', data: pipeline });
   });
 
+  router.get('/:id/execution', (req, res) => {
+    const pipeline = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(req.params.id);
+    if (!pipeline) return res.status(404).json({ status: 'error', error: { message: '任务不存在' } });
+    if (!canModifyPipeline(req, pipeline))
+      return res.status(403).json({ status: 'error', error: { message: '没有权限查看此任务执行记录' } });
+    const snapshot = taskExecutionSnapshot(db, pipeline);
+    if (!snapshot) return res.status(409).json({ status: 'error', error: { message: '任务关联执行记录的所有者或目标不匹配，请核对来源' } });
+    res.json({ status: 'ok', data: snapshot });
+  });
+
+  router.get('/:id/logs', (req, res) => {
+    const pipeline = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(req.params.id);
+    if (!pipeline) return res.status(404).json({ status: 'error', error: { message: '任务不存在' } });
+    if (!canModifyPipeline(req, pipeline))
+      return res.status(403).json({ status: 'error', error: { message: '没有权限查看此任务日志' } });
+    const limit = req.query.limit === undefined ? 100 : Number(req.query.limit);
+    const after = req.query.after === undefined ? null : Number(req.query.after);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200 || (after !== null && (!Number.isSafeInteger(after) || after < 0)))
+      return res.status(400).json({ status: 'error', error: { message: '日志游标或条数无效（每次 1–200 条）' } });
+    let rows;
+    if (after === null) rows = db.prepare('SELECT * FROM pipeline_logs WHERE pipeline_id = ? ORDER BY id DESC LIMIT ?')
+      .all(req.params.id, limit).reverse();
+    else rows = db.prepare('SELECT * FROM pipeline_logs WHERE pipeline_id = ? AND id > ? ORDER BY id ASC LIMIT ?')
+      .all(req.params.id, after, limit + 1);
+    const hasMore = after !== null && rows.length > limit;
+    if (hasMore) rows.pop();
+    res.json({ status: 'ok', pipeline_id: req.params.id, data: rows,
+      meta: { has_more: hasMore, history_limit: 2000, next_cursor: rows.at(-1)?.id ?? after ?? 0 } });
+  });
+
+  router.post('/:id/assistant', async (req, res, next) => {
+    let requestKey;
+    try {
+      const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+      if (!message || message.length > 2000)
+        return res.status(400).json({ status: 'error', error: { message: '问题不能为空，且不能超过 2000 个字符' } });
+      const pipeline = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(req.params.id);
+      if (!pipeline)
+        return res.status(404).json({ status: 'error', error: { message: '流水线不存在' } });
+      if (!canModifyPipeline(req, pipeline))
+        return res.status(403).json({ status: 'error', error: { message: '没有权限查看此流水线' } });
+      const key = `${req.user.sub}:${pipeline.pipeline_id}`;
+      if (assistantRequests.has(key) || assistantRequests.size >= 5)
+        return res.status(429).json({ status: 'error', error: { message: 'AI 问答繁忙，请等待当前请求完成后重试' } });
+      requestKey = key;
+      assistantRequests.add(key);
+      const history = Array.isArray(req.body?.history) ? req.body.history
+        .filter(item => item && ['user', 'assistant'].includes(item.role) && typeof item.content === 'string')
+        .slice(-6).map(item => ({ role: item.role, content: item.content.trim().slice(0, 800) })) : [];
+      const result = await askTaskAssistant(db, pipeline, message, history);
+      const stage = typeof req.body?.stage === 'string' ? req.body.stage.slice(0, 80) : null;
+      auditLog(db, result.ok ? 'pipeline_assistant_query' : 'pipeline_assistant_error',
+        pipeline.pipeline_id, req.user.role, pipeline.target, { message_length: message.length, stage });
+      if (!result.ok)
+        return res.status(503).json({ status: 'error', error: { message: '模型未配置、调用失败或返回空内容，请检查模型服务后重试' } });
+      res.json({ status: 'ok', data: {
+        task_id: pipeline.pipeline_id, answer: result.answer, citations: result.citations,
+      } });
+    } catch (error) {
+      next(error);
+    } finally {
+      if (requestKey) assistantRequests.delete(requestKey);
+    }
+  });
+
   // Create pipeline
-  router.post('/', (req, res) => {
-    const { target, config } = req.body;
+  router.post('/', asyncRoute(async (req, res) => {
+    let { target, config } = req.body;
     if (!target) {
       return res.status(400).json({ status: 'error', error: { message: '目标地址不能为空' } });
     }
     if (target && !validateTarget(target)) {
-      return res.status(400).json({ status: 'error', error: { message: '目标地址格式无效（支持URL/IP/CIDR/主机名）' } });
+      return res.status(400).json({ status: 'error', error: { message: '目标地址格式无效（支持HTTP/HTTPS、tcp://主机:端口、IP/CIDR/主机名）' } });
     }
 
     const limitErr = checkPipelineLimits(db, req.user.sub);
@@ -138,7 +237,7 @@ export default function (db) {
         const parsed = typeof config === 'string' ? JSON.parse(config) : config;
         // Only allow known config keys
         const sanitized = {};
-        const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval'];
+        const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id'];
         for (const key of allowedKeys) {
           if (parsed[key] !== undefined) sanitized[key] = parsed[key];
         }
@@ -148,12 +247,17 @@ export default function (db) {
       }
     }
 
-    configJson = JSON.stringify({ ...JSON.parse(configJson), topology_origin: captureTopologyOrigin(req) });
+    try {
+      const program=await normalizeProgramConfig(JSON.parse(configJson),target);
+      target=program.target;
+      configJson=JSON.stringify({...program.config,topology_origin:captureTopologyOrigin(req)});
+    } catch(error) {return res.status(400).json({status:'error',error:{message:error.message}});}
     try {
       db.prepare(`INSERT INTO pipelines (pipeline_id, target, status, config, created_by, created_at, updated_at)
         VALUES (?, ?, 'created', ?, ?, ?, ?)`).run(pipelineId, target, configJson, req.user.sub, now, now);
 
       auditLog(db, 'pipeline_create', pipelineId, req.user.role, target, { config: configJson });
+      appendTaskLog(db, pipelineId, '任务已创建，等待启动');
 
       const row = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(pipelineId);
       row.status_cn = statusCn(row.status);
@@ -163,8 +267,7 @@ export default function (db) {
       try { row.result = JSON.parse(row.result || '{}'); } catch {}
 
       // WebSocket broadcast
-      const ws = getWsManager();
-      if (ws) ws.broadcast('pipeline:created', { pipeline_id: pipelineId, target, user: req.user.sub });
+      broadcastTaskEvent(db, 'pipeline:created', { pipeline_id: pipelineId, target, user: req.user.sub });
 
       res.status(201).json({ status: 'ok', data: row });
     } catch (err) {
@@ -173,10 +276,12 @@ export default function (db) {
       }
       throw err;
     }
-  });
+  }));
+
+  router.use('/:id/plan', taskPlanRoutes(db));
 
   // Update pipeline
-  router.put('/:id', (req, res) => {
+  router.put('/:id', asyncRoute(async (req, res) => {
     const pipeline = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(req.params.id);
     if (!pipeline) return res.status(404).json({ status: 'error', error: { message: '流水线不存在' } });
     if (!canModifyPipeline(req, pipeline)) {
@@ -184,6 +289,9 @@ export default function (db) {
     }
 
     const { config } = req.body;
+    if (db.prepare('SELECT pipeline_id FROM task_plans WHERE pipeline_id = ?').get(req.params.id)) {
+      return res.status(409).json({ status: 'error', error: { message: '已有任务预案，任务配置已冻结；请新建任务调整授权或执行策略' } });
+    }
     const sets = [];
     const params = [];
 
@@ -194,13 +302,21 @@ export default function (db) {
         if (typeof parsed === 'object' && parsed !== null) {
           // Only allow known config keys (same whitelist as create)
           const sanitized = {};
-          const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval'];
+          const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id'];
           for (const key of allowedKeys) {
             if (parsed[key] !== undefined) sanitized[key] = parsed[key];
           }
           configStr = JSON.stringify(sanitized);
         }
       } catch {}
+      try {
+        const normalized=await normalizeProgramConfig(JSON.parse(configStr),pipeline.target);
+        const previous=JSON.parse(pipeline.config || '{}');
+        if(pipeline.status!=='created' && ['scan_mode','source_url','source_connection_id'].some(key=>(previous[key] ?? null)!==(normalized.config[key] ?? null))) {
+          return res.status(409).json({status:'error',error:{message:'扫描已启动，不能改变程序测试模式或源码来源；请新建任务'}});
+        }
+        configStr=JSON.stringify(normalized.config);
+      } catch(error) {return res.status(400).json({status:'error',error:{message:error.message}});}
       const origin = readTopologyOrigin(pipeline.config);
       if (origin) configStr = JSON.stringify({ ...JSON.parse(configStr), topology_origin: origin });
       sets.push('config = ?');
@@ -221,7 +337,7 @@ export default function (db) {
     const row = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(req.params.id);
     row.status_cn = statusCn(row.status);
     res.json({ status: 'ok', data: row });
-  });
+  }));
 
   // Delete pipeline
   router.delete('/:id', (req, res) => {
@@ -267,9 +383,9 @@ export default function (db) {
     db.prepare("UPDATE pipelines SET status = 'running', updated_at = ?, config = ? WHERE pipeline_id = ?")
       .run(now, JSON.stringify(startConfig), req.params.id);
     auditLog(db, 'pipeline_start', req.params.id, req.user.role, pipeline.target, { from: pipeline.status, to: 'running' });
+    appendTaskLog(db, req.params.id, '已请求启动任务');
 
-    const ws = getWsManager();
-    if (ws) ws.broadcast('pipeline:started', { pipeline_id: req.params.id, target: pipeline.target, user: req.user.sub });
+    broadcastTaskEvent(db, 'pipeline:started', { pipeline_id: req.params.id, target: pipeline.target, user: req.user.sub });
 
     // Fire-and-forget: start pipeline engine
     try {
@@ -309,6 +425,7 @@ export default function (db) {
     }
 
     auditLog(db, 'pipeline_cancel', req.params.id, req.user.role, pipeline.target, {});
+    appendTaskLog(db, req.params.id, '已请求取消任务', 'warn');
 
     const row = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(req.params.id);
     row.status_cn = statusCn(row.status);
@@ -322,12 +439,30 @@ export default function (db) {
     if (!canModifyPipeline(req, pipeline)) {
       return res.status(403).json({ status: 'error', error: { message: '没有权限审批此流水线' } });
     }
+    let approvalConfig={};try {approvalConfig=JSON.parse(pipeline.config || '{}');} catch {}
+    if(approvalConfig.scan_mode==='source_assisted') {
+      return res.status(409).json({status:'error',error:{message:'程序测试需先选择发现并建立任务预案，不能绕过演示对象清单直接执行'}});
+    }
+    if (db.prepare('SELECT pipeline_id FROM task_plans WHERE pipeline_id = ?').get(req.params.id)) {
+      return res.status(409).json({ status: 'error', error: { message: '此任务已有预案草稿，请通过任务预案页提审并审批具体版本' } });
+    }
     if (pipeline.status !== 'awaiting_approval') {
       return res.status(400).json({ status: 'error', error: { message: `只有待确认状态的流水线可以审批，当前状态: ${statusCn(pipeline.status)}` } });
     }
 
     // 用户可选择执行哪个 playbook（覆盖 AI 生成的）
     const selectedPlaybookId = req.body?.playbook_id;
+    const recommendation = recommendForScans(db, pipeline.target, String(pipeline.scan_task_id || '').split(','))
+      .find(candidate => candidate.playbook_id === (selectedPlaybookId || pipeline.generated_playbook_id));
+    if (recommendation?.match_status === 'needs_input') {
+      return res.status(409).json({ status: 'error', error: {
+        message: `执行条件尚未满足：${recommendation.match_conditions.join('；')}。请补充入口后重新创建任务，或选择其他预案。`,
+      } });
+    }
+    if (selectedPlaybookId || pipeline.generated_playbook_id) {
+      try { assertPlaybookUse(db, selectedPlaybookId || pipeline.generated_playbook_id, req.user, pipeline.created_by); }
+      catch (error) { return res.status(error.status || 500).json({ status: 'error', error: { message: error.message } }); }
+    }
     if (selectedPlaybookId && selectedPlaybookId !== pipeline.generated_playbook_id) {
       db.prepare("UPDATE pipelines SET generated_playbook_id = ?, updated_at = datetime('now') WHERE pipeline_id = ?")
         .run(selectedPlaybookId, req.params.id);
@@ -357,8 +492,10 @@ export default function (db) {
 
   // Get pipeline steps
   router.get('/:id/steps', (req, res) => {
-    const pipeline = db.prepare('SELECT pipeline_id FROM pipelines WHERE pipeline_id = ?').get(req.params.id);
+    const pipeline = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(req.params.id);
     if (!pipeline) return res.status(404).json({ status: 'error', error: { message: '流水线不存在' } });
+    if (!canModifyPipeline(req, pipeline))
+      return res.status(403).json({ status: 'error', error: { message: '没有权限查看此流水线步骤' } });
 
     const steps = db.prepare(
       'SELECT * FROM pipeline_steps WHERE pipeline_id = ? ORDER BY step_order'
@@ -378,6 +515,8 @@ export default function (db) {
   router.get('/:id/report', (req, res) => {
     const pipeline = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(req.params.id);
     if (!pipeline) return res.status(404).json({ status: 'error', error: { message: '流水线不存在' } });
+    if (!canModifyPipeline(req, pipeline))
+      return res.status(403).json({ status: 'error', error: { message: '没有权限查看此任务报告' } });
 
     const steps = db.prepare(
       'SELECT * FROM pipeline_steps WHERE pipeline_id = ? ORDER BY step_order'

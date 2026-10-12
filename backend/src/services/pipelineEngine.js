@@ -1,9 +1,10 @@
 import { getDb } from '../db/connection.js';
 import { randomUUID } from 'crypto';
-import { getWsManager } from './wsManager.js';
 import { resolveTargetProfile } from './targetProfileResolver.js';
 import { analyzeScanResults } from './scanAnalyzer.js';
 import { loadTargetProfile } from './targetDiscovery.js';
+import { appendTaskLog, broadcastTaskEvent } from './taskActivity.js';
+import { recommendForScans } from './playbookRecommendations.js';
 
 // ── Track running pipelines for cancellation ──────────────────────────────
 const runningPipelines = new Set();
@@ -17,14 +18,12 @@ const STEP_EXECUTE  = 'execute';
 // ── WebSocket event names ─────────────────────────────────────────────────
 const WS_PIPELINE_STATUS   = 'pipeline:status';
 const WS_PIPELINE_STEP     = 'pipeline:step';
-const WS_PIPELINE_LOG      = 'pipeline:log';
 
 // ── Internal helpers ──────────────────────────────────────────────────────
 
 /** Broadcast a pipeline-level event to all connected clients. */
 function broadcastPipelineEvent(event, data) {
-  const ws = getWsManager();
-  if (ws) ws.broadcast(event, data);
+  broadcastTaskEvent(getDb(), event, data);
 }
 
 /** Update pipeline status in DB and broadcast. */
@@ -103,7 +102,8 @@ function updateStep(db, pipelineId, stepOrder, status, data = {}) {
 
 /** Log a pipeline message (for debugging / real-time UI). */
 function pipelineLog(pipelineId, message, level = 'info') {
-  broadcastPipelineEvent(WS_PIPELINE_LOG, { pipeline_id: pipelineId, message, level, timestamp: Date.now() });
+  try { appendTaskLog(getDb(), pipelineId, message, level); }
+  catch (error) { console.error('[PipelineLog] Failed to record activity:', error.message); }
 }
 
 /** Ensure step record exists in pipeline_steps. */
@@ -178,7 +178,7 @@ async function runPipelineScan(db, pipeline) {
       db.prepare(
         `INSERT INTO scan_tasks (scan_task_id, target, scan_type, target_class, parameters, created_by, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`
-      ).run(scanTaskId, target, scanType, profile.target_class, JSON.stringify(scanType === 'source_scan' ? {connection_id:config.source_connection_id || null,ai_analysis:true} : scanType === 'port_scan' ? { discover_topology: true } : {}), pipeline.created_by || 'pipeline', now);
+      ).run(scanTaskId, target, scanType, profile.target_class, JSON.stringify(scanType === 'source_scan' ? {connection_id:config.source_connection_id || null,source_url:config.source_url || null,ai_analysis:true} : scanType === 'port_scan' ? { discover_topology: true } : {}), pipeline.created_by || 'pipeline', now);
 
       scanTaskIds.push(scanTaskId);
 
@@ -359,6 +359,11 @@ async function runPipelineGeneration(db, pipeline, analysisData, scanTaskIds) {
     let playbookId = null;
     let generationMethod = null;
     let playbookName = null;
+    let recommendations = [];
+    let selectedRecommendation = null;
+    let generationError = null;
+    const ids = Array.isArray(scanTaskIds) ? scanTaskIds : [scanTaskIds];
+    recommendations = recommendForScans(db, pipeline.target, ids);
 
     // Strategy 1: Try AI generation from the primary scan task
     const primaryScanId = Array.isArray(scanTaskIds) ? scanTaskIds[0] : scanTaskIds;
@@ -379,9 +384,11 @@ async function runPipelineGeneration(db, pipeline, analysisData, scanTaskIds) {
           playbookName = genResult.name;
           pipelineLog(pipelineId, `AI 生成成功: ${playbookName} (${playbookId})`);
         } else {
+          generationError = genResult.error;
           pipelineLog(pipelineId, `AI 生成失败: ${genResult.error}，尝试匹配已有 Playbook`, 'warn');
         }
       } catch (err) {
+        generationError = err.message;
         pipelineLog(pipelineId, `AI 生成异常: ${err.message}，尝试匹配已有 Playbook`, 'warn');
       }
     }
@@ -392,22 +399,11 @@ async function runPipelineGeneration(db, pipeline, analysisData, scanTaskIds) {
     // Strategy 2: Fall back to playbook matching if generation failed
     if (!playbookId) {
       pipelineLog(pipelineId, '尝试匹配已有 Playbook');
-      const { matchPlaybooks } = await import('./playbookMatcher.js');
-
-      // Get all scan results for matching
-      const ids = Array.isArray(scanTaskIds) ? scanTaskIds : [scanTaskIds];
-      const placeholders = ids.map(() => '?').join(',');
-      const allResults = db.prepare(
-        `SELECT result_type, result_data, severity, mitre_technique_id, source_tool
-         FROM scan_results WHERE scan_task_id IN (${placeholders})
-         AND result_type NOT IN ('lan_scope', 'lan_host_discovery', 'scan_evidence', 'network_context', 'network_link')`
-      ).all(...ids);
-
-      const profile = loadTargetProfile(db, pipeline.target, ids);
-      const ranked = matchPlaybooks(allResults, profile);
+      const ranked = recommendations;
 
       if (ranked.length > 0) {
         const bestMatch = ranked[0];
+        selectedRecommendation = bestMatch;
         playbookId = bestMatch.playbook_id;
         generationMethod = 'matched';
         playbookName = bestMatch.name;
@@ -422,6 +418,9 @@ async function runPipelineGeneration(db, pipeline, analysisData, scanTaskIds) {
       }
     }
 
+    if (!selectedRecommendation && playbookId)
+      selectedRecommendation = recommendations.find(candidate => candidate.playbook_id === playbookId) || null;
+
     // Store playbook ID in pipeline record
     updateStatus(db, pipelineId, 'running', { generated_playbook_id: playbookId });
 
@@ -429,6 +428,9 @@ async function runPipelineGeneration(db, pipeline, analysisData, scanTaskIds) {
       playbook_id: playbookId,
       name: playbookName,
       method: generationMethod,
+      recommendations,
+      selected_recommendation: selectedRecommendation,
+      ai_generation_error: generationError,
     };
 
     updateStep(db, pipelineId, 2, 'completed', {
@@ -437,7 +439,8 @@ async function runPipelineGeneration(db, pipeline, analysisData, scanTaskIds) {
     });
 
     pipelineLog(pipelineId, `生成阶段完成: ${generationMethod} → ${playbookName}`);
-    return { ok: true, playbookId, method: generationMethod, name: playbookName };
+    return { ok: true, playbookId, method: generationMethod, name: playbookName,
+      recommendations, requiresApproval: selectedRecommendation && !selectedRecommendation.automatic_eligible };
   } catch (err) {
     updateStep(db, pipelineId, 2, 'failed', {
       step_type: STEP_GENERATE,
@@ -500,12 +503,22 @@ async function runPipelineExecution(db, pipeline, playbookId, analysisData) {
       } : null,
     };
 
+    const playbook = db.prepare('SELECT metadata FROM playbooks WHERE playbook_id = ?').get(playbookId);
+    let reviewedPlan = null;
+    try { reviewedPlan = JSON.parse(playbook?.metadata || '{}').task_plan; } catch {}
+    const taskPlan = db.prepare('SELECT state, revision, approved_playbook_id FROM task_plans WHERE pipeline_id = ?').get(pipelineId);
+    if (taskPlan && (taskPlan.state !== 'approved' || taskPlan.approved_playbook_id !== playbookId))
+      throw new Error('任务预案未经批准或执行快照不匹配');
+    const engineType = taskPlan ? 'mechanical' : 'auto';
+    if (taskPlan) reviewedPlan = { ...reviewedPlan, pipeline_id: pipelineId, revision: taskPlan.revision - 1 };
+    if (engineType === 'mechanical') planData._task_plan = reviewedPlan;
+
     const targetProfile = loadTargetProfile(db, pipeline.target, planData._scan_task_ids);
     db.prepare(
-      `INSERT INTO execution_runs (run_id, playbook_id, user_sub, user_role, target, scan_task_id, target_class, target_profile, status, plan_data, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)`
+      `INSERT INTO execution_runs (run_id, playbook_id, user_sub, user_role, target, scan_task_id, target_class, target_profile, status, engine_type, plan_data, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?)`
     ).run(runId, playbookId, userSub, userRole, pipeline.target, planData._scan_task_ids[0] || null,
-      targetProfile.target_class, JSON.stringify(targetProfile), JSON.stringify(planData), now, now);
+      targetProfile.target_class, JSON.stringify(targetProfile), engineType, JSON.stringify(planData), now, now);
 
     // Store run_id in pipeline record
     updateStatus(db, pipelineId, 'running', { run_id: runId });
@@ -526,10 +539,9 @@ async function runPipelineExecution(db, pipeline, playbookId, analysisData) {
       'SELECT status, final_summary, stop_reason FROM execution_runs WHERE run_id = ?'
     ).get(runId);
 
-    const execSuccess = execResult.ok && runRecord && runRecord.status === 'COMPLETED';
+    const execSuccess = execResult.ok && runRecord?.status === 'COMPLETED';
     const stepStatus = execSuccess ? 'completed' : 'failed';
-    const executionError = execSuccess ? null : execResult.error || runRecord?.stop_reason
-      || `执行未成功（状态：${runRecord?.status || 'UNKNOWN'}）`;
+    const executionError = execSuccess ? null : execResult.error || runRecord?.stop_reason || `执行未成功（状态：${runRecord?.status || execResult.status || 'UNKNOWN'}）`;
 
     const stepOutput = {
       run_id: runId,
@@ -623,6 +635,20 @@ export async function runPipeline(pipelineId) {
       return { ok: false, pipeline_id: pipelineId, status: 'failed', error: analysisResult.error };
     }
 
+    // Source demonstrations require an explicit object list before generation.
+    // Reuse the existing task-plan approval state rather than auto-picking defects.
+    if(pipelineConfig.scan_mode==='source_assisted') {
+      if(isCancelled(pipelineId)) return {ok:false,pipeline_id:pipelineId,status:'cancelled'};
+      ensureStep(db,pipelineId,2,STEP_GENERATE);
+      updateStep(db,pipelineId,2,'pending',{step_type:STEP_GENERATE,
+        output_data:{scan_task_ids:scanResult.scanTaskIds,note:'请在扫描发现中选择源码候选，生成逐项演示预案并建立任务草稿'}});
+      updateStatus(db,pipelineId,'awaiting_approval',{result:{scan_task_ids:scanResult.scanTaskIds,
+        paused_at:'source_selection',paused_at_time:new Date().toISOString()}});
+      runningPipelines.delete(pipelineId);
+      pipelineLog(pipelineId,'扫描分析完成，请选择源码发现并生成攻击演示清单，再进入任务预案审阅与执行');
+      return {ok:true,pipeline_id:pipelineId,status:'awaiting_approval'};
+    }
+
     // ── Step 2: Generate ────────────────────────────────────────────────
     pipelineLog(pipelineId, '=== 步骤 2: 生成 Playbook ===');
     const generateResult = await runPipelineGeneration(db, pipeline, analysisResult.data, scanResult.scanTaskIds);
@@ -638,7 +664,7 @@ export async function runPipeline(pipelineId) {
     // ── Approval gate ─────────────────────────────────────────────────
     // After generating the playbook, optionally pause for human approval
     // before proceeding to the execute step.
-    const requireApproval = pipelineConfig.require_approval !== false; // default: true
+    const requireApproval = pipelineConfig.require_approval !== false || generateResult.requiresApproval; // default: true
     if (requireApproval) {
       const pausedResult = {
         scan_task_ids: scanResult.scanTaskIds,
@@ -792,6 +818,10 @@ export async function resumePipelineAfterApproval(pipelineId) {
     failPipeline(db, pipelineId, '无法恢复：未找到已生成的 Playbook ID');
     return { ok: false, error: 'No generated_playbook_id found' };
   }
+
+  const taskPlan = db.prepare('SELECT state, approved_playbook_id FROM task_plans WHERE pipeline_id = ?').get(pipelineId);
+  if (taskPlan && (taskPlan.state !== 'approved' || taskPlan.approved_playbook_id !== playbookId))
+    return { ok: false, error: '任务预案未经批准或执行快照不匹配' };
 
   // Mark as running again
   runningPipelines.add(pipelineId);

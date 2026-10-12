@@ -1,7 +1,14 @@
 import { Router } from 'express';
+import { requireActor } from '../middleware/recordAccess.js';
 
 export default function (db) {
   const router = Router();
+  router.use(requireActor(db));
+  router.use((req, res, next) => {
+    if (req.user.role !== 'admin')
+      return res.status(403).json({ status: 'error', error: { message: '全局审计仅限管理员查看' } });
+    next();
+  });
 
   router.get('/', (req, res) => {
     const { type, tool_id, run_id, from, to, limit, offset } = req.query;

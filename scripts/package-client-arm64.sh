@@ -23,7 +23,7 @@ case "$(uname -m)" in
   aarch64|arm64) ;;
   *) echo "ERROR: Run this packager on the ARM64 cloud laptop." >&2; exit 1 ;;
 esac
-ROCKEY_SOURCE="$PROJECT_ROOT/third_party/rockey/linux-aarch64/libRockeyARM.so.0.3"
+ROCKEY_SOURCE="$PROJECT_ROOT/third_party/rockey/linux-aarch64/libRockeyARM.so.1.0"
 cmake "-DROCKEY_SDK_FILE=$ROCKEY_SOURCE" -DROCKEY_SDK_ARCH=linux-aarch64 \
   -DROCKEY_SDK_REQUIRED=ON -P "$PROJECT_ROOT/cmake/ValidateRockeySdk.cmake"
 

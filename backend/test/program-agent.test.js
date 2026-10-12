@@ -1,3 +1,5 @@
+import express from 'express';
+import scanRoutes from '../src/routes/scans.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -175,4 +177,34 @@ test('operator abort cancels a live model request and prevents subsequent target
   await modelFixture(t,()=>{started();return null;});
   const pending=executeRun('run');await modelStarted;requestAbort('run');
   const result=await pending;assert.equal(result.status,'ABORTED');assert.deepEqual(visits,['/']);
+});
+
+test('normal generation API enables Agent by default and honors the mechanical option',async t=>{
+  const db=await dbFixture(t),visits=[];
+  const port=await listen(t,http.createServer((req,res)=>{visits.push(req.url);res.end('observed response');}));
+  const target='http://127.0.0.1:'+port+'/';
+  db.prepare("INSERT INTO users(username,password,role) VALUES ('alice','test-only','user')").run();
+  db.prepare("INSERT INTO scan_tasks(scan_task_id,target,scan_type,status,created_by) VALUES ('api-scan',?,'source_scan','COMPLETED','alice')").run(target);
+  await modelFixture(t,context=>{
+    if(context.schema.steps) return {name:'API program plan',steps:[{name:'Observe entry',tool_id:'target-request',
+      args_template:args({url:target}),description:'Use real entry',finding_ids:[],expected_evidence:'Response requires review'}]};
+    const id=context.execution_evidence.at(-1).evidence_id;
+    return {action:'stop',reason:'evidence_collected',summary:'Observed endpoint; no vulnerability assertion',evidence_ids:[id]};
+  });
+  const app=express();app.use(express.json(),(req,res,next)=>{req.user={sub:'alice',role:'user'};next();});app.use('/scans',scanRoutes(db));
+  const apiPort=await listen(t,http.createServer(app));
+  let defaultPlan;
+  for(const [input,enabled] of [[{},true],[{adaptive:false},false]]) {
+    const response=await fetch('http://127.0.0.1:'+apiPort+'/scans/api-scan/generate-playbook',{
+      method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(input)});
+    const body=await response.json();assert.equal(response.status,201,JSON.stringify(body));
+    const metadata=JSON.parse(db.prepare('SELECT metadata FROM playbooks WHERE playbook_id=?').get(body.data.playbook_id).metadata);
+    assert.equal(metadata.source_verification.agent.enabled,enabled);
+    if(enabled) defaultPlan=body.data.playbook_id;
+  }
+  db.prepare("INSERT INTO execution_runs(run_id,playbook_id,target,scan_task_id,status,user_sub) VALUES ('api-run',?,?,'api-scan','PENDING','alice')").run(defaultPlan,target);
+  const executed=await executeRun('api-run');assert.equal(executed.status,'COMPLETED',JSON.stringify(executed));
+  const final=JSON.parse(db.prepare("SELECT final_summary FROM execution_runs WHERE run_id='api-run'").get().final_summary);
+  assert.equal(final.program_agent.decisions,1);assert.equal(final.program_agent.status,'evidence_collected');
+  assert.deepEqual(visits,['/']);
 });

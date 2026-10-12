@@ -14,6 +14,8 @@ public:
       : QTabBar(parent), m_padding(compact ? 16 : 22) {
     setDrawBase(false);
     setExpanding(false);
+    setUsesScrollButtons(true);
+    setElideMode(Qt::ElideNone);
     setStyleSheet(QStringLiteral(
       "QTabBar::tab { background:transparent; color:#64748b; border:none;"
       " padding:%1px %2px; margin-right:4px; font-size:13px; font-weight:500; }"

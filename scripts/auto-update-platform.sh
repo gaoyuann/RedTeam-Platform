@@ -208,12 +208,48 @@ update_server() (
   trap 'exit 130' INT
   trap 'exit 143' TERM
   git archive "$candidate" | tar -xf - -C "$stage"
-  if ! git diff --quiet "$previous" "$candidate" -- backend/package.json backend/package-lock.json; then
+  dependencies_changed=$("$NODE_BIN" --input-type=module - "$previous" "$candidate" <<'JS'
+import { execFileSync } from 'node:child_process';
+import { isDeepStrictEqual } from 'node:util';
+const fields = ['name', 'version', 'dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies', 'peerDependenciesMeta', 'bundledDependencies', 'bundleDependencies', 'overrides', 'engines', 'os', 'cpu', 'libc', 'packageManager', 'type', 'main', 'exports', 'imports', 'bin'];
+const lifecycleScripts = ['preinstall', 'install', 'postinstall', 'prepare', 'prepublish'];
+function installConfiguration(revision) {
+  const manifest = JSON.parse(execFileSync('git', ['show', `${revision}:backend/package.json`], { encoding: 'utf8' }));
+  const configuration = Object.fromEntries(fields.map(field => [field, manifest[field]]));
+  configuration.scripts = Object.fromEntries(lifecycleScripts.map(name => [name, manifest.scripts?.[name]]));
+  return configuration;
+}
+console.log(isDeepStrictEqual(installConfiguration(process.argv[2]), installConfiguration(process.argv[3])) ? '0' : '1');
+JS
+  )
+  if ! git diff --quiet "$previous" "$candidate" -- backend/package-lock.json; then
     dependencies_changed=1
-    (cd "$stage/backend" && npm ci --omit=dev --no-audit --no-fund)
+  fi
+  if [ "$dependencies_changed" = 1 ] || [ ! -d "$PROJECT_DIR/backend/node_modules" ]; then
+    dependencies_changed=1
+    if ! (cd "$stage/backend" && npm ci --omit=dev --no-audit --no-fund); then
+      log 'Dependency installation failed; retaining current deployment'
+      return 1
+    fi
   else
+    log 'Dependency configuration unchanged; reusing validated installed modules'
     ln -s "$PROJECT_DIR/backend/node_modules" "$stage/backend/node_modules"
   fi
+  (cd "$stage/backend" && "$NODE_BIN" --input-type=module <<'JS'
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import Database from 'better-sqlite3';
+import bcrypt from 'bcrypt';
+const require = createRequire(`${process.cwd()}/package.json`);
+const manifest = JSON.parse(readFileSync('package.json', 'utf8'));
+for (const dependency of Object.keys(manifest.dependencies || {})) require.resolve(dependency);
+const database = new Database(':memory:');
+database.prepare('SELECT 1').get();
+database.close();
+const password = 'redteam-update-check';
+if (!bcrypt.compareSync(password, bcrypt.hashSync(password, 4))) throw new Error('bcrypt validation failed');
+JS
+  )
   find "$stage/backend/src" -name '*.js' -print0 | xargs -0 -n 1 "$NODE_BIN" --check
   database_backup "$stage/migration-check.db"
   (cd "$stage/backend" && "$NODE_BIN" --input-type=module - "$stage/migration-check.db" <<'JS'

@@ -2,9 +2,21 @@ import {canAccessProgramPlaybook} from '../services/programAccess.js';
 import { Router } from 'express';
 import { chatGeneratePlaybook } from '../services/playbookAiChat.js';
 import { parseVariableContract } from '../services/executionVariables.js';
+import { requireActor } from '../middleware/recordAccess.js';
+import { canReadPlaybook, playbookScope } from '../services/playbookAccess.js';
 
 export default function (db) {
   const router = Router();
+  router.use(requireActor(db));
+  router.param('playbookId', (req, res, next, identifier) => {
+    const playbook = db.prepare('SELECT * FROM playbooks WHERE playbook_id = ?').get(identifier);
+    if (!playbook) return res.status(404).json({ status: 'error', error: { message: '预案不存在' } });
+    if (!canReadPlaybook(db, playbook, req.user))
+      return res.status(403).json({ status: 'error', error: { message: '没有权限访问此预案' } });
+    if (['PUT', 'DELETE'].includes(req.method) && playbookScope(db, playbook).snapshot)
+      return res.status(409).json({ status: 'error', error: { message: '批准预案快照不能修改或删除' } });
+    next();
+  });
 
   // ── AI Playbook Generation Chat ──────────────────────────────────────
   router.post('/ai/chat', async (req, res) => {
@@ -39,10 +51,12 @@ export default function (db) {
     if (category) { sql += ' AND category = ?'; params.push(category); }
     if (!includeGenerated || includeGenerated === 'false') { sql += ' AND is_generated = 0'; }
     sql += ' ORDER BY name';
-    const rows = db.prepare(sql).all(...params).filter(row=>canAccessProgramPlaybook(db,req.user,row));
+    const rows = db.prepare(sql).all(...params).filter(row => canReadPlaybook(db, row, req.user) && canAccessProgramPlaybook(db, req.user, row));
     // Attach step count and promote target_class from metadata to top-level
     const stepCountStmt = db.prepare('SELECT COUNT(*) as cnt FROM playbook_steps WHERE playbook_id = ?');
     for (const row of rows) {
+      const scope = playbookScope(db, row);
+      row.access = { private: scope.private, owner: scope.owner, snapshot: scope.snapshot, direct_run: !scope.snapshot && (!scope.private || scope.owner === req.user.sub) };
       row.steps_count = stepCountStmt.get(row.playbook_id).cnt;
       // Promote target_class from metadata JSON to top-level for frontend convenience
       if (row.metadata) {
@@ -63,6 +77,8 @@ export default function (db) {
   router.get('/:playbookId', (req, res) => {
     const row = db.prepare('SELECT * FROM playbooks WHERE playbook_id = ?').get(req.params.playbookId);
     if (!row) return res.status(404).json({ status: 'error', error: { message: 'Playbook not found' } });
+    const scope = playbookScope(db, row);
+    row.access = { private: scope.private, owner: scope.owner, snapshot: scope.snapshot, direct_run: !scope.snapshot && (!scope.private || scope.owner === req.user.sub) };
     row.steps = db.prepare('SELECT * FROM playbook_steps WHERE playbook_id = ? ORDER BY step_index').all(req.params.playbookId);
     // Promote target_class from metadata JSON to top-level
     if (row.metadata) {
@@ -76,6 +92,8 @@ export default function (db) {
 
   router.post('/', (req, res) => {
     const pb = req.body;
+    if (pb.metadata && Object.hasOwn(pb.metadata, 'task_plan'))
+      return res.status(400).json({ status: 'error', error: { message: '任务批准来源仅能由任务审批流程创建' } });
     if (!pb.playbook_id || !pb.name) return res.status(400).json({ status: 'error', error: { message: 'playbook_id, name are required' } });
     let steps;
     try {

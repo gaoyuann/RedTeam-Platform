@@ -35,6 +35,15 @@ export function requestAbort(runId) {
 
 const MAX_OUTPUT_LENGTH = 4096;
 
+// Generic Nuclei scans need more time because they evaluate many templates.
+// Keep the longer timeout scoped to Nuclei so other tools retain their limit.
+export function getToolTimeout(toolId) {
+  if (toolId !== 'nuclei') return 300_000;
+  const configured = Number(process.env.NUCLEI_TIMEOUT_MS);
+  return Number.isSafeInteger(configured) && configured >= 300_000 && configured <= 2_147_483_647
+    ? configured : 900_000;
+}
+
 // Track running executions to prevent duplicates
 const runningRuns = new Set();
 
@@ -398,7 +407,7 @@ export async function executeRun(runId) {
         }
       }
       try {
-        args = normalizeToolArgs(step.tool_id, args, { projectRoot: PROJECT_ROOT, engine: executionEnvironment, scheme: targetContext?.scheme });
+        args = normalizeToolArgs(step.tool_id, args, { projectRoot: PROJECT_ROOT, engine: executionEnvironment, scheme: targetContext?.scheme, target: run.target });
         const scope = validateExecutionScope({ target: run.target, toolId: step.tool_id, args });
         if (!scope.allowed) preparationError = scope.reason;
         if (targetProfile?.target_class === 'dvwa' && step.tool_id === 'sqlmap') {
@@ -453,7 +462,7 @@ export async function executeRun(runId) {
             }
             targetContext.dvwa_session_verified = result.success;
           } else {
-            result = await runTool(step.tool_id, args, { timeout: 300_000, signal: controller.signal, target: run.target });
+            result = await runTool(step.tool_id, args, { timeout: getToolTimeout(step.tool_id), signal: controller.signal, target: run.target });
           }
         } catch (err) {
           result = { success: false, exitCode: -1, stdout: '', stderr: err.message, executionMode: 'error' };
@@ -477,6 +486,7 @@ export async function executeRun(runId) {
       attempts++;
       step.execution_finished = true;
       step.execution_success = !!result.success;
+      step.execution_error = result.success ? null : result.error || result.stderr?.trim().slice(0, 1000) || `Tool exited with code ${result.exitCode ?? -1}`;
       db.prepare('DELETE FROM execution_steps WHERE run_id = ? AND step_index = ?')
         .run(runId, step.step_index);
       db.prepare(`
@@ -563,7 +573,8 @@ export async function executeRun(runId) {
       const ws = getWsManager();
       const runInfo = ws ? db.prepare('SELECT user_sub FROM execution_runs WHERE run_id = ?').get(runId) : null;
       if (ws) {
-        ws.broadcast('run:step', {
+        const broadcast = sourceVerification ? (event,data) => ws.broadcastProgram(run.user_sub,event,data) : (event,data) => ws.broadcast(event,data);
+        broadcast('run:step', {
           run_id: runId,
           step_index: step.step_index,
           tool_id: step.tool_id,
@@ -603,7 +614,7 @@ export async function executeRun(runId) {
             db.prepare('UPDATE execution_attempts SET react_thought=?,react_action=? WHERE id=?').run(decision.summary,actionData,attemptId);
             reactThoughts.push({stepIndex:step.step_index,attemptId,toolId:step.tool_id,
               thought:decision.summary,action:decision.action,decision:publicDecision,timestamp:new Date().toISOString()});
-            getWsManager()?.broadcast('run:react',{run_id:runId,step_index:step.step_index,
+            getWsManager()?.broadcastProgram(run.user_sub,'run:react',{run_id:runId,step_index:step.step_index,
               thought:decision.summary,action:decision.action,userId:run.user_sub || null});
             if(decision.action==='request') {
               const newStepIndex=allocateStepIndex();
@@ -784,6 +795,7 @@ export async function executeRun(runId) {
                 if (result.success) completedSteps--; else failedSteps--;
                 targetStep.execution_finished = false;
                 targetStep.execution_success = false;
+                targetStep.execution_error = null;
                 failedNonOptionalSteps.delete(adjustTargetIdx);  // clear this step's failure, re-eval on retry
                 i--;  // loop will i++ and re-execute this step
                 console.log(`[ReAct] Retrying step ${adjustTargetIdx} (attempt ${retries}/2)${decision.newArgs ? ' with adjusted args' : ''}`);
@@ -952,7 +964,8 @@ export async function executeRun(runId) {
     if (wsEnd && finalRun && ['COMPLETED', 'FAILED', 'ABORTED'].includes(finalRun.status)) {
       let summary = {};
       try { summary = JSON.parse(finalRun.final_summary || '{}'); } catch {}
-      wsEnd.broadcast('run:complete', {
+      const broadcast = sourceVerification ? (event,data) => wsEnd.broadcastProgram(run.user_sub,event,data) : (event,data) => wsEnd.broadcast(event,data);
+      broadcast('run:complete', {
         run_id: runId, status: finalRun.status,
         completed_steps: summary.completed || 0, failed_steps: summary.failed || 0,
         total_steps: summary.total ?? steps.length, stop_reason: finalRun.stop_reason,

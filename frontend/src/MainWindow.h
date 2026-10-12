@@ -14,6 +14,8 @@ class FlowPage;
 class WsClient;
 class ToastOverlay;
 class DongleLockPage;
+class DashboardPage;
+class AnalysisHubPage;
 class QTimer;
 
 class MainWindow : public QMainWindow {
@@ -55,11 +57,13 @@ private:
     QString m_username;
 
     // Dashboard + WebSocket + Toast
+    DashboardPage *m_dashboardPage = nullptr;
     FlowPage *m_flowPage = nullptr;
+    AnalysisHubPage *m_analysisPage = nullptr;
     WsClient *m_ws = nullptr;
     ToastOverlay *m_toastOverlay = nullptr;
 
-    // Module names (built dynamically, first item is 总览大屏 for admin)
+    // Unified top-level module names; task-internal pages remain under 测试任务.
     QStringList m_modules;
 
     // 加密锁运行时锁

@@ -17,6 +17,13 @@ class TopologyPage;
 class ScanPage;
 class ExecutionPage;
 class EvaluatePage;
+class MetricCard;
+class QLineEdit;
+class TaskAiPanel;
+class AnalysisPage;
+class TaskPlanPage;
+class TaskOverviewPage;
+class TaskLogPanel;
 
 // ── FlowPage ───────────────────────────────────────────────────────────
 // PentAGI-inspired task entry: internal QStackedWidget switches between
@@ -35,19 +42,26 @@ public:
   ExecutionPage *execTab() const;
   EvaluatePage *evalTab() const;  // 评估页（用于 run:complete 时预加载评分）
 
-  /// Switch to a stage tab by index (0=拓扑, 1=扫描, 2=攻击, 3=评估)
+  /// Switch to a task workbench tab by index.
   void switchToStageTab(int idx);
 
   /// Open the workbench in "direct execution" mode — no pipeline selected,
   /// jump straight to the attack tab with a playbook pre-selected.
   /// Used when PlaybookPage::executeRequested fires.
   void jumpToExecution(const QString &playbookId, const QString &target);
+  void openTaskReport(const QString &pipelineId, const QString &reportId);
+  void openTaskAnalysis(const QString &pipelineId);
+  void setReturnPage(int page, const QString &title);
+
+signals:
+  void returnPageRequested(int page);
 
 public slots:
   void refreshFlows();
   void onPipelineCreated(const QJsonObject &data);
   void onPipelineStatus(const QJsonObject &data);
   void onPipelineStep(const QJsonObject &data);
+  void onPipelineLog(const QJsonObject &data);
   void onRunCompleted(const QString &runId);
 
 private slots:
@@ -58,6 +72,8 @@ private slots:
   void onCancelFlow();
   void onDeleteFlow();
   void onApproveFlow();
+  void createFlow(bool quickMode);
+  void onStartFlow();
   void onBackToList();
   void onFilterChanged(int index);
 
@@ -67,9 +83,8 @@ private:
   void setupWorkbenchView();
   void loadFlows();
   void loadFlowDetail(const QString &pipelineId);
-  void approveFlow(const QString &preferredPlaybookId);
-  bool m_approvalInFlight = false;
   void clearRunContext();
+  void showTaskDetailError(const QString &message);
 
   QString statusText(const QString &status) const;
   QString statusIcon(const QString &status) const;
@@ -88,20 +103,32 @@ private:
   QTableWidget *m_flowTable;
   QPushButton *m_newBtn;
   QPushButton *m_refreshBtn;
+  QPushButton *m_quickBtn;
+  QLineEdit *m_searchInput;
   QComboBox *m_filterCombo;
+  QLabel *m_listState;
+  int m_flowListRequestRevision = 0;
+  bool m_flowListFresh = false;
+  MetricCard *m_totalCard;
+  MetricCard *m_runningCard;
+  MetricCard *m_pendingCard;
+  MetricCard *m_completedCard;
 
   // Workbench view
   QWidget *m_workbenchView;
   QPushButton *m_backBtn;
   QLabel *m_targetLabel;
   QLabel *m_statusLabel;
+  QPushButton *m_startBtn;
   QPushButton *m_approveBtn;
   QPushButton *m_resultBtn;
   QPushButton *m_moreBtn;       // ⋯ dropdown (cancel / delete / report)
+  QPushButton *m_aiToggleBtn;
+  QPushButton *m_logToggleBtn;
   QAction *m_cancelAction;
   QAction *m_deleteAction;
   QAction *m_reportAction;
-  StepIndicator *m_stepIndicator;   // pipeline 四阶段进度（自绘节点+连线+摘要）
+  StepIndicator *m_stepIndicator;   // 六阶段任务进度（后端四步骤映射到用户流程）
 
   // Stage tabs (拓扑/扫描/攻击/评估) embedded in the workbench
   QTabWidget *m_stageTabs;
@@ -109,9 +136,18 @@ private:
   ScanPage *m_scanTab;
   ExecutionPage *m_execTab;
   EvaluatePage *m_evalTab;
+  AnalysisPage *m_analysisTab;
+  TaskPlanPage *m_planTab;
+  TaskOverviewPage *m_overviewTab;
+  TaskLogPanel *m_logPanel;
+  TaskAiPanel *m_aiPanel;
 
   QString m_selectedPipelineId;
+  int m_returnPage = -1;
+  QString m_pendingTaskReportId;
   QString m_lastDetailPipelineId;
+  int m_taskContextRevision = 0;
+  int m_taskDetailRequestRevision = 0;
   QJsonObject m_lastDisplayedDetail;
   QString m_workbenchRunId;
   // Dedup guards: track the last run/playbook loaded into the attack tab,
