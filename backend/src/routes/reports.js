@@ -1,3 +1,4 @@
+import { canAccessProgramReport } from '../services/programAccess.js';
 import { Router } from 'express';
 import { generateReport } from '../services/reportGenerator.js';
 import { readTaskReport, taskReportHtml, recordTaskReportExport } from '../services/taskResults.js';
@@ -7,6 +8,12 @@ import { taskDisplayText } from '../services/taskExecution.js';
 export default function (db) {
   const router = Router();
   router.use(requireActor(db));
+  const allowed = (req, report) => canAccessProgramReport(db, req.user, report);
+  const deny = res => res.status(403).json({status:'error',error:{message:'没有权限访问此程序测试报告'}});
+  router.use((req, res, next) => {
+    if (req.method === 'POST' && (req.body?.run_id || req.body?.scan_task_id) && !allowed(req, req.body)) return deny(res);
+    next();
+  });
   router.param('reportId', recordParam(db, 'report'));
   router.post(['/', '/generate', '/generate-and-export'], (req, res, next) => {
     const { run_id, scan_task_id } = req.body;
@@ -40,7 +47,7 @@ export default function (db) {
     const pageSize = Math.min(Number(limit), 100);
     const records = [];
     for (const row of db.prepare('SELECT * FROM test_reports ORDER BY created_at DESC, id DESC').all()) {
-      if (!canAccessRecord(db, 'report', row, req.user)) continue;
+      if (!canAccessRecord(db, 'report', row, req.user) || !allowed(req, row)) continue;
       let document;
       if (row.template === 'task_trace_v1') {
         try { document = traceDocument(row, req.user); } catch { continue; }
@@ -63,7 +70,7 @@ export default function (db) {
 
   router.get('/', (req, res) => {
     const rows = db.prepare('SELECT * FROM test_reports ORDER BY created_at DESC').all().filter(row => {
-      if (!canAccessRecord(db, 'report', row, req.user)) return false;
+      if (!canAccessRecord(db, 'report', row, req.user) || !allowed(req, row)) return false;
       if (row.template !== 'task_trace_v1') return true;
       try { traceDocument(row, req.user); return true; } catch { return false; }
     });
@@ -135,6 +142,12 @@ export default function (db) {
     } catch (err) {
       res.status(500).json({ status: 'error', error: { message: err.message } });
     }
+  });
+
+  router.use('/:reportId', (req, res, next) => {
+    const report = db.prepare('SELECT * FROM test_reports WHERE report_id=?').get(req.params.reportId);
+    if (report && !allowed(req, report)) return deny(res);
+    next();
   });
 
   // ── Dynamic routes (with :reportId) ───────────────────────────────────

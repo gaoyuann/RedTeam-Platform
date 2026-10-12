@@ -46,7 +46,10 @@ export async function callLlm(messages, options = {}) {
   };
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onAbort = () => controller.abort();
+  options.signal?.addEventListener('abort', onAbort, { once: true });
+  if (options.signal?.aborted) onAbort();
+  const timer = setTimeout(onAbort, timeoutMs);
 
   try {
     const res = await fetch(url, {
@@ -70,6 +73,7 @@ export async function callLlm(messages, options = {}) {
     return { ok: false, error: `LLM request failed: ${err.message}` };
   } finally {
     clearTimeout(timer);
+    options.signal?.removeEventListener('abort', onAbort);
   }
 }
 

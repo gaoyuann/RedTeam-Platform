@@ -1,4 +1,5 @@
 import { isIP } from 'net';
+import { parseTargetRequest } from '../tools/targetRequest.js';
 
 const URL_FLAGS = {
   nuclei: ['-u', '-target'], sqlmap: ['-u', '--url'], gobuster: ['-u', '--url'],
@@ -19,6 +20,11 @@ const POSITIONAL_VALUE_FLAGS = {
 };
 
 export function validateExecutionScope({ target, toolId, args }) {
+  if (toolId === 'target-request') {
+    try { parseTargetRequest(args, target); return {allowed:true}; }
+    catch (error) { return {allowed:false,reason:error.message}; }
+  }
+  if (/^tcp:\/\//i.test(target || '')) return {allowed:false,reason:'TCP 程序目标须使用 target-request 进行有界交互'};
   if (!/^https?:\/\//i.test(target || '')) return { allowed: true };
   let authorized;
   try { authorized = new URL(target); } catch { return { allowed: false, reason: '授权目标 URL 无效' }; }

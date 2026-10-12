@@ -608,6 +608,19 @@ void TaskPlanPage::addCandidate(const QString &category, int index, const QJsonV
   } else sendCandidate(candidate);
 }
 
+void TaskPlanPage::useSourcePlaybook(const QString &playbookId)
+{
+  if (m_busy || m_dirty || m_pipeline.value("status").toString() != "awaiting_approval") {
+    message(QStringLiteral("仅待审批任务可建立演示草稿；请等待加载并先保存现有编辑。"), true);
+    return;
+  }
+  if (!m_plan.isEmpty()) {
+    message(QStringLiteral("当前任务已有预案草稿，已保留。请在新任务中建立另一份攻击演示清单。"), true);
+    return;
+  }
+  mutate({}, {{"playbook_id", playbookId}});
+}
+
 void TaskPlanPage::sendCandidate(const QJsonObject &candidate)
 {
   auto body = candidate;

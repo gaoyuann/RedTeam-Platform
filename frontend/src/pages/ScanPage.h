@@ -1,5 +1,6 @@
 #pragma once
 #include <QWidget>
+#include <QSpinBox>
 #include <QTableWidget>
 #include <QTreeWidget>
 #include <QLineEdit>
@@ -10,6 +11,7 @@
 #include <QJsonArray>
 #include <QTabWidget>
 
+class QCheckBox;
 class ApiClient;
 class ScanResultOverview;
 
@@ -22,6 +24,7 @@ public:
   void setTarget(const QString &target);
   void setTaskScope(const QStringList &taskIds);
   void clearTaskScope();
+  static QString chooseHttpSourceDirectory(ApiClient *api, const QString &target, const QString &initial, QWidget *parent);
   void showTaskContextError(const QString &message);
 
 signals:
@@ -52,6 +55,12 @@ private:
   void startPollingIfNeeded();
   void renderGroupedResults(const QJsonArray &results);
   void enableCurrentTabDelBtn(bool enabled);
+  void loadSourceConnections();
+  void browseSourceDirectory();
+  void showSourceEvidence(QTreeWidgetItem *item);
+  void reviewSourceFinding(int findingId);
+  void selectSourceDemonstration();
+  void generatePlaybook(const QJsonArray &findingIds = QJsonArray());
 
   // Formatting helpers
   static QString formatScanType(const QString &type);
@@ -68,16 +77,23 @@ private:
 
   ApiClient *m_api;
 
-  // ── Left panel: 4-Tab scan type layout ──
+  // ── Left panel: 5-Tab scan type layout ──
   QTabWidget *m_scanTypeTabs;
   QTableWidget *m_portScanTable;
   QTableWidget *m_vulnScanTable;
   QTableWidget *m_webScanTable;
   QTableWidget *m_bruteForceTable;
+  QTableWidget *m_sourceScanTable;
   QLineEdit *m_portTargetInput;
   QLineEdit *m_vulnTargetInput;
   QLineEdit *m_webTargetInput;
   QLineEdit *m_bruteTargetInput;
+  QLineEdit *m_sourceTargetInput;
+  QLineEdit *m_sourceDirectoryInput;
+  QComboBox *m_sourceConnectionCombo;
+  QCheckBox *m_sourceAiCheck;
+  QCheckBox *m_sourceAdaptiveCheck;
+  QSpinBox *m_sourceAiBatches;
   QLineEdit *m_portsInput;         // port_scan specific
   QLineEdit *m_cookieInput;        // web_scan specific
   QComboBox *m_serviceCombo;       // brute_force service selector
@@ -86,11 +102,14 @@ private:
   QLabel *m_vulnScanCount;
   QLabel *m_webScanCount;
   QLabel *m_bruteForceCount;
+  QLabel *m_sourceScanCount;
 
   // ── Right panel ──
   ScanResultOverview *m_resultOverview;
   QTreeWidget *m_resultTree;       // grouped results by result_type
   QLabel *m_statusLabel;
+  QLabel *m_resultHint;
+  QPushButton *m_sourceDemoBtn;
   QString m_currentTaskTarget;     // 当前选中任务的目标（供"发起攻击"使用）
   QString m_currentScanType;
 
@@ -99,6 +118,7 @@ private:
   QPushButton *m_vulnDelBtn;
   QPushButton *m_webDelBtn;
   QPushButton *m_bruteDelBtn;
+  QPushButton *m_sourceDelBtn;
 
   // Recommendations
   QTableWidget *m_recTable;

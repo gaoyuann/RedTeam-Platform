@@ -1,11 +1,14 @@
+import {parseCppcheck,parseFlawfinder} from './sourceToolParsers.js';
 import { parseNmapResults, parseNmapInterfaces, topologyScanArgs, selectLanDiscoveryScope } from './nmapTopology.js';
 import { getDb } from '../db/connection.js';
 import { runTool } from '../tools/toolRunner.js';
 import { getWsManager } from './wsManager.js';
 import { normalizeTarget, probeTarget, buildDiscoveredProfile } from './targetDiscovery.js';
 import { classifyToolResult } from '../tools/toolContracts.js';
+import { auditSources } from './sourceAudit.js';
 
 const MAX_OUTPUT_LENGTH = 8192;
+
 
 // Track running scans to prevent duplicates
 const runningScans = new Set();
@@ -60,6 +63,7 @@ const SCAN_TOOL_MAP = {
   cloud_scan: 'cloudmapper', // Cloud security audit
   // app_discovery and api_fuzz are handled specially (dual-step)
   auth_audit: 'nuclei',      // Nuclei with auth templates
+  // source_scan is handled specially: runs cppcheck then flawfinder (dual-step)
 };
 
 // ── Build tool arguments from scan parameters ─────────────────────────
@@ -67,6 +71,19 @@ export function buildArgs(scanType, target, parameters = {}) {
   if (scanType === 'topology_scan') return topologyScanArgs(target);
   const args = [];
   const { ports, timeout, extra_args, threads } = parameters;
+
+  // 源码目标名 → 容器内路径（getVolumeMounts 将 data/source-targets 挂载到 /src:ro）
+  if (scanType === 'source_scan_cppcheck' || scanType === 'source_scan_flawfinder') {
+    if (!/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$/.test(String(target))) throw new Error('源码项目名称无效');
+    const safeName = String(target);
+    const srcPath = `/src/${safeName}`;
+    if (scanType === 'source_scan_cppcheck') {
+      args.push('-q', '--enable=warning,portability,performance', '--xml', '--xml-version=2', srcPath);
+    } else {
+      args.push('--csv', '--minlevel=1', srcPath);
+    }
+    return args;
+  }
 
   switch (scanType) {
     case 'port_scan': // nmap
@@ -226,7 +243,7 @@ export function buildArgs(scanType, target, parameters = {}) {
 }
 
 // ── Simple result parsers per scan type ────────────────────────────────
-function parseResults(scanType, stdout) {
+export function parseResults(scanType, stdout) {
   const results = [];
   const lines = stdout.split('\n').filter(l => l.trim());
 
@@ -626,6 +643,13 @@ function parseResults(scanType, stdout) {
       }
       break;
     }
+
+    case 'source_scan_cppcheck':
+      results.push(...parseCppcheck(stdout));
+      break;
+    case 'source_scan_flawfinder':
+      results.push(...parseFlawfinder(stdout));
+      break;
   }
 
   if (results.length === 0 && stdout.length > 0) {
@@ -649,10 +673,12 @@ export async function executeScan(scanTaskId) {
   const db = getDb();
 
   const task = db.prepare(
-    'SELECT scan_task_id, target, scan_type, parameters, status FROM scan_tasks WHERE scan_task_id = ?'
+    'SELECT scan_task_id, target, scan_type, parameters, status, created_by FROM scan_tasks WHERE scan_task_id = ?'
   ).get(scanTaskId);
   if (!task) return { ok: false, error: 'Scan task not found' };
   if (task.status === 'RUNNING') return { ok: false, error: 'Scan is already running' };
+
+  if (task.scan_type === 'source_scan' && task.status !== 'PENDING') return {ok:false,error:'请新建程序测试任务以保留源码版本和复核证据'};
 
   // Reset to PENDING if needed (for re-execution of COMPLETED/FAILED/CANCELLED)
   if (task.status !== 'PENDING') {
@@ -803,6 +829,15 @@ export async function executeScan(scanTaskId) {
         console.log(`[Scan] brute_force ${service}: hydra for ${task.target}`);
         totalResults = await runAndStore('brute_force', 'hydra', task.target, parameters, timeoutMs);
       }
+    } else if (task.scan_type === 'source_scan') {
+      db.prepare('DELETE FROM source_audits WHERE scan_task_id=?').run(scanTaskId);
+      const controller = new AbortController();
+      const audit = await raceScanWithAbort(auditSources(task, {
+        db, parameters, signal: controller.signal, runTool, parseResults,
+      }), scanTaskId, controller);
+      if (!audit.outcomes) throw new Error(audit.stderr || '程序审计失败');
+      totalResults += audit.count;
+      outcomes.push(...audit.outcomes);
     } else if (task.scan_type === 'ad_scan') {
       // ── AD scan: netexec SMB enumeration ──
       console.log(`[Scan] ad_scan: netexec SMB for ${task.target}`);
@@ -920,7 +955,7 @@ export async function executeScan(scanTaskId) {
     // WebSocket: notify scan completed (include operator info)
     const ws = getWsManager();
     const taskInfo = db.prepare('SELECT created_by FROM scan_tasks WHERE scan_task_id = ?').get(scanTaskId);
-    if (ws) ws.broadcast('scan:completed', {
+    if (ws) (task.scan_type==='source_scan' ? (event,data)=>ws.broadcastProgram(taskInfo?.created_by,event,data) : (event,data)=>ws.broadcast(event,data))('scan:completed', {
       scanTaskId, status: finalStatus, resultsCount: totalResults, error: warnings || null,
       scanType: task.scan_type, target: task.target,
       userId: taskInfo?.created_by || null,
@@ -938,7 +973,7 @@ export async function executeScan(scanTaskId) {
     // WebSocket: notify scan failed/cancelled (include operator info)
     const ws = getWsManager();
     const taskInfo = db.prepare('SELECT created_by FROM scan_tasks WHERE scan_task_id = ?').get(scanTaskId);
-    if (ws) ws.broadcast('scan:completed', {
+    if (ws) (task.scan_type==='source_scan' ? (event,data)=>ws.broadcastProgram(taskInfo?.created_by,event,data) : (event,data)=>ws.broadcast(event,data))('scan:completed', {
       scanTaskId, status: finalStatus, error: err.message,
       scanType: task.scan_type, target: task.target,
       userId: taskInfo?.created_by || null,

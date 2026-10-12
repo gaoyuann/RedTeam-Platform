@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { runTargetRequest } from './targetRequest.js';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getEngine } from './containerEngine.js';
@@ -26,6 +27,9 @@ const IMAGE_MAP = {
   uname: 'rt-system', ping: 'rt-system', netstat: 'rt-system',
   // ── Network capture tools ────────────────────────────────────────────
   tcpdump: 'rt-capture', tshark: 'rt-capture',
+  // ── Source code audit (C/C++) ────────────────────────────────────────
+  cppcheck: 'rt-sast-c', flawfinder: 'rt-sast-c',
+  'target-request': 'builtin',
 };
 
 // ── Tool → Binary name inside container ─────────────────────────────────
@@ -53,11 +57,13 @@ const NUCLEI_TOOLS = new Set(['nuclei']);
 
 // ── Tools needing capture directory volume mount ────────────────────────
 const CAPTURE_TOOLS = new Set(['tcpdump', 'tshark']);
+// 源码工具只挂载当前任务快照。
+const SAST_TOOLS = new Set(['cppcheck', 'flawfinder']);
 
 // ── Virtual tools (no container needed, handled in JS) ─────────────────
 const VIRTUAL_TOOLS = new Set(['upload_shell', 'webshell', 'webshell_health']);
 
-function getVolumeMounts(toolId) {
+function getVolumeMounts(toolId, options = {}) {
   const mounts = [];
   const wordlistsDir = resolve(PROJECT_ROOT, 'data', 'wordlists');
   const nucleiTemplatesDir = resolve(PROJECT_ROOT, 'data', 'nuclei-templates');
@@ -69,6 +75,10 @@ function getVolumeMounts(toolId) {
   }
   if (NUCLEI_TOOLS.has(toolId)) {
     mounts.push('-v', `${nucleiTemplatesDir}:/root/nuclei-templates`);
+  }
+  if (SAST_TOOLS.has(toolId)) {
+    if (!options.sourceDir) throw new Error('源码工具必须指定任务快照目录');
+    mounts.push('-v', `${resolve(options.sourceDir)}:/src/project:ro`);
   }
   mounts.push('-v', `${outputDir}:/tmp/redteam-output`);
 
@@ -139,6 +149,8 @@ function runProcess(bin, args, options, executionMode, stopContainer) {
 
 // ── Main entry: runTool ─────────────────────────────────────────────────
 export async function runTool(toolId, args, options = {}) {
+  if (toolId === 'target-request') return runTargetRequest(args, options);
+  if (SAST_TOOLS.has(toolId) && !options.sourceDir) return {success:false,exitCode:1,stdout:'',stderr:'源码工具必须从源码审计任务运行',error:'缺少任务源码快照'};
   if (VIRTUAL_TOOLS.has(toolId)) {
     return { success: false, exitCode: -1, stdout: '', stderr: `Tool ${toolId} is virtual (HTTP-based), use dedicated handler`, executionMode: 'virtual' };
   }
@@ -162,13 +174,14 @@ export async function runTool(toolId, args, options = {}) {
   }
 
   if (engine === 'host' || !image) {
+    if (SAST_TOOLS.has(toolId)) args = args.map(arg => arg === '/src/project' ? resolve(options.sourceDir) : arg);
     return runProcess(bin, args, { ...options, toolId }, 'host');
   }
 
   ensureOutputDir();
   const name = `rt-tool-${randomUUID()}`;
-  const containerArgs = ['run', '--rm', '--name', name, '--network', 'host',
-    ...getVolumeMounts(toolId), ...(PRIVILEGED_TOOLS.has(toolId) ? ['--privileged'] : []), image, bin, ...args];
+  const containerArgs = ['run', '--rm', '--name', name, '--network', SAST_TOOLS.has(toolId) ? 'none' : 'host',
+    ...getVolumeMounts(toolId, options), ...(PRIVILEGED_TOOLS.has(toolId) ? ['--privileged'] : []), image, bin, ...args];
   return runProcess(engine, containerArgs, { ...options, toolId }, engine, () => {
     const cleanup = spawn(engine, ['rm', '-f', name], { stdio: 'ignore' });
     cleanup.on('error', () => {});

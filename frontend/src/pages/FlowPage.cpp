@@ -77,6 +77,7 @@ static QString pipelineTypeText(const QJsonObject &pipeline)
   if (type == QStringLiteral("web")) return QStringLiteral("Web 安全测试");
   if (type == QStringLiteral("host")) return QStringLiteral("主机安全测试");
   if (type == QStringLiteral("internal")) return QStringLiteral("内网渗透测试");
+  if (type == QStringLiteral("source")) return QStringLiteral("C/C++ 源码辅助测试");
   return QStringLiteral("综合测试");
 }
 
@@ -477,6 +478,15 @@ void FlowPage::setupWorkbenchView()
     m_execTab->attackFromVuln(target, vulnText, resultType);
     m_stageTabs->setCurrentWidget(m_execTab);
   });
+  connect(m_scanTab, &ScanPage::playbookNavigateRequested, this, [this](const QString &playbookId, const QString &target) {
+    if (!m_selectedPipelineId.isEmpty()) {
+      m_stageTabs->setCurrentWidget(m_planTab);
+      m_planTab->useSourcePlaybook(playbookId);
+    } else {
+      m_execTab->selectPlaybook(playbookId, target);
+      m_stageTabs->setCurrentWidget(m_execTab);
+    }
+  });
 
   auto *workspace = new QSplitter(Qt::Horizontal, m_workbenchView);
   workspace->setObjectName(QStringLiteral("taskWorkspaceSplitter"));
@@ -760,7 +770,9 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     const QString taskTitle = pipelineTaskName(p);
     m_targetLabel->setText(QStringLiteral("%1 · %2").arg(taskTitle, target));
     m_targetLabel->setToolTip(QStringLiteral("任务：%1\n目标：%2").arg(taskTitle, target));
-    m_statusLabel->setText(QStringLiteral("%1  %2").arg(statusIcon(status), statusText(status)));
+    const bool selectingSource = status == "awaiting_approval" && p["generated_playbook_id"].toString().isEmpty()
+        && parseJsonObject(p["result"])["paused_at"].toString() == "source_selection";
+    m_statusLabel->setText(QStringLiteral("%1  %2").arg(statusIcon(status), selectingSource ? QStringLiteral("待选择攻击演示对象 · 请进入扫描发现") : statusText(status)));
     m_statusLabel->setStyleSheet(statusBadgeStyle(status));
 
     // 从 pipeline 数据提取 run_id 和 playbook_id，自动加载到攻击 Tab.
@@ -956,7 +968,28 @@ void FlowPage::createFlow(bool quickMode)
   testType->addItem(QStringLiteral("Web 安全测试"), QStringLiteral("web"));
   testType->addItem(QStringLiteral("主机安全测试"), QStringLiteral("host"));
   testType->addItem(QStringLiteral("内网渗透测试"), QStringLiteral("internal"));
-  if (!quickMode) form->addRow(QStringLiteral("任务类型"), testType);
+  testType->addItem(QStringLiteral("C/C++ 源码辅助测试"), QStringLiteral("source"));
+  form->addRow(QStringLiteral("任务类型"), testType);
+  auto *sourceRow = new QWidget(&dlg);
+  auto *sourceLayout = new QHBoxLayout(sourceRow);
+  sourceLayout->setContentsMargins(0,0,0,0);
+  auto *sourceInput = new QLineEdit(sourceRow);
+  sourceInput->setPlaceholderText("/实际目录/ 或 HTTP 源码目录 URL；留空按项目配置匹配");
+  sourceLayout->addWidget(sourceInput,1);
+  auto *browseSource = new QPushButton("浏览目录…",sourceRow);
+  sourceLayout->addWidget(browseSource);
+  auto *sourceLabel = new QLabel("源码目录",&dlg);
+  form->addRow(sourceLabel,sourceRow);
+  sourceRow->hide(); sourceLabel->hide();
+  connect(browseSource,&QPushButton::clicked,&dlg,[this,targetInput,sourceInput,&dlg]() {
+    const QString selected=ScanPage::chooseHttpSourceDirectory(m_api,targetInput->text().trimmed(),sourceInput->text().trimmed(),&dlg);
+    if(!selected.isEmpty()) sourceInput->setText(selected);
+  });
+  connect(testType,QOverload<int>::of(&QComboBox::currentIndexChanged),&dlg,[testType,sourceRow,sourceLabel,targetInput](int) {
+    const bool source=testType->currentData().toString()=="source";
+    sourceRow->setVisible(source); sourceLabel->setVisible(source);
+    targetInput->setPlaceholderText(source ? "程序运行地址：http://192.168.1.113:8089 或 tcp://192.168.1.113:8091" : "例: 192.168.1.0/24 或 http://172.17.0.2");
+  });
 
   QLineEdit *scopeInput = nullptr;
   if (!quickMode) {
@@ -1010,6 +1043,10 @@ void FlowPage::createFlow(bool quickMode)
   config["auto_execute"] = true;
   config["task_name"] = taskName;
   config["test_type"] = testType->currentData().toString();
+  if (testType->currentData().toString()=="source") {
+    config["scan_mode"]="source_assisted";
+    if(!sourceInput->text().trimmed().isEmpty()) config["source_url"]=sourceInput->text().trimmed();
+  }
   config["authorization_confirmed"] = authorizationCheck->isChecked();
   config["authorization_scope"] = scopeInput ? scopeInput->text().trimmed() : target;
   config["creation_mode"] = quickMode ? QStringLiteral("quick") : QStringLiteral("full");

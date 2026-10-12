@@ -150,9 +150,23 @@ int main(int argc, char **argv)
   MockServer server;
   bool delayedTask = false;
   bool delayedScans = false;
+  bool sourceOnly = false;
+  QString sourceStatus = "COMPLETED";
+  auto sourceRecord = [&]() {
+    auto record = scanRecord("source");
+    record["scan_type"] = "source_scan";
+    record["target"] = "http://127.0.0.1:8089/";
+    record["status"] = sourceStatus;
+    record["results"] = QJsonArray{QJsonObject{{"id", 101}, {"result_type", "source_finding"},
+      {"severity", "medium"}, {"result_data", QString::fromUtf8(QJsonDocument(QJsonObject{{"file", "input.c"},
+        {"start_line", 12}, {"title", "Fixture input review"}}).toJson(QJsonDocument::Compact))}}};
+    return record;
+  };
   bool failedTask = false;
   server.handler = [&](const QString &, const QString &requestPath) -> MockReply {
     const QString path = QUrl(requestPath).path();
+    if (sourceOnly && path == "/api/scan-tasks") return {success(QJsonArray{sourceRecord()})};
+    if (sourceOnly && path == "/api/scan-tasks/scan-source") return {success(sourceRecord())};
     const QString taskId = path.split('/').value(3);
     if (path == "/api/pipelines") return {success(QJsonArray{taskRecord("A"), taskRecord("B")})};
     if (path == "/api/scan-tasks") return {success(QJsonArray{scanRecord("A"), scanRecord("B")}), delayedScans ? 250 : 0};
@@ -254,6 +268,34 @@ int main(int argc, char **argv)
   flow.onBackToList();
   QTest::qWait(350);
   verify(flow.m_scanTab->m_currentTarget.isEmpty() && flow.m_scanTab->m_resultTree->topLevelItemCount() == 0, "late scan detail cannot restore old target or results");
+  sourceOnly = true;
+  ScanPage sourcePage(&api, "user", "fixture-user");
+  sourcePage.setTaskScope({"scan-source"});
+  verify(awaitCondition([&]() { return sourcePage.m_selectedTaskId == "scan-source" && sourcePage.m_sourceDemoBtn->isEnabled(); }), "source task loads in scoped workbench with demonstration selector");
+  verify(sourcePage.m_sourceScanTable->rowCount() == 1 && sourcePage.m_scanTypeTabs->currentIndex() == 4, "C/C++ task selects its existing scan tab");
+  verify(sourcePage.m_genBtn->text().contains("攻击演示"), "source generation does not show generic web action");
+  sourceStatus = "RUNNING";
+  emit sourcePage.m_sourceScanTable->cellClicked(0, 0);
+  verify(awaitCondition([&]() { return !sourcePage.m_genBtn->isEnabled(); }), "running source task disables generation");
+  sourceStatus = "COMPLETED";
+  sourcePage.onPollStatus();
+  verify(awaitCondition([&]() { return sourcePage.m_genBtn->isEnabled() && sourcePage.m_sourceDemoBtn->isEnabled(); }), "source polling completion refreshes results and generation controls");
+  bool selectionLoaded = false;
+  QTimer::singleShot(0, &sourcePage, [&]() {
+    auto *dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+    if (!dialog) return;
+    auto *candidates = dialog->findChild<QTableWidget*>("sourceDemonstrationCandidates");
+    selectionLoaded = candidates && candidates->rowCount() == 1 && candidates->columnCount() == 6
+        && candidates->item(0, 0)->data(Qt::UserRole).toInt() == 101;
+    if (candidates) candidates->item(0, 0)->setCheckState(Qt::Checked);
+    dialog->reject();
+  });
+  sourcePage.onGeneratePlaybook();
+  verify(selectionLoaded, "generation opens source object list before sending any plan request");
+  sourcePage.clearTaskScope();
+  verify(sourcePage.m_sourceScanTable->rowCount() == 0 && sourcePage.m_sourceScanCount->text().contains("0"), "clearing scope clears C/C++ rows and count");
+  verify(sourcePage.m_currentTarget.isEmpty() && !sourcePage.m_sourceDemoBtn->isEnabled() && sourcePage.m_resultTree->topLevelItemCount() == 0,
+    "clearing source scope clears target, results and attack objects");
 
   failedTask = true;
   flow.openTaskAnalysis("A");

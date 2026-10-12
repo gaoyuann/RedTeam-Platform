@@ -24,6 +24,8 @@ data/*.db:ro
 # ── Data: large/downloaded content ──────────
 data/nuclei-templates/
 data/output/
+data/source-scan/connections.json
+data/source-scan/snapshots/
 
 # ── Archives ────────────────────────────────
 *.tar

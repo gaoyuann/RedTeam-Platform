@@ -9,7 +9,7 @@ ENGINE="${CONTAINER_ENGINE:-docker}"
 
 echo "=== RedTeam-Platform: Building container images with $ENGINE ==="
 
-IMAGES="recon vuln-scan brute system exploit web credential cloud"
+IMAGES="recon vuln-scan brute system exploit web credential cloud sast-c"
 
 for img in $IMAGES; do
   dir="$CONTAINERS_DIR/$img"

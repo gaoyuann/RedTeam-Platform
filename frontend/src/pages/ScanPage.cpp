@@ -25,7 +25,11 @@
 #include <QHeaderView>
 #include <QDateTime>
 #include <QTreeWidgetItem>
+#include <QCheckBox>
+#include <QPlainTextEdit>
+#include <QRegularExpression>
 #include <QPointer>
+#include <QUrl>
 
 // ── Translate nikto finding text to Chinese ───────────────────────────
 static QString translateNiktoFinding(const QString &finding) {
@@ -72,6 +76,10 @@ static QString formatResultType(const QString &type) {
   if (type == "open_port")    return "开放端口";
   if (type == "vulnerability") return "漏洞";
   if (type == "web_vuln")     return "网站漏洞";
+  if (type == "source_vuln")  return "旧版静态发现";
+  if (type == "source_finding") return "源码候选 / 复核结果";
+  if (type == "application_observation") return "程序入口响应";
+  if (type == "source_coverage") return "分析覆盖情况";
   if (type == "sql_injection") return "SQL注入";
   if (type == "credential")   return "凭据";
   if (type == "raw_output")   return "原始输出";
@@ -90,6 +98,7 @@ QString ScanPage::formatScanType(const QString &type) {
   if (type == "web_scan")    return "网站扫描";
   if (type == "app_discovery") return "应用发现";
   if (type == "brute_force") return "暴力破解";
+  if (type == "source_scan") return "C/C++ 程序测试";
   return type;
 }
 
@@ -202,6 +211,40 @@ QString ScanPage::formatResultData(const QString &json, const QString &resultTyp
       return cn;
     }
 
+    if (resultType == "source_finding") {
+      const auto review = obj["review"].toObject();
+      const QString status = review["status"].toString();
+      const QString label = status == "supported" ? "复核：证据支持" : status == "not_reproduced" ? "复核：未复现" : status == "inconclusive" ? "复核：条件不足" : "待验证";
+      return QString("%1:%2 [%3] %4 — %5").arg(obj["file"].toString()).arg(obj["start_line"].toInt())
+        .arg(obj["cwe"].toString(), obj["title"].toString(), label);
+    }
+    if (resultType == "application_observation")
+      return QString("%1 · %2\n%3").arg(obj["url"].toString(),
+        obj["error"].isNull() ? QString("响应已保存（不代表漏洞验证成功）") : obj["error"].toString(),
+        obj["response"].toString().left(300));
+    if (resultType == "source_coverage") {
+      if (!obj["source_read"].toBool()) return "远程程序测试：本次未读取源码；可根据响应生成测试预案";
+      const QString source=obj["source_url"].toString();
+      return (source.isEmpty() ? QString() : "源码目录：" + source + "\n") + QString("已读取 %1 个文件；AI 分析 %2/%3 个片段；跳过 %4 个文件。%5")
+        .arg(obj["files"].toInt()).arg(obj["ai_reviewed_chunks"].toInt()).arg(obj["total_chunks"].toInt())
+        .arg(obj["skipped"].toArray().size()).arg(obj["note"].toString());
+    }
+    if (resultType == "source_vuln") {
+      QString file = obj["file"].toString();
+      if (file.startsWith("/src/")) {  // 去掉容器挂载前缀，只留相对路径
+        int slash = file.indexOf('/', 5);
+        file = slash > 0 ? file.mid(slash + 1) : file.mid(5);
+      }
+      int line = obj["line"].toInt();
+      QString cwe = obj["cwe"].toString();
+      QString msg = obj["message"].toString();
+      QString text = file;
+      if (line > 0) text += QString(":%1").arg(line);
+      if (!cwe.isEmpty()) text += QString(" [%1]").arg(cwe);
+      if (!msg.isEmpty()) text += " — " + msg;
+      return text;
+    }
+
     if (resultType == "scan_error") return obj["error"].toString();
     if (resultType == "http_probe" || resultType == "technology_detection") {
       return QString("%1 [%2] %3").arg(obj["url"].toString())
@@ -289,6 +332,21 @@ QString ScanPage::buildResultSummary(const QJsonArray &results, const QString &s
     }
     if (creds > 0) return QString("破解成功: %1").arg(creds);
   }
+  else if (scanType == "source_scan") {
+    QMap<QString, int> counts;
+    for (const auto &r : results) {
+      auto obj = r.toObject();
+      if (obj["result_type"].toString() != "source_vuln" && obj["result_type"].toString() != "source_finding") continue;
+      QString sev = obj["severity"].toString();
+      if (!sev.isEmpty()) counts[sev]++;
+    }
+    QStringList parts;
+    for (const auto &sev : {"critical", "high", "medium", "low"}) {
+      if (counts.contains(sev) && counts[sev] > 0)
+        parts << QString("%1: %2").arg(formatSeverity(sev)).arg(counts[sev]);
+    }
+    if (!parts.isEmpty()) return parts.join(", ");
+  }
   return "";
 }
 
@@ -314,11 +372,13 @@ bool ScanPage::hasStructuredResults(const QJsonArray &results) {
 // ── Helper: map scan_type string to the corresponding table ───────────
 static QTableWidget *tableForScanType(const QString &scanType,
                                        QTableWidget *port, QTableWidget *vuln,
-                                       QTableWidget *web, QTableWidget *brute) {
+                                       QTableWidget *web, QTableWidget *brute,
+                                       QTableWidget *source) {
   if (scanType == "port_scan")   return port;
   if (scanType == "vuln_scan")   return vuln;
   if (scanType == "web_scan" || scanType == "app_discovery") return web;
   if (scanType == "brute_force") return brute;
+  if (scanType == "source_scan") return source;
   return nullptr;
 }
 
@@ -330,13 +390,15 @@ void ScanPage::enableCurrentTabDelBtn(bool enabled) {
   m_vulnDelBtn->setEnabled(false);
   m_webDelBtn->setEnabled(false);
   m_bruteDelBtn->setEnabled(false);
+  m_sourceDelBtn->setEnabled(false);
   if (!enabled || m_selectedTaskId.isEmpty()) return;
 
   int idx = m_scanTypeTabs->currentIndex();
   QTableWidget *activeTable = idx == 0 ? m_portScanTable
                             : idx == 1 ? m_vulnScanTable
                             : idx == 2 ? m_webScanTable
-                                       : m_bruteForceTable;
+                            : idx == 3 ? m_bruteForceTable
+                                       : m_sourceScanTable;
   bool taskIsInActiveTab = false;
   for (int row = 0; row < activeTable->rowCount(); ++row) {
     auto *item = activeTable->item(row, 0);
@@ -352,6 +414,7 @@ void ScanPage::enableCurrentTabDelBtn(bool enabled) {
     case 1: m_vulnDelBtn->setEnabled(true); break;
     case 2: m_webDelBtn->setEnabled(true); break;
     case 3: m_bruteDelBtn->setEnabled(true); break;
+    case 4: m_sourceDelBtn->setEnabled(true); break;
     default: break;
   }
 }
@@ -361,6 +424,7 @@ void ScanPage::enableCurrentTabDelBtn(bool enabled) {
 ScanPage::ScanPage(ApiClient *api, const QString &role, const QString &username, QWidget *parent) : QWidget(parent), m_api(api) {
   (void)role; (void)username;
   setupUI();
+  loadSourceConnections();
   onRefreshTasks();
 }
 
@@ -370,6 +434,7 @@ void ScanPage::setTarget(const QString &target)
   m_vulnTargetInput->setText(target);
   m_webTargetInput->setText(target);
   m_bruteTargetInput->setText(target);
+  m_sourceTargetInput->setText(target);
 }
 
 void ScanPage::setTaskScope(const QStringList &taskIds)
@@ -396,10 +461,10 @@ void ScanPage::clearTaskScope()
   m_runningTaskIds.clear();
   m_pollErrorCount = 0;
   if (m_pollTimer) m_pollTimer->stop();
-  for (auto *table : {m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable}) {
+  for (auto *table : {m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable, m_sourceScanTable}) {
     if (table) table->setRowCount(0);
   }
-  for (auto *count : {m_portScanCount, m_vulnScanCount, m_webScanCount, m_bruteForceCount}) {
+  for (auto *count : {m_portScanCount, m_vulnScanCount, m_webScanCount, m_bruteForceCount, m_sourceScanCount}) {
     if (count) count->setText(QStringLiteral("共 0 个"));
   }
   setTarget(QString());
@@ -727,6 +792,123 @@ void ScanPage::setupUI() {
     m_scanTypeTabs->addTab(tab, QStringLiteral("弱口令扫描"));
   }
 
+  // --- Tab: 源代码扫描（C/C++ 静态审计）---
+  {
+    auto *tab = new QWidget;
+    auto *layout = new QVBoxLayout(tab);
+    auto *h = new QGridLayout;
+    h->addWidget(new QLabel("程序运行地址:"), 0, 0);
+    m_sourceTargetInput = new QLineEdit;
+    m_sourceTargetInput->setPlaceholderText("http://192.168.1.113:8089 或 tcp://192.168.1.113:8091");
+    m_sourceTargetInput->setText("http://192.168.1.113:8089");
+    m_sourceTargetInput->setMinimumWidth(150);
+    auto *completer = new QCompleter(history, this);
+    completer->setCaseSensitivity(Qt::CaseInsensitive);
+    m_sourceTargetInput->setCompleter(completer);
+    h->addWidget(m_sourceTargetInput, 0, 1);
+    auto *preset = new QComboBox;
+    preset->addItem("vulnerable-webapp · HTTP 8089", "http://192.168.1.113:8089");
+    preset->addItem("vuln-demo · HTTP 8090", "http://192.168.1.113:8090");
+    preset->addItem("exploit_me · TCP 8091", "tcp://192.168.1.113:8091");
+    h->addWidget(new QLabel("靶场入口:"), 1, 0);
+    h->addWidget(preset, 1, 1);
+    connect(preset, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this,preset](int) {
+      m_sourceTargetInput->setText(preset->currentData().toString());
+    });
+    m_sourceConnectionCombo = new QComboBox;
+    m_sourceConnectionCombo->addItem("不提供源码（远程测试）", "");
+    h->addWidget(new QLabel("源码映射（按运行地址自动匹配）:"), 2, 0);
+    h->addWidget(m_sourceConnectionCombo, 2, 1);
+    m_sourceConnectionCombo->setEnabled(false);
+    auto *reloadSources = new QPushButton("刷新源码项目");
+    h->addWidget(reloadSources, 2, 2);
+    connect(reloadSources, &QPushButton::clicked, this, &ScanPage::loadSourceConnections);
+    connect(m_sourceTargetInput, &QLineEdit::textChanged, this, [this](const QString &value) {
+      const QString target=value.trimmed().toLower().remove(QRegularExpression("/$"));
+      int match=0;
+      for(int i=1;i<m_sourceConnectionCombo->count();++i) {
+        const auto targets=m_sourceConnectionCombo->itemData(i,Qt::UserRole+1).toStringList();
+        for(const auto &candidate:targets) {
+          if(candidate.toLower().remove(QRegularExpression("/$"))==target) { match=i; break; }
+        }
+        if(match) break;
+      }
+      m_sourceConnectionCombo->setCurrentIndex(match);
+      const QString mapped=m_sourceConnectionCombo->itemData(match,Qt::UserRole+2).toString();
+      m_sourceDirectoryInput->setPlaceholderText(mapped.isEmpty() ? "填写 /实际目录/ 或完整 HTTP 源码目录 URL；留空使用项目配置" : "留空使用：" + mapped);
+    });
+    m_sourceDirectoryInput = new QLineEdit;
+    m_sourceDirectoryInput->setPlaceholderText("填写 /实际目录/ 或完整 HTTP 源码目录 URL；留空使用项目配置");
+    h->addWidget(new QLabel("源码目录地址:"), 3, 0);
+    h->addWidget(m_sourceDirectoryInput, 3, 1);
+    auto *browseSource = new QPushButton("浏览远端目录…");
+    h->addWidget(browseSource, 3, 2);
+    connect(browseSource, &QPushButton::clicked, this, &ScanPage::browseSourceDirectory);
+    m_sourceAiCheck = new QCheckBox("读取源码后使用 AI 分析代码");
+    m_sourceAiCheck->setChecked(true);
+    h->addWidget(m_sourceAiCheck, 4, 1);
+    m_sourceAiBatches = new QSpinBox;
+    m_sourceAiBatches->setRange(1, 24);
+    m_sourceAiBatches->setValue(12);
+    m_sourceAiBatches->setPrefix("AI 分析批次：");
+    m_sourceAiBatches->setToolTip("优先审查静态告警和危险操作；增加批次可扩大源码覆盖");
+    h->addWidget(m_sourceAiBatches, 4, 2);
+    connect(m_sourceAiCheck, &QCheckBox::toggled, m_sourceAiBatches, &QSpinBox::setEnabled);
+    m_sourceAdaptiveCheck = new QCheckBox("生成预案时允许 Agent 根据执行证据补充验证请求");
+    m_sourceAdaptiveCheck->setChecked(true);
+    h->addWidget(m_sourceAdaptiveCheck, 5, 1, 1, 2);
+    auto *hint = new QLabel("程序运行地址与源码目录分别填写。HTTP 源码目录可手动填写或通过目录索引浏览选择；留空时使用后端已配置的源码项目，没有项目则仅进行远程测试。目录须能从扫描后端访问，且与运行地址使用相同协议、主机和端口。SSH 来源沿用项目配置。读取实际源码后进行工具与 AI 分析，再生成预案验证程序。");
+    hint->setWordWrap(true);
+    hint->setStyleSheet("color:#64748b; font-size:12px;");
+    h->addWidget(hint, 6, 0, 1, 3);
+    auto *btn = new QPushButton("创建测试");
+    btn->setProperty("primary", true);
+    h->addWidget(btn, 7, 1);
+    layout->addLayout(h);
+    connect(btn, &QPushButton::clicked, this, &ScanPage::onCreateScan);
+    auto *headerH = new QHBoxLayout;
+    auto *label = new QLabel("C/C++ 程序测试"); label->setStyleSheet(Theme::SectionStyle);
+    headerH->addWidget(label);
+    m_sourceScanCount = new QLabel;
+    m_sourceScanCount->setStyleSheet("color:#64748b; font-size:13px;");
+    headerH->addWidget(m_sourceScanCount);
+    headerH->addStretch();
+    layout->addLayout(headerH);
+    m_sourceScanTable = new QTableWidget(0, 3);
+    m_sourceScanTable->setObjectName("scanSourceTasks");
+    UiUtil::EmptyHint::attach(m_sourceScanTable, QStringLiteral("暂无程序测试任务"));
+    m_sourceScanTable->setHorizontalHeaderLabels({"目标", "状态", "时间"});
+    m_sourceScanTable->setAlternatingRowColors(true);
+    m_sourceScanTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_sourceScanTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_sourceScanTable->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_sourceScanTable->setSortingEnabled(false);
+    m_sourceScanTable->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_sourceScanTable->horizontalHeader()->setStretchLastSection(true);
+    layout->addWidget(m_sourceScanTable, 1);
+    connect(m_sourceScanTable, &QTableWidget::cellClicked, this, &ScanPage::onTaskClicked);
+    auto *btnH = new QHBoxLayout;
+    auto *delBtn = new QPushButton("删除选中");
+    delBtn->setProperty("danger", true);
+    delBtn->setEnabled(false);
+    auto *refreshBtn = new QPushButton("刷新任务列表");
+    btnH->addWidget(delBtn);
+    btnH->addStretch();
+    btnH->addWidget(refreshBtn);
+    layout->addLayout(btnH);
+    connect(delBtn, &QPushButton::clicked, this, &ScanPage::onDeleteTask);
+    connect(refreshBtn, &QPushButton::clicked, this, &ScanPage::onRefreshTasks);
+    m_sourceDelBtn = delBtn;
+    connect(m_sourceScanTable, &QTableWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
+      auto *item = m_sourceScanTable->itemAt(pos);
+      if (!item) return;
+      QMenu menu;
+      menu.addAction("复制单元格内容", [item]() { QApplication::clipboard()->setText(item->text()); });
+      menu.exec(m_sourceScanTable->viewport()->mapToGlobal(pos));
+    });
+    m_scanTypeTabs->addTab(tab, QStringLiteral("C/C++ 程序测试"));
+  }
+
   left->setContentsMargins(14, 14, 14, 14);
   left->setSpacing(10);
   auto *typePicker = new QComboBox(this);
@@ -823,10 +1005,16 @@ void ScanPage::setupUI() {
   right->addWidget(resLabel);
   m_resultOverview = new ScanResultOverview(resultsPage);
   right->addWidget(m_resultOverview);
-  auto *resultHint = new QLabel(QStringLiteral("完整结果  ·  右键复制内容 / 发起攻击，双击漏洞行进入攻击测试"));
-  resultHint->setObjectName("scanPanelHint");
-  resultHint->setWordWrap(true);
-  right->addWidget(resultHint);
+  m_resultHint = new QLabel(QStringLiteral("完整结果  ·  右键复制内容 / 发起攻击，双击漏洞行进入攻击测试"));
+  m_resultHint->setObjectName("scanPanelHint");
+  m_resultHint->setWordWrap(true);
+  right->addWidget(m_resultHint);
+  m_sourceDemoBtn = new QPushButton("选择源码发现 · 生成攻击演示清单…");
+  m_sourceDemoBtn->setObjectName("sourceDemonstrationButton");
+  m_sourceDemoBtn->hide();
+  m_sourceDemoBtn->setEnabled(false);
+  right->addWidget(m_sourceDemoBtn);
+  connect(m_sourceDemoBtn, &QPushButton::clicked, this, &ScanPage::selectSourceDemonstration);
   m_resultTree = new QTreeWidget;
   m_resultTree->setMinimumHeight(180);
   m_resultTree->setObjectName("scanResultTree");
@@ -849,6 +1037,14 @@ void ScanPage::setupUI() {
     menu.addAction("复制内容", [text]() { QApplication::clipboard()->setText(text); });
     // 演示动线：漏洞结果一键发起攻击
     const QString resultType = item->data(0, Qt::UserRole).toString();
+    if (resultType == "source_finding" || resultType == "application_observation" || resultType == "source_coverage") {
+      menu.addAction("查看源码 / 请求证据", [this,item]() { showSourceEvidence(item); });
+      if (resultType == "source_finding" && m_sourceDemoBtn->isEnabled()) {
+        menu.addAction("生成此项攻击演示预案", [this,item]() {
+          generatePlaybook(QJsonArray{item->data(0,Qt::UserRole+1).toInt()});
+        });
+      }
+    }
     const QStringList attackable = {"vulnerability", "web_vuln", "sql_injection", "credential"};
     if (!m_currentTaskTarget.isEmpty() && attackable.contains(resultType)) {
       menu.addSeparator();
@@ -863,6 +1059,7 @@ void ScanPage::setupUI() {
     // 双击漏洞行 = 直接发起攻击（分组头/不可攻击类型忽略）
     if (!item || item->parent() == nullptr) return;
     const QString resultType = item->data(0, Qt::UserRole).toString();
+    if (resultType == "source_finding" || resultType == "application_observation" || resultType == "source_coverage") {showSourceEvidence(item); return;}
     const QStringList attackable = {"vulnerability", "web_vuln", "sql_injection", "credential"};
     if (!attackable.contains(resultType) || m_currentTaskTarget.isEmpty()) return;
     const QString raw = item->toolTip(1);
@@ -1034,6 +1231,18 @@ void ScanPage::updateStatusLabel(const QJsonObject &d) {
   m_currentScanType = d["scan_type"].toString();
   auto arr = d["results"].toArray();
   bool structured = hasStructuredResults(arr);
+  const bool sourceTask = m_currentScanType == "source_scan";
+  const bool finished = status == "COMPLETED" || status == "PARTIAL";
+  bool sourceFindings = false;
+  for (const auto &result : arr) {
+    if (result.toObject()["result_type"].toString() == "source_finding") sourceFindings = true;
+  }
+  m_sourceDemoBtn->setVisible(sourceTask);
+  m_sourceDemoBtn->setEnabled(sourceTask && finished && sourceFindings);
+  m_resultHint->setText(sourceTask
+      ? QStringLiteral("扫描 → 源码候选列表 → 选择攻击演示对象 → 逐项对照与验证 → 引用执行证据复核。双击查看源码；静态告警和执行成功均不代表漏洞成立。")
+      : QStringLiteral("完整结果  ·  右键复制内容 / 发起攻击，双击漏洞行进入攻击测试"));
+  m_genBtn->setText(sourceTask && sourceFindings ? "选择发现生成攻击演示预案" : sourceTask ? "生成远程诊断预案" : "智能生成预案");
 
   QStringList parts;
   parts << QString("目标: %1").arg(target);
@@ -1074,7 +1283,7 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
   // Group by result_type
   QMap<QString, QJsonArray> groups;
   // Define display order
-  QStringList order = {"open_port", "vulnerability", "web_vuln", "sql_injection",
+  QStringList order = {"source_coverage", "application_observation", "source_finding", "open_port", "vulnerability", "web_vuln", "source_vuln", "sql_injection",
                        "credential", "service_info", "http_probe", "technology_detection", "scan_error", "raw_output"};
 
   for (const auto &r : results) {
@@ -1112,6 +1321,7 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
       auto *child = new QTreeWidgetItem(groupItem);
       child->setText(0, formatSeverity(sev));
       child->setForeground(0, severityColor(sev));
+      child->setData(0, Qt::UserRole+1, obj["id"].toInt());
       child->setData(0, Qt::UserRole, resultType);  // 供右键"发起攻击"判断类型
       child->setText(1, formatResultData(rawData, resultType));
       child->setToolTip(1, rawData);
@@ -1158,6 +1368,7 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
       auto *child = new QTreeWidgetItem(groupItem);
       child->setText(0, formatSeverity(sev));
       child->setForeground(0, severityColor(sev));
+      child->setData(0, Qt::UserRole+1, obj["id"].toInt());
       child->setData(0, Qt::UserRole, resultType);  // 供右键"发起攻击"判断类型
       child->setText(1, formatResultData(rawData, resultType));
       child->setToolTip(1, rawData);
@@ -1181,6 +1392,7 @@ void ScanPage::onCreateScan() {
     case 1: scanType = "vuln_scan";   target = m_vulnTargetInput->text().trimmed(); break;
     case 2: scanType = "web_scan";    target = m_webTargetInput->text().trimmed(); break;
     case 3: scanType = "brute_force"; target = m_bruteTargetInput->text().trimmed(); break;
+    case 4: scanType = "source_scan"; target = m_sourceTargetInput->text().trimmed(); break;
     default: return;
   }
 
@@ -1199,7 +1411,7 @@ void ScanPage::onCreateScan() {
     while (history.size() > 20) history.removeLast();
     settings.setValue("history/targets", history);
     // Update completers for all target inputs
-    for (auto *input : {m_portTargetInput, m_vulnTargetInput, m_webTargetInput, m_bruteTargetInput}) {
+    for (auto *input : {m_portTargetInput, m_vulnTargetInput, m_webTargetInput, m_bruteTargetInput, m_sourceTargetInput}) {
       if (auto *c = input->completer()) {
         auto *m = qobject_cast<QStringListModel*>(c->model());
         if (m) m->setStringList(history);
@@ -1228,11 +1440,17 @@ void ScanPage::onCreateScan() {
       parameters["form_definition"] = formDef;
     }
   }
+  if (scanType == "source_scan") {
+    const QString sourceDirectory=m_sourceDirectoryInput->text().trimmed();
+    if(!sourceDirectory.isEmpty()) parameters["source_url"]=sourceDirectory;
+    parameters["ai_analysis"] = m_sourceAiCheck->isChecked();
+    parameters["ai_batches"] = m_sourceAiBatches->value();
+  }
   if (!parameters.isEmpty()) body["parameters"] = parameters;
 
   m_api->post("/api/scan-tasks", body, 10000, [this](const QJsonObject &res) {
     if (res["status"].toString() != "ok") {
-      m_statusLabel->setText("创建扫描任务失败");
+      m_statusLabel->setText("创建扫描任务失败：" + res["error"].toObject()["message"].toString());
       m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
       return;
     }
@@ -1248,6 +1466,7 @@ void ScanPage::onCreateScan() {
       case 1: m_vulnTargetInput->clear(); break;
       case 2: m_webTargetInput->clear(); m_cookieInput->clear(); break;
       case 3: m_bruteTargetInput->clear(); break;
+      case 4: /* Keep the runtime address for subsequent independent tests. */ break;
     }
     onRefreshTasks();
 
@@ -1288,13 +1507,14 @@ void ScanPage::onRefreshTasks() {
     if (res["status"].toString() != "ok") return;
     auto arr = res["data"].toArray();
 
-    // Clear all 4 tables
+    // Clear all 5 tables
     m_portScanTable->setRowCount(0);
     m_vulnScanTable->setRowCount(0);
     m_webScanTable->setRowCount(0);
     m_bruteForceTable->setRowCount(0);
+    m_sourceScanTable->setRowCount(0);
 
-    QMap<QString, int> counts = {{"port_scan", 0}, {"vuln_scan", 0}, {"web_scan", 0}, {"brute_force", 0}};
+    QMap<QString, int> counts = {{"port_scan", 0}, {"vuln_scan", 0}, {"web_scan", 0}, {"brute_force", 0}, {"source_scan", 0}};
     QStringList runningIds;
     int selectTabIdx = -1;
     int selectRowInTab = -1;
@@ -1306,7 +1526,7 @@ void ScanPage::onRefreshTasks() {
       QString scanType = t["scan_type"].toString();
       QString status = t["status"].toString();
 
-      auto *table = tableForScanType(scanType, m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable);
+      auto *table = tableForScanType(scanType, m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable, m_sourceScanTable);
       if (!table) continue;
 
       int row = table->rowCount();
@@ -1333,13 +1553,14 @@ void ScanPage::onRefreshTasks() {
         selectTabIdx = (scanType == "port_scan") ? 0 :
                        (scanType == "vuln_scan") ? 1 :
                        (scanType == "web_scan" || scanType == "app_discovery") ? 2 :
-                       (scanType == "brute_force") ? 3 : -1;
+                       (scanType == "brute_force") ? 3 :
+                       (scanType == "source_scan") ? 4 : -1;
         selectRowInTab = row;
       }
     }
 
     // Resize columns
-    for (auto *table : {m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable}) {
+    for (auto *table : {m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable, m_sourceScanTable}) {
       table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     }
 
@@ -1348,6 +1569,7 @@ void ScanPage::onRefreshTasks() {
     m_vulnScanCount->setText(QString("共 %1 个").arg(counts["vuln_scan"]));
     m_webScanCount->setText(QString("共 %1 个").arg(counts["web_scan"]));
     m_bruteForceCount->setText(QString("共 %1 个").arg(counts["brute_force"]));
+    m_sourceScanCount->setText(QString("共 %1 个").arg(counts["source_scan"]));
 
     // Select the previously selected task (only highlight row, don't switch tabs
     // to avoid jarring UX when user is viewing a different tab)
@@ -1355,8 +1577,8 @@ void ScanPage::onRefreshTasks() {
       // Only switch tab if the selected task is in the currently visible tab
       if (m_scanTypeTabs->currentIndex() == selectTabIdx) {
         auto *table = tableForScanType(
-          selectTabIdx == 0 ? "port_scan" : selectTabIdx == 1 ? "vuln_scan" : selectTabIdx == 2 ? "web_scan" : "brute_force",
-          m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable);
+          selectTabIdx == 0 ? "port_scan" : selectTabIdx == 1 ? "vuln_scan" : selectTabIdx == 2 ? "web_scan" : selectTabIdx == 3 ? "brute_force" : "source_scan",
+          m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable, m_sourceScanTable);
         if (table) {
           table->selectRow(selectRowInTab);
           enableCurrentTabDelBtn(true);
@@ -1366,7 +1588,7 @@ void ScanPage::onRefreshTasks() {
 
     // Opening a pipeline should show its results, not unrelated global tasks.
     if (m_scopedTasks && m_selectInitialScopeTask && m_selectedTaskId.isEmpty()) {
-      const QList<QTableWidget*> tables{m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable};
+      const QList<QTableWidget*> tables{m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable, m_sourceScanTable};
       for (int tab = 0; tab < tables.size(); ++tab) {
         if (tables[tab]->rowCount() == 0) continue;
         m_scanTypeTabs->setCurrentIndex(tab);
@@ -1406,8 +1628,8 @@ void ScanPage::onTaskClicked(int row, int) {
     // Save current target for cross-page navigation
     m_currentTarget = d["target"].toString();
 
-    // Update status in the originating table (find across all 4 tables)
-    for (auto *t : {m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable}) {
+    // Update status in the originating table (find across all 5 tables)
+    for (auto *t : {m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable, m_sourceScanTable}) {
       for (int i = 0; i < t->rowCount(); i++) {
         auto *item = t->item(i, 0);
         if (item && item->data(Qt::UserRole).toString() == id) {
@@ -1518,17 +1740,103 @@ void ScanPage::loadRecommendations(const QString &taskId) {
 
 // ── AI Generate Playbook ──────────────────────────────────────────────
 void ScanPage::onGeneratePlaybook() {
+  if (m_currentScanType == "source_scan" && m_sourceDemoBtn->isEnabled()) {
+    selectSourceDemonstration();
+    return;
+  }
+  generatePlaybook();
+}
+
+void ScanPage::selectSourceDemonstration() {
+  if (m_selectedTaskId.isEmpty() || !m_sourceDemoBtn->isEnabled()) return;
+  QDialog dialog(this);
+  dialog.setWindowTitle("选择攻击演示对象");
+  dialog.resize(1000, 520);
+  auto *layout = new QVBoxLayout(&dialog);
+  auto *hint = new QLabel("目标：" + m_currentTarget + "\n选择 1–10 条源码候选。预案按清单逐项安排正常对照和漏洞验证；缺少运行入口、协议或诊断条件时会说明原因，不能直接把源码告警当作可利用漏洞。", &dialog);
+  hint->setWordWrap(true);
+  layout->addWidget(hint);
+  auto *table = new QTableWidget(0, 6, &dialog);
+  table->setObjectName("sourceDemonstrationCandidates");
+  table->setHorizontalHeaderLabels({"选择 / 编号", "严重度", "发现 / CWE", "源码位置", "触发前提", "复核状态"});
+  table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  table->setAlternatingRowColors(true);
+  table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+  table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
+  for (int group = 0; group < m_resultTree->topLevelItemCount(); ++group) {
+    auto *parent = m_resultTree->topLevelItem(group);
+    for (int index = 0; index < parent->childCount(); ++index) {
+      auto *item = parent->child(index);
+      if (item->data(0, Qt::UserRole).toString() != "source_finding") continue;
+      const auto data = QJsonDocument::fromJson(item->toolTip(1).toUtf8()).object();
+      const int row = table->rowCount();
+      table->insertRow(row);
+      const int id = item->data(0, Qt::UserRole+1).toInt();
+      auto *select = new QTableWidgetItem(QString("#%1").arg(id));
+      select->setData(Qt::UserRole, id);
+      select->setFlags(select->flags() | Qt::ItemIsUserCheckable);
+      select->setCheckState(item == m_resultTree->currentItem() ? Qt::Checked : Qt::Unchecked);
+      table->setItem(row, 0, select);
+      table->setItem(row, 1, new QTableWidgetItem(item->text(0)));
+      table->setItem(row, 2, new QTableWidgetItem(data["title"].toString() + " " + data["cwe"].toString()));
+      table->setItem(row, 3, new QTableWidgetItem(QString("%1:%2").arg(data["file"].toString()).arg(data["start_line"].toInt())));
+      const QString conditions = data["preconditions"].toString();
+      auto *condition = new QTableWidgetItem(conditions.isEmpty() ? "需确认输入点及运行条件" : conditions);
+      condition->setToolTip(condition->text());
+      table->setItem(row, 4, condition);
+      const QString status = data["review"].toObject()["status"].toString();
+      table->setItem(row, 5, new QTableWidgetItem(status == "supported" ? "证据支持" : status == "not_reproduced" ? "未复现" : status == "inconclusive" ? "条件不足" : "待验证"));
+    }
+  }
+  table->resizeColumnToContents(0);
+  table->resizeColumnToContents(1);
+  layout->addWidget(table);
+  auto *buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, &dialog);
+  auto *generate = buttons->addButton("按清单生成逐项演示预案", QDialogButtonBox::AcceptRole);
+  auto *selection = new QLabel(&dialog);
+  layout->addWidget(selection);
+  layout->addWidget(buttons);
+  auto updateSelection = [table, generate, selection]() {
+    int count = 0;
+    for (int row = 0; row < table->rowCount(); ++row) if (table->item(row, 0)->checkState() == Qt::Checked) ++count;
+    selection->setText(QString("已选择 %1 条 · 每项单独保留步骤和证据，最多 10 条").arg(count));
+    generate->setEnabled(count >= 1 && count <= 10);
+  };
+  connect(table, &QTableWidget::itemChanged, &dialog, [updateSelection](QTableWidgetItem *) { updateSelection(); });
+  updateSelection();
+  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  const QString taskId = m_selectedTaskId;
+  if (dialog.exec() != QDialog::Accepted || taskId != m_selectedTaskId) return;
+  QJsonArray ids;
+  for (int row = 0; row < table->rowCount(); ++row) if (table->item(row, 0)->checkState() == Qt::Checked) ids.append(table->item(row, 0)->data(Qt::UserRole).toInt());
+  generatePlaybook(ids);
+}
+
+void ScanPage::generatePlaybook(const QJsonArray &findingIds) {
   if (m_selectedTaskId.isEmpty()) return;
   const QString taskId = m_selectedTaskId;
+  const bool sourceDemo = m_currentScanType == "source_scan" && !findingIds.isEmpty();
+  const QString buttonText = m_genBtn->text();
   m_genBtn->setEnabled(false);
+  m_sourceDemoBtn->setEnabled(false);
   m_genBtn->setText("智能生成中...");
   m_genPreviewWidget->setVisible(false);
   m_genStepTable->setRowCount(0);
   QJsonObject body;
-  m_api->post("/api/scan-tasks/" + taskId + "/generate-playbook", body, 60000, [this, taskId](const QJsonObject &res) {
+  body["adaptive"] = m_sourceAdaptiveCheck->isChecked();
+  if (sourceDemo) {
+    body["finding_ids"] = findingIds;
+    body["demonstration"] = true;
+  }
+  const int scopeRevision = m_scopeRevision;
+  QPointer<ScanPage> guard(this);
+  m_api->post("/api/scan-tasks/" + taskId + "/generate-playbook", body, 150000, [this, guard, scopeRevision, taskId, sourceDemo, buttonText](const QJsonObject &res) {
+    if (!guard || scopeRevision != m_scopeRevision) return;
     if (taskId != m_selectedTaskId) return;
     m_genBtn->setEnabled(true);
-    m_genBtn->setText("智能生成预案");
+    m_genBtn->setText(buttonText);
+    m_sourceDemoBtn->setEnabled(sourceDemo);
     if (res["status"].toString() == "ok") {
       auto data = res["data"].toObject();
       QString pbId = data["playbook_id"].toString();
@@ -1538,11 +1846,12 @@ void ScanPage::onGeneratePlaybook() {
       m_lastGeneratedId = pbId;
 
       // 显示预览区标题
-      m_genPreviewTitle->setText(QString("智能生成预案：%1（%2步）").arg(pbName).arg(steps));
-      m_genExecBtn->setText(QString("前往执行「%1」→").arg(pbName.left(20)));
+      m_genPreviewTitle->setText(QString("%1：%2（%3步）").arg(sourceDemo ? "逐项攻击演示预案" : "智能生成预案", pbName).arg(steps));
+      m_genExecBtn->setText(QString("%1「%2」→").arg(m_scopedTasks ? "前往任务预案" : "前往执行", pbName.left(20)));
 
       // 加载 Playbook 详情并渲染步骤表格
-      m_api->get("/api/playbooks/" + pbId, 5000, [this, taskId](const QJsonObject &pbRes) {
+      m_api->get("/api/playbooks/" + pbId, 5000, [this, guard, scopeRevision, taskId](const QJsonObject &pbRes) {
+        if (!guard || scopeRevision != m_scopeRevision) return;
         if (taskId != m_selectedTaskId) return;
         if (pbRes["status"].toString() != "ok") return;
         auto pb = pbRes["data"].toObject();
@@ -1550,8 +1859,12 @@ void ScanPage::onGeneratePlaybook() {
         m_genStepTable->setRowCount(stepsArr.size());
         for (int i = 0; i < stepsArr.size(); i++) {
           auto s = stepsArr[i].toObject();
-          int stepNum = s["step_index"].toInt(i + 1);
-          m_genStepTable->setItem(i, 0, new QTableWidgetItem(QString("步骤 %1").arg(stepNum)));
+          int stepNum = s["step_index"].toInt(i);
+          const auto evidence = QJsonDocument::fromJson(s["evidence_config"].toString().toUtf8()).object();
+          QStringList findingLabels;
+          for (const auto &id : evidence["finding_ids"].toArray()) findingLabels << QString("#%1").arg(id.toInt());
+          const QString phase = evidence["phase"].toString();
+          m_genStepTable->setItem(i, 0, new QTableWidgetItem(QString("步骤 %1 %2 %3").arg(stepNum + 1).arg(findingLabels.join(", "), phase == "baseline" ? "正常对照" : phase == "verification" ? "漏洞验证" : "")));
           m_genStepTable->setItem(i, 1, new QTableWidgetItem(s["tool_id"].toString()));
           QStringList args;
           auto at = s["args_template"];
@@ -1600,7 +1913,7 @@ void ScanPage::onRecommendationClicked(int row, int) {
   m_selectedRecPlaybookName = item->text();
   // 显示"前往执行"按钮
   m_recExecBtn->setVisible(true);
-  m_recExecBtn->setText(QString("前往执行「%1」→").arg(m_selectedRecPlaybookName.left(20)));
+  m_recExecBtn->setText(QString("%1「%2」→").arg(m_scopedTasks ? "前往任务预案" : "前往执行", m_selectedRecPlaybookName.left(20)));
 }
 
 // ── 推荐预案"前往执行→"按钮 ──────────────────────────────────────────
@@ -1675,6 +1988,10 @@ void ScanPage::clearDetailPanel() {
   m_resultTree->clear();
   m_recTable->setRowCount(0);
   m_genBtn->setEnabled(false);
+  m_genBtn->setText("智能生成预案");
+  m_sourceDemoBtn->hide();
+  m_sourceDemoBtn->setEnabled(false);
+  m_resultHint->setText("完整结果  ·  右键复制内容 / 发起攻击，双击漏洞行进入攻击测试");
   m_reexecBtn->setVisible(false);
   m_selectedRecPlaybookId.clear();
   m_selectedRecPlaybookName.clear();
@@ -1721,7 +2038,7 @@ void ScanPage::onPollStatus() {
 
       if (m_runningTaskIds.contains(taskId)) {
         // Update status in the corresponding table
-        for (auto *table : {m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable}) {
+        for (auto *table : {m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable, m_sourceScanTable}) {
           for (int row = 0; row < table->rowCount(); row++) {
             auto *idItem = table->item(row, 0);
             if (idItem && idItem->data(Qt::UserRole).toString() == taskId) {
@@ -1749,7 +2066,7 @@ void ScanPage::onPollStatus() {
     if (selectedTaskFinished && !m_selectedTaskId.isEmpty()) {
       // Re-trigger task click to load full details
       bool found = false;
-      for (auto *table : {m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable}) {
+      for (auto *table : {m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable, m_sourceScanTable}) {
         if (found) break;
         for (int row = 0; row < table->rowCount(); row++) {
           auto *idItem = table->item(row, 0);
@@ -1797,5 +2114,210 @@ void ScanPage::onPollStatus() {
         renderGroupedResults(d["results"].toArray());
       });
     }
+  });
+}
+
+void ScanPage::loadSourceConnections() {
+  m_api->get("/api/scan-tasks/source-connections", 5000, [this](const QJsonObject &res) {
+    if(res["status"].toString()!="ok") {
+      m_statusLabel->setText("源码项目配置未就绪，仍可选择远程测试：" + res["error"].toObject()["message"].toString());
+      return;
+    }
+    const QString selected=m_sourceConnectionCombo->currentData().toString();
+    m_sourceConnectionCombo->blockSignals(true);
+    m_sourceConnectionCombo->clear();
+    m_sourceConnectionCombo->addItem("不提供源码（远程测试）", "");
+    for(const auto &value:res["data"].toArray()) {
+      const auto source=value.toObject();
+      m_sourceConnectionCombo->addItem(source["name"].toString(),source["id"].toString());
+      QStringList targets; for(const auto &target:source["targets"].toArray()) targets<<target.toString();
+      m_sourceConnectionCombo->setItemData(m_sourceConnectionCombo->count()-1,targets,Qt::UserRole+1);
+      m_sourceConnectionCombo->setItemData(m_sourceConnectionCombo->count()-1,source["source_url"].toString(),Qt::UserRole+2);
+    }
+    const int index=m_sourceConnectionCombo->findData(selected);
+    m_sourceConnectionCombo->setCurrentIndex(index>=0?index:0);
+    m_sourceConnectionCombo->blockSignals(false);
+    const QString target=m_sourceTargetInput->text();
+    int match=0;
+    for(int i=1;i<m_sourceConnectionCombo->count();++i) {
+      for(const auto &candidate:m_sourceConnectionCombo->itemData(i,Qt::UserRole+1).toStringList()) {
+        if(QUrl(candidate)==QUrl(target)) { match=i; break; }
+        if(candidate.toLower().remove(QRegularExpression("/$"))==target.toLower().remove(QRegularExpression("/$"))) { match=i; break; }
+      }
+      if(match) break;
+    }
+    m_sourceConnectionCombo->setCurrentIndex(match);
+    const QString mapped=m_sourceConnectionCombo->itemData(match,Qt::UserRole+2).toString();
+    m_sourceDirectoryInput->setPlaceholderText(mapped.isEmpty() ? "填写 /实际目录/ 或完整 HTTP 源码目录 URL；留空使用项目配置" : "留空使用：" + mapped);
+  });
+}
+
+void ScanPage::browseSourceDirectory() {
+  const QString target=m_sourceTargetInput->text().trimmed();
+  QString initial=m_sourceDirectoryInput->text().trimmed();
+  if(initial.isEmpty()) initial=m_sourceConnectionCombo->currentData(Qt::UserRole+2).toString();
+  const QString selected=chooseHttpSourceDirectory(m_api,target,initial,this);
+  if(!selected.isEmpty()) m_sourceDirectoryInput->setText(selected);
+}
+
+QString ScanPage::chooseHttpSourceDirectory(ApiClient *api, const QString &target, const QString &initialDirectory, QWidget *owner) {
+  const QUrl runtime(target);
+  if(runtime.scheme()!="http" && runtime.scheme()!="https") {
+    QMessageBox::information(owner,"源码目录","远端目录浏览支持 HTTP/HTTPS。TCP 程序请使用后端配置的 SSH 源码项目。");
+    return QString();
+  }
+  QDialog dialog(owner);
+  dialog.setWindowTitle("选择远端 HTTP 源码目录");
+  dialog.resize(760,480);
+  auto *layout=new QVBoxLayout(&dialog);
+  auto *hint=new QLabel("输入目录地址并打开，双击子目录进入；选择当前目录后将递归读取 C/C++ 源码。服务器需要提供目录索引。",&dialog);
+  hint->setWordWrap(true); layout->addWidget(hint);
+  auto *row=new QHBoxLayout;
+  auto *address=new QLineEdit(&dialog);
+  QString initial=initialDirectory;
+  if(initial.isEmpty()) { QUrl root=runtime; root.setPath("/"); root.setQuery(QString()); root.setFragment(QString()); initial=root.toString(); }
+  address->setText(initial);
+  auto *open=new QPushButton("打开",&dialog);
+  auto *parent=new QPushButton("上一级",&dialog); parent->setEnabled(false);
+  row->addWidget(address,1); row->addWidget(open); row->addWidget(parent); layout->addLayout(row);
+  auto *tree=new QTreeWidget(&dialog); tree->setHeaderLabels({"目录 / C/C++ 文件","类型"}); tree->setRootIsDecorated(false); layout->addWidget(tree,1);
+  auto *status=new QLabel(&dialog); status->setWordWrap(true); layout->addWidget(status);
+  auto *buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel,&dialog);
+  auto *choose=buttons->button(QDialogButtonBox::Ok); choose->setText("选择当前目录"); choose->setEnabled(false);
+  layout->addWidget(buttons);
+  auto load= [api,target,address,open,parent,tree,status,choose,guard=QPointer<QDialog>(&dialog)]() {
+    open->setEnabled(false); parent->setEnabled(false); choose->setEnabled(false); tree->clear(); status->setText("正在读取远端目录…");
+    const QString requested=address->text().trimmed();
+    api->post("/api/scan-tasks/source-directory",QJsonObject{{"target",target},{"source_url",requested}},15000,
+      [guard,address,open,parent,tree,status,choose](const QJsonObject &res) {
+        if(!guard) return;
+        open->setEnabled(true);
+        if(res["status"].toString()!="ok") { status->setText("目录读取失败："+res["error"].toObject()["message"].toString()); return; }
+        const auto data=res["data"].toObject();
+        address->setText(data["url"].toString());
+        parent->setProperty("directoryUrl",data["parent"].toString()); parent->setEnabled(!data["parent"].toString().isEmpty());
+        for(const auto &entry:data["entries"].toArray()) {
+          const auto obj=entry.toObject(); auto *item=new QTreeWidgetItem(tree,{obj["name"].toString(),obj["directory"].toBool()?"目录":"源码文件"});
+          item->setData(0,Qt::UserRole,obj["url"].toString()); item->setData(0,Qt::UserRole+1,obj["directory"].toBool());
+        }
+        tree->resizeColumnToContents(0);
+        status->setText(data["note"].toString());
+        choose->setProperty("directoryUrl",data["url"].toString()); choose->setEnabled(!data["entries"].toArray().isEmpty());
+      });
+  };
+  connect(open,&QPushButton::clicked,&dialog,load);
+  connect(address,&QLineEdit::returnPressed,&dialog,[load,open](){if(open->isEnabled()) load();});
+  connect(address,&QLineEdit::textEdited,&dialog,[choose](){choose->setEnabled(false);});
+  connect(parent,&QPushButton::clicked,&dialog,[address,parent,load](){address->setText(parent->property("directoryUrl").toString());load();});
+  connect(tree,&QTreeWidget::itemDoubleClicked,&dialog,[address,open,load](QTreeWidgetItem *item,int){
+    if(open->isEnabled() && item->data(0,Qt::UserRole+1).toBool()) { address->setText(item->data(0,Qt::UserRole).toString()); load(); }
+  });
+  connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);
+  connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+  load();
+  return dialog.exec()==QDialog::Accepted ? choose->property("directoryUrl").toString() : QString();
+}
+
+void ScanPage::showSourceEvidence(QTreeWidgetItem *item) {
+  const QString taskId=m_selectedTaskId;
+  const int findingId=item->data(0,Qt::UserRole+1).toInt();
+  const QString type=item->data(0,Qt::UserRole).toString();
+  const auto data=QJsonDocument::fromJson(item->toolTip(1).toUtf8()).object();
+  QDialog dialog(this);
+  dialog.setWindowTitle("程序测试证据");
+  dialog.resize(850,650);
+  auto *layout=new QVBoxLayout(&dialog);
+  auto *view=new QPlainTextEdit(&dialog);
+  view->setReadOnly(true);
+  QString text;
+  if(type=="source_finding") {
+    text=QString("%1\n%2:%3–%4\nCWE: %5\n快照: %6\n\n依据：%7\n\n触发前提：%8\n\n修复建议：%9\n\n")
+      .arg(data["title"].toString(),data["file"].toString()).arg(data["start_line"].toInt()).arg(data["end_line"].toInt())
+      .arg(data["cwe"].toString(),data["snapshot_id"].toString(),data["reason"].toString(),data["preconditions"].toString(),data["suggestion"].toString());
+    const auto lines=data["code"].toString().split('\n');
+    for(int i=0;i<lines.size();i++) text+=QString("%1  %2\n").arg(data["start_line"].toInt()+i).arg(lines[i]);
+    for(const auto &entry:data["trace"].toArray()) {
+      const auto item=entry.toObject();
+      text+=QString("\n证据链 [%1] %2:%3–%4\n%5\n%6\n").arg(item["role"].toString(),item["file"].toString())
+        .arg(item["start_line"].toInt()).arg(item["end_line"].toInt()).arg(item["note"].toString(),item["code"].toString());
+    }
+    for(const auto &entry:data["analyses"].toArray()) {
+      const auto item=entry.toObject();
+      text+=QString("\n分析来源：%1\n%2\n前提：%3\n").arg(item["tool"].toString(),item["reason"].toString(),item["preconditions"].toString());
+    }
+    text+="\n静态发现不等于运行时漏洞。\n最近复核：\n"+QString::fromUtf8(QJsonDocument(data["review"].toObject()).toJson(QJsonDocument::Indented));
+  } else text=QString::fromUtf8(QJsonDocument(data).toJson(QJsonDocument::Indented));
+  view->setPlainText(text); layout->addWidget(view);
+  auto *buttons=new QDialogButtonBox(QDialogButtonBox::Close,&dialog);
+  auto *generate=buttons->addButton(type=="source_finding" ? "生成此项攻击演示预案" : "生成验证预案",QDialogButtonBox::ActionRole);
+  generate->setEnabled(m_genBtn->isEnabled());
+  connect(generate,&QPushButton::clicked,&dialog,[this,&dialog,taskId,findingId,type](){
+    if(taskId==m_selectedTaskId) {
+      if(type=="source_finding") generatePlaybook(QJsonArray{findingId});
+      else onGeneratePlaybook();
+    }
+    dialog.accept();
+  });
+  if(type=="source_finding") {
+    auto *review=buttons->addButton("查看执行证据并复核",QDialogButtonBox::ActionRole);
+    connect(review,&QPushButton::clicked,&dialog,[this,&dialog,taskId,findingId](){
+      if(taskId==m_selectedTaskId) reviewSourceFinding(findingId);
+      dialog.accept();
+    });
+  }
+  connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+  layout->addWidget(buttons); dialog.exec();
+}
+
+void ScanPage::reviewSourceFinding(int findingId) {
+  const QString taskId=m_selectedTaskId;
+  m_api->get("/api/scan-tasks/"+taskId+"/source-verifications",10000,[this,taskId,findingId](const QJsonObject &res){
+    if(taskId!=m_selectedTaskId) return;
+    if(res["status"].toString()!="ok") {QMessageBox::warning(this,"读取失败",res["error"].toObject()["message"].toString());return;}
+    const auto runs=res["data"].toObject()["runs"].toArray();
+    if(runs.isEmpty()) {QMessageBox::information(this,"尚无执行记录","请先生成并执行验证预案，然后根据实际执行证据复核。");return;}
+    QDialog dialog(this); dialog.setWindowTitle("源码发现 · 验证复核"); dialog.resize(900,700);
+    auto *layout=new QVBoxLayout(&dialog);
+    auto *runCombo=new QComboBox;
+    for(const auto &value:runs) {const auto run=value.toObject();runCombo->addItem(run["run_id"].toString()+" · "+run["status"].toString());}
+    layout->addWidget(runCombo);
+    auto *tree=new QTreeWidget; tree->setHeaderLabels({"引用证据","步骤","输出摘要"}); layout->addWidget(tree);
+    auto *raw=new QPlainTextEdit;raw->setReadOnly(true);layout->addWidget(raw);
+    auto populate=[tree,raw,runs,findingId](int index){
+      tree->clear();raw->clear();
+      for(const auto &value:runs[index].toObject()["evidence"].toArray()) {
+        const auto evidence=value.toObject();
+        const auto details=QJsonDocument::fromJson(evidence["evidence_data"].toString().toUtf8()).object();
+        if(!details["source_verification"].toObject()["finding_ids"].toArray().contains(QJsonValue(findingId))) continue;
+        auto *row=new QTreeWidgetItem(tree);
+        row->setText(0,QString::number(evidence["id"].toInt())); row->setData(0,Qt::UserRole,evidence["id"].toInt());
+        row->setCheckState(0,Qt::Unchecked);row->setText(1,QString::number(evidence["step_index"].toInt()));
+        const QString output=evidence["raw_stdout"].toString()+"\n"+evidence["raw_stderr"].toString();
+        row->setText(2,output.left(150));row->setData(2,Qt::UserRole,output);
+      }
+      tree->resizeColumnToContents(0);tree->resizeColumnToContents(1);
+    };
+    connect(runCombo,QOverload<int>::of(&QComboBox::currentIndexChanged),&dialog,populate);populate(0);
+    connect(tree,&QTreeWidget::currentItemChanged,&dialog,[raw](QTreeWidgetItem *current,QTreeWidgetItem*){if(current) raw->setPlainText(current->data(2,Qt::UserRole).toString());});
+    auto *conclusion=new QComboBox;
+    conclusion->addItem("条件不足 / 结论不明确","inconclusive");
+    conclusion->addItem("证据支持此问题","supported");
+    conclusion->addItem("本次未复现（不代表不存在）","not_reproduced");
+    layout->addWidget(conclusion);
+    auto *note=new QPlainTextEdit;note->setPlaceholderText("填写判断依据，并勾选支持结论的实际执行证据");note->setMaximumHeight(100);layout->addWidget(note);
+    auto *buttons=new QDialogButtonBox(QDialogButtonBox::Save|QDialogButtonBox::Cancel);
+    connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+    connect(buttons,&QDialogButtonBox::accepted,&dialog,[&](){
+      QJsonArray ids;for(int i=0;i<tree->topLevelItemCount();i++) if(tree->topLevelItem(i)->checkState(0)==Qt::Checked) ids.append(tree->topLevelItem(i)->data(0,Qt::UserRole).toInt());
+      if(ids.isEmpty()||note->toPlainText().trimmed().isEmpty()) {QMessageBox::information(&dialog,"需要证据","请勾选执行证据并填写判断依据。");return;}
+      QJsonObject body{{"finding_id",findingId},{"run_id",runs[runCombo->currentIndex()].toObject()["run_id"]},
+        {"status",conclusion->currentData().toString()},{"evidence_ids",ids},{"note",note->toPlainText()}};
+      m_api->post("/api/scan-tasks/"+taskId+"/source-verifications",body,10000,[this,taskId](const QJsonObject &saved){
+        if(saved["status"].toString()!="ok") QMessageBox::warning(this,"复核保存失败",saved["error"].toObject()["message"].toString());
+        else if(taskId==m_selectedTaskId) loadResults(taskId);
+      });
+      dialog.accept();
+    });
+    layout->addWidget(buttons);dialog.exec();
   });
 }

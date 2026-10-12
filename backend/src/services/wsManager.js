@@ -118,6 +118,14 @@ class WsManager {
     }
   }
 
+  // Private program evidence is visible to its owner and administrators.
+  broadcastProgram(userId, event, data) {
+    const msg = JSON.stringify({event, data, timestamp: Date.now()});
+    for (const [ws, client] of this.clients) {
+      if (ws.readyState === 1 && (client.role === 'admin' || userId && client.userId === userId)) ws.send(msg);
+    }
+  }
+
   /**
    * Broadcast to clients with a specific role.
    * @param {string} role

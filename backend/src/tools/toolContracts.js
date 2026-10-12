@@ -193,6 +193,10 @@ export function classifyToolResult(toolId, result) {
 }
 
 export function redactToolArgs(args, toolId = '') {
+  if (toolId === 'target-request') return args.map(arg => {
+    try { const value=JSON.parse(arg); if(value.headers) for(const key of Object.keys(value.headers)) if(/cookie|authorization/i.test(key)) value.headers[key]='[REDACTED]'; return JSON.stringify(value); }
+    catch { return '[INVALID REQUEST]'; }
+  });
   const sensitiveFlags = new Set(['--cookie', '-b', '--data', '--data-raw', '--data-urlencode', '-d', '--password', '--token', '-H', '--header']);
   if (['hydra', 'ssh-exec', 'evil-winrm', 'netexec', 'web-brute'].includes(toolId)) sensitiveFlags.add('-p');
   if (toolId === 'curl') sensitiveFlags.add('-u');

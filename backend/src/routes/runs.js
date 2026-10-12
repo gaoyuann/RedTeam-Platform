@@ -1,4 +1,6 @@
+import {canAccessProgramRun,canAccessProgramTask} from '../services/programAccess.js';
 import { Router } from 'express';
+import { sourceTarget } from '../services/sourceScanConnections.js';
 import { randomUUID } from 'crypto';
 import { executeRun, requestAbort } from '../services/executionEngine.js';
 import { computeGrade } from '../services/gradingEngine.js';
@@ -37,7 +39,7 @@ export default function (db) {
     if ((pageLimit !== null && (!Number.isSafeInteger(pageLimit) || pageLimit < 1)) || !Number.isSafeInteger(pageOffset) || pageOffset < 0)
       return res.status(400).json({ status: 'error', error: { message: 'limit 和 offset 必须为有效的分页整数' } });
     if (pageLimit !== null || pageOffset) { sql += ' LIMIT ? OFFSET ?'; params.push(pageLimit ?? -1, pageOffset); }
-    const rows = db.prepare(sql).all(...params);
+    const rows = db.prepare(sql).all(...params).filter(row => canAccessProgramRun(db, req.user, row));
     // Enrich each row with playbook_name for display
     for (const row of rows) {
       if (row.playbook_id) {
@@ -50,6 +52,11 @@ export default function (db) {
     res.json({ status: 'ok', data: rows, meta: { total: rows.length } });
   });
 
+  router.use('/:runId',(req,res,next)=>{
+    const run=db.prepare('SELECT playbook_id,scan_task_id FROM execution_runs WHERE run_id=?').get(req.params.runId);
+    if(run && !canAccessProgramRun(db,req.user,run)) return res.status(403).json({status:'error',error:{message:'没有权限访问此程序验证执行'}});
+    next();
+  });
   router.get('/:runId', (req, res) => {
     const row = db.prepare('SELECT * FROM execution_runs WHERE run_id = ?').get(req.params.runId);
     if (!row) return res.status(404).json({ status: 'error', error: { message: 'Run not found' } });
@@ -71,7 +78,19 @@ export default function (db) {
   });
 
   router.post('/', (req, res) => {
-    const { run_id, playbook_id, target, scan_task_id } = req.body;
+    let { run_id, playbook_id, target, scan_task_id } = req.body;
+    const pb=db.prepare('SELECT metadata FROM playbooks WHERE playbook_id=?').get(playbook_id || '');
+    let source;
+    try {source=JSON.parse(pb?.metadata || '{}').source_verification;} catch {}
+    if(source) {
+      try {
+        if(sourceTarget(target)!==source.target) throw new Error('验证目标必须与生成预案时一致，请重新生成预案');
+        const task=db.prepare('SELECT created_by FROM scan_tasks WHERE scan_task_id=?').get(source.scan_task_id);
+        if(!task || req.user?.role!=='admin' && task.created_by!==req.user?.sub) return res.status(403).json({status:'error',error:{message:'没有权限执行此源码任务的预案'}});
+        scan_task_id=source.scan_task_id;
+      } catch(error) {return res.status(400).json({status:'error',error:{message:error.message}});}
+    }
+    if (!canAccessProgramTask(db,req.user,scan_task_id)) return res.status(403).json({status:'error',error:{message:'没有权限使用此源码任务'}});
     if (playbook_id) {
       try { assertPlaybookUse(db, playbook_id, req.user); }
       catch (error) { return res.status(error.status || 500).json({ status: 'error', error: { message: error.message } }); }
@@ -90,7 +109,7 @@ export default function (db) {
       const row = db.prepare('SELECT * FROM execution_runs WHERE run_id = ?').get(rid);
       // WebSocket: notify run created
       const ws = getWsManager();
-      if (ws) ws.broadcast('run:created', {
+      if (ws) (source ? (event,data)=>ws.broadcastProgram(req.user.sub,event,data) : (event,data)=>ws.broadcast(event,data))('run:created', {
         runId: rid, playbookId: playbook_id || null, target: target || null,
         userId: req.user.sub,
         username: req.user?.sub || null,
@@ -226,7 +245,7 @@ export default function (db) {
 
   // ── Trigger Execution ───────────────────────────────────────────────
   router.post('/:runId/execute', async (req, res) => {
-    const run = db.prepare('SELECT run_id, playbook_id, status, engine_type FROM execution_runs WHERE run_id = ?').get(req.params.runId);
+    const run = db.prepare('SELECT run_id, playbook_id, scan_task_id, user_sub, status, engine_type FROM execution_runs WHERE run_id = ?').get(req.params.runId);
     if (!run) return res.status(404).json({ status: 'error', error: { message: 'Run not found' } });
     if (run.status !== 'PENDING') return res.status(409).json({ status: 'error', error: { message: `Run is ${run.status}, expected PENDING; create a new run to execute again` } });
     if (!run.playbook_id || !db.prepare('SELECT 1 FROM playbook_steps WHERE playbook_id = ? LIMIT 1').get(run.playbook_id)) {
@@ -249,7 +268,8 @@ export default function (db) {
     });
     // WebSocket: notify run started
     const ws = getWsManager();
-    if (ws) ws.broadcast('run:started', {
+    const programTask=run.scan_task_id && db.prepare('SELECT scan_type FROM scan_tasks WHERE scan_task_id=?').get(run.scan_task_id);
+    if (ws) (programTask?.scan_type==='source_scan' ? (event,data)=>ws.broadcastProgram(run.user_sub,event,data) : (event,data)=>ws.broadcast(event,data))('run:started', {
       runId: req.params.runId,
       userId: req.user?.sub || null,
       username: req.user?.sub || null,

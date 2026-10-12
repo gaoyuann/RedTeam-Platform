@@ -3,6 +3,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { parseVariableContract } from './executionVariables.js';
 import { appendTaskLog } from './taskActivity.js';
 import { assertPlaybookUse } from './playbookAccess.js';
+import { sourceTarget } from './sourceScanConnections.js';
+import { validateSourceDemonstration } from './sourceVerification.js';
 
 function fail(status, message) {
   throw Object.assign(new Error(message), { status });
@@ -80,6 +82,13 @@ export function createTaskPlan(db, pipeline, actor, playbookId) {
   const rows = db.prepare('SELECT * FROM playbook_steps WHERE playbook_id = ? ORDER BY step_index').all(sourceId);
   if (!rows.length || rows.length > 60) fail(400, '来源预案必须包含 1–60 个步骤');
   const config = json(pipeline.config, {});
+  if(config.scan_mode==='source_assisted') {
+    const source=json(playbook.metadata,{}).source_verification;
+    const ids=String(pipeline.scan_task_id || '').split(',');
+    if(!source?.demonstration || sourceTarget(pipeline.target)!==source.target || !ids.includes(source.scan_task_id)) {
+      fail(400,'请选择本任务源码发现生成的逐项攻击演示预案，不能套用通用或其他任务预案');
+    }
+  }
   const content = {
     name: playbook.name,
     notes: '',
@@ -172,6 +181,12 @@ export function transitionTaskPlan(db, pipeline, actor, action, body) {
   const playbookId = `task_plan_${randomUUID()}`;
   const source = plan.content.source_playbook;
   const metadata = json(source.metadata, {});
+  if(metadata.source_verification?.demonstration) {
+    try {
+      validateSourceDemonstration(plan.content.steps.map(step=>({...step,...json(step.evidence_config,{})})),
+        metadata.source_verification.finding_ids,metadata.source_verification.target);
+    } catch(error) {fail(400,error.message);}
+  }
   metadata.task_plan = { pipeline_id: pipeline.pipeline_id, revision: plan.revision, approved_by: actor.sub };
   db.prepare(`INSERT INTO playbooks (playbook_id, name, description, target_type, not_suitable_for, baseline_group,
     expected_output_policy, roles_allowed, disable_auto_insert, enable_kg_context, requires_teacher_review,
@@ -189,5 +204,10 @@ export function transitionTaskPlan(db, pipeline, actor, action, body) {
   db.prepare("UPDATE pipelines SET generated_playbook_id = ?, updated_at = datetime('now') WHERE pipeline_id = ?")
     .run(playbookId, pipeline.pipeline_id);
   db.prepare('UPDATE task_plans SET approved_playbook_id = ? WHERE pipeline_id = ?').run(playbookId, pipeline.pipeline_id);
+  if(config.scan_mode==='source_assisted') {
+    db.prepare("UPDATE pipeline_steps SET status='completed',completed_at=datetime('now'),output_data=? WHERE pipeline_id=? AND step_type='generate'")
+      .run(JSON.stringify({playbook_id:playbookId,source_playbook_id:plan.content.source_playbook_id,
+        method:'selected_source_demonstration',finding_ids:metadata.source_verification.finding_ids}),pipeline.pipeline_id);
+  }
   return update(db, pipeline.pipeline_id, actor, 'approve', 'approved', plan.content, note);
 }
