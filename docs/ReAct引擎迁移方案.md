@@ -69,9 +69,9 @@
 
 ```js
 // 主入口：每步执行后调用
-export async function reactDecide({ runId, stepIndex, toolId, stepResult,
-                                     evidenceHistory, remainingSteps, target,
-                                     kgContext, aiConfig })
+export async function reactDecide({ runId, stepIndex, toolId, stepResult, 
+                                     evidenceHistory, remainingSteps, target, 
+                                     kgContext, aiConfig }) 
   → { action: 'continue'|'adjust'|'insert'|'stop',
       thought: string,      // LLM 的分析
       observation: string,  // LLM 对结果的总结
@@ -125,7 +125,7 @@ Action: <action type="continue|adjust|insert|stop" ... />
 ```js
 // 懒加载 KG 数据
 loadKnowledgeIndex()    // data/knowledge/knowledge_index.json
-loadKgFull()            // data/knowledge/kg_full.json
+loadKgFull()            // data/knowledge/kg_full.json  
 loadTechniqueZh()       // data/knowledge/technique_zh.json
 
 // 主入口：为 ReAct prompt 构建 KG 上下文
@@ -166,24 +166,24 @@ for (const step of steps) {
 for (const step of steps) {
   result = await runTool(step.tool_id, args);
   // 记录结果
-
+  
   if (engineType === 'react') {
     // 累积证据历史
     evidenceHistory.push({ stepIndex, toolId, result });
-
+    
     // 构建 KG 上下文
     const kgContext = buildKGContextForStep(step.tool_id);
-
+    
     // 调用 ReAct 引擎
     const decision = await reactDecide({
       runId, stepIndex, toolId, stepResult: result,
       evidenceHistory, remainingSteps, target, kgContext, aiConfig
     });
-
+    
     // 记录 Thought/Action 到数据库
     db.prepare("UPDATE execution_steps SET react_thought=?, react_action=? ...")
       .run(decision.thought, JSON.stringify(decision.action), ...);
-
+    
     // 处理 Action
     if (decision.action === 'stop') break;
     if (decision.action === 'adjust') { /* 修改后续步骤参数 */ }
@@ -248,7 +248,7 @@ ALTER TABLE execution_steps ADD COLUMN react_action TEXT;     -- JSON: {type, at
 
 ```
 ① 端口扫描 (nmap)          → 无 LLM
-② 漏洞扫描 (nuclei)        → 无 LLM
+② 漏洞扫描 (nuclei)        → 无 LLM  
 ③ 生成攻击方案             → LLM 生成 Playbook（已有）
 ④ 执行攻击 (ReAct 模式)    → ★ 每步执行后 LLM 分析 ★
 ⑤ 生成报告                 → 无 LLM（模板拼接）
