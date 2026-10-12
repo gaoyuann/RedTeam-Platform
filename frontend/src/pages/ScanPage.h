@@ -22,6 +22,7 @@ public:
   void setTarget(const QString &target);
   void setTaskScope(const QStringList &taskIds);
   void clearTaskScope();
+  void showTaskContextError(const QString &message);
 
 signals:
   void playbookNavigateRequested(const QString &playbookId, const QString &target = "");

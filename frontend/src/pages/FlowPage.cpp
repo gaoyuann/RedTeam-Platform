@@ -710,15 +710,13 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
         requestRevision != m_taskDetailRequestRevision) return;
     if (res["status"].toString() != "ok") {
       m_lastDisplayedDetail = {};
-      m_analysisTab->showError(res["error"].toObject()["message"].toString(QStringLiteral("后端未返回有效数据")));
-      m_overviewTab->showError(res["error"].toObject()["message"].toString(QStringLiteral("后端未返回有效数据")));
+      showTaskDetailError(res["error"].toObject()["message"].toString(QStringLiteral("后端未返回有效数据")));
       return;
     }
 
     auto p = res["data"].toObject();
     if (p.value("pipeline_id").toString() != pipelineId) {
-      m_analysisTab->showError(QStringLiteral("响应任务标识不匹配"));
-      m_overviewTab->showError(QStringLiteral("响应任务标识不匹配"));
+      showTaskDetailError(QStringLiteral("响应任务标识不匹配"));
       m_lastDisplayedDetail = {};
       return;
     }
@@ -1299,6 +1297,17 @@ void FlowPage::clearRunContext()
   m_cancelAction->setVisible(false);
   m_deleteAction->setVisible(false);
   m_reportAction->setVisible(false);
+}
+
+void FlowPage::showTaskDetailError(const QString &message)
+{
+  m_targetLabel->setText(QStringLiteral("任务详情加载失败"));
+  m_targetLabel->setToolTip(message);
+  m_statusLabel->setText(QStringLiteral("加载失败"));
+  m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
+  m_analysisTab->showError(message);
+  m_overviewTab->showError(message);
+  m_scanTab->showTaskContextError(message);
 }
 
 void FlowPage::onRunCompleted(const QString &runId)
