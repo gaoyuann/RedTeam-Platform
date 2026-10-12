@@ -6,14 +6,18 @@ import { generatePlaybook } from '../services/playbookGenerator.js';
 import { executeScan, requestScanAbort } from '../services/scanExecutor.js';
 import { getWsManager } from '../services/wsManager.js';
 import { resolveTargetProfile } from '../services/targetProfileResolver.js';
+import { requireActor, recordParam } from '../middleware/recordAccess.js';
 
 export default function (db) {
   const router = Router();
+  router.use(requireActor(db));
+  router.param('scanTaskId', recordParam(db, 'scan'));
 
   router.get('/', (req, res) => {
     const { status, target, scan_type } = req.query;
     let sql = 'SELECT * FROM scan_tasks WHERE 1=1';
     const params = [];
+    if (req.user.role !== 'admin') { sql += ' AND created_by = ?'; params.push(req.user.sub); }
     if (status) { sql += ' AND status = ?'; params.push(status); }
     if (target) { sql += ' AND target = ?'; params.push(target); }
     if (scan_type) { sql += ' AND scan_type = ?'; params.push(scan_type); }
@@ -30,7 +34,7 @@ export default function (db) {
   });
 
   router.post('/', (req, res) => {
-    let { target, scan_type, parameters, created_by } = req.body;
+    let { target, scan_type, parameters } = req.body;
     if (!target || !scan_type) return res.status(400).json({ status: 'error', error: { message: 'target, scan_type are required' } });
     if (scan_type === 'topology_scan') {
       try { target = normalizeTopologyTarget(target); }
@@ -48,20 +52,19 @@ export default function (db) {
           return res.status(400).json({ status: 'error', error: { message: '拓扑探测范围必须与当前任务目标一致' } });
       }
       parameters = { ...(pipelineId ? { pipeline_id: pipelineId } : {}), timeout: 300 };
-      created_by = req.user?.sub || null;
     }
     const scan_task_id = `scan_${randomUUID().slice(0, 12)}`;
     const now = new Date().toISOString();
     // Auto-resolve target_class for the new scan task
     const targetProfile = resolveTargetProfile(target);
     db.prepare(`INSERT INTO scan_tasks (scan_task_id, target, scan_type, target_class, parameters, created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(scan_task_id, target, scan_type, targetProfile.target_class, parameters ? JSON.stringify(parameters) : null, created_by || null, now);
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(scan_task_id, target, scan_type, targetProfile.target_class, parameters ? JSON.stringify(parameters) : null, req.user.sub, now);
     const row = db.prepare('SELECT * FROM scan_tasks WHERE scan_task_id = ?').get(scan_task_id);
     // WebSocket: notify all clients about new scan (include operator info)
     const ws = getWsManager();
     if (ws) ws.broadcast('scan:created', {
       scanTaskId: scan_task_id, target, scanType: scan_type,
-      userId: req.user?.sub || created_by || null,
+      userId: req.user.sub,
       username: req.user?.sub || null,
       role: req.user?.role || null,
     });

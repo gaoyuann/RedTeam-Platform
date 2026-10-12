@@ -14,6 +14,7 @@
 
 class ApiClient;
 class CortexPanel;
+class TaskExecutionPanel;
 
 class ExecutionPage : public QWidget {
   Q_OBJECT
@@ -34,7 +35,7 @@ public:
   void showRun(const QString &runId, bool focus = true);
   void focusDetails();
   void showExecutionError(const QString &message);
-  void setPipelineContext(const QString &pipelineId, const QString &status, const QString &runId);
+  void setPipelineContext(const QString &pipelineId, const QString &status, const QString &runId, const QString &target = {});
 
   void clearRunContext();
 
@@ -47,6 +48,9 @@ signals:
 public slots:
   void onRefreshRuns();
   void onRunReact(const QJsonObject &data);
+
+protected:
+  void showEvent(QShowEvent *event) override;
 
 private slots:
   void onRunClicked(int row, int col);
@@ -67,6 +71,7 @@ private:
   QString m_pipelineRunId;
   ApiClient *m_api;
   QTabWidget *m_tabWidget;
+  TaskExecutionPanel *m_taskMonitor;
   QWidget *m_standaloneControls;
   QLabel *m_pipelineHint;
   QComboBox *m_playbookCombo;

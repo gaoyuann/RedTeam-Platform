@@ -1,5 +1,6 @@
 #include "../widgets/WorkbenchTabs.h"
 #include "EvaluatePage.h"
+#include "TaskResultsPanel.h"
 #include "../ApiClient.h"
 #include "../Theme.h"
 #include "../UiUtil.h"
@@ -25,14 +26,39 @@
 #include <QPointer>
 #include <QDialog>
 #include <QGridLayout>
+#include <QShowEvent>
 
 EvaluatePage::EvaluatePage(ApiClient *api, const QString &role, const QString &username, QWidget *parent)
     : QWidget(parent), m_api(api), m_previewMode(false) {
   setupUI();
-  onLoadRuns();
-  onRefreshReports();
-  onLoadEvidenceRuns();
-  onLoadCaptureTasks();
+  m_taskResults = new TaskResultsPanel(api, role, username, this);
+  layout()->addWidget(m_taskResults);
+  m_taskResults->hide();
+}
+
+void EvaluatePage::showEvent(QShowEvent *event) {
+  QWidget::showEvent(event);
+  if (!m_pipelineId.isEmpty() || m_standaloneLoaded) return;
+  m_standaloneLoaded = true;
+  onLoadRuns(); onRefreshReports(); onLoadEvidenceRuns(); onLoadCaptureTasks();
+}
+
+void EvaluatePage::setPipelineContext(const QString &pipelineId, const QString &runId, const QString &target) {
+  const bool changed = pipelineId != m_pipelineId || runId != m_pipelineRunId || target != m_pipelineTarget;
+  if (changed) clearRun();
+  m_pipelineId = pipelineId; m_pipelineRunId = runId; m_pipelineTarget = target;
+  const bool scoped = !pipelineId.isEmpty();
+  m_tabs->setVisible(!scoped);
+  m_taskResults->setTaskContext(pipelineId, runId, target);
+  m_taskResults->setVisible(scoped);
+  if (scoped) m_analysisPollTimer->stop();
+  else if (changed) {
+    m_standaloneLoaded = false;
+    if (isVisible()) {
+      m_standaloneLoaded = true;
+      onLoadRuns(); onRefreshReports(); onLoadEvidenceRuns(); onLoadCaptureTasks();
+    }
+  }
 }
 
 void EvaluatePage::setTarget(const QString &target) {
@@ -42,6 +68,10 @@ void EvaluatePage::setTarget(const QString &target) {
 
 void EvaluatePage::showRun(const QString &runId, bool focus) {
   if (runId.isEmpty()) return;
+  if (!m_pipelineId.isEmpty()) {
+    if (runId == m_pipelineRunId) m_taskResults->refresh();
+    return;
+  }
   if (focus) m_tabs->setCurrentIndex(0);
   if (runId == m_requestedRunId &&
       (m_runLoadPending || runId == m_gradingRunId || runId == m_gradedRunId)) return;
@@ -87,6 +117,8 @@ void EvaluatePage::showRun(const QString &runId, bool focus) {
 }
 
 void EvaluatePage::clearRun() {
+  m_taskResults->clearTaskContext();
+  ++m_reportListRevision;
   ++m_runRequestRevision;
   ++m_gradeRequestRevision;
   ++m_reportRequestRevision;
@@ -106,16 +138,19 @@ void EvaluatePage::clearRun() {
 }
 
 void EvaluatePage::retryRun(const QString &runId) {
+  if (!m_pipelineId.isEmpty()) { if (runId == m_pipelineRunId) m_taskResults->refresh(); return; }
   if (runId == m_requestedRunId) showRun(runId, false);
 }
 
 void EvaluatePage::showReports() {
+  if (!m_pipelineId.isEmpty()) { m_taskResults->showReport(); return; }
   m_tabs->setCurrentIndex(1);  // 切到"测试报告"子页
   onRefreshReports();
 }
 
 void EvaluatePage::showReport(const QString &reportId) {
   if (reportId.isEmpty()) return;
+  if (!m_pipelineId.isEmpty()) { m_taskResults->showReport(reportId); return; }
   m_pendingReportId = reportId;
   m_tabs->setCurrentIndex(1);
   onRefreshReports();
@@ -538,6 +573,7 @@ void EvaluatePage::setupUI() {
 // ════════════════════════════════════════════════════════════════════════
 
 void EvaluatePage::onLoadRuns() {
+  if (!m_pipelineId.isEmpty()) return;
   const int revision = ++m_runRequestRevision;
   m_api->get("/api/runs", 5000, [this, revision](const QJsonObject &res) {
     if (revision != m_runRequestRevision || res["status"].toString() != "ok") return;
@@ -562,6 +598,7 @@ void EvaluatePage::onLoadRuns() {
 }
 
 void EvaluatePage::onGradeRun() {
+  if (!m_pipelineId.isEmpty()) return;
   QString runId = m_runCombo->currentData().toString();
   if (runId.isEmpty()) return;
   if (runId == m_gradingRunId) return;
@@ -649,6 +686,7 @@ void EvaluatePage::onGradeRun() {
 }
 
 void EvaluatePage::onGenerateReport() {
+  if (!m_pipelineId.isEmpty()) return;
   const QString runId = m_selectedRunId;
   if (runId.isEmpty() || runId != m_gradedRunId || runId != m_runCombo->currentData().toString()
       || !m_genReportBtn->isEnabled()) return;
@@ -678,6 +716,7 @@ void EvaluatePage::onGenerateReport() {
 // ════════════════════════════════════════════════════════════════════════
 
 void EvaluatePage::onRefreshReports() {
+  if (!m_pipelineId.isEmpty()) { m_taskResults->refresh(); return; }
   const int revision = ++m_reportListRevision;
   QPointer<EvaluatePage> self(this);
   m_api->get("/api/reports", 5000, [this, self, revision](const QJsonObject &res) {
@@ -686,7 +725,9 @@ void EvaluatePage::onRefreshReports() {
       m_reportDetail->setPlainText(QStringLiteral("报告列表加载失败，请刷新后重试。"));
       return;
     }
-    auto arr = res["data"].toArray();
+    QJsonArray arr;
+    for (const auto &value : res["data"].toArray())
+      if (value.toObject().value("template").toString() != "task_trace_v1") arr.append(value);
     const bool sorting = m_reportTable->isSortingEnabled();
     m_reportTable->setSortingEnabled(false);
     m_reportTable->setRowCount(arr.size());
@@ -997,8 +1038,11 @@ void EvaluatePage::onPreviewReport() {
 // ════════════════════════════════════════════════════════════════════════
 
 void EvaluatePage::onLoadEvidenceRuns() {
-  m_api->get("/api/runs", 5000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
+  if (!m_pipelineId.isEmpty()) return;
+  const int revision = m_runRequestRevision;
+  QPointer<EvaluatePage> guard(this);
+  m_api->get("/api/runs", 5000, [this, guard, revision](const QJsonObject &res) {
+    if (!guard || revision != m_runRequestRevision || !m_pipelineId.isEmpty() || res["status"].toString() != "ok") return;
     m_evidenceRunCombo->clear();
     auto arr = res["data"].toArray();
     for (int i = 0; i < arr.size(); i++) {
@@ -1021,12 +1065,16 @@ void EvaluatePage::onLoadEvidenceRuns() {
 }
 
 void EvaluatePage::onEvidenceRunSelected(int index) {
+  if (!m_pipelineId.isEmpty()) return;
   if (index < 0) return;
   QString runId = m_evidenceRunCombo->currentData().toString();
   if (runId.isEmpty()) return;
 
-  m_api->get("/api/runs/" + runId, 5000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
+  const int revision = m_runRequestRevision;
+  QPointer<EvaluatePage> guard(this);
+  m_api->get("/api/runs/" + runId, 5000, [this, guard, revision, runId](const QJsonObject &res) {
+    if (!guard || revision != m_runRequestRevision || !m_pipelineId.isEmpty()
+        || runId != m_evidenceRunCombo->currentData().toString() || res["status"].toString() != "ok") return;
     auto d = res["data"].toObject();
     auto evidence = d["evidence"].toArray();
 
@@ -1088,8 +1136,11 @@ void EvaluatePage::onEvidenceClicked(int row, int) {
 // ════════════════════════════════════════════════════════════════════════
 
 void EvaluatePage::onLoadCaptureTasks() {
-  m_api->get("/api/capture-tasks", 5000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
+  if (!m_pipelineId.isEmpty()) return;
+  const int revision = m_runRequestRevision;
+  QPointer<EvaluatePage> guard(this);
+  m_api->get("/api/capture-tasks", 5000, [this, guard, revision](const QJsonObject &res) {
+    if (!guard || revision != m_runRequestRevision || !m_pipelineId.isEmpty() || res["status"].toString() != "ok") return;
     auto arr = res["data"].toArray();
     const bool sorting = m_captureTaskTable->isSortingEnabled();
     m_captureTaskTable->setSortingEnabled(false);

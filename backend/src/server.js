@@ -146,7 +146,7 @@ async function start() {
 
   const HOST = process.env.HOST || '0.0.0.0';
   const server = createServer(app);
-  initWebSocket(server);
+  initWebSocket(server, db);
 
   // Clean up pipelines/steps stuck 'running' from a crash/kill before this boot
   cleanupOrphanedPipelines();

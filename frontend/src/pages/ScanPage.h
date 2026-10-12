@@ -21,6 +21,7 @@ public:
   /// Pre-fill all 4 target inputs (used when embedded in FlowPage workbench)
   void setTarget(const QString &target);
   void setTaskScope(const QStringList &taskIds);
+  void clearTaskScope();
 
 signals:
   void playbookNavigateRequested(const QString &playbookId, const QString &target = "");
@@ -114,6 +115,7 @@ private:
   bool m_scopedTasks = false;
   bool m_selectInitialScopeTask = false;
   QStringList m_scopeTaskIds;
+  int m_scopeRevision = 0;
   QString m_selectedTaskId;
   QString m_lastGeneratedId;       // playbook_id of last AI-generated playbook
   QString m_currentTarget;         // current selected task's target, for cross-page navigation

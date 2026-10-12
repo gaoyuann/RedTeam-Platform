@@ -396,7 +396,7 @@ export async function executeRun(runId) {
         }
       }
       try {
-        args = normalizeToolArgs(step.tool_id, args, { projectRoot: PROJECT_ROOT, engine: executionEnvironment, scheme: targetContext?.scheme });
+        args = normalizeToolArgs(step.tool_id, args, { projectRoot: PROJECT_ROOT, engine: executionEnvironment, scheme: targetContext?.scheme, target: run.target });
         const scope = validateExecutionScope({ target: run.target, toolId: step.tool_id, args });
         if (!scope.allowed) preparationError = scope.reason;
         if (targetProfile?.target_class === 'dvwa' && step.tool_id === 'sqlmap') {

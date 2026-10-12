@@ -1,5 +1,6 @@
 #include "../widgets/WorkbenchTabs.h"
 #include "ExecutionPage.h"
+#include "TaskExecutionPanel.h"
 #include "../Theme.h"
 #include "../UiUtil.h"
 #include "../ApiClient.h"
@@ -23,6 +24,7 @@
 #include <QTextEdit>
 #include <QRegularExpression>
 #include <QMessageBox>
+#include <QShowEvent>
 
 // ── Helper: create a table item with truncated display text and the full
 //    text stored in Qt::UserRole for double-click expansion. ─────────────
@@ -44,8 +46,12 @@ static QString wrapToolTip(const QString &text) {
 ExecutionPage::ExecutionPage(ApiClient *api, const QString &role, const QString &username, QWidget *parent)
     : QWidget(parent), m_api(api) {
   setupUI();
+  m_taskMonitor = new TaskExecutionPanel(api, role, username, this);
+  layout()->addWidget(m_taskMonitor);
+  m_taskMonitor->hide();
+  connect(m_taskMonitor, &TaskExecutionPanel::runSelected, this, &ExecutionPage::runSelected);
+  connect(m_taskMonitor, &TaskExecutionPanel::runCompleted, this, &ExecutionPage::runCompleted);
   loadPlaybooks();
-  onRefreshRuns();
 
   // Poll timer for real-time execution updates
   m_pollTimer = new QTimer(this);
@@ -410,6 +416,11 @@ void ExecutionPage::showRun(const QString &runId, bool focus)
 {
   if (!m_pipelineId.isEmpty() && runId != m_pipelineRunId) return;
   if (runId.isEmpty()) return;
+  if (!m_pipelineId.isEmpty()) {
+    m_taskMonitor->setTaskContext(m_pipelineId, runId, m_targetInput->text());
+    m_taskMonitor->refresh();
+    return;
+  }
   // Track as the running run so the poll timer keeps the step table, evidence,
   // and status label live.  onPollRunning stops automatically at a terminal
   // state, so a completed run costs at most one extra GET.
@@ -435,6 +446,7 @@ void ExecutionPage::showExecutionError(const QString &message) {
 }
 
 void ExecutionPage::clearRunContext() {
+  m_taskMonitor->clearTaskContext();
   ++m_contextRevision;
   m_pollTimer->stop();
   m_runningRunId.clear();
@@ -485,12 +497,16 @@ void ExecutionPage::onAttackCategoryChanged(int id) {
 }
 
 // A pipeline owns its execution; independent runs remain in the standalone view.
-void ExecutionPage::setPipelineContext(const QString &pipelineId, const QString &status, const QString &runId) {
+void ExecutionPage::setPipelineContext(const QString &pipelineId, const QString &status, const QString &runId, const QString &target) {
   const bool changed = pipelineId != m_pipelineId || runId != m_pipelineRunId;
   m_pipelineId = pipelineId;
   m_pipelineStatus = status;
   m_pipelineRunId = runId;
   const bool scoped = !pipelineId.isEmpty();
+  if (scoped) m_targetInput->setText(target);
+  m_tabWidget->setVisible(!scoped);
+  m_taskMonitor->setTaskContext(pipelineId, runId, target);
+  m_taskMonitor->setVisible(scoped);
   m_targetInput->setReadOnly(scoped);
   m_standaloneControls->setVisible(!scoped);
   m_pipelineHint->setVisible(scoped);
@@ -674,7 +690,16 @@ void ExecutionPage::onExecute() {
 }
 
 // ── Refresh runs ─────────────────────────────────────────────────────
+void ExecutionPage::showEvent(QShowEvent *event) {
+  QWidget::showEvent(event);
+  onRefreshRuns();
+}
+
 void ExecutionPage::onRefreshRuns() {
+  if (!m_pipelineId.isEmpty()) {
+    m_taskMonitor->refresh();
+    return;
+  }
   const int contextRevision = m_contextRevision;
   m_api->get("/api/runs", 5000, [this, contextRevision](const QJsonObject &res) {
     if (contextRevision != m_contextRevision || res["status"].toString() != "ok") return;
@@ -746,6 +771,10 @@ void ExecutionPage::onRunClicked(int row, int) {
 // ── Load run details by ID (shared by onRunClicked and onExecute) ────
 void ExecutionPage::onRunReact(const QJsonObject &data) {
   const QString runId = data.value(QStringLiteral("run_id")).toString();
+  if (!m_pipelineId.isEmpty()) {
+    if (!runId.isEmpty() && runId == m_pipelineRunId) m_taskMonitor->refresh();
+    return;
+  }
   if (runId.isEmpty() || runId != m_loadedRunId) return;
   const QString thought = data.value(QStringLiteral("thought")).toString();
   if (thought.isEmpty()) return;
@@ -790,6 +819,10 @@ void ExecutionPage::onRunReact(const QJsonObject &data) {
 
 void ExecutionPage::loadRunDetails(const QString &runId) {
   if (!m_pipelineId.isEmpty() && runId != m_pipelineRunId) return;
+  if (!m_pipelineId.isEmpty()) {
+    m_taskMonitor->refresh();
+    return;
+  }
   if (runId != m_loadedRunId) {
     ++m_runSelectionRevision;
     ++m_pollRequestRevision;
@@ -881,8 +914,7 @@ void ExecutionPage::applyRunDetails(const QString &runId, const QJsonObject &dat
     const int returned = hasCanonicalCounts ? resultCounts.value("returned").toInt() : succeeded + failed;
     succeeded = hasCanonicalCounts ? resultCounts.value("succeeded").toInt() : succeeded;
     failed = hasCanonicalCounts ? resultCounts.value("failed").toInt() : failed;
-    const int pending = hasCanonicalCounts ? resultCounts.value("pending").toInt()
-        : (known > returned ? known - returned : 0);
+    const int pending = hasCanonicalCounts ? resultCounts.value("pending").toInt() : qMax(0, known - returned);
     const bool requiresAttention = hasCanonicalCounts && resultCounts.value("requires_attention").toBool();
     const bool terminalPending = hasCanonicalCounts && resultCounts.value("terminal_pending").toBool();
     QString statusText = QString("%1 · %2\n已返回 %3/%4 步结果  ·  成功 %5  ·  失败 %6  ·  证据 %7 条")

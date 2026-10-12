@@ -55,7 +55,6 @@ private:
   QString m_role;
   QString m_username;
 
-  // Sub-tab container (Playbook 库 / 知识图谱 / 载荷样本库)
   QTabWidget *m_tabs;
   QWidget *m_playbookTab;
   KnowledgeGraphPage *m_kgTab;
@@ -72,6 +71,8 @@ private:
   QTextBrowser *m_stepDetail;   // 步骤详情卡片（描述/参数模板完整展示）
   QPushButton *m_copyArgsBtn;
   QString m_selectedId;
+  bool m_selectedSnapshot = false;
+  bool m_detailReady = false;
 
   // Go to execute button
   QPushButton *m_goExecBtn;
