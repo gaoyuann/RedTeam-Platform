@@ -5,8 +5,6 @@
 #include "../widgets/MetricCard.h"
 #include "../widgets/WorkbenchTabs.h"
 #include <QDateTime>
-#include <QCheckBox>
-#include <QComboBox>
 #include <QFileDialog>
 #include <QHeaderView>
 #include <QHBoxLayout>
@@ -162,25 +160,8 @@ TaskResultsPanel::TaskResultsPanel(ApiClient *api, const QString &role, const QS
   splitter->setStretchFactor(1, 2);
   splitter->setSizes({680, 360});
   outer->addWidget(splitter, 1);
-  m_reviewForm = new QWidget(this);
-  auto *reviewLayout = new QVBoxLayout(m_reviewForm);
-  reviewLayout->setContentsMargins(0, 0, 0, 0);
-  m_reviewNotice = plainLabel(m_reviewForm);
-  m_reviewNotice->setStyleSheet(Theme::StatusInfoStyle);
-  reviewLayout->addWidget(m_reviewNotice);
-  auto *reviewRow = new QHBoxLayout;
-  m_reviewAction = new QComboBox(m_reviewForm);
-  m_reviewNote = new QPlainTextEdit(m_reviewForm);
-  m_reviewNote->setPlaceholderText(QStringLiteral("必填审阅说明（最多 1000 字）：材料/表述问题、退回原因或重新打开原因；不要填写秘密。"));
-  m_reviewNote->setMaximumHeight(64);
-  m_reviewSubmit = new QPushButton(QStringLiteral("确认审阅操作"), m_reviewForm);
-  reviewRow->addWidget(m_reviewAction); reviewRow->addWidget(m_reviewNote, 1); reviewRow->addWidget(m_reviewSubmit);
-  reviewLayout->addLayout(reviewRow);
-  m_reviewAcknowledged = new QCheckBox(QStringLiteral("我确认：此操作仅审阅报告材料与表述，不验证漏洞、不判定目标安全，也不发布报告。"), m_reviewForm);
-  reviewLayout->addWidget(m_reviewAcknowledged);
-  outer->addWidget(m_reviewForm);
   auto *actions = new QHBoxLayout;
-  m_generate = new QPushButton(QStringLiteral("生成追溯报告（草稿）"), this);
+  m_generate = new QPushButton(QStringLiteral("生成报告"), this);
   m_exportJson = new QPushButton(QStringLiteral("导出 JSON"), this);
   m_exportHtml = new QPushButton(QStringLiteral("导出 HTML"), this);
   actions->addWidget(m_generate);
@@ -199,9 +180,6 @@ TaskResultsPanel::TaskResultsPanel(ApiClient *api, const QString &role, const QS
   connect(m_generate, &QPushButton::clicked, this, &TaskResultsPanel::generateReport);
   connect(m_exportJson, &QPushButton::clicked, this, [this]() { exportReport("json"); });
   connect(m_exportHtml, &QPushButton::clicked, this, [this]() { exportReport("html"); });
-  connect(m_reviewSubmit, &QPushButton::clicked, this, &TaskResultsPanel::reviewReport);
-  connect(m_reviewNote, &QPlainTextEdit::textChanged, this, &TaskResultsPanel::updateButtons);
-  connect(m_reviewAcknowledged, &QCheckBox::toggled, this, &TaskResultsPanel::updateButtons);
   clearTaskContext();
 }
 
@@ -231,8 +209,6 @@ void TaskResultsPanel::clearTaskContext()
   m_snapshot = {}; m_report = {}; m_reportMetadata = {};
   m_linkedReportMetadata = {}; m_linkedBusy = false;
   m_busy = false; m_fresh = false; m_generating = false; m_exporting = false;
-  m_reviewing = false;
-  m_reviewNote->clear(); m_reviewAcknowledged->setChecked(false);
   m_timer->stop(); m_refresh->setEnabled(false);
   for (auto *table : {m_findings, m_steps, m_evidence, m_reports}) table->setRowCount(0);
   for (auto *metric : m_metrics) metric->setValue(QStringLiteral("—"));
@@ -319,13 +295,12 @@ bool TaskResultsPanel::validReport(const QJsonObject &document, const QString &r
     && results.value("source_fingerprint") == source.value("source_fingerprint")
     && QRegularExpression("^[a-f0-9]{64}$").match(source.value("source_fingerprint").toString()).hasMatch()
     && source.value("source_fingerprint") == report.value("source_fingerprint")
-    && (linked || source.value("source_fingerprint") == m_reportMetadata.value("source_fingerprint"))
-    && validReview(report.value("review").toObject(), report.value("source_fingerprint").toString());
+    && (linked || source.value("source_fingerprint") == m_reportMetadata.value("source_fingerprint"));
 }
 
 void TaskResultsPanel::refresh()
 {
-  if (m_pipelineId.isEmpty() || m_busy || m_reviewing) return;
+  if (m_pipelineId.isEmpty() || m_busy) return;
   m_busy = true; updateButtons();
   const int context = m_contextVersion;
   const int request = ++m_requestVersion;
@@ -349,7 +324,6 @@ void TaskResultsPanel::showEvent(QShowEvent *event) { QWidget::showEvent(event);
 
 void TaskResultsPanel::showReport(const QString &reportId)
 {
-  m_reviewing = false; m_reviewNote->clear(); m_reviewAcknowledged->setChecked(false);
   ++m_selectionVersion; m_linkedBusy = false;
   m_linkedReportMetadata = {}; m_selectedReportId.clear(); m_report = {}; m_reportMetadata = {};
   m_pendingReportId = reportId;
@@ -426,8 +400,7 @@ void TaskResultsPanel::render()
       else if (tableIndex == 2) cells = QStringList{number(row.value("id")), number(row.value("step_index")), row.value("tool_id").toString(),
         number(row.value("attempt_id")), sourceState(row.value("source_state").toString()), time(row.value("recorded_at").toString())};
       else cells = QStringList{row.value("report_id").toString(), row.value("title").toString(), kind(row.value("kind").toString()),
-        row.value("kind").toString() == "trace_snapshot" ? state(row.value("review").toObject().value("state").toString("draft"))
-          + QStringLiteral("（报告审阅）") : state(row.value("status").toString()), time(row.value("created_at").toString())};
+        row.value("kind").toString() == "trace_snapshot" ? QStringLiteral("已生成") : state(row.value("status").toString()), time(row.value("created_at").toString())};
       for (int column = 0; column < cells.size(); ++column) {
         auto *item = new QTableWidgetItem(cells[column]); item->setToolTip(cells[column].toHtmlEscaped());
         if (column == 0) item->setData(Qt::UserRole, row);
@@ -464,12 +437,6 @@ void TaskResultsPanel::showSelection()
       ++m_selectionVersion; m_linkedBusy = false; m_pendingReportId.clear();
     }
     if (reportId != m_selectedReportId || metadata != m_reportMetadata) {
-      if (reportId != m_selectedReportId || metadata.value("review") != m_reportMetadata.value("review")) {
-        m_reviewNote->clear(); m_reviewAcknowledged->setChecked(false);
-      }
-      if (reportId != m_selectedReportId) {
-        m_reviewing = false;
-      }
       ++m_selectionVersion; m_exporting = false; m_report = {}; m_reportMetadata = metadata; m_selectedReportId = reportId;
       if (!reportId.isEmpty()) {
         const int context = m_contextVersion; const int selection = m_selectionVersion;
@@ -511,7 +478,6 @@ void TaskResultsPanel::renderDetail()
             number(counts.value("returned")), number(counts.value("steps")), number(counts.value("evidence")), content.value("notice").toString());
         detail += pretty(QJsonObject{{"provenance", content.value("provenance")}, {"trace", results.value("trace")},
           {"assessment", results.value("assessment")}, {"limits", results.value("limits")}});
-        detail += QStringLiteral("\n\n独立人工审阅记录（冻结正文保持不变；不代表漏洞已验证）\n") + pretty(report.value("review").toObject());
       } else detail += content.value("notice").toString() + "\n\n" + pretty(content);
     }
     if (m_detail->toPlainText() != detail) m_detail->setPlainText(detail);
@@ -529,104 +495,12 @@ void TaskResultsPanel::renderDetail()
 void TaskResultsPanel::updateButtons()
 {
   const QString runState = m_snapshot.value("execution").toObject().value("run").toObject().value("status").toString();
-  m_generate->setEnabled(m_fresh && !m_busy && !m_generating && !m_reviewing && QStringList{"COMPLETED", "FAILED", "ABORTED"}.contains(runState));
-  m_generate->setText(m_generating ? QStringLiteral("保存报告中…") : QStringLiteral("生成追溯报告（草稿）"));
-  const bool canExport = m_fresh && !m_exporting && !m_reviewing && m_tabs->currentWidget() == m_reports
+  m_generate->setEnabled(m_fresh && !m_busy && !m_generating && QStringList{"COMPLETED", "FAILED", "ABORTED"}.contains(runState));
+  m_generate->setText(m_generating ? QStringLiteral("生成报告中…") : QStringLiteral("生成报告"));
+  const bool canExport = m_fresh && !m_exporting && m_tabs->currentWidget() == m_reports
       && !m_report.isEmpty() && m_report.value("report").toObject().value("kind").toString() == "trace_snapshot";
-  m_exportJson->setEnabled(canExport); m_exportHtml->setEnabled(canExport);
-  const auto report = m_report.value("report").toObject();
-  const auto review = report.value("review").toObject();
-  const bool trace = m_tabs->currentWidget() == m_reports && report.value("kind").toString() == "trace_snapshot";
-  m_reviewForm->setVisible(trace);
-  const bool available = trace && validReview(review) && review.value("available").toBool();
-  const bool ready = available && m_fresh && !m_busy && !m_reviewing && !m_exporting && !m_generating;
-  const QString reviewState = review.value("state").toString();
-  QStringList actions;
-  if (available && (reviewState == "draft" || reviewState == "rejected")) actions << "submit";
-  if (available && m_role == "admin" && reviewState == "submitted" && m_username != m_snapshot.value("owner").toString()
-      && m_username != review.value("submitted_by").toString()) actions << "approve" << "reject";
-  if (available && m_role == "admin" && reviewState == "reviewed") actions << "reopen";
-  if (m_reviewAction->property("actions").toStringList() != actions) {
-    m_reviewAction->clear();
-    const QMap<QString, QString> labels{{"submit", "提交审阅"}, {"approve", "审阅通过（非漏洞验证）"}, {"reject", "退回"}, {"reopen", "重新打开"}};
-    for (const auto &action : actions) m_reviewAction->addItem(labels.value(action), action);
-    m_reviewAction->setProperty("actions", actions);
-  }
-  m_reviewNotice->setText(validReview(review) && review.value("available").toBool()
-    ? QStringLiteral("报告审阅：%1 · 版本 %2。仅管理员独立审核；任务所有者及本轮提交人不能审核自己的报告。不代表漏洞已验证或报告已发布，冻结正文与候选结论不变。")
-        .arg(state(reviewState)).arg(review.value("revision").toInt())
-    : QStringLiteral("审阅记录不可用或格式不匹配，请更新后端并刷新；报告正文仍只读。"));
-  m_reviewAction->setEnabled(ready && !actions.isEmpty());
-  m_reviewNote->setEnabled(ready && !actions.isEmpty());
-  m_reviewAcknowledged->setEnabled(ready && !actions.isEmpty());
-  m_reviewSubmit->setText(m_reviewing ? QStringLiteral("保存审阅中…") : QStringLiteral("确认审阅操作"));
-  m_reviewSubmit->setEnabled(ready && !actions.isEmpty() && m_reviewAcknowledged->isChecked()
-      && !m_reviewNote->toPlainText().trimmed().isEmpty() && m_reviewNote->toPlainText().size() <= 1000);
-}
-
-bool TaskResultsPanel::validReview(const QJsonObject &review, const QString &fingerprint) const
-{
-  const auto revision = review.value("revision");
-  const QString source = fingerprint.isEmpty() ? m_report.value("report").toObject().value("source_fingerprint").toString() : fingerprint;
-  if (!(review.value("available").isBool() && QStringList{"draft", "submitted", "reviewed", "rejected"}.contains(review.value("state").toString())
-    && revision.isDouble() && revision.toDouble() >= 0 && revision.toDouble() <= 2147483647
-    && revision.toDouble() == revision.toInt(-1) && review.value("history").isArray() && review.value("history").toArray().size() <= 20
-    && review.value("source_fingerprint").toString() == source && !source.isEmpty()
-    && review.value("history_total") == revision && review.value("history_limit").toInt(-1) == 20)) return false;
-  int previous = 0;
-  for (const auto &value : review.value("history").toArray()) {
-    const auto entry = value.toObject();
-    const int version = entry.value("revision").toInt(-1);
-    if (!value.isObject() || version <= previous || (previous && version != previous + 1) || version > revision.toInt()
-        || !QStringList{"submit", "approve", "reject", "reopen"}.contains(entry.value("action").toString())
-        || !QStringList{"draft", "submitted", "reviewed", "rejected"}.contains(entry.value("state").toString())
-        || !QStringList{"admin", "user"}.contains(entry.value("actor_role").toString())
-        || entry.value("actor").toString().isEmpty() || !entry.value("note").isString()
-        || entry.value("note").toString().size() > 2000) return false;
-    previous = version;
-  }
-  const auto history = review.value("history").toArray();
-  return previous == revision.toInt() && history.size() == qMin(20, revision.toInt())
-    && (history.isEmpty() ? review.value("state").toString() == "draft" : history.last().toObject().value("state") == review.value("state"));
-}
-
-void TaskResultsPanel::reviewReport()
-{
-  if (!m_reviewSubmit->isEnabled()) return;
-  const int context = m_contextVersion;
-  const int selection = m_selectionVersion;
-  const auto report = m_report.value("report").toObject();
-  const auto review = report.value("review").toObject();
-  const QString reportId = m_selectedReportId;
-  const QJsonObject body{{"action", m_reviewAction->currentData().toString()}, {"revision", review.value("revision")},
-    {"source_fingerprint", report.value("source_fingerprint")}, {"note", m_reviewNote->toPlainText().trimmed()}, {"acknowledged", true}};
-  QMessageBox confirmation(QMessageBox::Question, QStringLiteral("确认报告审阅"),
-    QStringLiteral("任务：%1\n报告：%2\n操作：%3 · 审阅版本：%4\n此操作追加独立审阅记录，不修改冻结正文、不验证漏洞、不发布报告。是否继续？")
-      .arg(m_pipelineId, reportId, m_reviewAction->currentText()).arg(review.value("revision").toInt()),
-    QMessageBox::Yes | QMessageBox::No, this);
-  confirmation.setTextFormat(Qt::PlainText);
-  confirmation.setDefaultButton(QMessageBox::No);
-  if (confirmation.exec() != QMessageBox::Yes || context != m_contextVersion || selection != m_selectionVersion || !m_reviewSubmit->isEnabled()) return;
-  m_reviewing = true; updateButtons();
-  QPointer<TaskResultsPanel> guard(this);
-  m_api->post(apiPath() + "/reports/" + QString::fromLatin1(QUrl::toPercentEncoding(reportId)) + "/review", body, 10000,
-    [guard, context, selection, reportId, body](const QJsonObject &response) {
-      if (!guard || context != guard->m_contextVersion || selection != guard->m_selectionVersion || reportId != guard->m_selectedReportId) return;
-      guard->m_reviewing = false;
-      const auto data = response.value("data").toObject();
-      const QMap<QString, QString> expectedStates{{"submit", "submitted"}, {"approve", "reviewed"}, {"reject", "rejected"}, {"reopen", "draft"}};
-      if (response.value("status").toString() != "ok" || data.value("pipeline_id").toString() != guard->m_pipelineId
-          || data.value("report_id").toString() != reportId || !guard->validReview(data.value("review").toObject())
-          || data.value("review").toObject().value("revision").toInt() != body.value("revision").toInt() + 1
-          || data.value("review").toObject().value("state").toString() != expectedStates.value(body.value("action").toString())) {
-        guard->m_fresh = false;
-        guard->m_state->setText(QStringLiteral("审阅未确认成功，请刷新状态后重试：") + response.value("error").toObject().value("message").toString());
-        guard->updateButtons(); return;
-      }
-      guard->m_reviewNote->clear(); guard->m_reviewAcknowledged->setChecked(false);
-      guard->showReport(reportId);
-      guard->refresh();
-    });
+  m_exportJson->setEnabled(canExport);
+  m_exportHtml->setEnabled(canExport);
 }
 
 void TaskResultsPanel::generateReport()
@@ -635,8 +509,8 @@ void TaskResultsPanel::generateReport()
   const int context = m_contextVersion;
   const auto run = m_snapshot.value("execution").toObject().value("run").toObject();
   const QString fingerprint = m_snapshot.value("source_fingerprint").toString();
-  QMessageBox confirmation(QMessageBox::Question, QStringLiteral("保存结果报告草稿"),
-    QStringLiteral("将保存任务 %1 / Run %2 的脱敏、限长来源快照。\n不会重新执行、评分、判定漏洞或发布报告；同一来源重复生成会复用已有草稿。\n是否继续？").arg(m_pipelineId, run.value("run_id").toString()),
+  QMessageBox confirmation(QMessageBox::Question, QStringLiteral("生成结果报告"),
+    QStringLiteral("将保存任务 %1 / Run %2 的脱敏、限长来源快照。\n不会重新执行、评分或判定漏洞；同一来源重复生成会复用已有报告。\n是否继续？").arg(m_pipelineId, run.value("run_id").toString()),
     QMessageBox::Yes | QMessageBox::No, this);
   confirmation.setTextFormat(Qt::PlainText); confirmation.setDefaultButton(QMessageBox::No);
   if (confirmation.exec() != QMessageBox::Yes || context != m_contextVersion || !m_fresh) return;
