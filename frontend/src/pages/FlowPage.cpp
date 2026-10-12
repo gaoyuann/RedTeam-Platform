@@ -747,7 +747,7 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     const auto summary = p.value("summary").toObject();
     if (summary.contains("scan_task_ids")) {
       for (const auto &value : summary.value("scan_task_ids").toArray()) scopedScanIds.append(value.toString());
-    } else scopedScanIds = p.value("scan_task_id").toString().split(',', Qt::SkipEmptyParts);
+    } else scopedScanIds = p.value("scan_task_id").toString().split(',', QString::SkipEmptyParts);
     m_topoTab->setPipelineContext(pipelineId, target, scopedScanIds, scanFinished);
     m_scanTab->setTaskScope(scopedScanIds);
     m_scanTab->setTarget(target);

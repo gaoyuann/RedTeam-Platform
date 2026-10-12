@@ -218,7 +218,7 @@ void TaskOverviewPage::setTaskContext(const QJsonObject &pipeline)
            !autoExecute.isBool() ? QStringLiteral("未提供") : autoExecute.toBool() ? QStringLiteral("允许执行（仍需满足审批/预检）") : QStringLiteral("不自动执行")));
   QStringList scanIds;
   for (const auto &value : summary.value("scan_task_ids").toArray()) scanIds.append(value.toString());
-  if (!summary.contains("scan_task_ids")) scanIds = pipeline.value("scan_task_id").toString().split(',', Qt::SkipEmptyParts);
+  if (!summary.contains("scan_task_ids")) scanIds = pipeline.value("scan_task_id").toString().split(',', QString::SkipEmptyParts);
   m_sources->setText(QStringLiteral("关联扫描：%1\n来源预案 / 执行快照：%2\n关联执行：%3%4")
       .arg(scanIds.isEmpty() ? QStringLiteral("尚无") : scanIds.join(", "),
            pipeline.value("generated_playbook_id").toString(QStringLiteral("尚无")),

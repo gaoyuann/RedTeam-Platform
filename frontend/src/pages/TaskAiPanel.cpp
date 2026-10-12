@@ -275,7 +275,7 @@ void TaskAiPanel::rebuildContext()
   addCard(QStringLiteral("任务摘要"), summary.join(QStringLiteral("\n")), QStringLiteral("#2563eb"));
 
   QStringList sources;
-  const auto scanIds = m_pipeline.value(QStringLiteral("scan_task_id")).toString().split(',', Qt::SkipEmptyParts);
+  const auto scanIds = m_pipeline.value(QStringLiteral("scan_task_id")).toString().split(',', QString::SkipEmptyParts);
   if (!scanIds.isEmpty()) {
     sources << QStringLiteral("扫描来源：%1 个扫描作业（%2）").arg(scanIds.size()).arg(scanIds.join(QStringLiteral(", ")));
   } else {
