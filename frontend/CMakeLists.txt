@@ -18,14 +18,25 @@ set(SOURCES
     src/SplashDialog.cpp
     src/LoginDialog.cpp
     src/pages/BasePage.cpp
+    src/pages/DashboardPage.cpp
     src/pages/FlowPage.cpp
+    src/pages/TaskAiPanel.cpp
+    src/pages/AnalysisPage.cpp
+    src/pages/AnalysisHubPage.cpp
+    src/pages/ResourceCatalogPage.cpp
+    src/pages/TaskPlanPage.cpp
+    src/pages/TaskOverviewPage.cpp
+    src/pages/TaskLogPanel.cpp
     src/pages/DeployConfigPage.cpp
     src/pages/PlaybookPage.cpp
     src/pages/KnowledgeGraphPage.cpp
     src/pages/ScanPage.cpp
     src/pages/PayloadPage.cpp
     src/pages/ExecutionPage.cpp
+    src/pages/TaskExecutionPanel.cpp
     src/pages/EvaluatePage.cpp
+    src/pages/TaskResultsPanel.cpp
+    src/pages/ResultsPage.cpp
     src/pages/SystemPage.cpp
     src/pages/StepIndicator.cpp
     src/pages/PhasePanel.cpp
@@ -46,19 +57,31 @@ set(HEADERS
     src/ToastOverlay.h
     src/SplashDialog.h
     src/LoginDialog.h
+    src/AppStyle.h
     src/Theme.h
     src/widgets/WorkbenchTabs.h
     src/widgets/MetricCard.h
     src/widgets/ScanResultOverview.h
     src/pages/BasePage.h
+    src/pages/DashboardPage.h
     src/pages/FlowPage.h
+    src/pages/TaskAiPanel.h
+    src/pages/AnalysisPage.h
+    src/pages/AnalysisHubPage.h
+    src/pages/ResourceCatalogPage.h
+    src/pages/TaskPlanPage.h
+    src/pages/TaskOverviewPage.h
+    src/pages/TaskLogPanel.h
     src/pages/DeployConfigPage.h
     src/pages/PlaybookPage.h
     src/pages/KnowledgeGraphPage.h
     src/pages/ScanPage.h
     src/pages/PayloadPage.h
     src/pages/ExecutionPage.h
+    src/pages/TaskExecutionPanel.h
     src/pages/EvaluatePage.h
+    src/pages/TaskResultsPanel.h
+    src/pages/ResultsPage.h
     src/pages/SystemPage.h
     src/pages/StepIndicator.h
     src/pages/PhasePanel.h
@@ -128,3 +151,40 @@ add_custom_target(copy_rockey_sdk
   COMMENT "Validating and copying bundled ROCKEY SDK next to binary"
 )
 add_dependencies(RedTeam-Platform copy_rockey_sdk)
+
+option(BUILD_UI_CHECKS "Build isolated Qt UI regression checks" OFF)
+if(BUILD_UI_CHECKS)
+  find_package(Qt5 REQUIRED COMPONENTS Test)
+  set(UI_CHECK_SOURCES ${SOURCES})
+  list(REMOVE_ITEM UI_CHECK_SOURCES src/main.cpp)
+  add_executable(RedTeam-Platform-Batch16Checks
+    ${UI_CHECK_SOURCES}
+    ${HEADERS}
+    test/batch16_context_checks.cpp
+    resources/resources.qrc
+  )
+  target_link_libraries(RedTeam-Platform-Batch16Checks
+    Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Network Qt5::Test
+  )
+  if(Qt5WebSockets_FOUND)
+    target_link_libraries(RedTeam-Platform-Batch16Checks Qt5::WebSockets)
+  endif()
+  target_include_directories(RedTeam-Platform-Batch16Checks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  foreach(UI_SCALE IN ITEMS 1 1.25 1.5)
+    add_test(NAME ui-context-${UI_SCALE} COMMAND RedTeam-Platform-Batch16Checks)
+    set_tests_properties(ui-context-${UI_SCALE} PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${UI_SCALE}"
+      TIMEOUT 60
+    )
+  endforeach()
+endif()
+
+if(BUILD_UI_CHECKS)
+  add_executable(RedTeam-DashboardChecks
+    src/ApiClient.cpp src/pages/DashboardPage.cpp
+    test/dashboard_checks.cpp resources/resources.qrc)
+  target_include_directories(RedTeam-DashboardChecks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(RedTeam-DashboardChecks Qt5::Widgets Qt5::Network Qt5::Test)
+  add_test(NAME ui-dashboard COMMAND RedTeam-DashboardChecks)
+  set_tests_properties(ui-dashboard PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+endif()

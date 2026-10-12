@@ -17,10 +17,25 @@ constexpr const char* Dark          = "#10243e";
 constexpr const char* DarkLighter   = "#1d3655";
 
 // ── Surface / Background ─────────────────────────────────────────────
-constexpr const char* Background    = "#f3f6fb";
+constexpr const char* Background    = "#f5f7fa";
 constexpr const char* Surface       = "#eef4fb";
 constexpr const char* SurfaceHover  = "#dbeafe";
 constexpr const char* Border        = "#dbe3ef";
+
+// Shared shell geometry is in device-independent pixels.
+constexpr int TopBarHeight = 64;
+constexpr int NavigationWidth = 184;
+constexpr int NavigationCompactWidth = 64;
+constexpr int IconSize = 22;
+constexpr int ControlHeight = 36;
+constexpr int CardRadius = 8;
+constexpr int Space = 16;
+constexpr const char* Card = "#ffffff";
+constexpr const char* CanvasBackground = "#08121a";
+constexpr const char* CanvasText = "#a8bdd5";
+constexpr const char* Text = "#172033";
+constexpr const char* TextSecondary = "#64748b";
+constexpr const char* Selected = "#dcebff";
 
 // ── Status colors (unified across all pages) ─────────────────────────
 constexpr const char* Success       = "#166534";
@@ -113,8 +128,8 @@ inline const QString ItemViewStyle =
 // Pages share one set of controls while keeping their existing card layout.
 inline const QString PageStyle = QStringLiteral(
   "QLabel { background:transparent; border:none; }"
-  "QFrame[card=\"true\"] { background:#ffffff; border:1px solid #dbe3ef; border-radius:14px; }"
-  "QFrame[softCard=\"true\"] { background:#f8fbff; border:1px solid #dbe3ef; border-radius:12px; }"
+  "QFrame[card=\"true\"] { background:#ffffff; border:1px solid #dbe3ef; border-radius:8px; }"
+  "QFrame[softCard=\"true\"] { background:#f8fbff; border:1px solid #dbe3ef; border-radius:8px; }"
   "QLineEdit, QPlainTextEdit, QComboBox, QSpinBox { "
     "background:#ffffff; border:1px solid #cbd5e1; border-radius:8px; padding:6px 9px; }"
   "QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus { "

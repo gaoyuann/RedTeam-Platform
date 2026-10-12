@@ -7,4 +7,5 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
+enable_testing()
 add_subdirectory(frontend)

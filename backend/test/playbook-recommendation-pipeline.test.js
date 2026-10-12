@@ -8,6 +8,8 @@ import pipelineSchema from '../src/db/migrations/013_add_pipeline_tables.js';
 import scanProfile from '../src/db/migrations/020_scan_target_profile.js';
 import targetClassMigration from '../src/db/migrations/011_add_target_class.js';
 import approvalMigration from '../src/db/migrations/015_add_pipeline_approval_status.js';
+import taskPlanMigration from '../src/db/migrations/022_task_plans.js';
+import pipelineLogsMigration from '../src/db/migrations/023_pipeline_logs.js';
 
 let includeInjection = false;
 let executionCalls = 0;
@@ -56,6 +58,8 @@ function createDatabase() {
   approvalMigration(db);
   targetClassMigration(db);
   scanProfile(db);
+  taskPlanMigration(db);
+  pipelineLogsMigration(db);
   db.exec('ALTER TABLE execution_runs ADD COLUMN scan_task_id TEXT');
   db.prepare("INSERT INTO users (username,password,role) VALUES ('alice','test','user')").run();
   return db;

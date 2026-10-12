@@ -17,7 +17,7 @@ export const RBAC = {
   'assignments':   { read: ['admin', 'user'], write: ['admin'] },
   'submissions':   { read: ['admin', 'user'], write: ['admin', 'user'] },
   'memberships':   { read: ['admin', 'user'], write: ['admin'] },
-  'audit':         { read: ['admin', 'user'], write: [] },
+  'audit':         { read: ['admin'], write: [] },
   'kg':            { read: ['admin', 'user'], write: [] },
   'payloads':      { read: ['admin', 'user'], write: ['admin', 'user'] },
   'users':         { read: ['admin'],         write: ['admin'] },

@@ -83,7 +83,7 @@ export default function (db) {
     }));
     // Add virtual tools
     for (const v of VIRTUAL_TOOLS) {
-      tools.push({ toolId: v, image: null, virtual: true });
+      if (!Object.hasOwn(IMAGE_MAP, v)) tools.push({ toolId: v, image: null, virtual: true });
     }
     res.json({ status: 'ok', data: tools, meta: { total: tools.length } });
   });

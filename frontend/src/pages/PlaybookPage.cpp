@@ -2,6 +2,7 @@
 #include "PlaybookPage.h"
 #include "KnowledgeGraphPage.h"
 #include "PayloadPage.h"
+#include "ResourceCatalogPage.h"
 #include "../ApiClient.h"
 #include <QHBoxLayout>
 #include <QVBoxLayout>
@@ -36,6 +37,12 @@ void PlaybookPage::setupUI() {
   auto *outerLayout = new QVBoxLayout(this);
   outerLayout->setContentsMargins(0, 0, 0, 0);
   outerLayout->setSpacing(0);
+
+  auto *resourceHint = new QLabel(QStringLiteral("资源二级入口：预案用于任务编排；知识图谱提供关系参考；漏洞知识显示真实接入状态；工具库仅展示注册目录；载荷样本沿用现有权限。"), this);
+  resourceHint->setTextFormat(Qt::PlainText);
+  resourceHint->setWordWrap(true);
+  resourceHint->setContentsMargins(16, 10, 16, 10);
+  outerLayout->addWidget(resourceHint);
 
   m_tabs = new WorkbenchTabs(this);
 
@@ -233,11 +240,14 @@ void PlaybookPage::setupUI() {
     menu.exec(m_listTable->viewport()->mapToGlobal(pos));
   });
 
-  m_tabs->addTab(m_playbookTab, QStringLiteral("Playbook 库"));
+  m_tabs->addTab(m_playbookTab, QStringLiteral("预案库"));
 
   // ── Tab 1: 知识图谱 ──────────────────────────────────────────────
   m_kgTab = new KnowledgeGraphPage(m_api, m_tabs);
   m_tabs->addTab(m_kgTab, QStringLiteral("知识图谱"));
+
+  m_tabs->addTab(new ResourceCatalogPage(m_api, ResourceCatalogPage::Kind::Vulnerabilities, m_tabs), QStringLiteral("漏洞知识"));
+  m_tabs->addTab(new ResourceCatalogPage(m_api, ResourceCatalogPage::Kind::Tools, m_tabs), QStringLiteral("工具库"));
 
   // ── Tab 2: 载荷样本库 ────────────────────────────────────────────
   m_payloadTab = new PayloadPage(m_api, m_role, m_username, m_tabs);
@@ -270,7 +280,7 @@ void PlaybookPage::refreshPermissions() {
     const auto permissions = res["data"].toObject()["playbooks"].toObject();
     m_canWrite = permissions["write"].toBool();
     m_newBtn->setEnabled(m_canWrite);
-    m_deleteBtn->setEnabled(m_canWrite);
+    m_deleteBtn->setEnabled(m_canWrite && m_detailReady && !m_selectedSnapshot);
     m_newBtn->setToolTip(m_canWrite ? QString() : QStringLiteral("当前账号没有预案编辑权限"));
     m_deleteBtn->setToolTip(m_newBtn->toolTip());
     m_permissionHint->setText(permissions["read"].toBool()
@@ -419,7 +429,7 @@ void PlaybookPage::selectPlaybook(const QString &playbookId) {
         m_listTable->selectRow(i);
         m_listTable->scrollToItem(item);
         m_selectedId = playbookId;
-        m_goExecBtn->setEnabled(true);
+        m_goExecBtn->setEnabled(false);
         loadPlaybookDetail(playbookId);
         return;
       }
@@ -432,21 +442,34 @@ void PlaybookPage::onPlaybookClicked(int row, int) {
   if (!item) return;
   auto id = item->data(Qt::UserRole).toString();
   m_selectedId = id;
-  m_goExecBtn->setEnabled(!id.isEmpty());
+  m_goExecBtn->setEnabled(false);
   loadPlaybookDetail(id);
 }
 
 void PlaybookPage::loadPlaybookDetail(const QString &id) {
+  m_detailReady = false;
+  m_selectedSnapshot = false;
+  m_goExecBtn->setEnabled(false);
+  m_deleteBtn->setEnabled(false);
   QPointer<PlaybookPage> self(this);
-  m_api->get("/api/playbooks/" + id, 5000, [this, self](const QJsonObject &res) {
-    if (!self) return;
+  m_api->get("/api/playbooks/" + id, 5000, [this, self, id](const QJsonObject &res) {
+    if (!self || id != m_selectedId) return;
     if (res["status"].toString() != "ok") return;
     auto d = res["data"].toObject();
+    if (d.value("playbook_id").toString() != id || !d.value("access").isObject()) return;
+    const auto access = d.value("access").toObject();
+    m_detailReady = true;
+    m_selectedSnapshot = access.value("snapshot").toBool();
+    m_goExecBtn->setEnabled(access.value("direct_run").toBool());
+    m_goExecBtn->setToolTip(m_selectedSnapshot ? QStringLiteral("批准预案为只读快照，请从所属任务的执行页操作")
+      : access.value("direct_run").toBool() ? QString() : QStringLiteral("此预案不能作为当前账号的独立执行来源"));
+    m_deleteBtn->setEnabled(m_canWrite && !m_selectedSnapshot);
     m_detailLabel->setText(d["name"].toString());
     m_detailMeta->setText(QString("%1 · %2 · %3 个步骤")
       .arg(formatDifficulty(d["difficulty"].toString()),
            formatBaselineGroup(d["baseline_group"].toString()),
            QString::number(d["steps"].toArray().size())));
+    if (m_selectedSnapshot) m_detailMeta->setText(m_detailMeta->text() + QStringLiteral(" · 批准快照（只读，仅限所属任务执行）"));
     m_detailMeta->setVisible(true);
     const QString desc = d["description"].toString();
     m_detailDesc->setText(desc.isEmpty() ? QString()
@@ -524,7 +547,7 @@ void PlaybookPage::onStepSelected() {
 }
 
 void PlaybookPage::onDeletePlaybook() {
-  if (!m_canWrite) return;
+  if (!m_canWrite || !m_detailReady || m_selectedSnapshot) return;
   if (m_selectedId.isEmpty()) return;
   auto reply = QMessageBox::question(this->window(), "确认删除",
     QString("确定要删除此预案吗？此操作不可撤销。"),
@@ -551,6 +574,7 @@ void PlaybookPage::onDeletePlaybook() {
 
 // ── Go to Execute ─────────────────────────────────────────────────────
 void PlaybookPage::onGoExecute() {
+  if (!m_detailReady || !m_goExecBtn->isEnabled()) return;
   if (m_selectedId.isEmpty()) {
     QMessageBox::warning(this, QStringLiteral("提示"), QStringLiteral("请先在左侧列表中选择一个预案，再点击此按钮！"));
     return;

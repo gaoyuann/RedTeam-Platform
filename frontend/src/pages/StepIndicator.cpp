@@ -1,4 +1,5 @@
 #include "StepIndicator.h"
+#include "../Theme.h"
 
 #include <QMouseEvent>
 #include <QPainter>
@@ -12,11 +13,11 @@
 
 static QColor colorForStatus(const QString &status)
 {
-  if (status == "awaiting_approval") return QColor("#b45309");
-  if (status == "running")    return QColor("#2563eb");
-  if (status == "completed")  return QColor("#16a36b");
-  if (status == "skipped")    return QColor("#b45309");
-  if (status == "failed")     return QColor("#dc4b4b");
+  if (status == "awaiting_approval") return QColor(Theme::Warning);
+  if (status == "running")    return QColor(Theme::Primary);
+  if (status == "completed")  return QColor(Theme::Success);
+  if (status == "skipped")    return QColor(Theme::Warning);
+  if (status == "failed")     return QColor(Theme::Error);
   if (status == "cancelled")  return QColor("#94a3b8");
   /* pending  */              return QColor("#78879c");
 }
@@ -129,11 +130,13 @@ void StepIndicator::paintEvent(QPaintEvent *)
     p.drawRoundedRect(card, 10, 10);
 
     // Small, lightly tinted status tile with vector marks at any display scale.
-    const QRectF tile(card.left() + 11, card.top() + 11, 28, 28);
+    const QRectF tile(card.left() + 11, card.top() + 11, card.width() < 155 ? 0 : 28, card.width() < 155 ? 0 : 28);
     QColor tint = color; tint.setAlpha(24);
     p.setPen(Qt::NoPen); p.setBrush(tint); p.drawRoundedRect(tile, 8, 8);
     p.setPen(QPen(color, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    if (completed) {
+    if (tile.isEmpty()) {
+      // Narrow cards reserve the full width for the phase title.
+    } else if (completed) {
       QPainterPath check;
       check.moveTo(tile.left()+8, tile.top()+14);
       check.lineTo(tile.left()+12, tile.top()+18);
@@ -149,19 +152,21 @@ void StepIndicator::paintEvent(QPaintEvent *)
 
     QFont label = font(); label.setPixelSize(13); label.setBold(true);
     p.setFont(label); p.setPen(QColor("#243247"));
-    const QRectF title(card.left()+48, card.top()+10, qMax(0.0,card.width()-108), 24);
+    const bool compact = card.width() < 155;
+    const qreal textLeft = compact ? 10 : 48;
+    const QRectF title(card.left()+textLeft, card.top()+(compact ? 4 : 10), qMax(0.0,card.width()-textLeft-8), 22);
     p.drawText(title, Qt::AlignLeft|Qt::AlignVCenter,
                QFontMetrics(label).elidedText(phase.displayName, Qt::ElideRight, int(title.width())));
     label.setPixelSize(11); label.setBold(false); p.setFont(label);
     p.setPen(color);
-    p.drawText(QRectF(card.right()-56, card.top()+12, 46, 20),
-               Qt::AlignRight|Qt::AlignVCenter, labelForStatus(phase.status));
+    p.drawText(QRectF(card.left()+textLeft, card.top()+32, qMax(0.0,card.width()-textLeft-8), 17),
+               Qt::AlignLeft|Qt::AlignVCenter, labelForStatus(phase.status));
 
     const QString summary = phase.summary.isEmpty()
         ? (active ? QStringLiteral("正在处理，请稍候") : labelForStatus(phase.status))
         : phase.summary;
     label.setPixelSize(12); p.setFont(label); p.setPen(QColor("#718096"));
-    const QRectF detail(card.left()+12, card.top()+45, card.width()-24, 20);
+    const QRectF detail(card.left()+12, card.top()+50, card.width()-24, 18);
     p.drawText(detail, Qt::AlignLeft|Qt::AlignVCenter,
                QFontMetrics(label).elidedText(summary, Qt::ElideRight, int(detail.width())));
   }

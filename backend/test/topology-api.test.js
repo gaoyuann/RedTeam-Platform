@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import Database from 'better-sqlite3';
+import { fileURLToPath } from 'node:url';
+import { runMigrations } from '../src/db/migrate.js';
 import topologyRoutes from '../src/routes/topology.js';
 import scanRoutes from '../src/routes/scans.js';
 import pipelineRoutes from '../src/routes/pipelines.js';
@@ -9,9 +11,9 @@ import { captureTopologyOrigin } from '../src/services/topologyOrigin.js';
 
 async function fixture(t) {
   const db = new Database(':memory:');
-  db.exec('CREATE TABLE pipelines (pipeline_id TEXT, target TEXT, scan_task_id TEXT, created_by TEXT, config TEXT, status TEXT, created_at TEXT, updated_at TEXT);'
-    + "CREATE TABLE scan_tasks (scan_task_id TEXT, target TEXT, scan_type TEXT, target_class TEXT, parameters TEXT, created_by TEXT, created_at TEXT, status TEXT DEFAULT 'PENDING');"
-    + 'CREATE TABLE scan_results (scan_task_id TEXT, result_type TEXT, result_data TEXT, source_tool TEXT, captured_at TEXT);');
+  await runMigrations(db, fileURLToPath(new URL('../src/db/migrations/', import.meta.url)));
+  for (const username of ['alice', 'bob'])
+    db.prepare('INSERT INTO users (username,password,role) VALUES (?,?,?)').run(username, 'test', 'user');
   const app = express();
   app.use(express.json(), (req, res, next) => {
     req.user = { role: 'user', sub: req.headers['x-user'] || 'alice' }; next();
@@ -37,12 +39,12 @@ test('task topology aggregates only its scans, retaining route evidence', async 
   const {db,request} = await fixture(t);
   db.prepare('INSERT INTO pipelines (pipeline_id,target,scan_task_id,created_by) VALUES (?,?,?,?)').run('p1','10.0.0.0/24','old','alice');
   db.prepare('INSERT INTO pipelines (pipeline_id,target,scan_task_id,created_by) VALUES (?,?,?,?)').run('p2','10.1.0.0/24','','bob');
-  const insertTask = db.prepare('INSERT INTO scan_tasks (scan_task_id,target,scan_type,parameters,status) VALUES (?,?,?,?,?)');
-  insertTask.run('old','10.0.0.2','port_scan',null,'COMPLETED');
-  insertTask.run('discovery','10.0.0.0/24','topology_scan',JSON.stringify({pipeline_id:'p1'}),'COMPLETED');
-  insertTask.run('other','10.1.0.0/24','topology_scan',JSON.stringify({pipeline_id:'p2'}),'COMPLETED');
-  const insert = db.prepare('INSERT INTO scan_results VALUES (?,?,?,?,?)');
-  insert.run('old','open_port',JSON.stringify({port:22, state:'open'}),'nmap','1');
+  const insertTask = db.prepare('INSERT INTO scan_tasks (scan_task_id,target,scan_type,parameters,status,created_by) VALUES (?,?,?,?,?,?)');
+  insertTask.run('old','10.0.0.0/24','port_scan',null,'COMPLETED','alice');
+  insertTask.run('discovery','10.0.0.0/24','topology_scan',JSON.stringify({pipeline_id:'p1'}),'COMPLETED','alice');
+  insertTask.run('other','10.1.0.0/24','topology_scan',JSON.stringify({pipeline_id:'p2'}),'COMPLETED','bob');
+  const insert = db.prepare('INSERT INTO scan_results (scan_task_id,result_type,result_data,source_tool,captured_at) VALUES (?,?,?,?,?)');
+  insert.run('old','open_port',JSON.stringify({host:'10.0.0.2',port:22, state:'open'}),'nmap','1');
   insert.run('discovery','host_discovery',JSON.stringify({host:'10.0.0.3',status:'up'}),'nmap','2');
   insert.run('discovery','network_link',JSON.stringify({source:'10.0.0.2',target:'10.0.0.3',type:'route',evidence:'TTL 1 → 2'}),'nmap','3');
   insert.run('other','host_discovery',JSON.stringify({host:'10.1.0.99',status:'up'}),'nmap','4');
@@ -71,9 +73,9 @@ test('task-attached discovery validates ownership and exact target scope', async
 
 test('completed topology scan generates deterministic graph without AI', async t => {
   const {db,request} = await fixture(t);
-  db.prepare('INSERT INTO scan_tasks (scan_task_id,target,scan_type,status) VALUES (?,?,?,?)')
-    .run('d1','10.0.0.0/24','topology_scan','COMPLETED');
-  db.prepare('INSERT INTO scan_results VALUES (?,?,?,?,?)')
+  db.prepare('INSERT INTO scan_tasks (scan_task_id,target,scan_type,status,created_by) VALUES (?,?,?,?,?)')
+    .run('d1','10.0.0.0/24','topology_scan','COMPLETED','alice');
+  db.prepare('INSERT INTO scan_results (scan_task_id,result_type,result_data,source_tool,captured_at) VALUES (?,?,?,?,?)')
     .run('d1','host_discovery',JSON.stringify({host:'10.0.0.2',status:'up'}),'nmap','1');
   const result = await request('/topology/generate-from-scan',{scan_task_id:'d1'});
   assert.equal(result.status,200);

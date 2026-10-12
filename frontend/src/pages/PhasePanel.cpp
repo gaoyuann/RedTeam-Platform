@@ -40,6 +40,8 @@ void PhasePanel::setupUI() {
   m_playbookTable = new QTableWidget(0, 4);
   m_playbookTable->setHorizontalHeaderLabels({"顺序", "预案", "模式", "状态"});
   m_playbookTable->setAlternatingRowColors(true);
+  m_playbookTable->setShowGrid(false);
+  m_playbookTable->verticalHeader()->hide();
   m_playbookTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_playbookTable->setSelectionBehavior(QAbstractItemView::SelectRows);
   m_playbookTable->setSortingEnabled(true);
@@ -71,6 +73,8 @@ void PhasePanel::setupUI() {
   m_artifactTable = new QTableWidget(0, 3);
   m_artifactTable->setHorizontalHeaderLabels({"类型", "键", "值摘要"});
   m_artifactTable->setAlternatingRowColors(true);
+  m_artifactTable->setShowGrid(false);
+  m_artifactTable->verticalHeader()->hide();
   m_artifactTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_artifactTable->setSelectionBehavior(QAbstractItemView::SelectRows);
   m_artifactTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
@@ -169,11 +173,11 @@ void PhasePanel::loadPlaybooksForPhase() {
       // Column 3: status with Chinese translation + icon
       QString st = pb["status"].toString();
       QString statusText;
-      if (st == "pending") statusText = "⏳ 待执行";
-      else if (st == "running") statusText = "▶ 运行中";
-      else if (st == "completed") statusText = "✓ 已完成";
-      else if (st == "failed") statusText = "✗ 失败";
-      else if (st == "skipped") statusText = "⏭ 已跳过";
+      if (st == "pending") statusText = "待执行";
+      else if (st == "running") statusText = "运行中";
+      else if (st == "completed") statusText = "已完成";
+      else if (st == "failed") statusText = "失败";
+      else if (st == "skipped") statusText = "已跳过";
       else statusText = st;
       m_playbookTable->setItem(i, 3, new QTableWidgetItem(statusText));
 

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { getWsManager } from '../services/wsManager.js';
+import { assertPlaybookUse, canReadPlaybook } from '../services/playbookAccess.js';
 
 // ── Security helpers ────────────────────────────────────────────────────
 
@@ -116,7 +117,8 @@ export default function (db) {
          FROM campaign_playbooks cp
          JOIN playbooks p ON p.playbook_id = cp.playbook_id
          WHERE cp.phase_id = ? ORDER BY cp.execution_order`
-      ).all(phase.phase_id);
+      ).all(phase.phase_id).filter(row => canReadPlaybook(db,
+        db.prepare('SELECT * FROM playbooks WHERE playbook_id = ?').get(row.playbook_id), req.user));
       for (const pb of phase.playbooks) { pb.status_cn = statusCn(pb.status); }
     }
 
@@ -297,6 +299,8 @@ export default function (db) {
     if (!canModifyCampaign(req, campaign)) return res.status(403).json({ status: 'error', error: { message: '没有权限' } });
 
     const mode = execution_mode || 'sequential';
+    try { assertPlaybookUse(db, playbook_id, req.user, campaign.created_by); }
+    catch (error) { return res.status(error.status || 500).json({ status: 'error', error: { message: error.message } }); }
     if (!VALID_EXECUTION_MODES.has(mode)) return res.status(400).json({ status: 'error', error: { message: '无效的执行模式' } });
 
     // Determine execution_order: append to end if not specified
@@ -378,6 +382,14 @@ export default function (db) {
     `).get(req.params.id).n;
     if (hasPlaybooks === 0) {
       return res.status(400).json({ status: 'error', error: { message: '战役没有任何Playbook，无法启动' } });
+    }
+    try {
+      for (const row of db.prepare(`SELECT cp.playbook_id FROM campaign_playbooks AS cp
+        JOIN campaign_phases AS phase ON phase.phase_id = cp.phase_id
+        WHERE phase.campaign_id = ? AND phase.status != 'skipped'`).all(req.params.id))
+        assertPlaybookUse(db, row.playbook_id, req.user, campaign.created_by);
+    } catch (error) {
+      return res.status(error.status || 500).json({ status: 'error', error: { message: error.message } });
     }
 
     const globalRunning = db.prepare("SELECT COUNT(*) AS n FROM campaigns WHERE status = 'running'").get().n;

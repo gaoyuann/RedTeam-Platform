@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { replaceTargetPlaceholder } from '../src/services/commandTemplateRenderer.js';
+import { renderCommand, replaceTargetPlaceholder } from '../src/services/commandTemplateRenderer.js';
 import { classifyToolResult, normalizeToolArgs } from '../src/tools/toolContracts.js';
 import { parseAction, parseReflection } from '../src/services/reactEngine.js';
 
@@ -33,6 +33,17 @@ test('legacy target URLs are rewritten into the run target scope', () => {
   });
   assert.equal(args[args.indexOf('-u') + 1], 'http://192.168.1.111:8088/');
   assert.equal(replaceTargetPlaceholder('http://target:8765/install.php', 'http://192.168.1.111:8765'), 'http://192.168.1.111:8765/install.php');
+});
+
+test('runtime adjusted placeholders are resolved before unresolved-token checks', () => {
+  const result = renderCommand(['dir', '-u', 'http://target:8765/.git/config', '-w', '{{wordlist_small}}'], {
+    target_url: 'https://authorized.test:9443/', wordlist_small: '/usr/share/wordlists/course_web_dirs.txt',
+  });
+  assert.equal(result.rendered[2], 'https://authorized.test:9443/.git/config');
+  assert.deepEqual(result.unresolvedTokens, []);
+  assert.deepEqual(renderCommand(['http://target:8765/'], {}).unresolvedTokens, ['http://target:8765/']);
+  assert.deepEqual(renderCommand(['{{unavailable}}'], { target_url: 'https://authorized.test/' }).unresolvedTokens, ['{{unavailable}}']);
+  assert.equal(renderCommand(['https://outside.example/path'], { target_url: 'https://authorized.test/' }).rendered[0], 'https://outside.example/path');
 });
 
 test('nmap replaces fast scan when a target URL carries a non-default port', () => {

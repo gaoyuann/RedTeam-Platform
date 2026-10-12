@@ -25,6 +25,7 @@
 #include <QHeaderView>
 #include <QDateTime>
 #include <QTreeWidgetItem>
+#include <QPointer>
 
 // ── Translate nikto finding text to Chinese ───────────────────────────
 static QString translateNiktoFinding(const QString &finding) {
@@ -374,18 +375,35 @@ void ScanPage::setTarget(const QString &target)
 void ScanPage::setTaskScope(const QStringList &taskIds)
 {
   if (m_scopedTasks && taskIds == m_scopeTaskIds) return;
+  clearTaskScope();
   m_scopedTasks = true;
   m_scopeTaskIds = taskIds;
-  m_selectInitialScopeTask = true;
-  if (!taskIds.contains(m_selectedTaskId)) {
-    m_selectedTaskId.clear();
-    clearDetailPanel();
-  }
+  m_selectInitialScopeTask = !taskIds.isEmpty();
   for (auto *button : findChildren<QPushButton*>("scanCreateToggle")) {
     button->setChecked(false);
     button->hide();
   }
-  onRefreshTasks();
+  if (!taskIds.isEmpty()) onRefreshTasks();
+}
+
+void ScanPage::clearTaskScope()
+{
+  ++m_scopeRevision;
+  m_scopedTasks = true;
+  m_scopeTaskIds.clear();
+  m_selectInitialScopeTask = false;
+  m_selectedTaskId.clear();
+  m_runningTaskIds.clear();
+  m_pollErrorCount = 0;
+  if (m_pollTimer) m_pollTimer->stop();
+  for (auto *table : {m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable}) {
+    if (table) table->setRowCount(0);
+  }
+  for (auto *count : {m_portScanCount, m_vulnScanCount, m_webScanCount, m_bruteForceCount}) {
+    if (count) count->setText(QStringLiteral("共 0 个"));
+  }
+  setTarget(QString());
+  clearDetailPanel();
 }
 
 void ScanPage::setupUI() {
@@ -1256,7 +1274,11 @@ void ScanPage::startPollingIfNeeded() {
 
 // ── Refresh task list ─────────────────────────────────────────────────
 void ScanPage::onRefreshTasks() {
-  m_api->get("/api/scan-tasks", 5000, [this](const QJsonObject &res) {
+  if (m_scopedTasks && m_scopeTaskIds.isEmpty()) return;
+  const int scopeRevision = m_scopeRevision;
+  QPointer<ScanPage> guard(this);
+  m_api->get("/api/scan-tasks", 5000, [this, guard, scopeRevision](const QJsonObject &res) {
+    if (!guard || scopeRevision != m_scopeRevision) return;
     if (res["status"].toString() != "ok") return;
     auto arr = res["data"].toArray();
 
@@ -1367,8 +1389,10 @@ void ScanPage::onTaskClicked(int row, int) {
   m_selectedTaskId = id;
   enableCurrentTabDelBtn(true);
 
-  m_api->get("/api/scan-tasks/" + id, 5000, [this, id](const QJsonObject &res) {
-    if (id != m_selectedTaskId) return;
+  const int scopeRevision = m_scopeRevision;
+  QPointer<ScanPage> guard(this);
+  m_api->get("/api/scan-tasks/" + id, 5000, [this, guard, id, scopeRevision](const QJsonObject &res) {
+    if (!guard || scopeRevision != m_scopeRevision || id != m_selectedTaskId) return;
     if (res["status"].toString() != "ok") return;
     auto d = res["data"].toObject();
     QString status = d["status"].toString();
@@ -1436,7 +1460,10 @@ void ScanPage::onTaskClicked(int row, int) {
 
 // ── Load results (used by poll completion) ───────────────────────────
 void ScanPage::loadResults(const QString &taskId) {
-  m_api->get("/api/scan-tasks/" + taskId, 5000, [this](const QJsonObject &res) {
+  const int scopeRevision = m_scopeRevision;
+  QPointer<ScanPage> guard(this);
+  m_api->get("/api/scan-tasks/" + taskId, 5000, [this, guard, taskId, scopeRevision](const QJsonObject &res) {
+    if (!guard || scopeRevision != m_scopeRevision || taskId != m_selectedTaskId) return;
     if (res["status"].toString() != "ok") return;
     auto d = res["data"].toObject();
     updateStatusLabel(d);
@@ -1448,8 +1475,10 @@ void ScanPage::loadResults(const QString &taskId) {
 
 // ── Load recommendations ─────────────────────────────────────────────
 void ScanPage::loadRecommendations(const QString &taskId) {
-  m_api->get("/api/scan-tasks/" + taskId + "/recommendations", 5000, [this, taskId](const QJsonObject &res) {
-    if (taskId != m_selectedTaskId) return;
+  const int scopeRevision = m_scopeRevision;
+  QPointer<ScanPage> guard(this);
+  m_api->get("/api/scan-tasks/" + taskId + "/recommendations", 5000, [this, guard, taskId, scopeRevision](const QJsonObject &res) {
+    if (!guard || scopeRevision != m_scopeRevision || taskId != m_selectedTaskId) return;
     if (res["status"].toString() != "ok") return;
     auto arr = res["data"].toArray();
     const bool sorting = m_recTable->isSortingEnabled();
@@ -1648,6 +1677,8 @@ void ScanPage::clearDetailPanel() {
   m_genStepTable->setRowCount(0);
   m_lastGeneratedId.clear();
   m_currentTarget.clear();
+  m_currentTaskTarget.clear();
+  m_currentScanType.clear();
   enableCurrentTabDelBtn(false);
 }
 
@@ -1658,7 +1689,10 @@ void ScanPage::onPollStatus() {
     return;
   }
 
-  m_api->get("/api/scan-tasks", 5000, [this](const QJsonObject &res) {
+  const int scopeRevision = m_scopeRevision;
+  QPointer<ScanPage> guard(this);
+  m_api->get("/api/scan-tasks", 5000, [this, guard, scopeRevision](const QJsonObject &res) {
+    if (!guard || scopeRevision != m_scopeRevision) return;
     if (res["status"].toString() != "ok") {
       // API error — tolerate transient failures, then stop polling to avoid spin
       if (++m_pollErrorCount >= 10) {
@@ -1716,8 +1750,8 @@ void ScanPage::onPollStatus() {
           if (idItem && idItem->data(Qt::UserRole).toString() == m_selectedTaskId) {
             // Directly load the task details
             const QString selectedId = m_selectedTaskId;
-      m_api->get("/api/scan-tasks/" + selectedId, 5000, [this, selectedId](const QJsonObject &detailRes) {
-        if (selectedId != m_selectedTaskId) return;
+      m_api->get("/api/scan-tasks/" + selectedId, 5000, [this, guard, selectedId, scopeRevision](const QJsonObject &detailRes) {
+        if (!guard || scopeRevision != m_scopeRevision || selectedId != m_selectedTaskId) return;
               if (detailRes["status"].toString() != "ok") return;
               auto d = detailRes["data"].toObject();
               m_currentTarget = d["target"].toString();
@@ -1748,8 +1782,8 @@ void ScanPage::onPollStatus() {
     } else if (!m_selectedTaskId.isEmpty() && m_runningTaskIds.contains(m_selectedTaskId)) {
       // Still running — update results incrementally
       const QString selectedId = m_selectedTaskId;
-      m_api->get("/api/scan-tasks/" + selectedId, 5000, [this, selectedId](const QJsonObject &detailRes) {
-        if (selectedId != m_selectedTaskId) return;
+      m_api->get("/api/scan-tasks/" + selectedId, 5000, [this, guard, selectedId, scopeRevision](const QJsonObject &detailRes) {
+        if (!guard || scopeRevision != m_scopeRevision || selectedId != m_selectedTaskId) return;
         if (detailRes["status"].toString() != "ok") return;
         auto d = detailRes["data"].toObject();
         m_currentTarget = d["target"].toString();

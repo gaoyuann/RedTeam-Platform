@@ -1,11 +1,36 @@
 <RCC>
     <qresource prefix="/">
         <file alias="images/logo.png">logo.png</file>
+        <file alias="images/app-icon.png">app-icon.png</file>
         <file alias="icons/checkbox_off.png">icons/checkbox_off.png</file>
         <file alias="icons/checkbox_on.png">icons/checkbox_on.png</file>
         <file alias="icons/checkbox_on_disabled.png">icons/checkbox_on_disabled.png</file>
         <file alias="icons/checkbox_off_disabled.png">icons/checkbox_off_disabled.png</file>
         <file alias="icons/radio_off.png">icons/radio_off.png</file>
         <file alias="icons/radio_on.png">icons/radio_on.png</file>
+        <file>icons/shell/dashboard.svg</file>
+        <file>icons/shell/dashboard-selected.svg</file>
+        <file>icons/shell/tasks.svg</file>
+        <file>icons/shell/tasks-selected.svg</file>
+        <file>icons/shell/topology.svg</file>
+        <file>icons/shell/topology-selected.svg</file>
+        <file>icons/shell/analysis.svg</file>
+        <file>icons/shell/analysis-selected.svg</file>
+        <file>icons/shell/library.svg</file>
+        <file>icons/shell/library-selected.svg</file>
+        <file>icons/shell/reports.svg</file>
+        <file>icons/shell/reports-selected.svg</file>
+        <file>icons/shell/settings.svg</file>
+        <file>icons/shell/settings-selected.svg</file>
+        <file>icons/shell/search.svg</file>
+        <file>icons/shell/search-selected.svg</file>
+        <file>icons/shell/bell.svg</file>
+        <file>icons/shell/bell-selected.svg</file>
+        <file>icons/shell/user.svg</file>
+        <file>icons/shell/user-selected.svg</file>
+        <file>icons/shell/collapse.svg</file>
+        <file>icons/shell/collapse-selected.svg</file>
+        <file>icons/shell/expand.svg</file>
+        <file>icons/shell/expand-selected.svg</file>
     </qresource>
 </RCC>

@@ -24,7 +24,7 @@ export async function generatePlaybook(scanTaskId, analysisResult = null, { scan
 
   // Get scan task + results
   const task = db.prepare(
-    'SELECT scan_task_id, target, scan_type FROM scan_tasks WHERE scan_task_id = ?'
+    'SELECT scan_task_id, target, scan_type, created_by FROM scan_tasks WHERE scan_task_id = ?'
   ).get(scanTaskId);
   if (!task) return { ok: false, error: 'Scan task not found' };
   const ids = Array.isArray(scanTaskIds) && scanTaskIds.length ? scanTaskIds : [scanTaskId];
@@ -32,9 +32,9 @@ export async function generatePlaybook(scanTaskId, analysisResult = null, { scan
   const results = db.prepare(
     `SELECT r.result_type, r.result_data, r.severity, r.mitre_technique_id, r.source_tool
      FROM scan_results r JOIN scan_tasks t ON t.scan_task_id = r.scan_task_id
-     WHERE r.scan_task_id IN (${ids.map(() => '?').join(',')}) AND t.target = ? AND t.status IN ('COMPLETED', 'PARTIAL')
+     WHERE r.scan_task_id IN (${ids.map(() => '?').join(',')}) AND t.target = ? AND t.created_by IS ? AND t.status IN ('COMPLETED', 'PARTIAL')
      ORDER BY r.severity DESC LIMIT 15`
-  ).all(...ids, task.target);
+  ).all(...ids, task.target, task.created_by);
 
   // Build findings summary — skip raw_output (tool output noise, not useful for playbook)
   // and truncate each entry to keep prompt within LLM context limits
@@ -61,7 +61,7 @@ export async function generatePlaybook(scanTaskId, analysisResult = null, { scan
   }
 
   // Resolve target class for intelligent target_type
-  const targetProfile = loadTargetProfile(db, task.target, scanTaskIds || []);
+  const targetProfile = loadTargetProfile(db, task.target, ids, task.created_by);
   const TARGET_CLASS_TO_TYPE = {
     dvwa: ['dvwa'],
     local_ip: ['web_url', 'local_ip'],

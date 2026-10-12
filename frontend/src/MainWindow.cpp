@@ -1,15 +1,19 @@
 #include "MainWindow.h"
 #include "ApiClient.h"
 #include "LoginDialog.h"
+#include "Theme.h"
 #include "WsClient.h"
 #include "ToastOverlay.h"
 #include "pages/BasePage.h"
+#include "pages/DashboardPage.h"
 #include "pages/FlowPage.h"
 #include "pages/TopologyPage.h"
 #include "pages/PlaybookPage.h"
 #include "pages/ScanPage.h"
 #include "pages/ExecutionPage.h"
 #include "pages/EvaluatePage.h"
+#include "pages/ResultsPage.h"
+#include "pages/AnalysisHubPage.h"
 #include "pages/SystemPage.h"
 #include "pages/DongleLockPage.h"
 #include "services/dongle/DongleService.h"
@@ -22,6 +26,9 @@
 #include <QFrame>
 #include <QResizeEvent>
 #include <QTimer>
+#include <QPixmap>
+#include <QLineEdit>
+#include <QIcon>
 
 namespace {
 QString displayRole(const QString &role)
@@ -56,70 +63,207 @@ void MainWindow::setupUI()
 
     auto *centralWidget = new QWidget(this);
     centralWidget->setObjectName("contentArea");
-    auto *mainLayout = new QHBoxLayout(centralWidget);
+    auto *rootLayout = new QVBoxLayout(centralWidget);
+    rootLayout->setContentsMargins(0, 0, 0, 0);
+    rootLayout->setSpacing(0);
 
-    // Left: navigation — 总览大屏 as first item
-    // Note: "资源部署配置" moved to SystemPage sub-tab (P2 optimization)
+    auto *topBar = new QFrame(centralWidget);
+    topBar->setObjectName("appTopBar");
+    topBar->setFixedHeight(Theme::TopBarHeight);
+    auto *topLayout = new QHBoxLayout(topBar);
+    topLayout->setContentsMargins(24, 0, 24, 0);
+    topLayout->setSpacing(14);
+    auto *brandIcon = new QLabel(topBar);
+    brandIcon->setPixmap(QPixmap(":/images/app-icon.png").scaled(38, 38, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    brandIcon->setFixedSize(40, 40);
+    topLayout->addWidget(brandIcon);
+    auto *brandText = new QVBoxLayout;
+    brandText->setSpacing(2);
+    auto *brandLabel = new QLabel(QStringLiteral("信息系统渗透智能化测试平台"), topBar);
+    brandLabel->setObjectName("appBrand");
+    auto *subtitle = new QLabel(QStringLiteral("Intelligent Penetration Testing Platform"), topBar);
+    subtitle->setObjectName("appSubtitle");
+    brandText->addWidget(brandLabel);
+    brandText->addWidget(subtitle);
+    topLayout->addLayout(brandText);
+    topLayout->addStretch();
+    auto *globalSearch = new QLineEdit(topBar);
+    globalSearch->setObjectName("globalSearch");
+    globalSearch->setPlaceholderText(QStringLiteral("全局搜索 · 暂未开放"));
+    globalSearch->setEnabled(false);
+    globalSearch->addAction(QIcon(":/icons/shell/search.svg"), QLineEdit::LeadingPosition);
+    globalSearch->setToolTip(QStringLiteral("此入口尚未接入；任务、分析、资源和报告页面提供各自的筛选。"));
+    globalSearch->setMinimumWidth(180);
+    globalSearch->setMaximumWidth(430);
+    topLayout->addWidget(globalSearch, 1);
+    topLayout->addStretch();
+    auto *notification = new QPushButton(topBar);
+    notification->setIcon(QIcon(":/icons/shell/bell.svg"));
+    notification->setFixedSize(36, 36);
+    notification->setProperty("quiet", true);
+    notification->setEnabled(false);
+    notification->setAccessibleName(QStringLiteral("通知暂未开放"));
+    notification->setStyleSheet(QStringLiteral("color:#64748b; font-size:12px;"));
+    notification->setToolTip(QStringLiteral("当前没有通知中心；页面状态提示与任务日志沿用已有接口。"));
+    topLayout->addWidget(notification);
+    auto *settings = new QPushButton(topBar);
+    settings->setObjectName("shellSettings");
+    settings->setProperty("quiet", true);
+    settings->setFixedSize(36, 36);
+    settings->setIcon(QIcon(":/icons/shell/settings.svg"));
+    settings->setToolTip(QStringLiteral("系统管理"));
+    settings->setAccessibleName(settings->toolTip());
+    connect(settings, &QPushButton::clicked, this, [this]() { switchToPage(6); });
+    topLayout->addWidget(settings);
+    auto *userIcon = new QLabel(topBar);
+    userIcon->setPixmap(QIcon(":/icons/shell/user.svg").pixmap(24, 24));
+    topLayout->addWidget(userIcon);
+    auto *topUser = new QLabel(QStringLiteral("%1 (%2)")
+        .arg(m_username, displayRole(m_role)), topBar);
+    topUser->setTextFormat(Qt::PlainText);
+    topUser->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    topUser->setMinimumWidth(120);
+    topUser->setMaximumWidth(280);
+    topUser->setToolTip(topUser->text().toHtmlEscaped());
+    topUser->setStyleSheet(QStringLiteral("color:#1e3a63; font-size:13px; font-weight:600;"));
+    topLayout->addWidget(topUser);
+    rootLayout->addWidget(topBar);
+
+    auto *body = new QWidget(centralWidget);
+    auto *mainLayout = new QHBoxLayout(body);
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+    mainLayout->setSpacing(0);
+
+    // Left: unified seven-module navigation. Task-internal pages stay under
+    // the 测试任务 parent and are not duplicated as top-level modules.
     m_modules = QStringList({
-        QStringLiteral("📋 测试任务"),
-        QStringLiteral("📚 预案与知识库"),
-        QStringLiteral("⚙️ 系统管理")
+        QStringLiteral("工作台"),
+        QStringLiteral("测试任务"),
+        QStringLiteral("资产与拓扑"),
+        QStringLiteral("智能分析"),
+        QStringLiteral("预案与知识库"),
+        QStringLiteral("结果与报告"),
+        QStringLiteral("系统管理")
     });
 
     auto *sidebar = new QFrame(centralWidget);
     sidebar->setObjectName("sidebar");
-    sidebar->setFixedWidth(200);
+    sidebar->setFixedWidth(Theme::NavigationWidth);
     auto *sidebarLayout = new QVBoxLayout(sidebar);
-    sidebarLayout->setContentsMargins(12, 18, 12, 14);
-    sidebarLayout->setSpacing(14);
-
-    auto *brandLabel = new QLabel(QStringLiteral("信息系统渗透智能化测试平台"), sidebar);
-    brandLabel->setObjectName("sidebarBrand");
-    brandLabel->setStyleSheet(QStringLiteral(
-        "color: #ffffff; font-size: 14px; font-weight: 800; letter-spacing: 0px;"));
-    brandLabel->setWordWrap(true);
-    sidebarLayout->addWidget(brandLabel);
-
-    auto *brandDivider = new QFrame(sidebar);
-    brandDivider->setObjectName("sidebarDivider");
-    brandDivider->setFrameShape(QFrame::HLine);
-    sidebarLayout->addWidget(brandDivider);
+    sidebarLayout->setContentsMargins(8, 18, 8, 12);
+    sidebarLayout->setSpacing(10);
 
     m_navList = new QListWidget(sidebar);
     m_navList->setObjectName("navList");
     m_navList->setMinimumWidth(0);
-    for (const auto &name : m_modules) {
-        m_navList->addItem(name);
+    m_navList->setIconSize(QSize(Theme::IconSize, Theme::IconSize));
+    m_navList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    const QStringList navIcons = {"dashboard", "tasks", "topology", "analysis", "library", "reports", "settings"};
+    for (int index = 0; index < m_modules.size(); ++index) {
+        auto *item = new QListWidgetItem(m_modules.at(index), m_navList);
+        item->setData(Qt::UserRole, m_modules.at(index));
+        item->setToolTip(m_modules.at(index));
+        QIcon icon(":/icons/shell/" + navIcons.at(index) + ".svg");
+        icon.addFile(":/icons/shell/" + navIcons.at(index) + "-selected.svg", QSize(), QIcon::Selected);
+        item->setIcon(icon);
+        item->setSizeHint(QSize(0, 48));
     }
     m_navList->setCurrentRow(0);
+    if (m_role != QStringLiteral("admin")) {
+        m_navList->item(6)->setToolTip(QStringLiteral("仅管理员可操作系统管理；当前账号显示权限说明。"));
+    }
 
     // Right: stacked pages
     m_stackWidget = new QStackedWidget(this);
 
-    // Page 0: FlowPage (测试任务 — PentAGI-style flow list + workbench)
+    // Page 0: global dashboard
+    m_dashboardPage = new DashboardPage(m_api, this);
+    m_stackWidget->addWidget(m_dashboardPage);
+
+    // Page 1: FlowPage (测试任务 — task list + workbench)
     m_flowPage = new FlowPage(m_api, m_role, m_username, this);
     m_stackWidget->addWidget(m_flowPage);
 
-    // Page 1: Playbook (was page 2 before deploy config removal)
+    // Page 2: assets and topology
+    m_stackWidget->addWidget(new TopologyPage(m_api, m_role, m_username, this));
+
+    m_analysisPage = new AnalysisHubPage(m_api, m_role, m_username, this);
+    m_stackWidget->addWidget(m_analysisPage);
+    connect(m_analysisPage, &AnalysisHubPage::openTaskAnalysisRequested, this,
+        [this](const QString &pipelineId) {
+            if (m_dongleLocked) return;
+            switchToPage(1);
+            m_flowPage->openTaskAnalysis(pipelineId);
+            m_flowPage->setReturnPage(3, QStringLiteral("智能分析"));
+        });
+
+    // Page 4: Playbook and knowledge resources
     auto *playbookPage = new PlaybookPage(m_api, m_role, m_username, this);
     m_stackWidget->addWidget(playbookPage);
 
-    // Page 2: System (includes 资源部署 as sub-tab)
-    m_stackWidget->addWidget(new SystemPage(m_api, m_role, m_username, this));
+    // Page 5: result and report management
+    auto *resultsPage = new ResultsPage(m_api, m_role, m_username, this);
+    m_stackWidget->addWidget(resultsPage);
+    connect(resultsPage, &ResultsPage::openTaskReportRequested, this,
+        [this](const QString &pipelineId, const QString &reportId) {
+            if (m_dongleLocked) return;
+            switchToPage(1);
+            m_flowPage->openTaskReport(pipelineId, reportId);
+            m_flowPage->setReturnPage(5, QStringLiteral("结果与报告"));
+        });
+    connect(m_flowPage, &FlowPage::returnPageRequested, this, &MainWindow::switchToPage);
+
+    // Page 6: System (includes 资源部署 as sub-tab)
+    if (m_role == QStringLiteral("admin")) {
+        m_stackWidget->addWidget(new SystemPage(m_api, m_role, m_username, this));
+    } else {
+        auto *restrictedPage = new QWidget(this);
+        restrictedPage->setObjectName(QStringLiteral("systemPermissionPage"));
+        restrictedPage->setStyleSheet(Theme::PageStyle);
+        auto *restrictedLayout = new QVBoxLayout(restrictedPage);
+        restrictedLayout->setContentsMargins(28, 24, 28, 24);
+        auto *restrictedTitle = new QLabel(QStringLiteral("系统管理 · 权限说明"), restrictedPage);
+        restrictedTitle->setStyleSheet(QStringLiteral("font-size:24px; font-weight:700; color:#12213c;"));
+        auto *restrictedHint = new QLabel(QStringLiteral("当前账号：%1（普通用户）\n用户、权限、模型和部署配置由管理员维护。\n"
+            "你可以在测试任务中创建自己的任务、编辑预案并提审；批准和驳回由管理员操作。\n"
+            "此页不会加载管理接口。其他模块操作仍由后端权限校验。 ").arg(m_username), restrictedPage);
+        restrictedHint->setTextFormat(Qt::PlainText);
+        restrictedHint->setWordWrap(true);
+        restrictedLayout->addWidget(restrictedTitle);
+        restrictedLayout->addWidget(restrictedHint);
+        auto *openTasks = new QPushButton(QStringLiteral("进入我的测试任务"), restrictedPage);
+        openTasks->setProperty("primary", true);
+        restrictedLayout->addWidget(openTasks, 0, Qt::AlignLeft);
+        restrictedLayout->addStretch();
+        connect(openTasks, &QPushButton::clicked, this, [this]() { switchToPage(1); });
+        m_stackWidget->addWidget(restrictedPage);
+    }
 
     // 加密锁锁屏页（不占导航行，仅在校验失败时显示）
     m_dongleLockPage = new DongleLockPage(this);
     m_stackWidget->addWidget(m_dongleLockPage);
 
     sidebarLayout->addWidget(m_navList, 1);
-    auto *sidebarFooter = new QLabel(QStringLiteral("安全态势 · 实时联动"), sidebar);
-    sidebarFooter->setObjectName("sidebarFooter");
-    sidebarLayout->addWidget(sidebarFooter);
+    auto *collapse = new QPushButton(sidebar);
+    collapse->setObjectName("navigationToggle");
+    collapse->setProperty("quiet", true);
+    collapse->setIcon(QIcon(":/icons/shell/collapse.svg"));
+    collapse->setToolTip(QStringLiteral("收起导航"));
+    collapse->setAccessibleName(QStringLiteral("收起导航"));
+    sidebarLayout->addWidget(collapse);
+    connect(collapse, &QPushButton::clicked, this, [this, sidebar, collapse]() {
+        const bool compact = sidebar->width() != Theme::NavigationCompactWidth;
+        sidebar->setFixedWidth(compact ? Theme::NavigationCompactWidth : Theme::NavigationWidth);
+        for (int i = 0; i < m_navList->count(); ++i)
+            m_navList->item(i)->setText(compact ? QString() : m_modules.at(i));
+        collapse->setIcon(QIcon(compact ? ":/icons/shell/expand.svg" : ":/icons/shell/collapse.svg"));
+        collapse->setToolTip(compact ? QStringLiteral("展开导航") : QStringLiteral("收起导航"));
+        collapse->setAccessibleName(collapse->toolTip());
+    });
 
-    mainLayout->setContentsMargins(0, 0, 0, 0);
-    mainLayout->setSpacing(0);
     mainLayout->addWidget(sidebar);
     mainLayout->addWidget(m_stackWidget, 1);
+    rootLayout->addWidget(body, 1);
     setCentralWidget(centralWidget);
 
     // Toast overlay (positioned in top-right corner)
@@ -132,12 +276,16 @@ void MainWindow::setupUI()
     statusBar()->addWidget(m_checkBackendBtn);
 
     m_backendStatusLabel = new QLabel(QStringLiteral("未检测"), this);
-    m_backendStatusLabel->setStyleSheet("color: #a0aec0; padding: 0 10px; font-size: 13px;");
+    m_backendStatusLabel->setStyleSheet("color: #64748b; padding: 0 10px; font-size: 13px;");
     statusBar()->addWidget(m_backendStatusLabel);
 
     // User info label in status bar
     m_userInfoLabel = new QLabel(QStringLiteral("%1 [%2]").arg(m_username, displayRole(m_role)), this);
-    m_userInfoLabel->setStyleSheet("color: #a0aec0; padding: 0 10px; font-size: 13px;");
+    m_userInfoLabel->setTextFormat(Qt::PlainText);
+    m_userInfoLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    m_userInfoLabel->setMaximumWidth(240);
+    m_userInfoLabel->setToolTip(m_userInfoLabel->text().toHtmlEscaped());
+    m_userInfoLabel->setStyleSheet("color: #64748b; padding: 0 10px; font-size: 13px;");
     statusBar()->addWidget(m_userInfoLabel);
 
     m_logoutBtn = new QPushButton(QStringLiteral("退出登录"), this);
@@ -162,9 +310,15 @@ void MainWindow::setupUI()
     // Cross-page navigation: PlaybookPage → FlowPage workbench (攻击 Tab)
     connect(playbookPage, &PlaybookPage::executeRequested, this,
         [this](const QString &id) {
-            switchToPage(0);  // 测试任务
+            if (m_dongleLocked) return;
+            switchToPage(1);  // 测试任务
             m_flowPage->jumpToExecution(id, QString());
+            m_flowPage->setReturnPage(4, QStringLiteral("预案与知识库"));
         });
+
+    connect(m_dashboardPage, &DashboardPage::openTasksRequested, this, [this]() {
+        switchToPage(1);
+    });
 }
 
 // ── WebSocket setup ────────────────────────────────────────────────────
@@ -180,9 +334,19 @@ void MainWindow::setupWebSocket()
         connect(m_ws, &WsClient::pipelineCreated, m_flowPage, &FlowPage::onPipelineCreated);
         connect(m_ws, &WsClient::pipelineStatus, m_flowPage, &FlowPage::onPipelineStatus);
         connect(m_ws, &WsClient::pipelineStep, m_flowPage, &FlowPage::onPipelineStep);
+        connect(m_ws, &WsClient::pipelineLog, m_flowPage, &FlowPage::onPipelineLog);
         // Scan/run events also refresh flow list (pipeline creates scans/runs internally)
         connect(m_ws, &WsClient::scanCompleted, m_flowPage, &FlowPage::refreshFlows);
         connect(m_ws, &WsClient::runCompleted, m_flowPage, &FlowPage::refreshFlows);
+        if (m_dashboardPage) {
+            connect(m_ws, &WsClient::pipelineCreated, m_dashboardPage, &DashboardPage::refresh);
+            connect(m_ws, &WsClient::pipelineStatus, m_dashboardPage, [this](const QJsonObject &) {
+                m_dashboardPage->refresh();
+            });
+            connect(m_ws, &WsClient::runCompleted, m_dashboardPage, [this](const QJsonObject &) {
+                m_dashboardPage->refresh();
+            });
+        }
     }
 
     // Wire WebSocket to FlowPage's embedded stage-tab pages
@@ -199,7 +363,7 @@ void MainWindow::setupWebSocket()
             // Embedded scan "推荐执行" → switch to attack tab within the workbench
             connect(embScan, &ScanPage::playbookNavigateRequested, this,
                 [this](const QString &id, const QString &target) {
-                    m_flowPage->switchToStageTab(2);  // 2 = 漏洞攻击
+                    m_flowPage->switchToStageTab(5);
                     m_flowPage->execTab()->selectPlaybook(id, target);
                 });
         }
@@ -215,9 +379,11 @@ void MainWindow::setupWebSocket()
 
 
     // Wire to ToastOverlay
-    connect(m_ws, &WsClient::scanCompleted, m_toastOverlay, &ToastOverlay::onScanCompleted);
-    connect(m_ws, &WsClient::runStepComplete, m_toastOverlay, &ToastOverlay::onRunStepComplete);
-    connect(m_ws, &WsClient::runCompleted, m_toastOverlay, &ToastOverlay::onRunCompleted);
+    if (m_role == QStringLiteral("admin")) {
+        connect(m_ws, &WsClient::scanCompleted, m_toastOverlay, &ToastOverlay::onScanCompleted);
+        connect(m_ws, &WsClient::runStepComplete, m_toastOverlay, &ToastOverlay::onRunStepComplete);
+        connect(m_ws, &WsClient::runCompleted, m_toastOverlay, &ToastOverlay::onRunCompleted);
+    }
 
     // WebSocket connection status in status bar
     connect(m_ws, &WsClient::connected, this, [this]() {
@@ -267,7 +433,10 @@ void MainWindow::onModuleChanged(int row)
                 }
             }
         }
-        if (row == 0 && m_flowPage) {
+        if (row == 0 && m_dashboardPage) {
+            m_dashboardPage->refresh();
+        }
+        if (row == 1 && m_flowPage) {
             m_flowPage->refreshFlows();
         }
     }
@@ -341,18 +510,18 @@ void MainWindow::onCheckBackend()
 {
     m_checkBackendBtn->setEnabled(false);
     m_backendStatusLabel->setText("检测中...");
-    m_backendStatusLabel->setStyleSheet("color: #a0aec0; padding: 0 10px; font-size: 13px;");
+    m_backendStatusLabel->setStyleSheet("color: #64748b; padding: 0 10px; font-size: 13px;");
 
     m_api->get("/api/health", 3000, [this](const QJsonObject &res) {
         m_checkBackendBtn->setEnabled(true);
         if (res["status"].toString() == "ok") {
             m_backendStatusLabel->setText("已连接");
             m_backendStatusLabel->setStyleSheet(
-                "color: #27ae60; font-weight: bold; padding: 0 10px; font-size: 13px;");
+                "color: #16a34a; font-weight: bold; padding: 0 10px; font-size: 13px;");
         } else {
             m_backendStatusLabel->setText("未连接");
             m_backendStatusLabel->setStyleSheet(
-                "color: #e74c3c; font-weight: bold; padding: 0 10px; font-size: 13px;");
+                "color: #dc3545; font-weight: bold; padding: 0 10px; font-size: 13px;");
         }
     });
 }

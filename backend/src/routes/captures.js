@@ -4,15 +4,19 @@ import { executeCapture, stopCapture, isCaptureRunning } from '../services/captu
 import { analyzeCapture } from '../services/captureAnalyzer.js';
 import { getWsManager } from '../services/wsManager.js';
 import { existsSync, unlinkSync } from 'fs';
+import { requireActor, recordParam } from '../middleware/recordAccess.js';
 
 export default function (db) {
   const router = Router();
+  router.use(requireActor(db));
+  router.param('captureTaskId', recordParam(db, 'capture'));
 
   // ── List capture tasks ────────────────────────────────────────────────
   router.get('/', (req, res) => {
     const { status } = req.query;
     let sql = 'SELECT * FROM capture_tasks WHERE 1=1';
     const params = [];
+    if (req.user.role !== 'admin') { sql += ' AND created_by = ?'; params.push(req.user.sub); }
     if (status) { sql += ' AND status = ?'; params.push(status); }
     sql += ' ORDER BY created_at DESC';
     const rows = db.prepare(sql).all(...params);
@@ -70,7 +74,7 @@ export default function (db) {
 
   // ── Create capture task ───────────────────────────────────────────────
   router.post('/', (req, res) => {
-    const { interface: iface, bpf_filter, capture_type, duration_sec, created_by } = req.body;
+    const { interface: iface, bpf_filter, capture_type, duration_sec } = req.body;
     if (!iface) return res.status(400).json({ status: 'error', error: { message: 'interface is required' } });
     const capture_task_id = `cap_${randomUUID().slice(0, 12)}`;
     const now = new Date().toISOString();
@@ -81,7 +85,7 @@ export default function (db) {
       bpf_filter || null,
       capture_type || 'timed',
       duration_sec || 60,
-      created_by || null,
+      req.user.sub,
       now
     );
     const row = db.prepare('SELECT * FROM capture_tasks WHERE capture_task_id = ?').get(capture_task_id);
@@ -89,7 +93,7 @@ export default function (db) {
     const ws = getWsManager();
     if (ws) ws.broadcast('capture:created', {
       captureTaskId: capture_task_id, interface: iface,
-      userId: req.user?.sub || created_by || null,
+      userId: req.user.sub,
     });
     res.status(201).json({ status: 'ok', data: row });
   });
