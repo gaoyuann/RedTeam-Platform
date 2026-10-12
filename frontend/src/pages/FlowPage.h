@@ -84,6 +84,7 @@ private:
   void loadFlows();
   void loadFlowDetail(const QString &pipelineId);
   void clearRunContext();
+  void showTaskDetailError(const QString &message);
 
   QString statusText(const QString &status) const;
   QString statusIcon(const QString &status) const;

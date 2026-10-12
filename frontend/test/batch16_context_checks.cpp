@@ -150,6 +150,7 @@ int main(int argc, char **argv)
   MockServer server;
   bool delayedTask = false;
   bool delayedScans = false;
+  bool failedTask = false;
   server.handler = [&](const QString &, const QString &requestPath) -> MockReply {
     const QString path = QUrl(requestPath).path();
     const QString taskId = path.split('/').value(3);
@@ -157,7 +158,11 @@ int main(int argc, char **argv)
     if (path == "/api/scan-tasks") return {success(QJsonArray{scanRecord("A"), scanRecord("B")}), delayedScans ? 250 : 0};
     if (path == "/api/scan-tasks/scan-A") return {success(scanRecord("A")), delayedScans ? 250 : 0};
     if (path == "/api/scan-tasks/scan-B") return {success(scanRecord("B"))};
-    if (path == "/api/pipelines/" + taskId) return {success(taskRecord(taskId)), delayedTask && taskId == "A" ? 250 : 0};
+    if (path == "/api/pipelines/" + taskId) {
+      if (failedTask && taskId == "A")
+        return {{{"status", "error"}, {"error", QJsonObject{{"message", "fixture task load failed"}}}}};
+      return {success(taskRecord(taskId)), delayedTask && taskId == "A" ? 250 : 0};
+    }
     if (path.endsWith("/execution")) return {success(executionRecord(taskId))};
     if (path.endsWith("/results")) return {success(resultsRecord(taskId))};
     if (path.contains("/results/reports/")) return {success(reportRecord(taskId))};
@@ -249,6 +254,15 @@ int main(int argc, char **argv)
   flow.onBackToList();
   QTest::qWait(350);
   verify(flow.m_scanTab->m_currentTarget.isEmpty() && flow.m_scanTab->m_resultTree->topLevelItemCount() == 0, "late scan detail cannot restore old target or results");
+
+  failedTask = true;
+  flow.openTaskAnalysis("A");
+  verify(awaitCondition([&]() { return flow.m_targetLabel->text().contains(QStringLiteral("失败")); }), "task detail failure ends header loading state");
+  verify(!flow.m_targetLabel->text().contains(QStringLiteral("加载中"))
+      && flow.m_statusLabel->text().contains(QStringLiteral("失败")), "task detail failure is visible in header");
+  verify(flow.m_overviewTab->m_state->text().contains(QStringLiteral("fixture task load failed"))
+      && flow.m_analysisTab->m_stateLabel->text().contains(QStringLiteral("fixture task load failed")), "task detail failure reaches overview and analysis");
+  verify(flow.m_scanTab->m_statusLabel->text().contains(QStringLiteral("fixture task load failed")), "task detail failure reaches scan workspace");
   bool readOnly = true;
   for (auto iterator = server.requests.cbegin(); iterator != server.requests.cend(); ++iterator)
     readOnly = readOnly && iterator.key().startsWith("GET ");

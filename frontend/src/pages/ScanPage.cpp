@@ -406,6 +406,12 @@ void ScanPage::clearTaskScope()
   clearDetailPanel();
 }
 
+void ScanPage::showTaskContextError(const QString &message)
+{
+  m_statusLabel->setText(QStringLiteral("任务数据加载失败：%1。请返回任务列表后重试。").arg(message));
+  m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
+}
+
 void ScanPage::setupUI() {
   setObjectName("scanPage");
   // Local styling: do not alter other pages or the application theme.
