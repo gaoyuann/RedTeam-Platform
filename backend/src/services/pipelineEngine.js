@@ -305,6 +305,7 @@ function createFallbackAnalysis(db, target, scanTaskIds) {
   const findings = db.prepare(
     `SELECT result_type, severity, COUNT(*) AS cnt
      FROM scan_results WHERE scan_task_id IN (${placeholders})
+     AND result_type NOT IN ('lan_scope', 'lan_host_discovery', 'scan_evidence', 'network_context', 'network_link')
      GROUP BY result_type, severity ORDER BY cnt DESC`
   ).all(...ids);
 
@@ -393,7 +394,8 @@ async function runPipelineGeneration(db, pipeline, analysisData, scanTaskIds) {
       const placeholders = ids.map(() => '?').join(',');
       const allResults = db.prepare(
         `SELECT result_type, result_data, severity, mitre_technique_id, source_tool
-         FROM scan_results WHERE scan_task_id IN (${placeholders})`
+         FROM scan_results WHERE scan_task_id IN (${placeholders})
+         AND result_type NOT IN ('lan_scope', 'lan_host_discovery', 'scan_evidence', 'network_context', 'network_link')`
       ).all(...ids);
 
       const profile = loadTargetProfile(db, pipeline.target, ids);

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { getWsManager } from '../services/wsManager.js';
+import { captureTopologyOrigin, readTopologyOrigin } from '../services/topologyOrigin.js';
 
 // ── Validation helpers ────────────────────────────────────────────────────
 
@@ -147,6 +148,7 @@ export default function (db) {
       }
     }
 
+    configJson = JSON.stringify({ ...JSON.parse(configJson), topology_origin: captureTopologyOrigin(req) });
     try {
       db.prepare(`INSERT INTO pipelines (pipeline_id, target, status, config, created_by, created_at, updated_at)
         VALUES (?, ?, 'created', ?, ?, ?, ?)`).run(pipelineId, target, configJson, req.user.sub, now, now);
@@ -199,6 +201,8 @@ export default function (db) {
           configStr = JSON.stringify(sanitized);
         }
       } catch {}
+      const origin = readTopologyOrigin(pipeline.config);
+      if (origin) configStr = JSON.stringify({ ...JSON.parse(configStr), topology_origin: origin });
       sets.push('config = ?');
       params.push(configStr);
     }
@@ -257,7 +261,11 @@ export default function (db) {
     }
 
     const now = new Date().toISOString();
-    db.prepare("UPDATE pipelines SET status = 'running', updated_at = ? WHERE pipeline_id = ?").run(now, req.params.id);
+    let startConfig = {};
+    try { startConfig = JSON.parse(pipeline.config || '{}'); } catch {}
+    startConfig = { ...startConfig, topology_origin: captureTopologyOrigin(req) };
+    db.prepare("UPDATE pipelines SET status = 'running', updated_at = ?, config = ? WHERE pipeline_id = ?")
+      .run(now, JSON.stringify(startConfig), req.params.id);
     auditLog(db, 'pipeline_start', req.params.id, req.user.role, pipeline.target, { from: pipeline.status, to: 'running' });
 
     const ws = getWsManager();

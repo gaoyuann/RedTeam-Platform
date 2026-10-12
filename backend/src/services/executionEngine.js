@@ -9,7 +9,7 @@ import { runPreflightChecks } from './preflightGate.js';
 import { compilePlaybook } from './playbookCompiler.js';
 import { detectMappings } from './mappingDetector.js';
 import { buildContextForTarget } from './targetAdapters/index.js';
-import { renderCommand } from './commandTemplateRenderer.js';
+import { renderCommand, replaceTargetPlaceholder } from './commandTemplateRenderer.js';
 import { getWsManager } from './wsManager.js';
 import { createStepIndexAllocator, buildExecutionSummary } from './executionState.js';
 import { validateExecutionScope } from './executionScope.js';
@@ -183,15 +183,16 @@ export async function executeRun(runId) {
   }
   if (!preflight.passed) {
     const failedChecks = preflight.checks.filter(c => !c.passed).map(c => `${c.name}: ${c.message}`);
+    const error = `预检失败：${failedChecks.join('; ')}`;
     db.prepare(
       "UPDATE execution_runs SET status = 'FAILED', final_summary = ?, preflight_status = 'FAILED', preflight_data = ?, stop_reason = ?, updated_at = datetime('now') WHERE run_id = ?"
     ).run(
       JSON.stringify({ preflightFailed: failedChecks }),
       JSON.stringify(preflight.checks),
-      `预检失败：${failedChecks.join('; ')}`,
+      error,
       runId
     );
-    return { ok: false, error: 'Preflight checks failed', checks: preflight.checks };
+    return { ok: false, runId, status: 'FAILED', error, checks: preflight.checks };
   }
 
   // Persist preflight data
@@ -661,8 +662,7 @@ export async function executeRun(runId) {
             if (!Array.isArray(dynamicArgs) || dynamicArgs.some(argument => typeof argument !== 'string')) {
               throw new Error('工具参数必须为字符串数组');
             }
-            const rendered = renderCommand(dynamicArgs.map(argument => typeof argument === 'string'
-              ? argument.replace(/<target>/g, run.target || '') : argument), targetContext || {});
+            const rendered = renderCommand(dynamicArgs.map(argument => replaceTargetPlaceholder(argument, run.target || '')), targetContext || {});
             if (rendered.unresolvedTokens.length) throw new Error('工具目标或参数仍含未解析变量');
             const normalized = normalizeToolArgs(toolId, rendered.rendered,
               { projectRoot: PROJECT_ROOT, engine: executionEnvironment, scheme: targetContext?.scheme });

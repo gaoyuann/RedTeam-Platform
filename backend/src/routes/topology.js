@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { callLlm } from '../services/llmClient.js';
+import { readTopologyOrigin } from '../services/topologyOrigin.js';
 
 import { extractTopologyFromResults, mergeTopologyEnhancement } from '../services/topologyBuilder.js';
 
@@ -61,7 +62,9 @@ export default function (db) {
       'SELECT r.*, t.target AS scan_target FROM scan_results r JOIN scan_tasks t ON t.scan_task_id = r.scan_task_id WHERE r.scan_task_id IN ('
         + ids.map(() => '?').join(',') + ') ORDER BY r.captured_at'
     ).all(...ids) : [];
-    const topology = extractTopologyFromResults(pipeline.target, results);
+    const topology = extractTopologyFromResults(pipeline.target, results, {
+      includeOrigin: true, origin: readTopologyOrigin(pipeline.config),
+    });
     topology.flowId = pipeline.pipeline_id;
     topology.target = pipeline.target;
     topology.generatedAt = new Date().toISOString();

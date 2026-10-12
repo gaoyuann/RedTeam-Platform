@@ -1,8 +1,8 @@
 {
   "id": "demo_web_full_killchain",
   "name": "Web 自动化杀伤链 (演示版)",
-  "description": "终极演示战术手册。依次执行：精准端口探测(80) -> 指纹识别 -> 敏感目录遍历 -> 漏洞扫描 -> DVWA 密码精准爆破。",
-  "target": "172.17.0.3 (Docker 内网)",
+  "description": "DVWA 专用的自动化杀伤链演示。预检确认目标为 DVWA 后，依次执行端口与服务探测、指纹识别、目录枚举、已验证模板扫描和带 CSRF 会话的登录口令验证。",
+  "target": "已确认的 DVWA 靶场",
   "rolesAllowed": [
     "viewer",
     "operator",
@@ -15,7 +15,8 @@
     "demo",
     "recon",
     "exploit",
-    "brute_force"
+    "brute_force",
+    "dvwa"
   ],
   "steps": [
     {
@@ -24,13 +25,11 @@
       "toolId": "nmap",
       "argsTemplate": [
         "-sV",
-        "-p",
-        "80",
         "--open",
         "-Pn",
         "<target>"
       ],
-      "description": "识别目标开放的 80 端口及内部真实中间件版本",
+      "description": "识别目标实际 HTTP 端口及内部真实中间件版本",
       "status": "PENDING",
       "score": 10,
       "payload_id": "port-scan",
@@ -67,7 +66,6 @@
         "T1083"
       ],
       "argsTemplate": [
-        "-m",
         "dir",
         "-u",
         "<target>",
@@ -85,9 +83,9 @@
         "-u",
         "<target>",
         "-id",
-        "http-missing-security-headers,dvwa-default-login,dvwa-sqli,phpinfo-files,phpmyadmin-panel,config-exposure,debug-endpoints,backup-files,default-login,drupal-detection,wordpress-detection,joomla-detection"
+        "http-missing-security-headers,dvwa-default-login,phpinfo-files,phpmyadmin-panel"
       ],
-      "description": "对目标进行全面的 Web 安全漏洞扫描",
+      "description": "使用已在本地模板库中核验存在的 DVWA 与 Web 配置检测模板进行扫描",
       "status": "PENDING",
       "score": 25,
       "payload_id": "nuclei",
@@ -97,32 +95,38 @@
     },
     {
       "id": "step_5_brute_force",
-      "name": "Grand Finale - 靶场登录密码精准爆破",
-      "toolId": "hydra",
+      "name": "Grand Finale - DVWA 登录口令验证",
+      "toolId": "web-brute",
       "argsTemplate": [
+        "{{login_url}}",
         "-l",
         "admin",
         "-P",
         "config/wordlists/common_passwords.txt",
-        "<target>",
-        "http-form-post",
-        "/login.php:username=^USER^&password=^PASS^&Login=Login:F=Login failed"
+        "--csrf-field",
+        "user_token",
+        "--success-string",
+        "Logout",
+        "--threads",
+        "2",
+        "--max-time",
+        "120"
       ],
-      "description": "对 DVWA 登录表单发起最终爆破打击。",
+      "description": "使用支持 CSRF 令牌与会话 Cookie 的表单验证工具对已确认的 DVWA 登录页执行受控口令验证。",
       "status": "PENDING",
       "score": 30,
       "payload_id": "auth-brute",
       "expectedMitre": [
         "T1110"
       ],
-      "requires_teacher_review": true
+      "requiresTeacherReview": true
     }
   ],
   "rubric": {
     "items": [
       {
-        "id": "port_80_found",
-        "desc": "发现 80 端口服务",
+        "id": "http_service_found",
+        "desc": "发现目标 HTTP 服务端口",
         "points": 10,
         "predicate": {
           "kind": "finding_type_min",
@@ -151,8 +155,8 @@
         }
       },
       {
-        "id": "vuln_found",
-        "desc": "扫描到关键漏洞",
+        "id": "template_scan_result",
+        "desc": "已验证模板扫描产生结果",
         "points": 25,
         "predicate": {
           "kind": "finding_type_min",
@@ -161,8 +165,8 @@
         }
       },
       {
-        "id": "password_cracked",
-        "desc": "成功获取登录凭据",
+        "id": "dvwa_login_verified",
+        "desc": "成功验证 DVWA 登录凭据",
         "points": 30,
         "predicate": {
           "kind": "finding_type_min",
@@ -173,18 +177,16 @@
     ]
   },
   "targetType": [
-    "web_url",
     "dvwa"
   ],
   "notSuitableFor": [],
   "baselineGroup": "web-vuln-scan",
   "expectedOutputPolicy": "expect_output",
-  "emptyOutputExplanation": "完整 Web 攻击链演示，需要目标为 Web 服务",
+  "emptyOutputExplanation": "该演示仅适用于已由预检确认的 DVWA 靶场；通用 Web 目标请使用“Web 漏洞利用通用测试”。",
   "applicableTargetType": [
-    "web_url",
     "dvwa"
   ],
-  "teachingObjective": "演示从侦察到漏洞利用的完整 Web 攻击链",
+  "teachingObjective": "在确认 DVWA 产品特征后，演示从侦察、指纹识别和目录枚举，到模板扫描及带 CSRF 登录验证的完整 Web 杀伤链",
   "dvwa_profile": {
     "target_type": "dvwa",
     "host": "localhost",
