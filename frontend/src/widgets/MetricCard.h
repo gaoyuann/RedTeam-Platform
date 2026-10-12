@@ -1,4 +1,5 @@
 #pragma once
+#include <QVariant>
 #include <QFrame>
 #include "../Theme.h"
 #include <QLabel>
