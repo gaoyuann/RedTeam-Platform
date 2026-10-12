@@ -848,11 +848,11 @@ void ScanPage::setupUI() {
   // ── Recommendations ───────────────────────────────────────────────
   auto *recLabel = new QLabel("推荐预案"); recLabel->setStyleSheet(Theme::SectionStyle);
   plansLayout->addWidget(recLabel);
-  m_recTable = new QTableWidget(0, 5);
+  m_recTable = new QTableWidget(0, 6);
   m_recTable->setMinimumHeight(140);
   m_recTable->setObjectName("scanRecommendations");
   UiUtil::EmptyHint::attach(m_recTable, QStringLiteral("暂无推荐预案 · 先完成扫描"));
-  m_recTable->setHorizontalHeaderLabels({"名称", "难度", "基线组", "匹配原因", "匹配分"});
+  m_recTable->setHorizontalHeaderLabels({"名称", "难度", "基线组", "匹配原因", "匹配分", "推荐类型/条件"});
   m_recTable->verticalHeader()->hide();
   m_recTable->horizontalHeader()->setMinimumSectionSize(50);
   m_recTable->setAlternatingRowColors(true);
@@ -866,6 +866,7 @@ void ScanPage::setupUI() {
   m_recTable->setColumnWidth(1, 60);
   m_recTable->setColumnWidth(2, 90);
   m_recTable->setColumnWidth(4, 70);
+  m_recTable->setColumnWidth(5, 180);
   plansLayout->addWidget(m_recTable, 1);
   connect(m_recTable, &QTableWidget::cellClicked, this, &ScanPage::onRecommendationClicked);
 
@@ -1466,7 +1467,12 @@ void ScanPage::loadRecommendations(const QString &taskId) {
       m_recTable->setItem(i, 3, reason);
       auto *scoreItem = new QTableWidgetItem;
       scoreItem->setData(Qt::DisplayRole, r["match_score"].toDouble());
+      scoreItem->setToolTip(QStringLiteral("用于候选排序，不是漏洞概率或执行成功率"));
       m_recTable->setItem(i, 4, scoreItem);
+      auto *stageItem = new QTableWidgetItem(r["match_stage_label"].toString()
+          + QStringLiteral(" · ") + r["match_status_label"].toString());
+      stageItem->setToolTip(r["match_reason"].toString());
+      m_recTable->setItem(i, 5, stageItem);
     }
     m_recTable->setSortingEnabled(sorting);
     m_recTable->sortItems(4, Qt::DescendingOrder);

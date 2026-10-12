@@ -65,7 +65,8 @@ export function renderCommand(argsArray, context) {
 
   for (const token of argsArray) {
     const tokenStr = String(token);
-    const renderedToken = renderToken(tokenStr, context);
+    const target = context.target_url || context.base_url;
+    const renderedToken = replaceTargetPlaceholder(renderToken(tokenStr, context), target);
 
     // 检查渲染后是否仍有未替换变量
     if (isUnresolved(renderedToken)) {
