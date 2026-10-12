@@ -25,6 +25,7 @@
 #include <QFormLayout>
 #include <QFrame>
 #include <QGraphicsEllipseItem>
+#include <QGraphicsRectItem>
 #include <QGraphicsLineItem>
 #include <QGraphicsScene>
 #include <QGraphicsSimpleTextItem>
@@ -296,12 +297,12 @@ protected:
     }
 };
 
-// ── Custom QGraphicsEllipseItem for draggable topology nodes ────────────
+// ── Custom card item for draggable topology nodes ────────────
 
-class TopologyNodeItem : public QGraphicsEllipseItem {
+class TopologyNodeItem : public QGraphicsRectItem {
 public:
     explicit TopologyNodeItem(const QString &nodeId, const QRectF &rect)
-        : QGraphicsEllipseItem(rect),
+        : QGraphicsRectItem(rect),
           m_nodeId(nodeId) {
         setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
         setAcceptedMouseButtons(Qt::LeftButton);
@@ -315,19 +316,34 @@ public:
 
 protected:
     void paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget) override {
-        QStyleOptionGraphicsItem clean(*option);
-        clean.state &= ~QStyle::State_Selected;
-        QGraphicsEllipseItem::paint(painter, &clean, widget);
+        Q_UNUSED(option);
+        Q_UNUSED(widget);
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing);
+        painter->setPen(QPen(QColor(isSelected() ? Theme::Primary : Theme::Border), isSelected() ? 2.2 : 1.2));
+        painter->setBrush(QColor(isSelected() ? Theme::InfoBg : "#ffffff"));
+        painter->drawRoundedRect(rect(), 12, 12);
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(brush());
+        painter->drawEllipse(QPointF(rect().right() - 12, rect().top() + 12), 4, 4);
+        const qreal iconX = rect().left() + 29;
+        painter->setBrush(QColor(Theme::Surface));
+        painter->drawRoundedRect(QRectF(iconX - 17, -19, 34, 38), 8, 8);
+        painter->translate(iconX, 0);
         painter->setBrush(Qt::NoBrush);
-        if (isSelected()) {
-            painter->setPen(QPen(QColor("#60a5fa"), 3));
-            painter->drawEllipse(rect().adjusted(2, 2, -2, -2));
-        }
-        painter->setPen(QPen(QColor("#10243e"), 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter->setPen(QPen(QColor(Theme::Primary), 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         const QString kind = data(2).toString().toLower();
-        if (kind.contains("router") || kind.contains("gateway") || kind.contains("switch")) {
+        if (kind == QStringLiteral("scanner")) {
+            painter->drawEllipse(QPointF(0, 0), 11, 11);
+            painter->drawEllipse(QPointF(0, 0), 5, 5);
+            painter->drawLine(QPointF(0, 0), QPointF(10, -10));
+        } else if (kind == QStringLiteral("network_segment")) {
+            for (int x : {-9, 0, 9}) painter->drawRect(QRectF(x - 3, 5, 6, 6));
+            painter->drawRect(QRectF(-4, -12, 8, 7));
+            painter->drawLine(QPointF(0, -5), QPointF(0, 1));
+            painter->drawLine(QPointF(-9, 1), QPointF(9, 1));
+            for (int x : {-9, 0, 9}) painter->drawLine(QPointF(x, 1), QPointF(x, 5));
+        } else if (kind.contains("router") || kind.contains("gateway") || kind.contains("switch")) {
             painter->drawRoundedRect(QRectF(-12, -5, 24, 12), 2, 2);
             painter->drawLine(QPointF(-8, -5), QPointF(-8, -12));
             painter->drawLine(QPointF(8, -5), QPointF(8, -12));
@@ -344,7 +360,7 @@ protected:
         painter->restore();
     }
     void mouseReleaseEvent(QGraphicsSceneMouseEvent *event) override {
-        QGraphicsEllipseItem::mouseReleaseEvent(event);
+        QGraphicsRectItem::mouseReleaseEvent(event);
         if (onMoveFinished) {
             onMoveFinished(m_nodeId, sceneBoundingRect().center());
         }
@@ -393,7 +409,10 @@ QString nodeStatusLabel(const QString &status) {
 
 QString edgeColor(const QString &type) {
     if (type == QStringLiteral("gateway") || type == QStringLiteral("route")) {
-        return QStringLiteral("#38bdf8");
+        return QStringLiteral("#2563eb");
+    }
+    if (type == QStringLiteral("virtual-link")) {
+        return QStringLiteral("#7c3aed");
     }
     if (type == QStringLiteral("uplink") || type == QStringLiteral("trunk")) {
         return QStringLiteral("#f59e0b");
@@ -402,6 +421,9 @@ QString edgeColor(const QString &type) {
 }
 
 QString edgeTypeLabel(const QString &type) {
+    if (type == QStringLiteral("task-request")) return QStringLiteral("任务请求");
+    if (type == QStringLiteral("reachability")) return QStringLiteral("目标响应");
+    if (type == QStringLiteral("virtual-link")) return QStringLiteral("逻辑归属");
     if (type == QStringLiteral("connection")) return QStringLiteral("连接");
     if (type == QStringLiteral("gateway")) return QStringLiteral("网关");
     if (type == QStringLiteral("route")) return QStringLiteral("路由");
@@ -539,7 +561,6 @@ QString topologyNodeSecondaryLabel(const TopologyNodeRecord &node,
     }
 
     const QStringList details{
-        node.deviceType.trimmed(),
         node.osName.trimmed(),
         node.vendor.trimmed(),
     };
@@ -551,9 +572,6 @@ QString topologyNodeSecondaryLabel(const TopologyNodeRecord &node,
         }
     }
 
-    if (!node.services.isEmpty()) {
-        return QStringLiteral("%1 个服务").arg(node.services.size());
-    }
     return {};
 }
 
@@ -587,7 +605,8 @@ QString scanStatusLabel(const QString &status) {
 }
 
 bool isTopologySourceScanType(const QString &scanType) {
-    return scanType == QStringLiteral("port_scan")
+    return scanType == QStringLiteral("topology_scan")
+        || scanType == QStringLiteral("port_scan")
         || scanType == QStringLiteral("vuln_scan")
         || scanType == QStringLiteral("web_scan");
 }
@@ -650,7 +669,7 @@ TopologyPage::TopologyPage(ApiClient *api, const QString &role, const QString &u
     auto *scanWatcher = new QTimer(this);
     scanWatcher->setInterval(3000);
     connect(scanWatcher, &QTimer::timeout, this, [this]() {
-        if (m_pipelineId.isEmpty()) refreshScans(true);
+        if (isVisible()) refreshScans(true);
     });
     scanWatcher->start();
 
@@ -695,7 +714,7 @@ void TopologyPage::onScanCompleted(const QJsonObject &data)
     const QString scanTaskId = data[QStringLiteral("scanTaskId")].toString();
     if (scanTaskId.isEmpty()) return;
 
-    if (!m_pipelineId.isEmpty()) return;
+    if (!m_pipelineId.isEmpty() && !m_scopedTopologyScanIds.contains(scanTaskId)) return;
     if (m_autoTopologyGenerationIds.contains(scanTaskId)) return;
 
     const QString eventScanType = data[QStringLiteral("scanType")].toString();
@@ -713,9 +732,10 @@ void TopologyPage::onScanCompleted(const QJsonObject &data)
 
     m_autoTopologyGenerationIds.insert(scanTaskId);
     QPointer<TopologyPage> page(this);
-    const auto beginGeneration = [this, page, scanTaskId](const QString &target,
+    const QString pipelineId = m_pipelineId;
+    const auto beginGeneration = [this, page, scanTaskId, pipelineId](const QString &target,
                                                            const QString &scanType) {
-        if (!page) return;
+        if (!page || pipelineId != m_pipelineId) return;
         if (!isTopologySourceScanType(scanType)) {
             m_autoTopologyGenerationIds.remove(scanTaskId);
             return;
@@ -776,6 +796,8 @@ void TopologyPage::setPipelineContext(const QString &pipelineId, const QString &
                                           m_selectedScanTaskId, m_documentDirty});
         }
         ++m_contextGeneration;
+        ++m_scanRefreshRevision;
+        m_scopedTopologyScanIds.clear();
         m_pipelineId = pipelineId;
         m_autoLoadAttempted = false;
         m_scanSnapshotInitialized = false;
@@ -795,19 +817,27 @@ void TopologyPage::setPipelineContext(const QString &pipelineId, const QString &
                                         : QStringLiteral("已恢复当前任务的拓扑。"), infoStatusStyle());
         }
     }
-    if (m_pipelineScanIds != scanIds || (!m_scanFinished && scanFinished))
-        m_autoLoadAttempted = false;
+    const bool resultsChanged = m_pipelineScanIds != scanIds || (!m_scanFinished && scanFinished);
+    if (resultsChanged) m_autoLoadAttempted = false;
     m_pipelineScanIds = scanIds;
     m_scanFinished = scanFinished;
     setTarget(target);
     m_targetInput->setReadOnly(!pipelineId.isEmpty());
+    if (!pipelineId.isEmpty()) m_scanTypeCombo->setCurrentIndex(0);
+    m_scanTypeCombo->setEnabled(pipelineId.isEmpty());
     m_createScanBtn->setEnabled(pipelineId.isEmpty());
+    m_createScanBtn->setVisible(pipelineId.isEmpty());
+    m_scanTypeCombo->setVisible(pipelineId.isEmpty());
     if (changed || m_scanTaskTable->rowCount() == 0) {
         // Filter the existing table immediately; a scoped refresh can populate it.
         for (int row = m_scanTaskTable->rowCount() - 1; row >= 0; --row) {
             auto *item = m_scanTaskTable->item(row, 0);
             if (!item || !scanIds.contains(item->text())) m_scanTaskTable->removeRow(row);
         }
+    }
+    if (!changed && resultsChanged && scanFinished && !m_documentDirty && !m_editorDirty) {
+        loadExistingScanTopology(true);
+        return;
     }
     if (m_documentDirty || m_editorDirty || !m_topologyDocument.nodes.isEmpty()) return;
     if (restoreCurrentArchive()) return;
@@ -853,7 +883,7 @@ bool TopologyPage::restoreCurrentArchive()
     return false;
 }
 
-void TopologyPage::loadExistingScanTopology()
+void TopologyPage::loadExistingScanTopology(bool replaceExisting)
 {
     if (m_pipelineId.isEmpty() || m_autoLoadAttempted) return;
     m_autoLoadAttempted = true;
@@ -863,9 +893,9 @@ void TopologyPage::loadExistingScanTopology()
     setStatusMessage(QStringLiteral("正在读取已有扫描结果，无需重新扫描…"), infoStatusStyle());
     m_api->get(QStringLiteral("/api/topology/from-pipeline/%1")
                    .arg(QString::fromLatin1(QUrl::toPercentEncoding(m_pipelineId))), 10000,
-        [this, guard, generation, scanIds](const QJsonObject &res) {
+        [this, guard, generation, scanIds, replaceExisting](const QJsonObject &res) {
         if (!guard || generation != m_contextGeneration || scanIds != m_pipelineScanIds
-            || m_documentDirty || m_editorDirty || !m_topologyDocument.nodes.isEmpty()) return;
+            || m_documentDirty || m_editorDirty || (!replaceExisting && !m_topologyDocument.nodes.isEmpty())) return;
         if (res["status"].toString() != "ok") {
             setStatusMessage(QStringLiteral("读取已有拓扑结果失败，可在“扫描与记录”中刷新重试。"),
                              errorStatusStyle());
@@ -880,6 +910,7 @@ void TopologyPage::loadExistingScanTopology()
         }
         doc.flowId = m_pipelineId;
         m_topologyDocument = doc;
+        m_discoveryFxPending = true;
         m_loadedTopologyPath.clear();
         m_documentDirty = true;
         m_editorDirty = false;
@@ -940,17 +971,18 @@ void TopologyPage::setupUI() {
     m_targetInput = new QLineEdit;
     m_targetInput->setPlaceholderText(QStringLiteral("例: 192.168.1.0/24"));
     m_scanTypeCombo = new QComboBox;
+    m_scanTypeCombo->addItem(QStringLiteral("拓扑探测"), "topology_scan");
     m_scanTypeCombo->addItem(QStringLiteral("端口扫描"), "port_scan");
     m_scanTypeCombo->addItem(QStringLiteral("漏洞扫描"), "vuln_scan");
     m_scanTypeCombo->addItem(QStringLiteral("网站扫描"), "web_scan");
-    m_createScanBtn = new QPushButton(QStringLiteral("创建扫描"));
+    m_createScanBtn = new QPushButton(QStringLiteral("开始探测"));
     form->addWidget(new QLabel(QStringLiteral("目标")), 0, 0);
     form->addWidget(m_targetInput, 0, 1);
     form->addWidget(m_scanTypeCombo, 0, 2);
     form->addWidget(m_createScanBtn, 0, 3);
     form->setColumnStretch(1, 1);
     scanLayout->addLayout(form);
-    auto *sourceHint = new QLabel(QStringLiteral("选择已完成的扫描生成拓扑；未执行的扫描请先在“脆弱性扫描”页运行。"));
+    auto *sourceHint = new QLabel(QStringLiteral("当前任务会随原有扫描自动采集拓扑并展示结果，无需另行启动。此处用于查看记录和必要时重新汇总；单个 IP 不会自动扩展为网段。"));
     sourceHint->setWordWrap(true);
     scanLayout->addWidget(sourceHint);
     m_scanTaskTable = new QTableWidget(0, 4);
@@ -975,120 +1007,49 @@ void TopologyPage::setupUI() {
     connect(m_generateBtn, &QPushButton::clicked, this, &TopologyPage::onGenerateTopology);
     sourceTabs->addTab(scanPage, QStringLiteral("扫描任务"));
     connect(m_createScanBtn, &QPushButton::clicked, this, [this]() {
-        QString target = m_targetInput->text().trimmed();
+        const QString target = m_targetInput->text().trimmed();
         if (target.isEmpty()) {
-            QMessageBox::information(this, QStringLiteral("提示"), QStringLiteral("请输入扫描目标。"));
+            QMessageBox::information(this, QStringLiteral("提示"), QStringLiteral("请输入 IP、主机名或 CIDR 网段。"));
             return;
         }
-        QJsonObject body;
-        body[QStringLiteral("target")] = target;
-        body[QStringLiteral("scan_type")] = m_scanTypeCombo->currentData().toString();
+        const QString pipelineId = m_pipelineId;
+        const QString scanType = m_scanTypeCombo->currentData().toString();
+        QJsonObject body{{"target", target}, {"scan_type", scanType}};
+        if (!pipelineId.isEmpty()) body["parameters"] = QJsonObject{{"pipeline_id", pipelineId}};
         m_createScanBtn->setEnabled(false);
         QPointer<TopologyPage> page(this);
         m_api->post(QStringLiteral("/api/scan-tasks"), body, 10000,
-                    [this, page, target](const QJsonObject &res) {
-                        if (!page) return;
-                        m_createScanBtn->setEnabled(true);
-                        if (res[QStringLiteral("status")].toString() == QStringLiteral("ok")) {
-                            m_targetInput->clear();
-                            setStatusMessage(QStringLiteral("扫描任务创建成功。"), successStatusStyle());
-
-                            // Persist recent record
-                            TopologyScanRecord record;
-                            record.scanTaskId = res[QStringLiteral("data")].toObject()[QStringLiteral("scan_task_id")].toString();
-                            record.target = target;
-                            record.createdAt = QDateTime::currentDateTime().toString(Qt::ISODate);
-                            if (!record.scanTaskId.isEmpty()) {
-                                upsertRecentRecord(record);
-                                saveRecentRecords();
-                            }
-
-                            onRefreshScans();
-
-                            // 自动触发执行（仿 ScanPage 创建即执行），
-                            // 否则扫描永驻 PENDING，"生成拓扑"按钮无法启用。
-                            QString scanTaskId = record.scanTaskId;
-                            if (scanTaskId.isEmpty()) {
-                                setStatusMessage(QStringLiteral("创建扫描失败：服务端未返回任务编号。"), errorStatusStyle());
-                                return;
-                            }
-                            m_selectedScanTaskId = scanTaskId;
-                            m_generateBtn->setEnabled(false);
-                            QJsonObject emptyBody;
-                            m_api->post(QStringLiteral("/api/scan-tasks/") + scanTaskId + QStringLiteral("/execute"),
-                                        emptyBody, 5000,
-                                        [this, page, scanTaskId](const QJsonObject &executeRes) {
-                                            if (!page) return;
-                                            if (executeRes[QStringLiteral("status")].toString() != QStringLiteral("ok")) {
-                                                refreshScans(true);
-                                                QString error = executeRes[QStringLiteral("error")].toObject()[QStringLiteral("message")].toString();
-                                                setStatusMessage(QStringLiteral("启动扫描失败：%1")
-                                                    .arg(error.isEmpty() ? QStringLiteral("请检查服务端日志") : error), errorStatusStyle());
-                                                return;
-                                            }
-                                            onRefreshScans();
-                                            auto *pollScan = new QTimer(this);
-                                            pollScan->setInterval(3000);
-                                            QPointer<QTimer> timer(pollScan);
-                                            const QDateTime started = QDateTime::currentDateTimeUtc();
-                                            connect(pollScan, &QTimer::timeout, this, [this, page, scanTaskId, timer, started]() {
-                                                if (!page || !timer) return;
-                                                timer->stop();
-                                                m_api->get(QStringLiteral("/api/scan-tasks/") + scanTaskId, 5000,
-                                                    [this, page, scanTaskId, timer, started](const QJsonObject &result) {
-                                                        if (!page || !timer) return;
-                                                        auto finish = [timer]() {
-                                                            timer->stop();
-                                                            timer->deleteLater();
-                                                        };
-                                                        if (result[QStringLiteral("status")].toString() != QStringLiteral("ok")) {
-                                                            const QString code = result[QStringLiteral("error")].toObject()[QStringLiteral("code")].toString();
-                                                            int failures = timer->property("failures").toInt() + 1;
-                                                            timer->setProperty("failures", failures);
-                                                            if (code == QStringLiteral("404") || code == QString::number(QNetworkReply::ContentNotFoundError) || failures >= 10) {
-                                                                finish();
-                                                                refreshScans(true);
-                                                                if (m_selectedScanTaskId == scanTaskId)
-                                                                    setStatusMessage(QStringLiteral("扫描状态查询失败：任务不存在或连续请求失败，请手动刷新。"), errorStatusStyle());
-                                                            } else {
-                                                                timer->start();
-                                                            }
-                                                            return;
-                                                        }
-                                                        timer->setProperty("failures", 0);
-                                                        const QJsonObject task = result[QStringLiteral("data")].toObject();
-                                                        const QString status = task[QStringLiteral("status")].toString();
-                                                        if (status == QStringLiteral("COMPLETED")) {
-                                                            finish();
-                                                            refreshScans(true);
-                                                            if (m_selectedScanTaskId == scanTaskId) onGenerateTopology();
-                                                        } else if (status == QStringLiteral("FAILED") || status == QStringLiteral("CANCELLED") || status == QStringLiteral("ABORTED")) {
-                                                            finish();
-                                                            refreshScans(true);
-                                                            QString reason = task[QStringLiteral("error_message")].toString();
-                                                            if (m_selectedScanTaskId == scanTaskId)
-                                                                setStatusMessage(QStringLiteral("扫描%1：%2").arg(scanStatusLabel(status),
-                                                                    reason.isEmpty() ? QStringLiteral("请检查任务详情") : reason), errorStatusStyle());
-                                                        } else if (started.secsTo(QDateTime::currentDateTimeUtc()) >= 1800) {
-                                                            finish();
-                                                            refreshScans(true);
-                                                            if (m_selectedScanTaskId == scanTaskId)
-                                                                setStatusMessage(QStringLiteral("扫描状态轮询已超时，请手动刷新任务状态。"), errorStatusStyle());
-                                                        } else {
-                                                            timer->start();
-                                                        }
-                                                    });
-                                            });
-                                            pollScan->start();
-                                        });
-                        } else {
-                            setStatusMessage(QStringLiteral("创建扫描失败：%1")
-                                                 .arg(res[QStringLiteral("error")].toObject()[QStringLiteral("message")].toString()),
-                                             errorStatusStyle());
-                        }
+            [this, page, target, pipelineId](const QJsonObject &res) {
+                if (!page) return;
+                if (pipelineId == m_pipelineId) m_createScanBtn->setEnabled(true);
+                if (res["status"].toString() != "ok") {
+                    if (pipelineId == m_pipelineId)
+                        setStatusMessage(QStringLiteral("创建探测失败：%1").arg(res["error"].toObject()["message"].toString()), errorStatusStyle());
+                    return;
+                }
+                const QString scanId = res["data"].toObject()["scan_task_id"].toString();
+                if (scanId.isEmpty()) return;
+                if (pipelineId == m_pipelineId) {
+                    m_selectedScanTaskId = scanId;
+                    if (!pipelineId.isEmpty()) m_scopedTopologyScanIds.insert(scanId);
+                    m_currentTargetValueLabel->setText(target);
+                    m_generateBtn->setEnabled(false);
+                    TopologyScanRecord record{scanId, target, QDateTime::currentDateTime().toString(Qt::ISODate)};
+                    upsertRecentRecord(record);
+                    saveRecentRecords();
+                }
+                // Execute even if the user navigates away after submitting.
+                m_api->post(QStringLiteral("/api/scan-tasks/") + scanId + QStringLiteral("/execute"), {}, 5000,
+                    [this, page, pipelineId](const QJsonObject &result) {
+                        if (!page || pipelineId != m_pipelineId) return;
+                        if (result["status"].toString() != "ok")
+                            setStatusMessage(QStringLiteral("启动失败：%1").arg(result["error"].toObject()["message"].toString()), errorStatusStyle());
+                        else
+                            setStatusMessage(QStringLiteral("探测已启动，完成后自动汇总拓扑。"), infoStatusStyle());
+                        refreshScans(true);
                     });
+            });
     });
-
 
     auto *recentPage = new QWidget;
     auto *recentLayout = new QVBoxLayout(recentPage);
@@ -1194,6 +1155,9 @@ void TopologyPage::setupUI() {
     m_edgeTypeCombo = new QComboBox(edgeFormPage);
     m_edgeTypeCombo->setEditable(true);
     m_edgeTypeCombo->addItem(QStringLiteral("连接"), QStringLiteral("connection"));
+    m_edgeTypeCombo->addItem(QStringLiteral("任务请求"), QStringLiteral("task-request"));
+    m_edgeTypeCombo->addItem(QStringLiteral("目标响应（路径未确认）"), QStringLiteral("reachability"));
+    m_edgeTypeCombo->addItem(QStringLiteral("逻辑归属"), QStringLiteral("virtual-link"));
     m_edgeTypeCombo->addItem(QStringLiteral("网关"), QStringLiteral("gateway"));
     m_edgeTypeCombo->addItem(QStringLiteral("路由"), QStringLiteral("route"));
     m_edgeTypeCombo->addItem(QStringLiteral("上行链路"), QStringLiteral("uplink"));
@@ -1242,9 +1206,9 @@ void TopologyPage::setupUI() {
     addValue(QStringLiteral("说明"), &m_canvasSubtitleLabel);
 
     auto *toolbar = new QHBoxLayout;
-    auto *sourcesButton = new QPushButton(QStringLiteral("扫描与记录"));
+    auto *sourcesButton = new QPushButton(QStringLiteral("扫描记录"));
     sourcesButton->setObjectName("topologySourcesButton");
-    sourcesButton->setProperty("primary", true);
+    sourcesButton->setProperty("quiet", true);
     auto *inspectorButton = new QPushButton(QStringLiteral("节点与连线"));
     inspectorButton->setObjectName("topologyInspectorButton");
     auto *infoButton = new QPushButton(QStringLiteral("信息"));
@@ -1278,6 +1242,24 @@ void TopologyPage::setupUI() {
         button->setFixedWidth(36);
     }
     toolbar->addWidget(sourcesButton);
+    sourcesButton->setToolTip(QStringLiteral("查看自动扫描记录，或重新汇总已有结果"));
+    auto *updateTopologyButton = new QPushButton(QStringLiteral("更新拓扑"));
+    UiUtil::styleToolbarButton(updateTopologyButton);
+    updateTopologyButton->setToolTip(QStringLiteral("用当前任务的已有扫描证据更新拓扑，不重新扫描；已保存的展示修改会被替换"));
+    toolbar->addWidget(updateTopologyButton);
+    connect(updateTopologyButton, &QPushButton::clicked, this, [this]() {
+        if (m_documentDirty || m_editorDirty) {
+            setStatusMessage(QStringLiteral("请先保存当前拓扑修改，再更新已有扫描结果。"), infoStatusStyle());
+            return;
+        }
+        if (m_pipelineId.isEmpty()) {
+            onGenerateTopology();
+            return;
+        }
+        m_autoLoadAttempted = false;
+        loadExistingScanTopology(true);
+    });
+
     toolbar->addWidget(inspectorButton);
     toolbar->addWidget(infoButton);
     toolbar->addStretch();
@@ -1306,7 +1288,7 @@ void TopologyPage::setupUI() {
     m_graphView->setScene(m_graphScene);
     m_graphView->setRenderHint(QPainter::Antialiasing, true);
     m_graphView->setDragMode(QGraphicsView::ScrollHandDrag);
-    m_graphView->setBackgroundBrush(QColor("#08121a"));
+    m_graphView->setBackgroundBrush(QColor(Theme::Background));
     m_graphView->setMinimumSize(0, 160);
     m_graphView->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     m_graphView->setViewportUpdateMode(QGraphicsView::SmartViewportUpdate);
@@ -1316,7 +1298,7 @@ void TopologyPage::setupUI() {
         "<span style='color:#b45309'>● 告警</span>　"
         "<span style='color:#b91c1c'>● 离线</span>　"
         "<span style='color:#64748b'>● 未知</span>　"
-        "图标区分网络设备、服务器与主机 · 单击选中，拖动调整"));
+        "点划线：任务请求 · 实线：探测路径 · 虚线：同网段归属 / 目标响应，非物理布线 · 上下分组不表示网络隔离 · 单击查看证据"));
     legend->setObjectName("topologyLegend");
     legend->setWordWrap(true);
     legend->setStyleSheet("color:#52637a;font-size:12px;padding:2px 0;");
@@ -1508,9 +1490,15 @@ void TopologyPage::refreshScans(bool preserveStatus) {
                    auto arr = res[QStringLiteral("data")].toArray();
                    if (!m_pipelineId.isEmpty()) {
                        QJsonArray scoped;
-                       for (const auto &value : arr)
-                           if (m_pipelineScanIds.contains(value.toObject()["scan_task_id"].toString()))
-                               scoped.append(value);
+                       for (const auto &value : arr) {
+                           const auto task = value.toObject();
+                           const auto params = QJsonDocument::fromJson(task["parameters"].toString().toUtf8()).object();
+                           const QString id = task["scan_task_id"].toString();
+                           const bool discovery = task["scan_type"].toString() == QStringLiteral("topology_scan")
+                               && params["pipeline_id"].toString() == m_pipelineId;
+                           if (discovery) m_scopedTopologyScanIds.insert(id);
+                           if (m_pipelineScanIds.contains(id) || discovery) scoped.append(value);
+                       }
                        arr = scoped;
                    }
                    QString selectedStatus;
@@ -1528,7 +1516,7 @@ void TopologyPage::refreshScans(bool preserveStatus) {
                        }
                        if (scanStatus == QStringLiteral("COMPLETED")) {
                            completedScanIds.insert(scanTaskId);
-                           if (m_scanSnapshotInitialized && m_pipelineId.isEmpty()
+                           if (m_scanSnapshotInitialized && (m_pipelineId.isEmpty() || m_scopedTopologyScanIds.contains(scanTaskId))
                                && newlyCompletedScanId.isEmpty()
                                && !m_observedCompletedScanIds.contains(scanTaskId)
                                && isTopologySourceScanType(scanType)) {
@@ -1536,8 +1524,12 @@ void TopologyPage::refreshScans(bool preserveStatus) {
                                newlyCompletedScan = t;
                            }
                        }
-                       if (scanTaskId == m_selectedScanTaskId)
+                       if (scanTaskId == m_selectedScanTaskId) {
                            selectedStatus = scanStatus;
+                           if (scanStatus == QStringLiteral("FAILED") || scanStatus == QStringLiteral("CANCELLED"))
+                               setStatusMessage(QStringLiteral("探测%1：%2").arg(scanStatusLabel(scanStatus),
+                                   t["error_message"].toString()), errorStatusStyle());
+                       }
                        m_scanTaskTable->setItem(
                            i, 0,
                            new QTableWidgetItem(t[QStringLiteral("scan_task_id")].toString()));
@@ -1548,6 +1540,7 @@ void TopologyPage::refreshScans(bool preserveStatus) {
                            i, 2,
                            new QTableWidgetItem([&]() {
                                QString st = t[QStringLiteral("scan_type")].toString();
+                               if (st == QStringLiteral("topology_scan")) return QStringLiteral("拓扑探测");
                                if (st == QStringLiteral("port_scan")) return QStringLiteral("端口扫描");
                                if (st == QStringLiteral("vuln_scan")) return QStringLiteral("漏洞扫描");
                                if (st == QStringLiteral("web_scan")) return QStringLiteral("网站扫描");
@@ -1644,7 +1637,7 @@ void TopologyPage::onGenerateTopology() {
     const auto generation = ++m_contextGeneration;
     QPointer<TopologyPage> guard(this);
     // ── Progress dialog (heap-allocated, safe for async callback) ────
-    m_progressDialog = new QProgressDialog(QStringLiteral("正在通过智能模型生成拓扑结构..."),
+    m_progressDialog = new QProgressDialog(QStringLiteral("正在汇总主机与链路证据..."),
                                             QString(), 0, 0, this);
     m_progressDialog->setWindowTitle(QStringLiteral("生成拓扑"));
     m_progressDialog->setWindowModality(Qt::WindowModal);
@@ -1656,7 +1649,7 @@ void TopologyPage::onGenerateTopology() {
     m_generateBtn->setEnabled(false);
     m_generateBtn->setText(QStringLiteral("生成中..."));
     qApp->setOverrideCursor(Qt::WaitCursor);
-    setStatusMessage(QStringLiteral("正在通过智能模型生成拓扑结构，请稍候..."), infoStatusStyle());
+    setStatusMessage(QStringLiteral("正在汇总主机与链路证据，请稍候..."), infoStatusStyle());
 
     if (m_currentStatusValueLabel) {
         m_currentStatusValueLabel->setText(QStringLiteral("生成中"));
@@ -1668,8 +1661,7 @@ void TopologyPage::onGenerateTopology() {
     QJsonObject body;
     body[QStringLiteral("scan_task_id")] = scanId;
 
-    m_api->post(QStringLiteral("/api/topology/generate-from-scan"), body, 120000,
-                [this, guard, scanId, target, generation](const QJsonObject &res) {
+    const auto receiveTopology = [this, guard, scanId, target, generation](const QJsonObject &res) {
                     if (!guard) return;
                     // Close and clean up progress dialog
                     if (m_progressDialog) {
@@ -1785,7 +1777,13 @@ void TopologyPage::onGenerateTopology() {
                     saveRecentRecords();
 
                     archiveGeneratedDocument();
-                });
+                };
+    if (m_pipelineId.isEmpty()) {
+        m_api->post(QStringLiteral("/api/topology/generate-from-scan"), body, 120000, receiveTopology);
+    } else {
+        m_api->get(QStringLiteral("/api/topology/from-pipeline/%1")
+            .arg(QString::fromLatin1(QUrl::toPercentEncoding(m_pipelineId))), 10000, receiveTopology);
+    }
 }
 
 // ── Save Topology ─────────────────────────────────────────────────────────
@@ -1818,7 +1816,7 @@ void TopologyPage::populateTopologyDocument() {
     }
     m_canvasTitleLabel->setText(
         m_topologyDocument.summary.isEmpty()
-            ? QStringLiteral("局域网网络拓扑")
+            ? QStringLiteral("源主机、服务器与目标路径")
             : m_topologyDocument.summary);
     const QString dirtySuffix = m_documentDirty
         ? QStringLiteral("当前有未保存修改。")
@@ -1944,35 +1942,6 @@ void TopologyPage::renderTopologyScene() {
         }
     }
 
-    // Draw edges first (below nodes)
-    for (const TopologyEdgeRecord &edge : m_topologyDocument.edges) {
-        if (!positions.contains(edge.sourceId) || !positions.contains(edge.targetId)) {
-            continue;
-        }
-        const QPointF source = positions.value(edge.sourceId);
-        const QPointF target = positions.value(edge.targetId);
-        auto *line = new TopologyEdgeItem(edge.id, QLineF(source, target));
-        const bool selected = edge.id == m_selectedEdgeId;
-        line->setPen(QPen(QColor(selected ? QStringLiteral("#e2e8f0") : edgeColor(edge.type)),
-                          selected ? 3.2 : 2.2,
-                          Qt::SolidLine,
-                          Qt::RoundCap));
-        line->setToolTip(QStringLiteral("%1\n%2 -> %3\n%4")
-                             .arg(fallbackEdgeLabel(edge))
-                             .arg(edge.sourceId)
-                             .arg(edge.targetId)
-                             .arg(edge.note));
-        m_graphScene->addItem(line);
-        m_edgeItems.insert(edge.id, line);
-
-        auto *edgeText = m_graphScene->addSimpleText(fallbackEdgeLabel(edge));
-        edgeText->setBrush(QColor(selected ? QStringLiteral("#f8fafc") : QStringLiteral("#cbd5e1")));
-        edgeText->setPos((source.x() + target.x()) * 0.5,
-                         (source.y() + target.y()) * 0.5);
-        edgeText->setParentItem(line);  // 跟随连线淡入/拖动
-        edgeText->setZValue(1.2);
-    }
-
     // Draw nodes
     for (TopologyNodeRecord &node : m_topologyDocument.nodes) {
         const QPointF pos = positions.value(node.id);
@@ -1980,9 +1949,28 @@ void TopologyPage::renderTopologyScene() {
         node.y = pos.y();
 
         auto *ellipse = new TopologyNodeItem(
-            node.id, QRectF(-22.0, -22.0, 44.0, 44.0));
+            node.id, QRectF(-116.0, -44.0, 232.0, 88.0));
         ellipse->setPos(pos);
         ellipse->setData(2, node.deviceType);
+        const QString role = node.tags.contains(QStringLiteral("local-request")) ? QStringLiteral("本机请求 · 地址未识别")
+            : node.tags.contains(QStringLiteral("source")) ? QStringLiteral("发起任务")
+            : node.deviceType == QStringLiteral("scanner")
+            ? (node.tags.contains(QStringLiteral("target")) ? QStringLiteral("执行扫描 · 任务目标") : QStringLiteral("执行扫描"))
+            : node.tags.contains(QStringLiteral("server")) ? QStringLiteral("接收任务")
+            : node.tags.contains(QStringLiteral("target")) ? QStringLiteral("任务目标")
+            : node.tags.contains(QStringLiteral("default-gateway")) ? QStringLiteral("默认网关 · 路由配置")
+            : node.tags.contains(QStringLiteral("configured-gateway")) ? QStringLiteral("配置网关 · 路由配置")
+            : node.deviceType == QStringLiteral("router") ? QStringLiteral("响应跳点")
+            : node.deviceType == QStringLiteral("network_segment")
+            ? (node.tags.contains(QStringLiteral("lan-segment"))
+                ? QStringLiteral("共享局域网 · 非实体设备")
+                : node.tags.contains(QStringLiteral("test-segment"))
+                ? QStringLiteral("测试设备逻辑交换机 · 非实体设备")
+                : node.tags.contains(QStringLiteral("other-segment"))
+                    ? QStringLiteral("其他发现主机逻辑交换机 · 非实体设备")
+                    : QStringLiteral("逻辑分组 · 非实体设备"))
+            : node.tags.contains(QStringLiteral("lan-host")) ? QStringLiteral("局域网主机")
+            : QStringLiteral("目标资产");
         ellipse->setBrush(QColor(nodeStatusColor(node.status)));
         ellipse->setPen(QPen(QColor(node.id == m_selectedNodeId
                                         ? QStringLiteral("#f8fafc")
@@ -2006,26 +1994,93 @@ void TopologyPage::renderTopologyScene() {
         m_graphScene->addItem(ellipse);
         m_nodeItems.insert(node.id, ellipse);
 
-        const QString primaryLabel = topologyNodePrimaryLabel(node);
-        const QString secondaryLabel = topologyNodeSecondaryLabel(node, primaryLabel);
-
-        // Anchor labels to their host while retaining readable text at overview zoom.
-        auto *labels = new QGraphicsItemGroup(ellipse);
-        labels->setFlag(QGraphicsItem::ItemIgnoresTransformations);
-        labels->setPos(0, 28);
-        const QString visibleName = QFontMetrics(QApplication::font()).elidedText(primaryLabel, Qt::ElideRight, 150);
-        auto *text = new QGraphicsSimpleTextItem(visibleName, labels);
-        text->setBrush(QColor(QStringLiteral("#e2e8f0")));
-        text->setPos(-text->boundingRect().width() / 2.0, 0);
-        text->setToolTip(topologyNodeTooltip(node));
-
-        if (!secondaryLabel.isEmpty()) {
-            auto *subText = new QGraphicsSimpleTextItem(secondaryLabel, labels);
-            subText->setBrush(QColor(QStringLiteral("#94a3b8")));
-            subText->setPos(-subText->boundingRect().width() / 2.0, text->boundingRect().height() + 2);
-            subText->setToolTip(topologyNodeTooltip(node));
+        QString primaryLabel = topologyNodePrimaryLabel(node);
+        // The generated scanner name used to combine its role and IP in one
+        // elided line. Keep the address independently readable instead.
+        if (node.deviceType == QStringLiteral("scanner")
+            && primaryLabel == QStringLiteral("扫描源 ") + node.ip.trimmed()) {
+            primaryLabel = QStringLiteral("服务器");
         }
+        const QString secondaryLabel = node.deviceType == QStringLiteral("network_segment")
+            ? (node.hostName.isEmpty() ? QStringLiteral("CIDR 范围") : node.hostName) : topologyNodeSecondaryLabel(node, primaryLabel);
+        QString footer = role == primaryLabel ? QString() : role;
+        if (!node.services.isEmpty()) {
+            if (!footer.isEmpty()) footer += QStringLiteral(" · ");
+            footer += QStringLiteral("%1 项服务").arg(node.services.size());
+        }
+
+        // All rows use the same font source and their actual graphics bounds.
+        // No separately painted footer can collide with a larger system font.
+        QFont titleFont = font();
+        titleFont.setBold(true);
+        const QFont detailFont = font();
+        const QFontMetricsF titleMetrics(titleFont), detailMetrics(detailFont);
+        const qreal addressWidth = node.ip.trimmed().isEmpty() ? 0
+            : qMax(titleMetrics.horizontalAdvance(node.ip.trimmed()),
+                   detailMetrics.horizontalAdvance(node.ip.trimmed()));
+        const qreal textWidth = qMax(180.0, qMax(addressWidth, detailMetrics.horizontalAdvance(footer)) + 4);
+        auto *labels = new QGraphicsItemGroup(ellipse);
+        qreal textHeight = 0;
+        auto addRow = [&](const QString &value, const QFont &rowFont, const QColor &color) {
+            if (value.isEmpty()) return;
+            if (textHeight > 0) textHeight += 5;
+            auto *text = new QGraphicsSimpleTextItem(
+                QFontMetricsF(rowFont).elidedText(value, Qt::ElideRight, textWidth), labels);
+            text->setFont(rowFont);
+            text->setBrush(color);
+            text->setPos(0, textHeight);
+            text->setToolTip(topologyNodeTooltip(node));
+            textHeight += text->boundingRect().height();
+        };
+        addRow(primaryLabel, titleFont, QColor(Theme::Dark));
+        addRow(secondaryLabel, detailFont, QColor(Theme::MutedText));
+        addRow(footer, detailFont, QColor(Theme::MutedText));
+        const qreal cardWidth = textWidth + 84;
+        const qreal cardHeight = qMax(88.0, textHeight + 28);
+        ellipse->setRect(-cardWidth / 2, -cardHeight / 2, cardWidth, cardHeight);
+        ellipse->setTransformOriginPoint(ellipse->rect().center());
+        labels->setPos(ellipse->rect().left() + 60, -textHeight / 2);
     }
+
+    // Connect the measured card boundaries; z-values keep edges below nodes.
+    for (const TopologyEdgeRecord &edge : m_topologyDocument.edges) {
+        if (!positions.contains(edge.sourceId) || !positions.contains(edge.targetId)) {
+            continue;
+        }
+        const QPointF source = positions.value(edge.sourceId);
+        const QPointF target = positions.value(edge.targetId);
+        auto anchor = [this](const QString &id, const QPointF &from, const QPointF &to) {
+            const QRectF bounds = m_nodeItems.value(id)->boundingRect();
+            const QPointF delta = to - from;
+            const qreal scale = qMax(qAbs(delta.x()) / (bounds.width() / 2 + 2),
+                                     qAbs(delta.y()) / (bounds.height() / 2 + 2));
+            return scale > 1.0 ? from + delta / scale : from;
+        };
+        auto *line = new TopologyEdgeItem(edge.id, QLineF(anchor(edge.sourceId, source, target),
+                                                        anchor(edge.targetId, target, source)));
+        const bool selected = edge.id == m_selectedEdgeId;
+        line->setPen(QPen(QColor(selected ? QString(Theme::Primary) : edgeColor(edge.type)),
+                          selected ? 3.2 : 2.2,
+                          edge.type == QStringLiteral("task-request") ? Qt::DashDotLine
+                            : (edge.type == QStringLiteral("virtual-link") || edge.type == QStringLiteral("reachability"))
+                              ? Qt::DashLine : Qt::SolidLine,
+                          Qt::RoundCap));
+        line->setToolTip(QStringLiteral("%1\n%2 -> %3\n%4")
+                             .arg(fallbackEdgeLabel(edge))
+                             .arg(edge.sourceId)
+                             .arg(edge.targetId)
+                             .arg(edge.note));
+        m_graphScene->addItem(line);
+        m_edgeItems.insert(edge.id, line);
+
+        auto *edgeText = m_graphScene->addSimpleText(fallbackEdgeLabel(edge));
+        edgeText->setBrush(QColor(selected ? Theme::Primary : Theme::MutedText));
+        edgeText->setPos((source.x() + target.x()) * 0.5 - edgeText->boundingRect().width() * 0.5,
+                         (source.y() + target.y()) * 0.5 - edgeText->boundingRect().height() - 4);
+        edgeText->setParentItem(line);  // 跟随连线淡入/拖动
+        edgeText->setZValue(1.2);
+    }
+
 
     m_graphScene->setSceneRect(
         m_graphScene->itemsBoundingRect().adjusted(-60, -60, 60, 60));

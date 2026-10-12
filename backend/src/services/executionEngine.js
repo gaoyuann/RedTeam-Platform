@@ -9,9 +9,10 @@ import { runPreflightChecks } from './preflightGate.js';
 import { compilePlaybook } from './playbookCompiler.js';
 import { detectMappings } from './mappingDetector.js';
 import { buildContextForTarget } from './targetAdapters/index.js';
-import { renderCommand } from './commandTemplateRenderer.js';
+import { renderCommand, replaceTargetPlaceholder } from './commandTemplateRenderer.js';
 import { getWsManager } from './wsManager.js';
 import { createStepIndexAllocator, buildExecutionSummary } from './executionState.js';
+import { validateExecutionScope } from './executionScope.js';
 import { normalizeToolArgs, redactToolArgs } from '../tools/toolContracts.js';
 import { getEngine } from '../tools/containerEngine.js';
 import { establishDvwaSession } from './dvwaSession.js';
@@ -32,6 +33,15 @@ export function requestAbort(runId) {
 }
 
 const MAX_OUTPUT_LENGTH = 4096;
+
+// Generic Nuclei scans need more time because they evaluate many templates.
+// Keep the longer timeout scoped to Nuclei so other tools retain their limit.
+export function getToolTimeout(toolId) {
+  if (toolId !== 'nuclei') return 300_000;
+  const configured = Number(process.env.NUCLEI_TIMEOUT_MS);
+  return Number.isSafeInteger(configured) && configured >= 300_000 && configured <= 2_147_483_647
+    ? configured : 900_000;
+}
 
 // Track running executions to prevent duplicates
 const runningRuns = new Set();
@@ -182,15 +192,16 @@ export async function executeRun(runId) {
   }
   if (!preflight.passed) {
     const failedChecks = preflight.checks.filter(c => !c.passed).map(c => `${c.name}: ${c.message}`);
+    const error = `预检失败：${failedChecks.join('; ')}`;
     db.prepare(
       "UPDATE execution_runs SET status = 'FAILED', final_summary = ?, preflight_status = 'FAILED', preflight_data = ?, stop_reason = ?, updated_at = datetime('now') WHERE run_id = ?"
     ).run(
       JSON.stringify({ preflightFailed: failedChecks }),
       JSON.stringify(preflight.checks),
-      `预检失败：${failedChecks.join('; ')}`,
+      error,
       runId
     );
-    return { ok: false, error: 'Preflight checks failed', checks: preflight.checks };
+    return { ok: false, runId, status: 'FAILED', error, checks: preflight.checks };
   }
 
   // Persist preflight data
@@ -386,6 +397,8 @@ export async function executeRun(runId) {
       }
       try {
         args = normalizeToolArgs(step.tool_id, args, { projectRoot: PROJECT_ROOT, engine: executionEnvironment, scheme: targetContext?.scheme });
+        const scope = validateExecutionScope({ target: run.target, toolId: step.tool_id, args });
+        if (!scope.allowed) preparationError = scope.reason;
         if (targetProfile?.target_class === 'dvwa' && step.tool_id === 'sqlmap') {
           const cookieIndex = args.indexOf('--cookie');
           if (!targetContext.dvwa_session_verified || !targetContext.dvwa_cookie) {
@@ -438,7 +451,7 @@ export async function executeRun(runId) {
             }
             targetContext.dvwa_session_verified = result.success;
           } else {
-            result = await runTool(step.tool_id, args, { timeout: 300_000, signal: controller.signal });
+            result = await runTool(step.tool_id, args, { timeout: getToolTimeout(step.tool_id), signal: controller.signal });
           }
         } catch (err) {
           result = { success: false, exitCode: -1, stdout: '', stderr: err.message, executionMode: 'error' };
@@ -462,6 +475,7 @@ export async function executeRun(runId) {
       attempts++;
       step.execution_finished = true;
       step.execution_success = !!result.success;
+      step.execution_error = result.success ? null : result.error || result.stderr?.trim().slice(0, 1000) || `Tool exited with code ${result.exitCode ?? -1}`;
       db.prepare('DELETE FROM execution_steps WHERE run_id = ? AND step_index = ?')
         .run(runId, step.step_index);
       db.prepare(`
@@ -653,6 +667,25 @@ export async function executeRun(runId) {
         };
         reactThoughts.push(thoughtRecord);
 
+        const validateDynamicArgs = (toolId, dynamicArgs) => {
+          try {
+            if (!Array.isArray(dynamicArgs) || dynamicArgs.some(argument => typeof argument !== 'string')) {
+              throw new Error('工具参数必须为字符串数组');
+            }
+            const rendered = renderCommand(dynamicArgs.map(argument => replaceTargetPlaceholder(argument, run.target || '')), targetContext || {});
+            if (rendered.unresolvedTokens.length) throw new Error('工具目标或参数仍含未解析变量');
+            const normalized = normalizeToolArgs(toolId, rendered.rendered,
+              { projectRoot: PROJECT_ROOT, engine: executionEnvironment, scheme: targetContext?.scheme });
+            const scope = validateExecutionScope({ target: run.target, toolId, args: normalized });
+            if (scope.allowed) return true;
+            throw new Error(scope.reason);
+          } catch (error) {
+            thoughtRecord.guardBlocks.push({ allowed: false, category: 'target_scope', toolId, reason: error.message });
+            console.warn(`[ReAct Guard] ${error.message}`);
+            return false;
+          }
+        };
+
         // ── WebSocket broadcast: ReAct reasoning (real-time) ──────────
         // Push the AI's thought + action to the frontend so the user can
         // see the reasoning chain as it happens, not just after completion.
@@ -696,6 +729,8 @@ export async function executeRun(runId) {
               break;
             }
 
+            if (decision.newArgs && !validateDynamicArgs(targetStep.tool_id, decision.newArgs)) break;
+
             // Apply new args if provided; otherwise keep existing (simple retry)
             if (decision.newArgs) {
               targetStep.args_template = JSON.stringify(decision.newArgs);
@@ -711,6 +746,7 @@ export async function executeRun(runId) {
                 if (result.success) completedSteps--; else failedSteps--;
                 targetStep.execution_finished = false;
                 targetStep.execution_success = false;
+                targetStep.execution_error = null;
                 failedNonOptionalSteps.delete(adjustTargetIdx);  // clear this step's failure, re-eval on retry
                 i--;  // loop will i++ and re-execute this step
                 console.log(`[ReAct] Retrying step ${adjustTargetIdx} (attempt ${retries}/2)${decision.newArgs ? ' with adjusted args' : ''}`);
@@ -726,6 +762,7 @@ export async function executeRun(runId) {
 
           case 'insert':
             if (decision.toolId && decision.args) {
+              if (!validateDynamicArgs(decision.toolId, decision.args)) break;
               // Guard: validate insertion before proceeding
               const guardState = { steps: mutableSteps, status: run.status, stopReason };
               const guardResult = validateInsertion(guardState, 'insert', decision.toolId, disableAutoInsert);
@@ -770,6 +807,7 @@ export async function executeRun(runId) {
 
           case 'pivot':
             if (decision.toolId && decision.args) {
+              if (!validateDynamicArgs(decision.toolId, decision.args)) break;
               // Guard: validate insertion before proceeding
               const guardState = { steps: mutableSteps, status: run.status, stopReason };
               const guardResult = validateInsertion(guardState, 'pivot', decision.toolId, disableAutoInsert);
@@ -804,6 +842,7 @@ export async function executeRun(runId) {
               for (let pi = 0; pi < decision.toolIds.length; pi++) {
                 const pToolId = decision.toolIds[pi];
                 const pArgs = decision.argsList[pi] || [];
+                if (!validateDynamicArgs(pToolId, pArgs)) continue;
                 // Guard: validate each parallel insertion
                 const pGuard = validateInsertion(guardState, 'parallel', pToolId, disableAutoInsert);
                 if (!pGuard.allowed) {
@@ -849,7 +888,8 @@ export async function executeRun(runId) {
       evidence_history = ?, react_thoughts = ?, updated_at = datetime('now') WHERE run_id = ?`)
       .run(finalStatus, summary, stopReason, JSON.stringify(evidenceHistory), JSON.stringify(reactThoughts), runId);
 
-    return { ok: true, runId, status: finalStatus, completed: completedSteps, failed: failedSteps, engineType, stopReason };
+    return { ok: true, runId, status: finalStatus, error: final.error, completed: final.summary.completed,
+      failed: final.summary.failed, engineType, stopReason };
 
   } catch (err) {
     const wasAborted = !!abortFlags.get(runId);

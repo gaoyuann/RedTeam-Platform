@@ -280,7 +280,7 @@ int main(int argc, char *argv[])
         QString dongleError;
         if (!DongleService::verifyPolicy(DongleService::policyDir(), &dongleError)) {
             QMessageBox::critical(nullptr, QStringLiteral("加密锁校验失败"),
-                dongleError + QStringLiteral("\n\n请插入已注册的加密锁，或在管理端校验页面停用策略。"));
+                dongleError + QStringLiteral("\n\n请重新插入本机已绑定的加密锁后重启客户端。"));
             return 0;
         }
 

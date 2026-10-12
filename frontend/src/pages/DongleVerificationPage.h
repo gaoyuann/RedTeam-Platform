@@ -30,6 +30,7 @@ private:
     void loadPolicy();
     bool savePolicy(QString *errorMessage = nullptr);
     int selectedDeviceIndex() const;
+    QByteArray selectedDeviceHid() const;
     void setStatus(const QString &text, const QString &color);
     void populateDevices(const QVector<DongleDeviceInfo> &devices);
     QString protocolText(quint32 deviceType) const;

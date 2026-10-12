@@ -26,16 +26,16 @@ fi
 
 echo "Qt version: $(qmake -query QT_VERSION 2>/dev/null || echo 'unknown')"
 echo "CMake version: $(cmake --version | head -1)"
-echo?echo "Compiler: $(g++ -dumpversion)"
+echo "Compiler: $(g++ -dumpversion)"
 
-9Aecho ""
+echo ""
 
 # ── Build ──────────────────────────────────────────────────────────────
 echo "[1/2] Configuring..."
-cmake -B build -S "$BASE_DIR"
+cmake -B "$BASE_DIR/build" -S "$BASE_DIR"
 
 echo "[2/2] Building..."
-cmake --build build -j"$(nproc 2>/dev/null || echo 2)"
+cmake --build "$BASE_DIR/build" -j"$(nproc 2>/dev/null || echo 2)"
 
 echo ""
 echo "=== Build Complete ==="

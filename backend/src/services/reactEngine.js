@@ -20,6 +20,7 @@ import { buildKGContextForStep, enrichTechnique } from './knowledgeEnricher.js';
 import { serializeEvidenceHistory, serializeCurrentPlan } from './evidenceSerializer.js';
 import { buildInsertionWarning, validateInsertion } from './reactRuntimeGuard.js';
 import { IMAGE_MAP } from '../tools/toolRunner.js';
+import { buildExecutionScopeHint } from './executionScope.js';
 
 const MAX_REACT_CALLS = 30;  // Safety: max LLM calls per run
 const MAX_THOUGHT_LEN = 500; // Truncate LLM thought for display
@@ -28,6 +29,9 @@ const MAX_THOUGHT_LEN = 500; // Truncate LLM thought for display
 const HIGH_RISK_ACTIONS = ['stop', 'pivot'];
 // Tools that are high-risk to insert (exploitation vs scanning)
 const HIGH_RISK_TOOLS = new Set(['sqlmap', 'hydra', 'metasploit', 'john', 'hashcat', 'msfconsole']);
+const SAFE_REVIEW_ACTIONS = new Set([
+  'check_authorization', 'verify_scope', 'check_scope', 'verify_authorization',
+]);
 
 // ── Clean LLM output: strip English boilerplate, keep Chinese ──────────
 // Ported from old system's cleanThoughtText (playbookRuntime.js L423-501)
@@ -128,7 +132,7 @@ function cleanThoughtText(text) {
 
 // ── Parse Action XML from LLM response ────────────────────────────────
 
-function parseAction(llmResponse) {
+export function parseAction(llmResponse) {
   // Extract thought (everything before <action>)
   const rawThought = llmResponse.split(/<action/)[0]?.trim() || '';
 
@@ -255,8 +259,23 @@ function parseAction(llmResponse) {
       return { action: 'continue', thought: 'LLM API 错误，跳过 AI 决策继续执行' };
 
     default:
-      console.warn(`[ReAct] Unknown action type: ${actionType}, falling back to continue`);
-      return { action: 'continue', thought };
+      if (SAFE_REVIEW_ACTIONS.has(actionType)) {
+        console.warn(`[ReAct] Review-only action ignored: ${actionType}`);
+        return {
+          action: 'continue',
+          thought,
+          ignoredAction: actionType,
+          reason: `忽略非控制流审查动作：${actionType}`,
+        };
+      }
+      console.warn(`[ReAct] Unknown action type: ${actionType}, stopping with an auditable decision`);
+      return {
+        action: 'stop',
+        thought,
+        unsupportedAction: actionType,
+        reason: `不支持的 ReAct Action 类型：${actionType}`,
+        finalSummary: '模型返回了平台不支持的动作，已停止本次执行，避免静默跳过控制流。',
+      };
   }
 }
 
@@ -282,6 +301,8 @@ function buildReactPrompt({ stepIndex, toolId, stepName, stepResult,
   const planText = serializeCurrentPlan(remainingSteps);
 
   return `你是 ISST 的安全测试执行代理。当前运行在 Auto-pilot 模式下。
+
+${buildExecutionScopeHint(target)}
 
 ⚠️ 重要：每次输出必须严格包含 Observation、Thought、Action 三段，不可省略任何一段。Thought 控制在 150 字以内。使用中文输出，避免英文推理过程。
 
@@ -321,7 +342,7 @@ Action: 使用以下 XML 格式之一：
   <action type="adjust" toolId="xxx" newArgs='["new1", "new2"]' stepIndex="当前步骤索引" />
   <action type="insert" toolId="xxx" args='["arg1", "arg2"]' position="after" />
   <action type="pivot" toolId="xxx" args='["arg1", "arg2"]' />
-  <action type="parallel" tools='[{"toolId":"gobuster","args":["dir","-u","http://target:8080","-w","/usr/share/wordlists/common_dirs.txt"]}]' />
+  <action type="parallel" tools='[{"toolId":"gobuster","args":["dir","-u","{{base_url}}","-w","/usr/share/wordlists/common_dirs.txt"]}]' />
   <action type="stop" reason="总结原因" finalSummary="最终报告文本" />
 
 注意：args 必须为严格的 JSON 序列化数组。不要输出任何其他内容。`;
@@ -340,6 +361,8 @@ function buildExplorationPrompt({ stepIndex, toolId, stepName, stepResult,
   const planText = serializeCurrentPlan(remainingSteps);
 
   return `你是 ISST 的安全测试执行代理。当前运行在 Exploration 模式下，目标是探索未知的攻击面。
+
+${buildExecutionScopeHint(target)}
 
 【核心原则 — 探索模式】
 1. 证据优先：所有决策必须基于工具的真实输出结果。禁止依赖 LLM 先验知识推测目标特性（如默认密码、常见路径、框架版本）。
@@ -381,7 +404,7 @@ Action: 使用以下 XML 格式之一：
   <action type="adjust" toolId="xxx" newArgs='["new1", "new2"]' stepIndex="当前步骤索引" />
   <action type="insert" toolId="xxx" args='["arg1", "arg2"]' position="after" />
   <action type="pivot" toolId="xxx" args='["arg1", "arg2"]' />
-  <action type="parallel" tools='[{"toolId":"gobuster","args":["dir","-u","http://target:8080","-w","/usr/share/wordlists/common_dirs.txt"]}]' />
+  <action type="parallel" tools='[{"toolId":"gobuster","args":["dir","-u","{{base_url}}","-w","/usr/share/wordlists/common_dirs.txt"]}]' />
   <action type="stop" reason="总结原因" finalSummary="最终报告文本" />
 
 注意：args 必须为严格的 JSON 序列化数组。不要输出任何其他内容。`;
@@ -513,7 +536,7 @@ function buildReflectionPrompt({ stepIndex, toolId, proposedDecision, evidenceHi
  * Parse the LLM's reflection response.
  * Returns { confirmed: boolean, alternative: decision|null }
  */
-function parseReflection(llmResponse) {
+export function parseReflection(llmResponse) {
   const verdictMatch = llmResponse.match(/<verdict>\s*(\w+)\s*<\/verdict>/i);
   if (!verdictMatch) {
     return { confirmed: true, alternative: null };
@@ -526,6 +549,9 @@ function parseReflection(llmResponse) {
 
   // Extract alternative action from the response
   const altDecision = parseAction(llmResponse);
+  if (altDecision.ignoredAction || altDecision.unsupportedAction) {
+    return { confirmed: true, alternative: null };
+  }
   if (altDecision.action === 'continue' && !llmResponse.includes('<action')) {
     // No alternative action found in reconsider response — fall back to confirm
     return { confirmed: true, alternative: null };

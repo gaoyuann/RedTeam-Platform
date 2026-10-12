@@ -5,10 +5,12 @@ import BetterSqlite3 from 'better-sqlite3';
 import schema from '../src/db/migrations/001_create_tables.js';
 import importPlaybooks from '../src/db/migrations/003_import_playbooks.js';
 import syncDemoPlaybook from '../src/db/migrations/027_sync_demo_web_killchain.js';
+import syncGenericNuclei from '../src/db/migrations/028_sync_generic_web_nuclei.js';
 import { discoverTargetProfile } from '../src/services/targetDiscovery.js';
 import { normalizeToolArgs, validateToolArgs } from '../src/tools/toolContracts.js';
 import { checkTargetTypeCompatibility } from '../src/services/targetProfileResolver.js';
 import { BIN_MAP } from '../src/tools/toolRunner.js';
+import { getToolTimeout } from '../src/services/executionEngine.js';
 
 const demo = JSON.parse(readFileSync(new URL('../../data/playbooks/demo_web_full_killchain.json', import.meta.url), 'utf8'));
 const generic = JSON.parse(readFileSync(new URL('../../data/playbooks/web_auto_killchain.json', import.meta.url), 'utf8'));
@@ -24,6 +26,43 @@ test('demo and generic Web playbooks remain separate products', () => {
     demo.steps.find(step => step.id === 'step_4_vuln_scan').argsTemplate.slice(-1),
     ['http-missing-security-headers,dvwa-default-login,phpinfo-files,phpmyadmin-panel'],
   );
+  const nuclei = generic.steps.find(step => step.toolId === 'nuclei');
+  assert.deepEqual(nuclei.argsTemplate.slice(-4), ['-severity', 'medium,high,critical', '-timeout', '5']);
+});
+
+test('Nuclei gets a longer per-tool timeout without changing other tools', context => {
+  const previous = process.env.NUCLEI_TIMEOUT_MS;
+  context.after(() => {
+    if (previous === undefined) delete process.env.NUCLEI_TIMEOUT_MS;
+    else process.env.NUCLEI_TIMEOUT_MS = previous;
+  });
+  delete process.env.NUCLEI_TIMEOUT_MS;
+  assert.equal(getToolTimeout('nuclei'), 900_000);
+  assert.equal(getToolTimeout('nikto'), 300_000);
+  process.env.NUCLEI_TIMEOUT_MS = '1200000';
+  assert.equal(getToolTimeout('nuclei'), 1_200_000);
+  for (const value of ['0', '-1', 'invalid', '900000ms', '2147483648']) {
+    process.env.NUCLEI_TIMEOUT_MS = value;
+    assert.equal(getToolTimeout('nuclei'), 900_000);
+  }
+});
+
+test('generic Nuclei migration updates existing steps and is repeatable', () => {
+  const db = new BetterSqlite3(':memory:');
+  try {
+    schema(db);
+    importPlaybooks(db);
+    const before = db.prepare("SELECT * FROM playbook_steps WHERE playbook_id = 'web_auto_killchain' AND tool_id != 'nuclei'").all();
+    db.prepare("UPDATE playbook_steps SET args_template = ? WHERE playbook_id = 'web_auto_killchain' AND tool_id = 'nuclei'")
+      .run(JSON.stringify(['-u', '<target>', '-timeout', '5']));
+    syncGenericNuclei(db);
+    syncGenericNuclei(db);
+    const row = db.prepare("SELECT args_template FROM playbook_steps WHERE playbook_id = 'web_auto_killchain' AND tool_id = 'nuclei'").get();
+    assert.deepEqual(JSON.parse(row.args_template), generic.steps.find(step => step.toolId === 'nuclei').argsTemplate);
+    assert.deepEqual(db.prepare("SELECT * FROM playbook_steps WHERE playbook_id = 'web_auto_killchain' AND tool_id != 'nuclei'").all(), before);
+  } finally {
+    db.close();
+  }
 });
 
 test('migration can insert the demo contract when an older database lacks it', () => {

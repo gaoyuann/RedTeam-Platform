@@ -492,7 +492,7 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     // 评估 Tab：pipeline 完成后预加载该 run 的评分（兜底，不切 stage tab —
     // stage tab 的切换由 onPipelineStatus 在完成事件到达时驱动，避免打开已
     // 完成的流水线时强制跳到评估 Tab）
-    if (!runId.isEmpty() && status == "completed" && runId != m_lastLoadedEvalRunId) {
+    if (!runId.isEmpty() && (status == "completed" || status == "failed") && runId != m_lastLoadedEvalRunId) {
       onRunCompleted(runId);
     }
 
@@ -559,10 +559,10 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     bool isActive = (status == "running" || status == "awaiting_approval");
     bool isDeletable = !isActive;  // backend refuses delete on running/awaiting
     m_approveBtn->setVisible(isAwaiting);
-    m_resultBtn->setVisible(status == "completed" && !runId.isEmpty());
+    m_resultBtn->setVisible((status == "completed" || status == "failed") && !runId.isEmpty());
     m_cancelAction->setVisible(isActive);
     m_deleteAction->setVisible(isDeletable);
-    m_reportAction->setVisible(status == "completed");
+    m_reportAction->setVisible((status == "completed" || status == "failed") && !runId.isEmpty());
     // Hide ⋯ button entirely if no actions are available
     m_moreBtn->setVisible(isActive || isDeletable || status == "completed");
   });

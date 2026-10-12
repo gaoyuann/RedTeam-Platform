@@ -64,7 +64,7 @@ private slots:
 private:
     void setupUI();
     bool restoreCurrentArchive();
-    void loadExistingScanTopology();
+    void loadExistingScanTopology(bool replaceExisting = false);
     QString archiveDocumentPath() const;
     void archiveGeneratedDocument();
     struct Draft {
@@ -76,6 +76,7 @@ private:
     QMap<QString, Draft> m_drafts;
     QString m_pipelineId;
     QStringList m_pipelineScanIds;
+    QSet<QString> m_scopedTopologyScanIds;
     bool m_scanFinished = false;
     bool m_autoLoadAttempted = false;
     quint64 m_contextGeneration = 0;

@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { getWsManager } from '../services/wsManager.js';
+import { recommendForScans } from '../services/playbookRecommendations.js';
+import { captureTopologyOrigin, readTopologyOrigin } from '../services/topologyOrigin.js';
 
 // ── Validation helpers ────────────────────────────────────────────────────
 
@@ -147,6 +149,7 @@ export default function (db) {
       }
     }
 
+    configJson = JSON.stringify({ ...JSON.parse(configJson), topology_origin: captureTopologyOrigin(req) });
     try {
       db.prepare(`INSERT INTO pipelines (pipeline_id, target, status, config, created_by, created_at, updated_at)
         VALUES (?, ?, 'created', ?, ?, ?, ?)`).run(pipelineId, target, configJson, req.user.sub, now, now);
@@ -199,6 +202,8 @@ export default function (db) {
           configStr = JSON.stringify(sanitized);
         }
       } catch {}
+      const origin = readTopologyOrigin(pipeline.config);
+      if (origin) configStr = JSON.stringify({ ...JSON.parse(configStr), topology_origin: origin });
       sets.push('config = ?');
       params.push(configStr);
     }
@@ -257,7 +262,11 @@ export default function (db) {
     }
 
     const now = new Date().toISOString();
-    db.prepare("UPDATE pipelines SET status = 'running', updated_at = ? WHERE pipeline_id = ?").run(now, req.params.id);
+    let startConfig = {};
+    try { startConfig = JSON.parse(pipeline.config || '{}'); } catch {}
+    startConfig = { ...startConfig, topology_origin: captureTopologyOrigin(req) };
+    db.prepare("UPDATE pipelines SET status = 'running', updated_at = ?, config = ? WHERE pipeline_id = ?")
+      .run(now, JSON.stringify(startConfig), req.params.id);
     auditLog(db, 'pipeline_start', req.params.id, req.user.role, pipeline.target, { from: pipeline.status, to: 'running' });
 
     const ws = getWsManager();
@@ -320,6 +329,13 @@ export default function (db) {
 
     // 用户可选择执行哪个 playbook（覆盖 AI 生成的）
     const selectedPlaybookId = req.body?.playbook_id;
+    const recommendation = recommendForScans(db, pipeline.target, String(pipeline.scan_task_id || '').split(','))
+      .find(candidate => candidate.playbook_id === (selectedPlaybookId || pipeline.generated_playbook_id));
+    if (recommendation?.match_status === 'needs_input') {
+      return res.status(409).json({ status: 'error', error: {
+        message: `执行条件尚未满足：${recommendation.match_conditions.join('；')}。请补充入口后重新创建任务，或选择其他预案。`,
+      } });
+    }
     if (selectedPlaybookId && selectedPlaybookId !== pipeline.generated_playbook_id) {
       db.prepare("UPDATE pipelines SET generated_playbook_id = ?, updated_at = datetime('now') WHERE pipeline_id = ?")
         .run(selectedPlaybookId, req.params.id);

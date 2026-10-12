@@ -2,7 +2,7 @@
 # RedTeam Platform - ARM64 Client Package Script
 # Creates a portable client-only bundle for cloud laptops
 # Run on ARM64 cloud laptop after building
-set -uo pipefail
+set -euo pipefail
 shopt -s nullglob
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -18,6 +18,15 @@ echo "=== RedTeam Platform - ARM64 Client Bundle ==="
 echo "Architecture: $(uname -m)"
 echo "Output: $DIST_DIR"
 
+# Fail before touching an existing bundle when the vendor SDK is missing/wrong.
+case "$(uname -m)" in
+  aarch64|arm64) ;;
+  *) echo "ERROR: Run this packager on the ARM64 cloud laptop." >&2; exit 1 ;;
+esac
+ROCKEY_SOURCE="$PROJECT_ROOT/third_party/rockey/linux-aarch64/libRockeyARM.so.1.0"
+cmake "-DROCKEY_SDK_FILE=$ROCKEY_SOURCE" -DROCKEY_SDK_ARCH=linux-aarch64 \
+  -DROCKEY_SDK_REQUIRED=ON -P "$PROJECT_ROOT/cmake/ValidateRockeySdk.cmake"
+
 # ── Clean ──────────────────────────────────────────────────────────────
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"/{bin,lib/qt,lib/openssl,plugins/platforms,plugins/imageformats,plugins/iconengines,fonts}
@@ -25,12 +34,16 @@ mkdir -p "$DIST_DIR"/{bin,lib/qt,lib/openssl,plugins/platforms,plugins/imageform
 # ── 1. Copy Qt binary ─────────────────────────────────────────────────
 if [ ! -x "$BINARY" ]; then
   echo "ERROR: Binary not found at $BINARY"
-  echo "Run: scripts/build-client-arm64;64.sh"
+  echo "Run: scripts/build-client-arm64.sh"
   exit 1
 fi
 cp "$BINARY" "$DIST_DIR/bin/RedTeam-Platform"
 strip "$DIST_DIR/bin/RedTeam-Platform" 2>/dev/null || true
-echo "[1/5] Copied binary ($(du -5h "$DIST_DIR/bin/RedTeam-Platform" | cut -f1))"
+echo "[1/5] Copied binary ($(du -sh "$DIST_DIR/bin/RedTeam-Platform" | cut -f1))"
+
+mkdir -p "$DIST_DIR/scripts" "$DIST_DIR/third_party/rockey/linux-aarch64"
+cp "$SCRIPT_DIR/70-rockey-arm.rules" "$DIST_DIR/scripts/"
+cp "$ROCKEY_SOURCE" "$DIST_DIR/third_party/rockey/linux-aarch64/"
 
 # ── 2. Copy Qt shared libraries (via ldd) ─────────────────────────────
 COPIED_LIBS=0
@@ -49,7 +62,7 @@ while read -r line; do
   [ -z "$lib_path" ] && continue
   [ ! -f "$lib_path" ] && continue
   name="$(basename "$lib_path")"
-  case "$name in
+  case "$name" in
     libQt5*|libicu*) copy_lib "$lib_path" ;;
   esac
 done < <(ldd "$BINARY")

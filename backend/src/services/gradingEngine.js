@@ -53,8 +53,8 @@ export function computeGrade(runId) {
     for (const pbStep of pbSteps) {
       const score = pbStep.score || 0;
       total += score;
-      const execStep = execSteps.find(s => s.step_index === pbStep.step_index);
-      const success = !!execStep && execStep.tool_id === pbStep.tool_id && execStep.success === 1 && execStep.exit_code === 0;
+      const execStep = execSteps.find(step => step.step_index === pbStep.step_index && step.tool_id === pbStep.tool_id);
+      const success = !!execStep && execStep.success === 1 && execStep.exit_code === 0;
       const stepEarned = success ? score : 0;
       earned += stepEarned;
       breakdown.push({
@@ -63,6 +63,7 @@ export function computeGrade(runId) {
         name: pbStep.name,
         toolId: pbStep.tool_id,
         success,
+        status: !execStep ? 'NOT_EXECUTED' : success ? 'PASSED' : 'FAILED',
         score,
         earned: stepEarned,
       });
@@ -79,6 +80,7 @@ export function computeGrade(runId) {
         name: null,
         toolId: s.tool_id,
         success: s.success === 1 && s.exit_code === 0,
+        status: s.success === 1 && s.exit_code === 0 ? 'PASSED' : 'FAILED',
         score: 10,
         earned: stepEarned,
       });
@@ -105,6 +107,7 @@ export function computeGrade(runId) {
   const result = {
     ok: true,
     runId,
+    executionStatus: run.status,
     total: finalTotal,
     earned: finalEarned,
     percent,
@@ -116,6 +119,9 @@ export function computeGrade(runId) {
       executedSteps: execSteps.length,
       aiAddedSteps: execSteps.filter(step => step.source === 'react').length,
       attempts: attemptCount > 0 || execSteps.length === 0 ? attemptCount : null,
+      plannedPassed: breakdown.filter(step => step.status === 'PASSED').length,
+      plannedFailed: breakdown.filter(step => step.status === 'FAILED').length,
+      plannedUnexecuted: breakdown.filter(step => step.status === 'NOT_EXECUTED').length,
     },
     breakdown,
     mitre: {

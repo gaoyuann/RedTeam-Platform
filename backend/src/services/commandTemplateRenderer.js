@@ -65,7 +65,8 @@ export function renderCommand(argsArray, context) {
 
   for (const token of argsArray) {
     const tokenStr = String(token);
-    const renderedToken = renderToken(tokenStr, context);
+    const target = context.target_url || context.base_url;
+    const renderedToken = replaceTargetPlaceholder(renderToken(tokenStr, context), target);
 
     // 检查渲染后是否仍有未替换变量
     if (isUnresolved(renderedToken)) {
@@ -91,4 +92,37 @@ export function isValidUrl(url) {
   }
 }
 
-export default { renderCommand, isUnresolved, isValidUrl };
+/**
+ * Replace the legacy <target> placeholder without creating http://http://...
+ * when a playbook embeds the placeholder inside an URL.
+ */
+export function replaceTargetPlaceholder(token, target) {
+  if (typeof token !== 'string') return token;
+  const rawTarget = String(target || '').trim();
+  if (!rawTarget) return token;
+
+  let targetUrl;
+  try {
+    targetUrl = new URL(/^https?:\/\//i.test(rawTarget) ? rawTarget : `http://${rawTarget}`);
+  } catch {
+    targetUrl = null;
+  }
+  const targetOrigin = targetUrl?.origin || `http://${rawTarget.replace(/^https?:\/\//i, '').replace(/\/$/, '')}`;
+  const targetHost = targetUrl?.host || rawTarget.replace(/^https?:\/\//i, '').replace(/\/.*$/, '').replace(/\/$/, '');
+  if (token === '<target>') return rawTarget;
+
+  let embeddedTarget = rawTarget;
+  if (targetUrl) embeddedTarget = `${targetUrl.host}${targetUrl.pathname === '/' ? '' : targetUrl.pathname.replace(/\/$/, '')}`;
+  else embeddedTarget = rawTarget.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+
+  let rendered = token.replaceAll('<target>', embeddedTarget)
+    .replace(/^(https?):\/\/https?:\/\//i, '$1://');
+  // Older generated playbooks used http://target:PORT/path instead of
+  // <target>. Keep their path, but force the request onto the run target.
+  rendered = rendered.replace(/https?:\/\/target(?::\d+)?(?=\/|$)/gi, targetOrigin);
+  rendered = rendered.replace(/https?:\/\/target\.com(?::\d+)?(?=\/|$)/gi, targetOrigin);
+  if (rendered === token && /^target(?::\d+)?(?:\/|$)/i.test(token)) rendered = `${targetHost}${token.replace(/^target(?::\d+)?/i, '')}`;
+  return rendered;
+}
+
+export default { renderCommand, isUnresolved, isValidUrl, replaceTargetPlaceholder };

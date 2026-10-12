@@ -29,18 +29,20 @@ public:
 
     DongleService();
     ~DongleService();
+    DongleService(const DongleService &) = delete;
+    DongleService &operator=(const DongleService &) = delete;
 
     QString libraryPath() const;
     bool isLibraryAvailable(QString *errorMessage = nullptr);
     QVector<DongleDeviceInfo> enumerate(QString *errorMessage = nullptr);
     bool readRegistration(int index, QByteArray *record, DongleDeviceInfo *device, QString *errorMessage = nullptr);
-    bool registerDevice(int index, bool overwrite, QString *errorMessage = nullptr);
-    bool destroyRegistration(int index, QString *errorMessage = nullptr);
-    bool verifyDevice(int index, QString *errorMessage = nullptr);
+    bool registerDevice(int index, bool overwrite, QString *errorMessage = nullptr, const QByteArray &expectedHid = QByteArray());
+    bool destroyRegistration(int index, QString *errorMessage = nullptr, const QByteArray &expectedHid = QByteArray());
+    bool verifyDevice(int index, QString *errorMessage = nullptr, const QByteArray &expectedHid = QByteArray());
     bool verifyDeviceByHid(const QByteArray &expectedHid, QString *errorMessage = nullptr);
 
     // 策略文件（dongle.json）所在目录：QStandardPaths::AppConfigLocation
-    // Linux 下为 ~/.config/RedTeam/RedTeam-Platform/，按机器存、升级不丢、不污染仓库。
+    // Linux 下为 ~/.config/RedTeam/RedTeam-Platform/，按当前操作系统用户存、升级不丢、不污染仓库。
     static QString policyDir();
     static QString policyPath(const QString &configDir);
     static bool loadPolicy(const QString &configDir, bool *enabled, QString *libraryPath,
@@ -64,7 +66,7 @@ private:
     QString formatError(const QString &operation, unsigned int code) const;
     bool openDevice(int index, DongleHandle *handle, QString *errorMessage);
     bool closeDevice(DongleHandle handle, QString *errorMessage);
-    bool readRecord(int index, QByteArray *record, DongleDeviceInfo *device, QString *errorMessage);
+    bool readRecord(int index, QByteArray *record, DongleDeviceInfo *device, QString *errorMessage, const QByteArray &expectedHid = QByteArray());
     bool writeRecord(int index, const QByteArray &record, QString *errorMessage);
     bool recordMatchesDevice(const QByteArray &record, const DongleDeviceInfo &device) const;
     QByteArray makeRecord(const DongleDeviceInfo &device) const;

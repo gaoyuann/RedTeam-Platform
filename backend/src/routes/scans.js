@@ -1,11 +1,11 @@
+import { normalizeTopologyTarget } from '../services/nmapTopology.js';
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
-import { matchPlaybooks } from '../services/playbookMatcher.js';
+import { recommendForScans } from '../services/playbookRecommendations.js';
 import { generatePlaybook } from '../services/playbookGenerator.js';
 import { executeScan, requestScanAbort } from '../services/scanExecutor.js';
 import { getWsManager } from '../services/wsManager.js';
 import { resolveTargetProfile } from '../services/targetProfileResolver.js';
-import { loadTargetProfile } from '../services/targetDiscovery.js';
 
 export default function (db) {
   const router = Router();
@@ -30,8 +30,26 @@ export default function (db) {
   });
 
   router.post('/', (req, res) => {
-    const { target, scan_type, parameters, created_by } = req.body;
+    let { target, scan_type, parameters, created_by } = req.body;
     if (!target || !scan_type) return res.status(400).json({ status: 'error', error: { message: 'target, scan_type are required' } });
+    if (scan_type === 'topology_scan') {
+      try { target = normalizeTopologyTarget(target); }
+      catch (error) { return res.status(400).json({ status: 'error', error: { message: error.message } }); }
+      const pipelineId = parameters?.pipeline_id;
+      if (pipelineId) {
+        const pipeline = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(pipelineId);
+        if (!pipeline) return res.status(404).json({ status: 'error', error: { message: '任务不存在' } });
+        if (req.user.role !== 'admin' && req.user.sub !== pipeline.created_by)
+          return res.status(403).json({ status: 'error', error: { message: '没有权限为此任务探测拓扑' } });
+        let expectedTarget;
+        try { expectedTarget = normalizeTopologyTarget(pipeline.target); }
+        catch (error) { return res.status(400).json({ status: 'error', error: { message: error.message } }); }
+        if (target !== expectedTarget)
+          return res.status(400).json({ status: 'error', error: { message: '拓扑探测范围必须与当前任务目标一致' } });
+      }
+      parameters = { ...(pipelineId ? { pipeline_id: pipelineId } : {}), timeout: 300 };
+      created_by = req.user?.sub || null;
+    }
     const scan_task_id = `scan_${randomUUID().slice(0, 12)}`;
     const now = new Date().toISOString();
     // Auto-resolve target_class for the new scan task
@@ -116,11 +134,7 @@ export default function (db) {
   router.get('/:scanTaskId/recommendations', (req, res) => {
     const task = db.prepare('SELECT scan_task_id, target, status FROM scan_tasks WHERE scan_task_id = ?').get(req.params.scanTaskId);
     if (!task) return res.status(404).json({ status: 'error', error: { message: 'Scan task not found' } });
-    const results = db.prepare('SELECT * FROM scan_results WHERE scan_task_id = ?').all(req.params.scanTaskId);
-    if (!results.length) return res.json({ status: 'ok', data: [] });
-    // Resolve target class for better playbook matching
-    const targetProfile = loadTargetProfile(db, task.target);
-    const recommendations = matchPlaybooks(results, targetProfile);
+    const recommendations = recommendForScans(db, task.target, [task.scan_task_id]);
     res.json({ status: 'ok', data: recommendations });
   });
 

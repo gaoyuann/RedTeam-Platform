@@ -4,6 +4,7 @@ import { getWsManager } from './wsManager.js';
 import { resolveTargetProfile } from './targetProfileResolver.js';
 import { analyzeScanResults } from './scanAnalyzer.js';
 import { loadTargetProfile } from './targetDiscovery.js';
+import { recommendForScans } from './playbookRecommendations.js';
 
 // ── Track running pipelines for cancellation ──────────────────────────────
 const runningPipelines = new Set();
@@ -176,7 +177,7 @@ async function runPipelineScan(db, pipeline) {
       db.prepare(
         `INSERT INTO scan_tasks (scan_task_id, target, scan_type, target_class, parameters, created_by, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`
-      ).run(scanTaskId, target, scanType, profile.target_class, JSON.stringify({}), pipeline.created_by || 'pipeline', now);
+      ).run(scanTaskId, target, scanType, profile.target_class, JSON.stringify(scanType === 'port_scan' ? { discover_topology: true } : {}), pipeline.created_by || 'pipeline', now);
 
       scanTaskIds.push(scanTaskId);
 
@@ -305,6 +306,7 @@ function createFallbackAnalysis(db, target, scanTaskIds) {
   const findings = db.prepare(
     `SELECT result_type, severity, COUNT(*) AS cnt
      FROM scan_results WHERE scan_task_id IN (${placeholders})
+     AND result_type NOT IN ('lan_scope', 'lan_host_discovery', 'scan_evidence', 'network_context', 'network_link')
      GROUP BY result_type, severity ORDER BY cnt DESC`
   ).all(...ids);
 
@@ -356,6 +358,9 @@ async function runPipelineGeneration(db, pipeline, analysisData, scanTaskIds) {
     let playbookId = null;
     let generationMethod = null;
     let playbookName = null;
+    let recommendations = [];
+    let selectedRecommendation = null;
+    let generationError = null;
 
     // Strategy 1: Try AI generation from the primary scan task
     const primaryScanId = Array.isArray(scanTaskIds) ? scanTaskIds[0] : scanTaskIds;
@@ -376,9 +381,11 @@ async function runPipelineGeneration(db, pipeline, analysisData, scanTaskIds) {
           playbookName = genResult.name;
           pipelineLog(pipelineId, `AI 生成成功: ${playbookName} (${playbookId})`);
         } else {
+          generationError = genResult.error;
           pipelineLog(pipelineId, `AI 生成失败: ${genResult.error}，尝试匹配已有 Playbook`, 'warn');
         }
       } catch (err) {
+        generationError = err.message;
         pipelineLog(pipelineId, `AI 生成异常: ${err.message}，尝试匹配已有 Playbook`, 'warn');
       }
     }
@@ -386,21 +393,13 @@ async function runPipelineGeneration(db, pipeline, analysisData, scanTaskIds) {
     // Strategy 2: Fall back to playbook matching if generation failed
     if (!playbookId) {
       pipelineLog(pipelineId, '尝试匹配已有 Playbook');
-      const { matchPlaybooks } = await import('./playbookMatcher.js');
-
-      // Get all scan results for matching
       const ids = Array.isArray(scanTaskIds) ? scanTaskIds : [scanTaskIds];
-      const placeholders = ids.map(() => '?').join(',');
-      const allResults = db.prepare(
-        `SELECT result_type, result_data, severity, mitre_technique_id, source_tool
-         FROM scan_results WHERE scan_task_id IN (${placeholders})`
-      ).all(...ids);
-
-      const profile = loadTargetProfile(db, pipeline.target, ids);
-      const ranked = matchPlaybooks(allResults, profile);
+      const ranked = recommendForScans(db, pipeline.target, ids);
+      recommendations = ranked;
 
       if (ranked.length > 0) {
         const bestMatch = ranked[0];
+        selectedRecommendation = bestMatch;
         playbookId = bestMatch.playbook_id;
         generationMethod = 'matched';
         playbookName = bestMatch.name;
@@ -422,6 +421,9 @@ async function runPipelineGeneration(db, pipeline, analysisData, scanTaskIds) {
       playbook_id: playbookId,
       name: playbookName,
       method: generationMethod,
+      recommendations,
+      selected_recommendation: selectedRecommendation,
+      ai_generation_error: generationError,
     };
 
     updateStep(db, pipelineId, 2, 'completed', {
@@ -430,7 +432,8 @@ async function runPipelineGeneration(db, pipeline, analysisData, scanTaskIds) {
     });
 
     pipelineLog(pipelineId, `生成阶段完成: ${generationMethod} → ${playbookName}`);
-    return { ok: true, playbookId, method: generationMethod, name: playbookName };
+    return { ok: true, playbookId, method: generationMethod, name: playbookName,
+      recommendations, requiresApproval: selectedRecommendation && !selectedRecommendation.automatic_eligible };
   } catch (err) {
     updateStep(db, pipelineId, 2, 'failed', {
       step_type: STEP_GENERATE,
@@ -521,6 +524,8 @@ async function runPipelineExecution(db, pipeline, playbookId, analysisData) {
 
     const execSuccess = execResult.ok && runRecord && runRecord.status === 'COMPLETED';
     const stepStatus = execSuccess ? 'completed' : 'failed';
+    const executionError = execSuccess ? null : execResult.error || runRecord?.stop_reason
+      || `执行未成功（状态：${runRecord?.status || 'UNKNOWN'}）`;
 
     const stepOutput = {
       run_id: runId,
@@ -532,12 +537,13 @@ async function runPipelineExecution(db, pipeline, playbookId, analysisData) {
     updateStep(db, pipelineId, 3, stepStatus, {
       step_type: STEP_EXECUTE,
       output_data: stepOutput,
-      error_message: execResult.ok ? null : (execResult.error || 'Execution failed'),
+      error_message: executionError,
     });
 
-    pipelineLog(pipelineId, `执行阶段${execSuccess ? '完成' : '失败'} (${runRecord?.status || 'ERROR'})`);
+    pipelineLog(pipelineId, `执行阶段${execSuccess ? '完成' : '失败'} (${runRecord?.status || 'ERROR'})${executionError ? `: ${executionError}` : ''}`,
+      execSuccess ? 'info' : 'error');
 
-    return { ok: execSuccess, runId, status: runRecord?.status };
+    return { ok: execSuccess, runId, status: runRecord?.status, error: executionError };
   } catch (err) {
     updateStep(db, pipelineId, 3, 'failed', {
       step_type: STEP_EXECUTE,
@@ -628,7 +634,7 @@ export async function runPipeline(pipelineId) {
     // ── Approval gate ─────────────────────────────────────────────────
     // After generating the playbook, optionally pause for human approval
     // before proceeding to the execute step.
-    const requireApproval = pipelineConfig.require_approval !== false; // default: true
+    const requireApproval = pipelineConfig.require_approval !== false || generateResult.requiresApproval;
     if (requireApproval) {
       const pausedResult = {
         scan_task_ids: scanResult.scanTaskIds,

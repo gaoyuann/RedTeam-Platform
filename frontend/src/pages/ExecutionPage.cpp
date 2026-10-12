@@ -871,15 +871,32 @@ void ExecutionPage::applyRunDetails(const QString &runId, const QJsonObject &dat
       if (!outcome.isBool() && !outcome.isDouble()) continue;
       if (outcome.toBool() || outcome.toInt() != 0) ++succeeded; else ++failed;
     }
+    const auto resultCounts = d["result_counts"].toObject();
+    const bool hasCanonicalCounts = resultCounts.value("known").isDouble()
+        && resultCounts.value("returned").isDouble()
+        && resultCounts.value("succeeded").isDouble()
+        && resultCounts.value("failed").isDouble()
+        && resultCounts.value("pending").isDouble();
+    const int known = hasCanonicalCounts ? resultCounts.value("known").toInt() : allSteps.size();
+    const int returned = hasCanonicalCounts ? resultCounts.value("returned").toInt() : succeeded + failed;
+    succeeded = hasCanonicalCounts ? resultCounts.value("succeeded").toInt() : succeeded;
+    failed = hasCanonicalCounts ? resultCounts.value("failed").toInt() : failed;
+    const int pending = hasCanonicalCounts ? resultCounts.value("pending").toInt()
+        : (known > returned ? known - returned : 0);
+    const bool requiresAttention = hasCanonicalCounts && resultCounts.value("requires_attention").toBool();
+    const bool terminalPending = hasCanonicalCounts && resultCounts.value("terminal_pending").toBool();
     QString statusText = QString("%1 · %2\n已返回 %3/%4 步结果  ·  成功 %5  ·  失败 %6  ·  证据 %7 条")
-        .arg(pbName, statusVal).arg(succeeded + failed).arg(allSteps.size())
+        .arg(pbName, statusVal).arg(returned).arg(known)
         .arg(succeeded).arg(failed).arg(d["evidence"].toArray().size());
+    if (pending > 0) statusText += QString("  ·  待返回 %1").arg(pending);
+    if (terminalPending) statusText += QStringLiteral("\n统计校验：任务已结束，但仍有步骤没有结果记录，请查看执行尝试。");
+    else if (requiresAttention) statusText += QStringLiteral("\n统计校验：存在重复或缺失的步骤结果，请查看执行尝试。");
     if (!stopReason.isEmpty()) statusText += "\n停止原因：" + stopReason;
     m_statusLabel->setTextFormat(Qt::PlainText);
     m_statusLabel->setToolTip(QString("执行编号：%1\n引擎：%2").arg(runId, engineType));
     m_statusLabel->setText(statusText);
     m_statusLabel->setStyleSheet(d["status"] == "FAILED" ? Theme::StatusErrorStyle :
-        failed > 0 ? Theme::StatusWarningStyle :
+        failed > 0 || requiresAttention ? Theme::StatusWarningStyle :
         d["status"] == "COMPLETED" ? Theme::StatusSuccessStyle : Theme::StatusInfoStyle);
 
     // ── Build evidence lookup: step_index → payload info ────────────
@@ -905,7 +922,8 @@ void ExecutionPage::applyRunDetails(const QString &runId, const QJsonObject &dat
       const auto outcome = s["success"];
       const bool reported = outcome.isBool() || outcome.isDouble();
       const bool success = reported && (outcome.toBool() || outcome.toInt() != 0);
-      auto *resultItem = new QTableWidgetItem(!reported ? QStringLiteral("等待结果") :
+      const bool terminal = QStringList{"COMPLETED", "FAILED", "ABORTED"}.contains(d["status"].toString());
+      auto *resultItem = new QTableWidgetItem(!reported ? (terminal ? QStringLiteral("结果未返回") : QStringLiteral("等待结果")) :
                                              success ? QStringLiteral("✓ 成功") : QStringLiteral("✕ 失败"));
       resultItem->setForeground(QColor(!reported ? "#64748b" : success ? "#15803d" : "#b91c1c"));
       resultItem->setBackground(QColor(!reported ? "#f8fafc" : success ? "#f0fdf4" : "#fff1f2"));

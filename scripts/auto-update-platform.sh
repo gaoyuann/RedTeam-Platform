@@ -208,12 +208,48 @@ update_server() (
   trap 'exit 130' INT
   trap 'exit 143' TERM
   git archive "$candidate" | tar -xf - -C "$stage"
-  if ! git diff --quiet "$previous" "$candidate" -- backend/package.json backend/package-lock.json; then
+  dependencies_changed=$("$NODE_BIN" --input-type=module - "$previous" "$candidate" <<'JS'
+import { execFileSync } from 'node:child_process';
+import { isDeepStrictEqual } from 'node:util';
+const fields = ['name', 'version', 'dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies', 'peerDependenciesMeta', 'bundledDependencies', 'bundleDependencies', 'overrides', 'engines', 'os', 'cpu', 'libc', 'packageManager', 'type', 'main', 'exports', 'imports', 'bin'];
+const lifecycleScripts = ['preinstall', 'install', 'postinstall', 'prepare', 'prepublish'];
+function installConfiguration(revision) {
+  const manifest = JSON.parse(execFileSync('git', ['show', `${revision}:backend/package.json`], { encoding: 'utf8' }));
+  const configuration = Object.fromEntries(fields.map(field => [field, manifest[field]]));
+  configuration.scripts = Object.fromEntries(lifecycleScripts.map(name => [name, manifest.scripts?.[name]]));
+  return configuration;
+}
+console.log(isDeepStrictEqual(installConfiguration(process.argv[2]), installConfiguration(process.argv[3])) ? '0' : '1');
+JS
+  )
+  if ! git diff --quiet "$previous" "$candidate" -- backend/package-lock.json; then
     dependencies_changed=1
-    (cd "$stage/backend" && npm ci --omit=dev --no-audit --no-fund)
+  fi
+  if [ "$dependencies_changed" = 1 ] || [ ! -d "$PROJECT_DIR/backend/node_modules" ]; then
+    dependencies_changed=1
+    if ! (cd "$stage/backend" && npm ci --omit=dev --no-audit --no-fund); then
+      log 'Dependency installation failed; retaining current deployment'
+      return 1
+    fi
   else
+    log 'Dependency configuration unchanged; reusing validated installed modules'
     ln -s "$PROJECT_DIR/backend/node_modules" "$stage/backend/node_modules"
   fi
+  (cd "$stage/backend" && "$NODE_BIN" --input-type=module <<'JS'
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import Database from 'better-sqlite3';
+import bcrypt from 'bcrypt';
+const require = createRequire(`${process.cwd()}/package.json`);
+const manifest = JSON.parse(readFileSync('package.json', 'utf8'));
+for (const dependency of Object.keys(manifest.dependencies || {})) require.resolve(dependency);
+const database = new Database(':memory:');
+database.prepare('SELECT 1').get();
+database.close();
+const password = 'redteam-update-check';
+if (!bcrypt.compareSync(password, bcrypt.hashSync(password, 4))) throw new Error('bcrypt validation failed');
+JS
+  )
   find "$stage/backend/src" -name '*.js' -print0 | xargs -0 -n 1 "$NODE_BIN" --check
   database_backup "$stage/migration-check.db"
   (cd "$stage/backend" && "$NODE_BIN" --input-type=module - "$stage/migration-check.db" <<'JS'
@@ -330,16 +366,48 @@ update_once() (
       return 0
     fi
   fi
-  python3 -c "$(cat <<'PY'
-import subprocess
-import sys
-tracked = set(subprocess.check_output(['git', 'ls-tree', '-rz', '--name-only', sys.argv[1]]).split(b'\0'))
-untracked = set(subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard', '-z']).split(b'\0'))
-collisions = (tracked & untracked) - {b''}
-if collisions or b'.env' in tracked or any(name.startswith(b'data/') and name.endswith(b'.db') for name in tracked):
-    raise SystemExit('Refusing to overwrite local files or deploy tracked secrets/database files')
-PY
-  )" "$candidate"
+  declare -A tracked_paths=() untracked_paths=() collision_paths=()
+  while IFS= read -r -d '' path; do tracked_paths["$path"]=1; done < <(git ls-tree -r -z --name-only "$candidate")
+  while IFS= read -r -d '' path; do untracked_paths["$path"]=1; done < <(git ls-files --others --exclude-standard -z)
+  record_collision() {
+    local candidate_path="$1" local_path="$2" key="$1\x00$2"
+    if [ -z "${collision_paths["$key"]+present}" ]; then
+      collision_paths["$key"]=1
+      collisions+=("$candidate_path ↔ $local_path")
+    fi
+  }
+  collisions=()
+  for local_path in "${!untracked_paths[@]}"; do
+    path="$local_path"
+    while :; do
+      if [ -n "${tracked_paths["$path"]+present}" ]; then record_collision "$path" "$local_path"; fi
+      [ "$path" = "${path%/*}" ] && break
+      path="${path%/*}"
+    done
+  done
+  for candidate_path in "${!tracked_paths[@]}"; do
+    path="$candidate_path"
+    while :; do
+      if [ -n "${untracked_paths["$path"]+present}" ]; then record_collision "$candidate_path" "$path"; fi
+      [ "$path" = "${path%/*}" ] && break
+      path="${path%/*}"
+    done
+  done
+  if [ "${#collisions[@]}" -gt 0 ]; then
+    preview=$(IFS=', '; printf '%s' "${collisions[*]:0:5}")
+    printf 'Refusing to overwrite local files or deploy path collisions: %s\n' "$preview" >&2
+    exit 1
+  fi
+  if [ -n "${tracked_paths[.env]+present}" ]; then
+    echo 'Refusing to overwrite local files or deploy tracked secrets/database files' >&2
+    exit 1
+  fi
+  for path in "${!tracked_paths[@]}"; do
+    if [[ "$path" == data/*.db ]]; then
+      echo 'Refusing to overwrite local files or deploy tracked secrets/database files' >&2
+      exit 1
+    fi
+  done
   if [ "$ROLE" = server ] && busy; then log 'Update deferred until running work finishes'; return 0; fi
   backup="$BACKUP_DIR/$(date +%Y%m%dT%H%M%S)-${previous:0:12}"
   mkdir -p "$backup"

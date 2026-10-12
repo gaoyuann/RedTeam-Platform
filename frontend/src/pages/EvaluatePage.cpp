@@ -619,7 +619,12 @@ void EvaluatePage::onGradeRun() {
       const QString basis = scope["scoringBasis"].toString() == QStringLiteral("playbook")
           ? QStringLiteral("本表按原预案固定步骤计分；AI 新增步骤不计固定步骤分，有效证据仍可计入 MITRE 覆盖。")
           : QStringLiteral("本记录没有预案评分步骤，按实际执行步骤每步 10 分计分，并保留 MITRE 覆盖加分。");
-      m_scopeLabel->setText(counts + QStringLiteral("\n") + basis);
+      const QString results = scope.contains("plannedUnexecuted")
+          ? QStringLiteral("\n计分步骤：通过 %1 · 失败 %2 · 未执行 %3")
+              .arg(scope["plannedPassed"].toInt()).arg(scope["plannedFailed"].toInt())
+              .arg(scope["plannedUnexecuted"].toInt())
+          : QString();
+      m_scopeLabel->setText(counts + results + QStringLiteral("\n") + basis);
     }
 
     auto breakdown = d["breakdown"].toArray();
@@ -632,7 +637,9 @@ void EvaluatePage::onGradeRun() {
       m_stepTable->setItem(i, 1, new QTableWidgetItem(s["toolId"].toString()));
       m_stepTable->setItem(i, 2, new QTableWidgetItem(QString::number(s["score"].toInt())));
       m_stepTable->setItem(i, 3, new QTableWidgetItem(QString::number(s["earned"].toInt())));
-      m_stepTable->setItem(i, 4, new QTableWidgetItem(s["success"].toBool() ? "通过" : "失败"));
+      const QString result = s["status"].toString() == QStringLiteral("NOT_EXECUTED")
+          ? QStringLiteral("未执行") : s["success"].toBool() ? QStringLiteral("通过") : QStringLiteral("失败");
+      m_stepTable->setItem(i, 4, new QTableWidgetItem(result));
     }
 
 

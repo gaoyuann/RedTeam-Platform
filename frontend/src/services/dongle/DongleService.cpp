@@ -3,6 +3,7 @@
 #include <QCryptographicHash>
 #include <QCoreApplication>
 #include <QDir>
+#include <QDebug>
 #include <QFile>
 #include <QFileInfo>
 #include <QLibrary>
@@ -11,6 +12,7 @@
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <QSysInfo>
+#include <QRegularExpression>
 #include <QtGlobal>
 
 #include <algorithm>
@@ -67,19 +69,34 @@ QStringList DongleService::candidateLibraryPaths() const {
     QStringList paths;
     const QString appDir = QCoreApplication::applicationDirPath();
 #ifdef Q_OS_WIN
-    const QString architecture = QSysInfo::currentCpuArchitecture().toLower();
-    const QString platformDirectory = (architecture == QStringLiteral("i386")
-                                       || architecture == QStringLiteral("i686"))
-                                          ? QStringLiteral("windows-x86")
-                                          : QStringLiteral("windows-x64");
+    const QString architecture = QSysInfo::buildCpuArchitecture().toLower();
+    QString platformDirectory;
+    if (architecture == QStringLiteral("i386") || architecture == QStringLiteral("i686"))
+        platformDirectory = QStringLiteral("windows-x86");
+    else if (architecture == QStringLiteral("x86_64"))
+        platformDirectory = QStringLiteral("windows-x64");
+    else
+        return paths;
     const QString relativeLibrary = QStringLiteral("third_party/rockey/%1/Dongle_d.dll").arg(platformDirectory);
+#elif defined(Q_OS_LINUX)
+    const QString architecture = QSysInfo::buildCpuArchitecture().toLower();
+    QString platformDirectory;
+    if (architecture == QStringLiteral("i386") || architecture == QStringLiteral("i686"))
+        platformDirectory = QStringLiteral("linux-x86");
+    else if (architecture == QStringLiteral("x86_64"))
+        platformDirectory = QStringLiteral("linux-x86_64");
+    else if (architecture == QStringLiteral("arm64") || architecture == QStringLiteral("aarch64"))
+        platformDirectory = QStringLiteral("linux-aarch64");
+    else
+        return paths;
+    // The vendor ARM64 SDK uses its original 1.0 filename; x86 SDKs remain 0.3.
+    const QString libraryName = platformDirectory == QStringLiteral("linux-aarch64")
+                                    ? QStringLiteral("libRockeyARM.so.1.0")
+                                    : QStringLiteral("libRockeyARM.so.0.3");
+    const QString relativeLibrary = QStringLiteral("third_party/rockey/%1/%2").arg(platformDirectory, libraryName);
 #else
-    const QString architecture = QSysInfo::currentCpuArchitecture().toLower();
-    const QString platformDirectory = (architecture == QStringLiteral("i386")
-                                       || architecture == QStringLiteral("i686"))
-                                          ? QStringLiteral("linux-x86")
-                                          : QStringLiteral("linux-x86_64");
-    const QString relativeLibrary = QStringLiteral("third_party/rockey/%1/libRockeyARM.so.0.3").arg(platformDirectory);
+    return paths;
+    const QString relativeLibrary;
 #endif
     // SDK 随程序分发；绝不加载用户指定或系统级库。
     // appDir/third_party/rockey 覆盖 dev 构建态（CMake post-build 拷贝）与安装态；
@@ -90,17 +107,31 @@ QStringList DongleService::candidateLibraryPaths() const {
 }
 
 bool DongleService::ensureLoaded(QString *errorMessage) {
-    if (m_enum && m_open && m_close && m_readData && m_writeData) {
+    if (m_enum && m_open && m_reset && m_close && m_readData && m_writeData) {
         return true;
     }
+    // A failed symbol lookup must never leave callable pointers into an unloaded SDK.
+    auto clearFunctions = [this]() {
+        m_enum = nullptr; m_open = nullptr; m_reset = nullptr;
+        m_close = nullptr; m_readData = nullptr; m_writeData = nullptr;
+        m_loadedLibraryPath.clear();
+    };
+    clearFunctions();
     QStringList attempted;
+    bool foundLibrary = false;
+    QStringList failures;
     for (const QString &path : candidateLibraryPaths()) {
         if (path.isEmpty() || attempted.contains(path)) {
             continue;
         }
         attempted << path;
+        if (!QFileInfo::exists(path)) {
+            continue;
+        }
+        foundLibrary = true;
         m_library->setFileName(path);
         if (!m_library->load()) {
+            failures << m_library->errorString();
             continue;
         }
         m_enum = reinterpret_cast<EnumFunction>(m_library->resolve("Dongle_Enum"));
@@ -113,11 +144,23 @@ bool DongleService::ensureLoaded(QString *errorMessage) {
             m_loadedLibraryPath = path;
             return true;
         }
+        failures << QStringLiteral("SDK 缺少必要接口");
         m_library->unload();
+        clearFunctions();
     }
+    qWarning().noquote() << "ROCKEY SDK load failed. Architecture:" << QSysInfo::buildCpuArchitecture()
+                         << "Paths:" << attempted.join(QStringLiteral(", "))
+                         << "Details:" << failures.join(QStringLiteral("; "));
     if (errorMessage) {
-        *errorMessage = QStringLiteral("未找到项目内置的 ROCKEY ARM SDK 动态库。请确认 third_party/rockey 目录完整。尝试路径：%1")
-                            .arg(attempted.join(QStringLiteral("、")));
+        if (attempted.isEmpty()) {
+            *errorMessage = QStringLiteral("当前程序架构（%1）暂不支持加密锁 SDK。").arg(QSysInfo::buildCpuArchitecture());
+        } else if (!foundLibrary) {
+            *errorMessage = QStringLiteral("缺少适用于当前系统及 %1 架构的加密锁组件。请联系部署人员补装厂商 SDK，完成后点击“刷新设备”。")
+                                .arg(QSysInfo::buildCpuArchitecture());
+        } else {
+            *errorMessage = QStringLiteral("加密锁 SDK 加载失败（%1）。请检查库的架构、依赖及接口版本；详细原因见客户端运行日志。")
+                                .arg(QSysInfo::buildCpuArchitecture());
+        }
     }
     return false;
 }
@@ -202,15 +245,24 @@ bool DongleService::closeDevice(DongleHandle handle, QString *errorMessage) {
     return result == DongleSuccess;
 }
 
-bool DongleService::readRecord(int index, QByteArray *record, DongleDeviceInfo *device, QString *errorMessage) {
+bool DongleService::readRecord(int index, QByteArray *record, DongleDeviceInfo *device, QString *errorMessage, const QByteArray &expectedHid) {
     if (!record) {
         return false;
     }
-    const QVector<DongleDeviceInfo> devices = enumerate(errorMessage);
+    QString enumerationError;
+    const QVector<DongleDeviceInfo> devices = enumerate(&enumerationError);
+    if (!enumerationError.isEmpty()) {
+        if (errorMessage) *errorMessage = enumerationError;
+        return false;
+    }
     if (index < 0 || index >= devices.size()) {
         if (errorMessage) {
             *errorMessage = QStringLiteral("加密锁索引无效，请先刷新设备列表。");
         }
+        return false;
+    }
+    if (!expectedHid.isEmpty() && devices.at(index).hid != expectedHid) {
+        if (errorMessage) *errorMessage = QStringLiteral("设备列表已变化，请刷新后重新选择加密锁。");
         return false;
     }
     if (device) {
@@ -231,8 +283,8 @@ bool DongleService::readRecord(int index, QByteArray *record, DongleDeviceInfo *
         }
         return false;
     }
-    if (!closed && errorMessage && errorMessage->isEmpty()) {
-        *errorMessage = closeError;
+    if (!closed) {
+        if (errorMessage) *errorMessage = closeError;
         return false;
     }
     *record = data;
@@ -260,8 +312,8 @@ bool DongleService::writeRecord(int index, const QByteArray &record, QString *er
         }
         return false;
     }
-    if (!closed && errorMessage) {
-        *errorMessage = closeError;
+    if (!closed) {
+        if (errorMessage) *errorMessage = closeError;
         return false;
     }
     return true;
@@ -287,20 +339,14 @@ QByteArray DongleService::makeRecord(const DongleDeviceInfo &device) const {
 }
 
 bool DongleService::recordMatchesDevice(const QByteArray &record, const DongleDeviceInfo &device) const {
-    if (record.size() < RegistrationSize || !record.startsWith(RegistrationMagic)) {
-        return false;
-    }
-    if (record.mid(32, 8) != device.hid.left(8)) {
-        return false;
-    }
-    const QByteArray expected = QCryptographicHash::hash(record.left(224), QCryptographicHash::Sha256);
-    return record.mid(224, expected.size()) == expected;
+    // Check version, HID, PID fingerprint and checksum, including reserved bytes.
+    return device.hid.size() == 8 && record == makeRecord(device);
 }
 
-bool DongleService::registerDevice(int index, bool overwrite, QString *errorMessage) {
+bool DongleService::registerDevice(int index, bool overwrite, QString *errorMessage, const QByteArray &expectedHid) {
     QByteArray existing;
     DongleDeviceInfo device;
-    if (!readRecord(index, &existing, &device, errorMessage)) {
+    if (!readRecord(index, &existing, &device, errorMessage, expectedHid)) {
         return false;
     }
     if (!isBlankRecord(existing) && !recordMatchesDevice(existing, device) && !overwrite) {
@@ -309,13 +355,14 @@ bool DongleService::registerDevice(int index, bool overwrite, QString *errorMess
         }
         return false;
     }
-    return writeRecord(index, makeRecord(device), errorMessage);
+    if (!writeRecord(index, makeRecord(device), errorMessage)) return false;
+    return verifyDevice(index, errorMessage, device.hid);
 }
 
-bool DongleService::destroyRegistration(int index, QString *errorMessage) {
+bool DongleService::destroyRegistration(int index, QString *errorMessage, const QByteArray &expectedHid) {
     QByteArray existing;
     DongleDeviceInfo device;
-    if (!readRecord(index, &existing, &device, errorMessage)) {
+    if (!readRecord(index, &existing, &device, errorMessage, expectedHid)) {
         return false;
     }
     if (!recordMatchesDevice(existing, device)) {
@@ -324,13 +371,22 @@ bool DongleService::destroyRegistration(int index, QString *errorMessage) {
         }
         return false;
     }
-    return writeRecord(index, QByteArray(RegistrationSize, '\0'), errorMessage);
+    const QByteArray cleared(RegistrationSize, '\0');
+    if (!writeRecord(index, cleared, errorMessage)) return false;
+    QByteArray actual;
+    DongleDeviceInfo current;
+    if (!readRecord(index, &actual, &current, errorMessage, device.hid)) return false;
+    if (actual != cleared) {
+        if (errorMessage) *errorMessage = QStringLiteral("销毁校验失败：设备回读内容与清除记录不一致。");
+        return false;
+    }
+    return true;
 }
 
-bool DongleService::verifyDevice(int index, QString *errorMessage) {
+bool DongleService::verifyDevice(int index, QString *errorMessage, const QByteArray &expectedHid) {
     QByteArray record;
     DongleDeviceInfo device;
-    if (!readRecord(index, &record, &device, errorMessage)) {
+    if (!readRecord(index, &record, &device, errorMessage, expectedHid)) {
         return false;
     }
     if (!recordMatchesDevice(record, device)) {
@@ -343,10 +399,15 @@ bool DongleService::verifyDevice(int index, QString *errorMessage) {
 }
 
 bool DongleService::verifyDeviceByHid(const QByteArray &expectedHid, QString *errorMessage) {
-    const QVector<DongleDeviceInfo> devices = enumerate(errorMessage);
+    QString enumerationError;
+    const QVector<DongleDeviceInfo> devices = enumerate(&enumerationError);
+    if (!enumerationError.isEmpty()) {
+        if (errorMessage) *errorMessage = enumerationError;
+        return false;
+    }
     for (const DongleDeviceInfo &device : devices) {
         if (device.hid == expectedHid) {
-            return verifyDevice(device.index, errorMessage);
+            return verifyDevice(device.index, errorMessage, expectedHid);
         }
     }
     if (errorMessage) {
@@ -356,7 +417,7 @@ bool DongleService::verifyDeviceByHid(const QByteArray &expectedHid, QString *er
 }
 
 QString DongleService::policyDir() {
-    // QStandardPaths::AppConfigLocation: Linux ~/.config/RedTeam/RedTeam-Platform/
+    // AppConfigLocation follows the application's organization/name settings.
     QString dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
     if (dir.isEmpty()) {
         dir = QDir::homePath() + QStringLiteral("/.config/RedTeam/RedTeam-Platform");
@@ -387,7 +448,17 @@ bool DongleService::loadPolicy(const QString &configDir, bool *enabled, QString 
         return false;
     }
     const QJsonObject object = document.object();
-    if (enabled) *enabled = object.value(QStringLiteral("enabled")).toBool(false);
+    const QJsonValue enabledValue = object.value(QStringLiteral("enabled"));
+    const QJsonValue hidValue = object.value(QStringLiteral("registeredHid"));
+    const QString hid = hidValue.toString();
+    static const QRegularExpression hidPattern(QStringLiteral("^[0-9a-fA-F]{16}$"));
+    if (!enabledValue.isBool() || !hidValue.isString()
+        || (!hid.isEmpty() && !hidPattern.match(hid).hasMatch())
+        || (enabledValue.toBool() && hid.isEmpty())) {
+        if (errorMessage) *errorMessage = QStringLiteral("加密锁策略字段无效：启用状态必须为布尔值，已绑定 HID 必须为 16 位十六进制字符串。");
+        return false;
+    }
+    if (enabled) *enabled = enabledValue.toBool();
     if (libraryPath) *libraryPath = QStringLiteral("bundled");
     if (registeredHid) *registeredHid = QByteArray::fromHex(object.value(QStringLiteral("registeredHid")).toString().toLatin1());
     return true;
@@ -395,6 +466,10 @@ bool DongleService::loadPolicy(const QString &configDir, bool *enabled, QString 
 
 bool DongleService::savePolicy(const QString &configDir, bool enabled, const QString &libraryPath,
                                const QByteArray &registeredHid, QString *errorMessage) {
+    if ((enabled && registeredHid.size() != 8) || (!registeredHid.isEmpty() && registeredHid.size() != 8)) {
+        if (errorMessage) *errorMessage = QStringLiteral("无法保存策略：已绑定设备 HID 必须为 8 字节。");
+        return false;
+    }
     if (!QDir().mkpath(configDir)) {
         if (errorMessage) *errorMessage = QStringLiteral("无法创建加密锁策略目录：%1").arg(configDir);
         return false;

@@ -1,0 +1,27 @@
+# May also run via cmake -DROCKEY_SDK_FILE=... -DROCKEY_SDK_ARCH=... -P ...
+# Validate the ELF header without loading/executing a vendor library.
+if(NOT EXISTS "${ROCKEY_SDK_FILE}")
+  if(ROCKEY_SDK_REQUIRED)
+    message(FATAL_ERROR "Missing ROCKEY SDK: ${ROCKEY_SDK_FILE}. Obtain the matching Linux SDK from the vendor; see docs/dongle-verification.md.")
+  endif()
+  message(WARNING "Missing ROCKEY SDK: ${ROCKEY_SDK_FILE}. Dongle verification will be unavailable; see docs/dongle-verification.md.")
+  return()
+endif()
+
+file(READ "${ROCKEY_SDK_FILE}" _rockey_header LIMIT 20 HEX)
+if(ROCKEY_SDK_ARCH STREQUAL "linux-aarch64")
+  set(_rockey_prefix "7f454c46020101")
+  set(_rockey_machine "b700")
+elseif(ROCKEY_SDK_ARCH STREQUAL "linux-x86_64")
+  set(_rockey_prefix "7f454c46020101")
+  set(_rockey_machine "3e00")
+elseif(ROCKEY_SDK_ARCH STREQUAL "linux-x86")
+  set(_rockey_prefix "7f454c46010101")
+  set(_rockey_machine "0300")
+else()
+  message(FATAL_ERROR "Unsupported ROCKEY SDK architecture: ${ROCKEY_SDK_ARCH}")
+endif()
+# ELF class, little-endian encoding, shared-object type and machine must match.
+if(NOT _rockey_header MATCHES "^${_rockey_prefix}[0-9a-f]+0300${_rockey_machine}$")
+  message(FATAL_ERROR "ROCKEY SDK is not a ${ROCKEY_SDK_ARCH} ELF shared library: ${ROCKEY_SDK_FILE}. Do not rename an x86 library to use it on ARM64.")
+endif()
