@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { getWsManager } from '../services/wsManager.js';
+import { recommendForScans } from '../services/playbookRecommendations.js';
 import { captureTopologyOrigin, readTopologyOrigin } from '../services/topologyOrigin.js';
 
 // ── Validation helpers ────────────────────────────────────────────────────
@@ -328,6 +329,13 @@ export default function (db) {
 
     // 用户可选择执行哪个 playbook（覆盖 AI 生成的）
     const selectedPlaybookId = req.body?.playbook_id;
+    const recommendation = recommendForScans(db, pipeline.target, String(pipeline.scan_task_id || '').split(','))
+      .find(candidate => candidate.playbook_id === (selectedPlaybookId || pipeline.generated_playbook_id));
+    if (recommendation?.match_status === 'needs_input') {
+      return res.status(409).json({ status: 'error', error: {
+        message: `执行条件尚未满足：${recommendation.match_conditions.join('；')}。请补充入口后重新创建任务，或选择其他预案。`,
+      } });
+    }
     if (selectedPlaybookId && selectedPlaybookId !== pipeline.generated_playbook_id) {
       db.prepare("UPDATE pipelines SET generated_playbook_id = ?, updated_at = datetime('now') WHERE pipeline_id = ?")
         .run(selectedPlaybookId, req.params.id);

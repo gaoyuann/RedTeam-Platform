@@ -1,12 +1,11 @@
 import { normalizeTopologyTarget } from '../services/nmapTopology.js';
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
-import { matchPlaybooks } from '../services/playbookMatcher.js';
+import { recommendForScans } from '../services/playbookRecommendations.js';
 import { generatePlaybook } from '../services/playbookGenerator.js';
 import { executeScan, requestScanAbort } from '../services/scanExecutor.js';
 import { getWsManager } from '../services/wsManager.js';
 import { resolveTargetProfile } from '../services/targetProfileResolver.js';
-import { loadTargetProfile } from '../services/targetDiscovery.js';
 
 export default function (db) {
   const router = Router();
@@ -135,11 +134,7 @@ export default function (db) {
   router.get('/:scanTaskId/recommendations', (req, res) => {
     const task = db.prepare('SELECT scan_task_id, target, status FROM scan_tasks WHERE scan_task_id = ?').get(req.params.scanTaskId);
     if (!task) return res.status(404).json({ status: 'error', error: { message: 'Scan task not found' } });
-    const results = db.prepare('SELECT * FROM scan_results WHERE scan_task_id = ?').all(req.params.scanTaskId);
-    if (!results.length) return res.json({ status: 'ok', data: [] });
-    // Resolve target class for better playbook matching
-    const targetProfile = loadTargetProfile(db, task.target);
-    const recommendations = matchPlaybooks(results, targetProfile);
+    const recommendations = recommendForScans(db, task.target, [task.scan_task_id]);
     res.json({ status: 'ok', data: recommendations });
   });
 

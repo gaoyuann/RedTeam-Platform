@@ -1,0 +1,25 @@
+{
+  "id": "web_sqli_verify",
+  "name": "SQL 注入定向验证（通用入口）",
+  "description": "对授权范围内已选定的带参数 URL 进行低风险 SQL 注入检测，不套用 DVWA 路径、凭据或数据库名。SQLi-Labs 应填写具体 lesson 的参数入口，不以首页扫描代替题目验证。",
+  "author": "Hexstrike-EDU 教学团队",
+  "difficulty": "入门-中级",
+  "estimatedTimeMinutes": 10,
+  "targetType": ["web_url", "local_ip"],
+  "notSuitableFor": ["windows_host", "ad_domain"],
+  "baselineGroup": "exploit",
+  "target_class": "web_url",
+  "mitreTechniques": ["T1190"],
+  "disableAutoInsert": true,
+  "steps": [
+    {
+      "id": "verify_sqli_endpoint",
+      "name": "验证指定入口的 SQL 注入",
+      "description": "仅检测注入点，保留检测证据；不自动导出数据、写文件或获取系统 shell。执行前确认目标为具体参数入口。",
+      "toolId": "sqlmap",
+      "argsTemplate": ["-u", "<target>", "--batch", "--level=1", "--risk=1", "--timeout=10", "--retries=1"],
+      "score": 20,
+      "expectedMitre": ["T1190"]
+    }
+  ]
+}

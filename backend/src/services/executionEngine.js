@@ -466,6 +466,7 @@ export async function executeRun(runId) {
       attempts++;
       step.execution_finished = true;
       step.execution_success = !!result.success;
+      step.execution_error = result.success ? null : result.error || result.stderr?.trim().slice(0, 1000) || `Tool exited with code ${result.exitCode ?? -1}`;
       db.prepare('DELETE FROM execution_steps WHERE run_id = ? AND step_index = ?')
         .run(runId, step.step_index);
       db.prepare(`
@@ -736,6 +737,7 @@ export async function executeRun(runId) {
                 if (result.success) completedSteps--; else failedSteps--;
                 targetStep.execution_finished = false;
                 targetStep.execution_success = false;
+                targetStep.execution_error = null;
                 failedNonOptionalSteps.delete(adjustTargetIdx);  // clear this step's failure, re-eval on retry
                 i--;  // loop will i++ and re-execute this step
                 console.log(`[ReAct] Retrying step ${adjustTargetIdx} (attempt ${retries}/2)${decision.newArgs ? ' with adjusted args' : ''}`);

@@ -16,23 +16,23 @@
   "steps": [
     {
       "id": "step1_gobuster_course_dict",
-      "name": "使用教学字典枚举 DVWA 路径",
+      "name": "使用教学字典枚举 Web 路径",
       "toolId": "gobuster",
-      "description": "使用专为 DVWA 设计的教学字典，发现 /login.php、/admin、/vulnerabilities 等常见路径。注意：DVWA 模拟服务器对未知路径返回 200，需要 -fw 参数强制继续枚举。",
+      "description": "使用教学字典发现常见 Web 路径；通配符响应须人工核对，不强制忽略预检失败。",
       "status": "PENDING",
       "score": 15,
       "expectedMitre": [
         "T1083"
       ],
       "argsTemplate": [
+        "dir",
         "-u",
         "<target>",
         "-w",
         "config/wordlists/course_web_dirs.txt",
         "-t",
         "10",
-        "-q",
-        "-fw"
+        "-q"
       ],
       "payload_id": "gobuster"
     },
@@ -47,16 +47,18 @@
         "T1083"
       ],
       "argsTemplate": [
+        "dir",
         "-u",
         "<target>",
         "-w",
         "config/wordlists/course_web_dirs.txt",
         "-s",
         "403",
+        "-b",
+        "",
         "-t",
         "10",
-        "-q",
-        "-fw"
+        "-q"
       ],
       "payload_id": "gobuster"
     }
@@ -115,6 +117,6 @@
     "requires_cookie": false
   },
   "target_class": "dvwa",
-  "_fix_note": "v3.8.1: 修复 gobuster 命令格式（旧版无 dir 子命令），改用教学字典 course_web_dirs.txt，添加 -fw 参数处理 DVWA 通配符响应",
+  "_fix_note": "使用 Gobuster 3.8 dir 子命令；移除不支持的 -fw，显式清空状态码黑名单以启用 403 白名单。",
   "disableAutoInsert": true
 }

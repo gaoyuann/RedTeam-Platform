@@ -692,20 +692,29 @@ export async function executeScan(scanTaskId) {
       outcomes.push({ tool_id: toolId, success: false, ...details });
     }
 
-    async function runAndStore(scanType, toolId, target, params, timeout) {
+    function recordWarning(toolId, error, result = {}) {
+      const details = { warning: error, exit_code: result.exitCode ?? null, timed_out: !!result.timedOut };
+      insertResult.run(scanTaskId, 'scan_warning', JSON.stringify(details), 'info', null, null, toolId, new Date().toISOString());
+      outcomes.push({ tool_id: toolId, success: false, non_blocking: true, warning: error, ...details });
+    }
+
+    async function runAndStore(scanType, toolId, target, params, timeout, { nonFatal = false } = {}) {
       if (scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');
       let args = buildArgs(scanType, target, params);
       let result;
       try {
         result = classifyToolResult(toolId, await runAbortableTool(toolId, args, { timeout }));
       } catch (error) {
+        if (nonFatal) {
+          recordWarning(toolId, error.message);
+          return 0;
+        }
         recordFailure(toolId, error.message);
         throw error;
       }
       if (result.executionMode === 'aborted') throw new Error('扫描被操作员中止');
       if (!result.success && scanType === 'port_scan' && params.discover_topology
           && !result.timedOut && /traceroute|root|privileg|raw socket/i.test((result.stderr || '') + (result.error || ''))) {
-        // A missing traceroute capability must not break the original scan.
         insertResult.run(scanTaskId, 'scan_warning', JSON.stringify({ message: '路由探测不可用，已回退到原端口扫描' }), 'info', null, null, toolId, new Date().toISOString());
         args = buildArgs(scanType, target, { ...params, discover_topology: false });
         result = classifyToolResult(toolId, await runAbortableTool(toolId, args, { timeout }));
@@ -713,6 +722,10 @@ export async function executeScan(scanTaskId) {
       }
       const output = (result.stdout || '') + (result.stderr ? '\n' + result.stderr : '');
       if (!result.success) {
+        if (nonFatal) {
+          recordWarning(toolId, result.error || `${toolId} failed`, result);
+          return 0;
+        }
         recordFailure(toolId, result.error || `${toolId} failed`, result);
         throw new Error(result.error || `${toolId} failed`);
       }
@@ -724,6 +737,10 @@ export async function executeScan(scanTaskId) {
       }
       if (['app_discovery_httpx', 'app_discovery_whatweb'].includes(scanType) && !results.some(result => ['http_probe', 'technology_detection'].includes(result.result_type))) {
         outcomes.pop();
+        if (nonFatal) {
+          recordWarning(toolId, 'HTTP probe returned no reachable endpoints', result);
+          return 0;
+        }
         recordFailure(toolId, 'HTTP probe returned no reachable endpoints', result);
         throw new Error('HTTP probe returned no reachable endpoints');
       }
@@ -741,10 +758,7 @@ export async function executeScan(scanTaskId) {
     let totalResults = 0;
     let contextResults = 0;
     let networkContext = null;
-    // Capture the scan source before probing, so failed targets do not erase it.
     if (task.scan_type === 'topology_scan' || (task.scan_type === 'port_scan' && parameters.discover_topology)) {
-      // Inspect the same tool/container networking context; the backend's host
-      // interfaces may belong to a different network namespace.
       const context = await runAbortableTool('nmap', ['--iflist'], { timeout: 15000 });
       if (context.success) {
         const data = { ...parseNmapInterfaces(context.stdout), executionMode: context.executionMode };
@@ -755,7 +769,6 @@ export async function executeScan(scanTaskId) {
         insertResult.run(scanTaskId, 'scan_warning', JSON.stringify({ message: '未能读取扫描环境路由，仅展示探测结果' }), 'info', null, null, 'nmap', new Date().toISOString());
       }
     }
-
     if (scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');
 
     if (task.scan_type === 'topology_scan') {
@@ -826,7 +839,7 @@ export async function executeScan(scanTaskId) {
       // ── Dual-step: whatweb (tech fingerprint) + httpx (HTTP probe) ──
       console.log(`[Scan] app_discovery step 1/2: whatweb for ${task.target}`);
       try {
-        totalResults += await runAndStore('app_discovery_whatweb', 'whatweb', task.target, parameters, 120_000);
+        totalResults += await runAndStore('app_discovery_whatweb', 'whatweb', task.target, parameters, 120_000, { nonFatal: true });
       } catch (err) {
         console.warn(`[Scan] whatweb failed: ${err.message}`);
       }
@@ -869,7 +882,7 @@ export async function executeScan(scanTaskId) {
     if (scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');
     if (networkContext) {
       const targetHosts = db.prepare("SELECT result_data FROM scan_results WHERE scan_task_id = ? AND result_type = 'host_discovery'")
-        .all(scanTaskId).map(r => JSON.parse(r.result_data)).filter(d => !d.traceTarget).map(d => d.host);
+        .all(scanTaskId).map(row => JSON.parse(row.result_data)).filter(data => !data.traceTarget).map(data => data.host);
       const scope = selectLanDiscoveryScope(task.target, networkContext, targetHosts);
       const storeLanResult = (type, data) => {
         insertResult.run(scanTaskId, type, JSON.stringify(data), 'info', null, null, 'nmap', new Date().toISOString());
@@ -883,9 +896,8 @@ export async function executeScan(scanTaskId) {
           if (discovery.executionMode === 'aborted' || scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');
           storeLanResult('scan_evidence', { phase: 'lan-discovery', args, output: discovery.stdout || '',
             error: discovery.stderr || discovery.error || '', executionMode: discovery.executionMode });
-          const hosts = parseNmapResults(discovery.stdout || '').filter(r => r.result_type === 'host_discovery' && r.result_data.status === 'up');
+          const hosts = parseNmapResults(discovery.stdout || '').filter(row => row.result_type === 'host_discovery' && row.result_data.status === 'up');
           storeLanResult('lan_scope', { ...scope, complete: discovery.success === true && !discovery.timedOut });
-          // A separate result type keeps neighboring assets out of target attack analysis.
           for (const host of hosts) storeLanResult('lan_host_discovery', { ...host.result_data, scope: scope.cidr });
           if (!discovery.success || discovery.timedOut) storeLanResult('scan_warning', { phase: 'lan-discovery',
             message: '局域网发现未完成，仅展示已响应主机；' + (discovery.error || discovery.stderr || '探测超时或失败') });
@@ -896,11 +908,10 @@ export async function executeScan(scanTaskId) {
       }
     }
     totalResults += contextResults;
-
     if (scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');
     if (!outcomes.some(outcome => outcome.success)) throw new Error(outcomes.map(outcome => `${outcome.tool_id}: ${outcome.error}`).join('; ') || 'No scan tool succeeded');
     const finalStatus = outcomes.some(outcome => !outcome.success) ? 'PARTIAL' : 'COMPLETED';
-    const warnings = outcomes.filter(outcome => !outcome.success).map(outcome => `${outcome.tool_id}: ${outcome.error}`).join('; ');
+    const warnings = outcomes.filter(outcome => !outcome.success).map(outcome => `${outcome.tool_id}: ${outcome.error || outcome.warning || 'scan failed'}`).join('; ');
     const completedAt = new Date().toISOString();
     const findings = db.prepare('SELECT * FROM scan_results WHERE scan_task_id = ?').all(scanTaskId);
     const discovered = buildDiscoveredProfile(task.target, findings);

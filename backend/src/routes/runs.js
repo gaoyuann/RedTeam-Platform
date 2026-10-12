@@ -6,6 +6,7 @@ import { buildAttackGraph, buildAttackGraphSummary } from '../services/graphBuil
 import { inferNextActions } from '../services/pathPlanner.js';
 import { runPreflightChecks } from '../services/preflightGate.js';
 import { getWsManager } from '../services/wsManager.js';
+import { summarizeRunResultCounts } from '../services/runResultCounts.js';
 
 export default function (db) {
   const router = Router();
@@ -39,6 +40,10 @@ export default function (db) {
     row.steps = db.prepare('SELECT * FROM execution_steps WHERE run_id = ? ORDER BY step_index').all(req.params.runId);
     row.evidence = db.prepare('SELECT * FROM evidence_records WHERE run_id = ? ORDER BY recorded_at').all(req.params.runId);
     row.attempts = db.prepare('SELECT * FROM execution_attempts WHERE run_id = ? ORDER BY id').all(req.params.runId);
+    const plannedSteps = row.playbook_id
+      ? db.prepare('SELECT COUNT(*) AS count FROM playbook_steps WHERE playbook_id = ?').get(row.playbook_id).count
+      : 0;
+    row.result_counts = summarizeRunResultCounts(row.steps, row.status, { knownStepCount: plannedSteps });
     // Enrich with playbook name for display
     if (row.playbook_id) {
       const pb = db.prepare('SELECT name FROM playbooks WHERE playbook_id = ?').get(row.playbook_id);
