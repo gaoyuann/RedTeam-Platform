@@ -1,4 +1,6 @@
 #include "MainWindow.h"
+#include "GlobalSearchDialog.h"
+#include <QShortcut>
 #include "ApiClient.h"
 #include "LoginDialog.h"
 #include "Theme.h"
@@ -89,10 +91,34 @@ void MainWindow::setupUI()
     topLayout->addStretch();
     auto *globalSearch = new QLineEdit(topBar);
     globalSearch->setObjectName("globalSearch");
-    globalSearch->setPlaceholderText(QStringLiteral("全局搜索 · 暂未开放"));
-    globalSearch->setEnabled(false);
+    globalSearch->setPlaceholderText(QStringLiteral("全局搜索 · 回车搜索"));
+    globalSearch->setMaxLength(120);
+    globalSearch->setClearButtonEnabled(true);
     globalSearch->addAction(QIcon(":/icons/shell/search.svg"), QLineEdit::LeadingPosition);
-    globalSearch->setToolTip(QStringLiteral("此入口尚未接入；任务、分析、资源和报告页面提供各自的筛选。"));
+    globalSearch->setToolTip(QStringLiteral("搜索模块、任务和报告（Ctrl+K）"));
+    auto *searchShortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+K")), this);
+    connect(searchShortcut, &QShortcut::activated, globalSearch, [globalSearch]() {
+        if (globalSearch->isEnabled()) { globalSearch->setFocus(); globalSearch->selectAll(); }
+    });
+    connect(globalSearch, &QLineEdit::returnPressed, this, [this, globalSearch]() {
+        if (m_dongleLocked) return;
+        auto *dialog = new GlobalSearchDialog(m_api, m_modules, m_role, m_username, this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->setWindowModality(Qt::WindowModal);
+        connect(dialog, &GlobalSearchDialog::resultActivated, this,
+            [this](int page, const QString &pipelineId, const QString &reportId) {
+                if (m_dongleLocked) return;
+                if (pipelineId.isEmpty()) { switchToPage(page); return; }
+                switchToPage(1);
+                if (reportId.isEmpty()) {
+                    m_flowPage->openTaskAnalysis(pipelineId);
+                    m_flowPage->switchToStageTab(0);
+                } else m_flowPage->openTaskReport(pipelineId, reportId);
+                m_flowPage->setReturnPage(page == 5 ? 5 : 0, page == 5 ? QStringLiteral("结果与报告") : QStringLiteral("工作台"));
+            });
+        dialog->show();
+        dialog->search(globalSearch->text());
+    });
     globalSearch->setMinimumWidth(180);
     globalSearch->setMaximumWidth(430);
     topLayout->addWidget(globalSearch, 1);
@@ -466,6 +492,8 @@ void MainWindow::setDongleLocked(bool locked, const QString &errorMessage) {
             m_pageBeforeDongleLock = current;
         }
         m_dongleLocked = true;
+        for (auto *dialog : findChildren<GlobalSearchDialog*>()) dialog->reject();
+        if (auto *search = findChild<QLineEdit*>("globalSearch")) search->setEnabled(false);
         if (m_dongleLockPage && m_stackWidget) {
             m_dongleLockPage->setErrorMessage(errorMessage);
             m_stackWidget->setCurrentWidget(m_dongleLockPage);
@@ -477,6 +505,7 @@ void MainWindow::setDongleLocked(bool locked, const QString &errorMessage) {
     }
 
     m_dongleLocked = false;
+    if (auto *search = findChild<QLineEdit*>("globalSearch")) search->setEnabled(true);
     if (m_navList) {
         m_navList->setEnabled(true);
     }
