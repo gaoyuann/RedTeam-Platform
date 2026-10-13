@@ -230,10 +230,12 @@ export default function (db) {
       const pipelines = isProgramScan(task.scan_type) ? db.prepare('SELECT pipeline_id,scan_task_id FROM pipelines WHERE created_by=?')
         .all(task.created_by).filter(row=>String(row.scan_task_id || '').split(',').includes(task.scan_task_id)) : [];
       const log = (message,level='info') => pipelines.forEach(row=>appendTaskLog(db,row.pipeline_id,message,level));
-      log('开始根据选中的程序发现生成验证预案');
+      const selectedIds=Array.isArray(req.body.finding_ids) ? req.body.finding_ids.filter(Number.isInteger).slice(0,10) : [];
+      log('开始根据选中的程序发现生成验证预案'+(selectedIds.length ? ' · 漏洞编号 '+selectedIds.join(',') : ''));
       const result = await generatePlaybook(req.params.scanTaskId, null, {findingIds:req.body.finding_ids ?? [],adaptive:req.body.adaptive !== false,demonstration:req.body.demonstration === true});
       if (!result.ok) {
-        log('验证预案生成失败；请在扫描发现页面查看缺失条件或生成错误','warn');
+        log('验证预案生成失败：'+String(result.error || '未知错误').slice(0,1200)
+          +(result.generation ? ` · 模型调用 ${result.generation.calls} 次，纠正 ${result.generation.corrective_attempts} 次` : ''),'warn');
         return res.status(400).json({ status: 'error', error: { message: result.error } });
       }
       log(result.requires_runtime_target ? '已保存程序预案草稿；需要补充运行地址后才能执行'

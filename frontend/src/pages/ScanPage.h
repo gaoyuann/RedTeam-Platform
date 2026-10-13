@@ -143,6 +143,9 @@ private:
   int m_scopeRevision = 0;
   QString m_selectedTaskId;
   QString m_lastGeneratedId;       // playbook_id of last AI-generated playbook
+  bool m_generationInProgress = false;
+  bool m_pendingSourceVerification = false;
+  int m_generationRevision = 0;
   QString m_currentTarget;         // current selected task's target, for cross-page navigation
 
   // Right-panel: re-execute for FAILED/CANCELLED
