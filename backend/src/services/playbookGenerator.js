@@ -2,8 +2,9 @@ import { getDb } from '../db/connection.js';
 import { generateSourceVerification } from './sourceVerification.js';
 import {isProgramScan} from './programScan.js';
 import { callLlm } from './llmClient.js';
+import { llmFailure } from './llmFailure.js';
 import { loadTargetProfile } from './targetDiscovery.js';
-import { parseVariableContract, validateVariablePlan } from './executionVariables.js';
+import { isUsableVariable, parseVariableContract, validateVariablePlan } from './executionVariables.js';
 import { buildContextForTarget } from './targetAdapters/index.js';
 
 const TOOL_LIST = [
@@ -80,6 +81,11 @@ export async function generatePlaybook(scanTaskId, analysisResult = null, { scan
     unknown: ['any'],
   };
   const detectedTargetTypes = TARGET_CLASS_TO_TYPE[targetProfile.target_class] || ['any'];
+  const context = buildContextForTarget(targetProfile);
+  const contextVariables = Object.keys(context).filter(name => {
+    try { parseVariableContract([name]); } catch { return false; }
+    return isUsableVariable(context[name]);
+  });
 
   // Build analysis context if provided (from pipeline scan→analyze step)
   let analysisContext = '';
@@ -123,6 +129,7 @@ Findings:
 ${findings || 'No specific findings.'}
 ${analysisContext}
 Available tools: ${TOOL_LIST.join(', ')}
+Available target context variable names (values are resolved at runtime): ${contextVariables.join(', ')}
 
 Output a single JSON object with this exact structure (no markdown, no explanation):
 {
@@ -160,6 +167,10 @@ Rules:
 - outputs MUST be [] for every step except a verified DVWA curl login using {{login_url}} and POST username data, which may produce only ["dvwa_cookie", "auth_cookie"].
 - Never declare outputs such as scan_results, open_ports, vulnerabilities, urls, cookies or report. The executor cannot extract these variables from tool output.
 - inputs may reference only provided target context or a preceding supported DVWA login producer; otherwise use [].
+- <target> is an args_template placeholder, not a variable named target; do not put target in inputs.
+- For verified DVWA, EVERY sqlmap step implicitly requires dvwa_cookie, even when its inputs is []. It MUST follow a supported curl login step declaring dvwa_cookie in outputs.
+- A supported DVWA login must pass {{login_url}} as a separate argument and use --data, -d or --data-raw with username= POST data. Merely visiting the login page or using -X POST does not produce a session.
+- If the evidence does not supply enough information for a valid login, choose unauthenticated reconnaissance steps instead of sqlmap or other session-dependent steps. Do not invent credentials.
 - Session cookies are runtime outputs, never use placeholder cookies or invent session values.
 - For windows_ad targets, use tools like netexec, evil-winrm, responder
 - For cloud targets, use tools like cloudmapper, pacu
@@ -172,16 +183,23 @@ Rules:
 
   let playbookJson;
   let steps;
+  // Both attempts share one budget; clients allow 150 s for this 120 s operation.
+  const deadline = Date.now() + 120_000;
   // One corrective model turn keeps strict validation and never silently drops
   // dependencies the generated requests actually need.
   for (let attempt = 0; attempt < 2; attempt++) {
-    const result = await callLlm(messages, { temperature: 0.3, maxTokens: 4096 });
-    if (!result.ok) return { ok: false, error: result.error };
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return llmFailure({ error: 'LLM request timed out' });
+    const result = await callLlm(messages, { temperature: 0.3, maxTokens: 4096, json: true, timeoutMs: remainingMs });
+    if (!result.ok) return llmFailure(result);
+    if (Date.now() >= deadline) return llmFailure({ error: 'LLM request timed out' });
+    let failureCode = 'PLAYBOOK_FORMAT_ERROR';
     try {
       const jsonStr = result.content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
       playbookJson = JSON.parse(jsonStr);
-      if (!playbookJson || Array.isArray(playbookJson) || !playbookJson.name || !Array.isArray(playbookJson.steps) || !playbookJson.steps.length) {
-        throw new Error('Generated playbook must have a name and nonempty steps array');
+      failureCode = 'PLAYBOOK_VALIDATION_ERROR';
+      if (!playbookJson || Array.isArray(playbookJson) || typeof playbookJson.name !== 'string' || !playbookJson.name.trim() || !Array.isArray(playbookJson.steps) || playbookJson.steps.length < 2 || playbookJson.steps.length > 5) {
+        throw new Error('Generated playbook must have a name and 2-5 steps');
       }
       steps = playbookJson.steps.map((step, index) => {
         if (!step || !step.name || !TOOL_LIST.includes(step.tool_id) || !Array.isArray(step.args_template) || step.args_template.some(arg => typeof arg !== 'string')) {
@@ -196,14 +214,17 @@ Rules:
         throw new Error('Generated DVWA playbook has no verified application fingerprint');
       }
       const variablePlan = validateVariablePlan(steps.map(step => ({ ...step,
-        input_variables: step.inputs, output_variables: step.outputs })), buildContextForTarget(targetProfile));
+        input_variables: step.inputs, output_variables: step.outputs })), context);
       if (!variablePlan.passed) throw new Error(`Invalid generated variable plan: ${variablePlan.issues.join('; ')}`);
       break;
     } catch (error) {
-      if (attempt === 1) return {ok:false,error:error.message};
+      if (attempt === 1) return {ok:false,code:failureCode,error: failureCode === 'PLAYBOOK_FORMAT_ERROR'
+        ? '模型返回格式错误，自动修正一次后仍无法解析为 JSON'
+        : `预案校验失败，自动修正一次后仍不符合执行约束：${error.message}`};
       messages.push({role:'assistant',content:result.content.slice(0,16000)}, {role:'user',content:
         `The generated playbook failed validation: ${error.message}. Return a corrected full JSON playbook using the original evidence and target. `
         + 'Do not invent missing values or remove required authentication. outputs must be [] except for the supported verified DVWA curl login cookie producer. '
+        + 'Every DVWA sqlmap step implicitly needs dvwa_cookie from a preceding supported curl login; inputs: [] cannot bypass this dependency. '
         + 'Tool findings and reports are evidence, not output variables. If necessary choose steps with no unsupported runtime dependencies.'});
     }
   }

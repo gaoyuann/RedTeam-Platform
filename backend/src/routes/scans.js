@@ -238,7 +238,7 @@ export default function (db) {
       if (!result.ok) {
         log('验证预案生成失败：'+String(result.error || '未知错误').slice(0,1200)
           +(result.generation ? ` · 模型调用 ${result.generation.calls} 次，纠正 ${result.generation.corrective_attempts} 次` : ''),'warn');
-        return res.status(400).json({ status: 'error', error: { message: result.error } });
+        return res.status(400).json({ status: 'error', error: { message: result.error, ...(result.code ? { code: result.code } : {}) } });
       }
       log(result.requires_runtime_target ? '已保存程序预案草稿；需要补充运行地址后才能执行'
         : `已生成验证预案 · ${result.steps_count} 个步骤 · 等待建立任务草稿和审批`);

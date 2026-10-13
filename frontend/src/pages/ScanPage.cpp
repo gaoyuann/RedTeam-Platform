@@ -2041,9 +2041,14 @@ void ScanPage::generatePlaybook(const QJsonArray &findingIds) {
       loadRecommendations(m_selectedTaskId);
     } else {
       QString errMsg = res["error"].toObject()["message"].toString();
+      const QString errCode = res["error"].toObject()["code"].toString();
       if (errMsg.isEmpty()) errMsg = res["data"].toObject()["error"].toString();
-      if (errMsg.contains("401") || errMsg.contains("invalid api key", Qt::CaseInsensitive)
-          || errMsg.contains("authentication", Qt::CaseInsensitive))
+      if (errCode == "PLAYBOOK_VALIDATION_ERROR")
+        errMsg = "预案校验失败，自动修正后仍有不支持的步骤或变量依赖，请调整任务信息后重试";
+      else if (errCode == "PLAYBOOK_FORMAT_ERROR")
+        errMsg = "模型返回格式错误，自动修正后仍无法解析，请重试";
+      else if (!errCode.startsWith("LLM_") && (errMsg.startsWith("LLM API 401:")
+          || errMsg.contains("invalid api key", Qt::CaseInsensitive)))
         errMsg = "模型服务密钥无效，请在「系统管理→系统配置」中检查模型服务配置";
       else if (errMsg.contains("timed out", Qt::CaseInsensitive))
         errMsg = "模型服务请求超时，请稍后重试";

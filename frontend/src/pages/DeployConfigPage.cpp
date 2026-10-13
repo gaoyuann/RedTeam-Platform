@@ -11,6 +11,7 @@
 #include <QMenu>
 #include <QApplication>
 #include <QClipboard>
+#include <QPointer>
 
 DeployConfigPage::DeployConfigPage(ApiClient *api, const QString &role, const QString &username, QWidget *parent)
     : QWidget(parent), m_api(api) {
@@ -406,28 +407,27 @@ void DeployConfigPage::onTestLlmConnection() {
   m_llmStatusLabel->setText("保存并测试中...");
   m_llmStatusLabel->setStyleSheet(Theme::StatusInfoStyle);
 
-  m_api->put("/api/config/llm/default", body, 5000, [this](const QJsonObject &saveRes) {
-    m_llmSaveBtn->setEnabled(true);
+  QPointer<DeployConfigPage> guard(this);
+  m_api->put("/api/config/llm/default", body, 5000, [this, guard](const QJsonObject &saveRes) {
+    if (!guard) return;
     if (saveRes["status"].toString() != "ok") {
+      m_llmSaveBtn->setEnabled(true);
       m_llmTestBtn->setEnabled(true);
       m_llmStatusLabel->setText("保存失败");
       m_llmStatusLabel->setStyleSheet(Theme::StatusErrorStyle);
       return;
     }
-    // Save succeeded, now test by reading back
-    m_api->get("/api/config/llm/default", 3000, [this](const QJsonObject &res) {
+    m_llmStatusLabel->setText("正在请求模型服务...");
+    m_api->post("/api/config/llm/test-connection", QJsonObject{}, 25000, [this, guard](const QJsonObject &res) {
+      if (!guard) return;
+      m_llmSaveBtn->setEnabled(true);
       m_llmTestBtn->setEnabled(true);
       if (res["status"].toString() == "ok") {
-        auto val = res["data"].toObject()["config_value"].toString();
-        if (!val.isEmpty() && val != "null") {
-          m_llmStatusLabel->setText("配置已就绪");
-          m_llmStatusLabel->setStyleSheet(Theme::StatusSuccessStyle);
-        } else {
-          m_llmStatusLabel->setText("配置为空");
-          m_llmStatusLabel->setStyleSheet(Theme::StatusWarningStyle);
-        }
+        m_llmStatusLabel->setText(res["data"].toObject()["message"].toString("模型连接测试通过"));
+        m_llmStatusLabel->setStyleSheet(Theme::StatusSuccessStyle);
       } else {
-        m_llmStatusLabel->setText("读取失败");
+        const QString error = res["error"].toObject()["message"].toString("未知错误");
+        m_llmStatusLabel->setText(QString("连接测试失败：%1").arg(error.left(120)));
         m_llmStatusLabel->setStyleSheet(Theme::StatusErrorStyle);
       }
     });

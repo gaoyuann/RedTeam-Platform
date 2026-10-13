@@ -72,9 +72,12 @@ export async function callLlm(messages, options = {}) {
     }
 
     const data = await res.json();
-    const content = data.choices?.[0]?.message?.content || '';
+    const choice = data.choices?.[0];
+    const content = typeof choice?.message?.content === 'string' ? choice.message.content : '';
     if (options.json === true && !content.trim()) return {ok:false,error:'LLM returned empty JSON content'};
-    return { ok: true, content, usage: data.usage };
+    return { ok: true, content, usage: data.usage,
+      finishReason: typeof choice?.finish_reason === 'string' ? choice.finish_reason : null,
+      hasReasoning: typeof choice?.message?.reasoning_content === 'string' && !!choice.message.reasoning_content.trim() };
 
   } catch (err) {
     if (err.name === 'AbortError') return { ok: false, error: 'LLM request timed out' };
