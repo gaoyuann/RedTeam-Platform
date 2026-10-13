@@ -57,6 +57,118 @@ const step=(id,phase,target)=>({name:phase+' #'+id,tool_id:'target-request',phas
   args_template:[JSON.stringify({url:target+'/check?id='+id+'&value='+(phase==='baseline'?'normal':'boundary')})],
   description:'Fixture input comparison, not a real exploit',expected_evidence:'Compare fixture response; no real vulnerability claim'});
 
+const sourceDraft=ids=>({name:'静态源码测试草稿',description:'需部署程序后复核',required_conditions:['补充真实运行入口与部署版本'],
+  objects:ids.map(finding_id=>({finding_id,purpose:'复核源码输入处理',baseline:'正常输入',verification:'确认输入可达后比较边界输入',
+    expected_effect:'观察诊断输出，尚未执行',limitations:'仅源码疑点，未确认运行条件'}))});
+
+function sourceOnlyTask(db,count=2) {
+  db.prepare("INSERT INTO scan_tasks(scan_task_id,scan_type,target,status,parameters,created_by) VALUES ('draft-source','source_scan','/fixture/source','PARTIAL',?, 'alice')")
+    .run(JSON.stringify({input_kind:'source'}));
+  for(let i=0;i<count;i++) db.prepare("INSERT INTO scan_results(id,scan_task_id,result_type,result_data) VALUES (?,'draft-source','source_finding',?)")
+    .run(1622+i,JSON.stringify({title:'Fixture input '+i,file:'input.c',start_line:i+1,code:'fixture_only(input);'}));
+  return db.prepare("SELECT * FROM scan_tasks WHERE scan_task_id='draft-source'").get();
+}
+
+test('source-only draft covers the exact ten selections, corrects omissions once and preserves order without executing',async t=>{
+  const {db}=await fixture(t),task=sourceOnlyTask(db,34),selected=[1655,1644,1642,1640,1638,1636,1634,1632,1630,1622];
+  const initialCounts=Object.fromEntries(['playbooks','playbook_steps','task_plans','execution_runs']
+    .map(table=>[table,db.prepare('SELECT count(*) n FROM '+table).get().n]));
+  let calls=0;
+  const llm=async(messages,options)=>{
+    calls++;
+    const context=JSON.parse(messages[1].content);
+    assert.deepEqual(context.selected_finding_ids,selected);
+    assert.deepEqual(context.findings.map(row=>row.finding_id),selected);
+    assert.equal(context.findings.length,10,'unselected findings do not enter the draft prompt');
+    assert.equal(context.findings[0].file,'input.c');assert.equal(context.findings[0].runtime_verified,false);
+    assert.equal(context.findings[0].scan_result_id,undefined);
+    assert.equal(options.json,true);assert.ok(options.maxTokens>5000);
+    if(calls===2) {
+      const correction=JSON.parse(messages.at(-1).content);
+      assert.equal(correction.correction_required,true);assert.deepEqual(correction.selected_finding_ids,selected);
+      assert.match(correction.error,/缺少编号 1622/);assert.equal(messages.at(-2).role,'assistant');
+    }
+    return {ok:true,content:JSON.stringify(sourceDraft(calls===1 ? selected.slice(0,-1) : [...selected].reverse()))};
+  };
+  const result=await generateSourceVerification(db,task,selected,{demonstration:true,llm});
+  assert.equal(result.ok,true,result.error);assert.equal(calls,2);
+  assert.equal(result.executable,false);assert.equal(result.requires_runtime_target,true);
+  assert.deepEqual(result.draft.objects.map(row=>row.finding_id),selected);
+  assert.equal(result.generation.corrective_attempts,1);assert.equal(result.generation.validation_errors.length,1);
+  const saved=db.prepare("SELECT result_data FROM scan_results WHERE result_type='program_plan'").all();
+  assert.equal(saved.length,1);assert.equal(JSON.parse(saved[0].result_data).executable,false);
+  assert.deepEqual(JSON.parse(saved[0].result_data).generation,result.generation);
+  // Old finding rows without new metadata and a repeated generation remain usable.
+  const repeated=await generateSourceVerification(db,task,selected,{demonstration:true,llm:async()=>({ok:true,content:JSON.stringify(sourceDraft(selected))})});
+  assert.equal(repeated.ok,true,repeated.error);assert.equal(repeated.generation.calls,1);
+  assert.equal(db.prepare("SELECT count(*) n FROM scan_results WHERE result_type='program_plan'").get().n,2);
+  assert.equal(db.prepare("SELECT result_data FROM scan_results WHERE result_type='program_plan' ORDER BY id").get().result_data,saved[0].result_data);
+  for(const [table,count] of Object.entries(initialCounts))
+    assert.equal(db.prepare('SELECT count(*) n FROM '+table).get().n,count,'a source-only draft does not create '+table);
+});
+
+test('source-only draft rejects wrong or incomplete IDs after one correction and stops immediately on model failure',async t=>{
+  const {db}=await fixture(t),task=sourceOnlyTask(db),ids=[1623,1622];
+  const invalid=[
+    [sourceDraft([1623]),/缺少编号 1622/],
+    [sourceDraft([1623,1623,1622]),/重复编号 1623/],
+    [sourceDraft([1623,1622,1]),/未选编号 1/],
+    [sourceDraft(['1623',1622]),/整数编号/],
+    [{...sourceDraft(ids),objects:[{scan_result_id:1623},{scan_result_id:1622}]},/整数编号/],
+    [{...sourceDraft(ids),required_conditions:null},/required_conditions/],
+    [{...sourceDraft(ids),objects:null},/objects/],
+    ['not JSON fixture_only(input);',/有效的JSON/]
+  ];
+  for(const [draft,error] of invalid) {
+    let calls=0;
+    const result=await generateSourceVerification(db,task,ids,{demonstration:true,llm:async()=>{
+      calls++;return {ok:true,content:typeof draft==='string' ? draft : JSON.stringify(draft)};
+    }});
+    assert.equal(result.ok,false);assert.equal(calls,2);assert.equal(result.generation.corrective_attempts,1);
+    assert.match(result.error,/纠正后仍未/);assert.match(result.error,error);
+    assert.equal(db.prepare("SELECT count(*) n FROM scan_results WHERE result_type='program_plan'").get().n,0);
+  }
+  for(const llm of [async()=>({ok:false,error:'model disconnected'}),async()=>{throw new Error('model disconnected');},
+    async()=>({ok:true,content:JSON.stringify({status:'needs_information',reason:'缺少实际输入接口'})})]) {
+    const result=await generateSourceVerification(db,task,ids,{demonstration:true,llm});
+    assert.equal(result.ok,false);assert.equal(result.generation.calls,1);assert.equal(result.generation.corrective_attempts,0);
+  }
+  db.prepare("INSERT INTO scan_tasks(scan_task_id,scan_type,target,status) VALUES ('other-source','source_scan','/other','COMPLETED')").run();
+  const foreign=Number(db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data) VALUES ('other-source','source_finding','{}')").run().lastInsertRowid);
+  let calls=0;const llm=async()=>{calls++;throw new Error('must not call model');};
+  for(const selection of [[],[foreign],[1623,1623]]) {
+    assert.equal((await generateSourceVerification(db,task,selection,{demonstration:true,llm})).ok,false);
+  }
+  assert.equal((await generateSourceVerification(db,{...task,status:'RUNNING'},ids,{demonstration:true,llm})).ok,false);
+  assert.equal(calls,0);assert.equal(db.prepare("SELECT count(*) n FROM scan_results WHERE result_type='program_plan'").get().n,0);
+});
+
+test('source-only generation API retains specific failure reasons in task logs without saving model text',async t=>{
+  const {db,request}=await fixture(t),task=sourceOnlyTask(db);
+  db.prepare("INSERT INTO pipelines(pipeline_id,target,status,scan_task_id,created_by) VALUES ('draft-pipeline',?,'awaiting_approval',?,'alice')")
+    .run(task.target,task.scan_task_id);
+  const keys=['LLM_API_KEY','LLM_BASE_URL','LLM_MODEL'],old=Object.fromEntries(keys.map(key=>[key,process.env[key]]));
+  t.after(()=>{for(const [key,value] of Object.entries(old)) {if(value===undefined) delete process.env[key];else process.env[key]=value;}});
+  let calls=0;
+  const model=await listen(t,http.createServer(async(req,res)=>{
+    let raw='';for await(const chunk of req) raw+=chunk;
+    assert.deepEqual(JSON.parse(JSON.parse(raw).messages[1].content).selected_finding_ids,[1623,1622]);calls++;
+    res.setHeader('content-type','application/json');
+    res.end(JSON.stringify({choices:[{message:{content:JSON.stringify({...sourceDraft([1623]),description:'DO_NOT_LOG_MODEL_TEXT'})}}]}));
+  }));
+  process.env.LLM_API_KEY='fixture-only';process.env.LLM_BASE_URL=model;process.env.LLM_MODEL='fixture';
+  const result=await request('/scans/'+task.scan_task_id+'/generate-playbook',{finding_ids:[1623,1622],demonstration:true});
+  assert.equal(result.status,400);assert.equal(calls,2);
+  const logs=db.prepare("SELECT level,message FROM pipeline_logs WHERE pipeline_id='draft-pipeline' ORDER BY id").all();
+  assert.match(logs[0].message,/漏洞编号 1623,1622/);assert.equal(logs.at(-1).level,'warn');
+  assert.match(logs.at(-1).message,/纠正后仍未通过校验.*缺少编号 1622/);
+  assert.match(logs.at(-1).message,/模型调用 2 次，纠正 1 次/);
+  assert.ok(logs.every(row=>!row.message.includes('DO_NOT_LOG_MODEL_TEXT') && !row.message.includes('fixture_only')));
+  assert.equal(db.prepare("SELECT count(*) n FROM scan_results WHERE result_type='program_plan'").get().n,0);
+  assert.equal(db.prepare('SELECT count(*) n FROM execution_runs').get().n,0);
+  assert.equal(db.prepare("SELECT status FROM pipelines WHERE pipeline_id='draft-pipeline'").get().status,'awaiting_approval');
+});
+
 test('source plan corrects malformed model URLs once and still rejects unresolved scope or missing conditions',async t=>{
   const {db}=await fixture(t),target='http://127.0.0.1:8999';
   db.prepare("INSERT INTO scan_tasks(scan_task_id,scan_type,target,status) VALUES ('url-repair','source_scan',?,'COMPLETED')").run(target);

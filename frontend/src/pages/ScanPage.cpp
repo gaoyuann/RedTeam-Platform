@@ -1232,9 +1232,11 @@ void ScanPage::setupUI() {
 
   // ── Tab switch: update delete button state ────────────────────────
   connect(m_scanTypeTabs, &QTabWidget::currentChanged, this, [this]() {
+    const bool pendingVerification = m_pendingSourceVerification;
     m_selectedTaskId.clear();
     clearDetailPanel();
-    const QList<QTableWidget*> tables{m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable};
+    m_pendingSourceVerification = pendingVerification;
+    const QList<QTableWidget*> tables{m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable, m_sourceScanTable};
     auto *table = tables.value(m_scanTypeTabs->currentIndex());
     if (table && table->rowCount() > 0) {
       const int row = qMax(0, table->currentRow());
@@ -1650,6 +1652,12 @@ void ScanPage::onTaskClicked(int row, int) {
   if (!idItem) return;
   QString id = idItem->data(Qt::UserRole).toString();
   if (id.isEmpty()) return;
+  if (id == m_selectedTaskId && m_generationInProgress) return;
+  if (id != m_selectedTaskId) {
+    const bool pendingVerification = m_pendingSourceVerification;
+    clearDetailPanel();
+    m_pendingSourceVerification = pendingVerification;
+  }
   m_selectedTaskId = id;
   enableCurrentTabDelBtn(true);
 
@@ -1657,7 +1665,13 @@ void ScanPage::onTaskClicked(int row, int) {
   QPointer<ScanPage> guard(this);
   m_api->get("/api/scan-tasks/" + id, 5000, [this, guard, id, scopeRevision](const QJsonObject &res) {
     if (!guard || scopeRevision != m_scopeRevision || id != m_selectedTaskId) return;
-    if (res["status"].toString() != "ok") return;
+    if (res["status"].toString() != "ok") {
+      m_pendingSourceVerification = false;
+      if (m_currentScanType.isEmpty()) m_selectedTaskId.clear();
+      m_statusLabel->setText(QStringLiteral("扫描详情加载失败，请点击生成重试或重新选择任务。"));
+      m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
+      return;
+    }
     auto d = res["data"].toObject();
     QString status = d["status"].toString();
 
@@ -1718,6 +1732,10 @@ void ScanPage::onTaskClicked(int row, int) {
       m_genBtn->setEnabled(false);
       m_reexecBtn->setVisible(false);
       m_recTable->setRowCount(0);
+    }
+    if (m_pendingSourceVerification) {
+      m_pendingSourceVerification = false;
+      beginSourceVerification();
     }
   });
 }
@@ -1798,6 +1816,21 @@ void ScanPage::onGeneratePlaybook() {
 
 void ScanPage::beginSourceVerification() {
   m_detailTabs->setCurrentIndex(0);
+  if (m_generationInProgress) {
+    m_statusLabel->setText(QStringLiteral("预案正在生成，请等待结果；失败后可重新生成。"));
+    return;
+  }
+  if (m_scopedTasks && !m_scopeTaskIds.isEmpty()
+      && (m_selectedTaskId.isEmpty() || m_currentScanType.isEmpty())) {
+    const bool refresh = !m_pendingSourceVerification;
+    m_pendingSourceVerification = true;
+    m_statusLabel->setText(QStringLiteral("正在加载本任务扫描发现，加载完成后继续生成预案…"));
+    if (refresh && m_selectedTaskId.isEmpty()) {
+      m_selectInitialScopeTask = true;
+      onRefreshTasks();
+    }
+    return;
+  }
   if (!isProgramScan(m_currentScanType) || !m_sourceDemoBtn->isEnabled()) {
     m_statusLabel->setText(QStringLiteral("请选择已完成的程序扫描并检查漏洞发现，再生成预案。"));
     m_statusLabel->setStyleSheet(Theme::StatusWarningStyle);
@@ -1812,13 +1845,14 @@ void ScanPage::selectSourceDemonstration() {
   dialog.setWindowTitle("选择漏洞生成预案");
   dialog.resize(1000, 520);
   auto *layout = new QVBoxLayout(&dialog);
-  auto *hint = new QLabel("目标：" + m_currentTarget + "\n选择 1–10 条漏洞发现生成预案。每项保留正常对照、验证步骤和实际效果；缺少运行条件时明确提示。", &dialog);
+  auto *hint = new QLabel("目标：" + m_currentTarget + "\n勾选复选框或点击发现行，选择 1–10 条生成预案。只有源码时可以生成待补运行条件的草稿。", &dialog);
   hint->setWordWrap(true);
   layout->addWidget(hint);
   auto *table = new QTableWidget(0, 6, &dialog);
   table->setObjectName("sourceDemonstrationCandidates");
   table->setHorizontalHeaderLabels({"选择 / 编号", "严重度", "发现 / CWE", "入口 / 源码位置", "触发前提", "复核状态"});
   table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  table->setSelectionBehavior(QAbstractItemView::SelectRows);
   table->setAlternatingRowColors(true);
   table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
   table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
@@ -1831,13 +1865,17 @@ void ScanPage::selectSourceDemonstration() {
       const int row = table->rowCount();
       table->insertRow(row);
       const int id = item->data(0, Qt::UserRole+1).toInt();
-      auto *select = new QTableWidgetItem(QString("#%1").arg(id));
+      auto *select = new QTableWidgetItem;
       select->setData(Qt::UserRole, id);
-      select->setFlags(select->flags() | Qt::ItemIsUserCheckable);
+      select->setFlags(select->flags() & ~Qt::ItemIsUserCheckable);
       const bool supported=!data["demonstration_supported"].isBool() || data["demonstration_supported"].toBool();
-      if (!supported) {select->setFlags(select->flags() & ~Qt::ItemIsEnabled);select->setToolTip(data["demonstration_reason"].toString());}
-      select->setCheckState(supported && item == m_resultTree->currentItem() ? Qt::Checked : Qt::Unchecked);
       table->setItem(row, 0, select);
+      auto *check = new QCheckBox(QString("#%1").arg(id), table);
+      check->setObjectName(QString("sourceFindingSelection%1").arg(id));
+      check->setEnabled(supported);
+      check->setChecked(supported && item == m_resultTree->currentItem());
+      if (!supported) check->setToolTip(data["demonstration_reason"].toString());
+      table->setCellWidget(row, 0, check);
       table->setItem(row, 1, new QTableWidgetItem(item->text(0)));
       table->setItem(row, 2, new QTableWidgetItem(data["title"].toString() + " " + data["cwe"].toString()));
       table->setItem(row, 3, new QTableWidgetItem(data["file"].toString().isEmpty() ? data["url"].toString() : QString("%1:%2").arg(data["file"].toString()).arg(data["start_line"].toInt())));
@@ -1859,25 +1897,43 @@ void ScanPage::selectSourceDemonstration() {
   layout->addWidget(buttons);
   auto updateSelection = [table, generate, selection]() {
     int count = 0;
-    for (int row = 0; row < table->rowCount(); ++row) if (table->item(row, 0)->checkState() == Qt::Checked) ++count;
+    for (int row = 0; row < table->rowCount(); ++row) {
+      auto *check = qobject_cast<QCheckBox*>(table->cellWidget(row, 0));
+      if (check && check->isChecked()) ++count;
+    }
     selection->setText(QString("已选择 %1 条 · 每项单独保留步骤和证据，最多 10 条").arg(count));
     generate->setEnabled(count >= 1 && count <= 10);
   };
-  connect(table, &QTableWidget::itemChanged, &dialog, [updateSelection](QTableWidgetItem *) { updateSelection(); });
+  for (int row = 0; row < table->rowCount(); ++row) {
+    auto *check = qobject_cast<QCheckBox*>(table->cellWidget(row, 0));
+    connect(check, &QCheckBox::toggled, &dialog, [updateSelection](bool) { updateSelection(); });
+  }
+  connect(table, &QTableWidget::cellClicked, &dialog, [table](int row, int) {
+    auto *check = qobject_cast<QCheckBox*>(table->cellWidget(row, 0));
+    if (check && check->isEnabled()) check->toggle();
+  });
   updateSelection();
   connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
   connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
   const QString taskId = m_selectedTaskId;
   if (dialog.exec() != QDialog::Accepted || taskId != m_selectedTaskId) return;
   QJsonArray ids;
-  for (int row = 0; row < table->rowCount(); ++row) if (table->item(row, 0)->checkState() == Qt::Checked) ids.append(table->item(row, 0)->data(Qt::UserRole).toInt());
+  for (int row = 0; row < table->rowCount(); ++row) {
+    auto *check = qobject_cast<QCheckBox*>(table->cellWidget(row, 0));
+    if (check && check->isChecked()) ids.append(table->item(row, 0)->data(Qt::UserRole).toInt());
+  }
   generatePlaybook(ids);
 }
 
 void ScanPage::generatePlaybook(const QJsonArray &findingIds) {
-  if (m_selectedTaskId.isEmpty()) return;
+  if (m_selectedTaskId.isEmpty() || m_generationInProgress) return;
   const QString taskId = m_selectedTaskId;
   const bool sourceDemo = isProgramScan(m_currentScanType) && !findingIds.isEmpty();
+  const bool selectionEnabled = m_sourceDemoBtn->isEnabled();
+  m_generationInProgress = true;
+  const int generationRevision = ++m_generationRevision;
+  m_lastGeneratedId.clear();
+  m_genExecBtn->setEnabled(false);
   const QString buttonText = m_genBtn->text();
   m_genBtn->setEnabled(false);
   m_sourceDemoBtn->setEnabled(false);
@@ -1894,12 +1950,13 @@ void ScanPage::generatePlaybook(const QJsonArray &findingIds) {
   QPointer<ScanPage> guard(this);
   // A source plan may require one validated model correction (2 x 120 s).
   const int generationTimeout = isProgramScan(m_currentScanType) ? 270000 : 150000;
-  m_api->post("/api/scan-tasks/" + taskId + "/generate-playbook", body, generationTimeout, [this, guard, scopeRevision, taskId, sourceDemo, buttonText](const QJsonObject &res) {
+  m_api->post("/api/scan-tasks/" + taskId + "/generate-playbook", body, generationTimeout, [this, guard, scopeRevision, generationRevision, taskId, sourceDemo, selectionEnabled, buttonText](const QJsonObject &res) {
     if (!guard || scopeRevision != m_scopeRevision) return;
-    if (taskId != m_selectedTaskId) return;
+    if (taskId != m_selectedTaskId || generationRevision != m_generationRevision) return;
+    m_generationInProgress = false;
     m_genBtn->setEnabled(true);
     m_genBtn->setText(buttonText);
-    m_sourceDemoBtn->setEnabled(sourceDemo);
+    m_sourceDemoBtn->setEnabled(selectionEnabled);
     if (res["status"].toString() == "ok") {
       auto data = res["data"].toObject();
       if(data["requires_runtime_target"].toBool()) {
@@ -1925,9 +1982,9 @@ void ScanPage::generatePlaybook(const QJsonArray &findingIds) {
       m_genExecBtn->setText(QString("%1「%2」→").arg(m_scopedTasks ? "前往任务预案" : "前往执行", pbName.left(20)));
 
       // 加载 Playbook 详情并渲染步骤表格
-      m_api->get("/api/playbooks/" + pbId, 8000, [this, guard, scopeRevision, taskId, sourceDemo, pbId](const QJsonObject &pbRes) {
+      m_api->get("/api/playbooks/" + pbId, 8000, [this, guard, scopeRevision, generationRevision, taskId, sourceDemo, pbId](const QJsonObject &pbRes) {
         if (!guard || scopeRevision != m_scopeRevision) return;
-        if (taskId != m_selectedTaskId) return;
+        if (taskId != m_selectedTaskId || generationRevision != m_generationRevision) return;
         if (pbRes["status"].toString() != "ok") {
           m_statusLabel->setText(QStringLiteral("预案已生成，但步骤加载失败，请在推荐列表中重新打开预案。"));
           m_statusLabel->setStyleSheet(Theme::StatusWarningStyle);
@@ -1958,6 +2015,7 @@ void ScanPage::generatePlaybook(const QJsonArray &findingIds) {
         }
         m_genStepTable->resizeColumnsToContents();
         m_genStepTable->horizontalHeader()->setStretchLastSection(true);
+        m_genExecBtn->setEnabled(!stepsArr.isEmpty());
         if (sourceDemo && m_scopedTasks && !stepsArr.isEmpty())
           emit playbookNavigateRequested(pbId, m_currentTarget);
       });
@@ -1983,7 +2041,7 @@ void ScanPage::generatePlaybook(const QJsonArray &findingIds) {
         errMsg = "未配置模型服务密钥，请在「系统管理→系统配置」中设置模型服务配置";
       else if (errMsg.isEmpty())
         errMsg = "未知错误";
-      m_statusLabel->setText(QString("✗ 预案生成失败: %1").arg(errMsg.left(120)));
+      m_statusLabel->setText(QString("✗ 预案生成失败: %1。可重新选择漏洞或点击生成重试。").arg(errMsg.left(120)));
       m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
     }
   });
@@ -2069,6 +2127,9 @@ void ScanPage::onDeleteTask() {
 
 // ── Clear detail panel ────────────────────────────────────────────────
 void ScanPage::clearDetailPanel() {
+  ++m_generationRevision;
+  m_generationInProgress = false;
+  m_pendingSourceVerification = false;
   m_resultOverview->clear();
   m_statusLabel->setText("选择任务查看详情");
   m_statusLabel->setStyleSheet(Theme::StatusInfoStyle);
@@ -2086,6 +2147,7 @@ void ScanPage::clearDetailPanel() {
   m_genPreviewWidget->setVisible(false);
   m_genStepTable->setRowCount(0);
   m_lastGeneratedId.clear();
+  m_genExecBtn->setEnabled(false);
   m_currentTarget.clear();
   m_currentTaskTarget.clear();
   m_currentScanType.clear();

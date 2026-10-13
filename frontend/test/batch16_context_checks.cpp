@@ -6,6 +6,7 @@
 
 #include "ApiClient.h"
 #include "UiUtil.h"
+#include "AppStyle.h"
 #define private public
 #include "pages/FlowPage.h"
 #include "pages/ScanPage.h"
@@ -31,6 +32,7 @@ class MockServer : public QTcpServer {
 public:
   std::function<MockReply(const QString &, const QString &)> handler;
   QMap<QString, int> requests;
+  QMap<QString, QByteArray> requestBodies;
 
   MockServer()
   {
@@ -41,12 +43,18 @@ public:
         connect(socket, &QTcpSocket::readyRead, this, [this, socket]() {
           const QByteArray buffer = socket->property("buffer").toByteArray() + socket->readAll();
           socket->setProperty("buffer", buffer);
-          if (!buffer.contains("\r\n\r\n") || socket->property("handled").toBool()) return;
+          const int headersEnd = buffer.indexOf("\r\n\r\n");
+          if (headersEnd < 0 || socket->property("handled").toBool()) return;
+          const auto length = QRegularExpression("(?:^|\\r\\n)Content-Length:\\s*(\\d+)",
+              QRegularExpression::CaseInsensitiveOption).match(QString::fromLatin1(buffer.left(headersEnd)));
+          const int bodyLength = length.hasMatch() ? length.captured(1).toInt() : 0;
+          if (buffer.size() < headersEnd + 4 + bodyLength) return;
           socket->setProperty("handled", true);
           const auto request = buffer.left(buffer.indexOf('\r')).split(' ');
           const QString method = QString::fromUtf8(request.value(0));
           const QString path = QString::fromUtf8(request.value(1));
           ++requests[method + " " + path];
+          requestBodies[method + " " + path] = buffer.mid(headersEnd + 4, bodyLength);
           const auto response = handler(method, path);
           QPointer<QTcpSocket> guard(socket);
           QTimer::singleShot(response.delay, this, [guard, response]() {
@@ -285,13 +293,123 @@ int main(int argc, char **argv)
     auto *dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
     if (!dialog) return;
     auto *candidates = dialog->findChild<QTableWidget*>("sourceDemonstrationCandidates");
+    dialog->setStyleSheet(Theme::GlobalStyle);
+    app.processEvents();
     selectionLoaded = candidates && candidates->rowCount() == 1 && candidates->columnCount() == 6
         && candidates->item(0, 0)->data(Qt::UserRole).toInt() == 101;
-    if (candidates) candidates->item(0, 0)->setCheckState(Qt::Checked);
+    auto *check = candidates ? qobject_cast<QCheckBox*>(candidates->cellWidget(0, 0)) : nullptr;
+    verify(selectionLoaded && check && check->isEnabled(), "source candidate has an explicit enabled checkbox");
+    auto *buttons = dialog->findChild<QDialogButtonBox*>();
+    auto *generate = buttons ? qobject_cast<QPushButton*>(buttons->buttons().last()) : nullptr;
+    for (auto *button : dialog->findChildren<QPushButton*>())
+      if (button->text() == QStringLiteral("生成攻击测试预案")) generate = button;
+    check->setChecked(false);
+    verify(generate && !generate->isEnabled(), "no selected findings keeps generation disabled");
+    QTest::mouseClick(candidates->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      candidates->visualItemRect(candidates->item(0, 2)).center());
+    verify(check->isChecked() && generate->isEnabled(), "clicking the finding row selects it and enables generation");
+    QTest::mouseClick(check, Qt::LeftButton, Qt::NoModifier, QPoint(8, check->height()/2));
+    verify(!check->isChecked() && !generate->isEnabled(), "checkbox mouse click toggles exactly once");
+    check->setFocus();
+    QTest::keyClick(check, Qt::Key_Space);
+    verify(check->isChecked() && generate->isEnabled(), "keyboard selection enables the plan action");
     dialog->reject();
   });
   sourcePage.selectSourceDemonstration();
   verify(selectionLoaded, "generation opens source object list before sending any plan request");
+  bool navigationReadOnly = true;
+  for (auto iterator = server.requests.cbegin(); iterator != server.requests.cend(); ++iterator)
+    navigationReadOnly = navigationReadOnly && iterator.key().startsWith("GET ");
+  verify(navigationReadOnly, "navigation emits no write request before explicit generation");
+  const auto selectionHandler = server.handler;
+  server.handler = [&](const QString &method, const QString &path) -> MockReply {
+    if (path == "/api/scan-tasks/scan-source/generate-playbook")
+      return {success(QJsonObject{{"playbook_id", "selected-source"}, {"name", "Selected input comparison"}, {"steps_count", 2}})};
+    if (path == "/api/playbooks/selected-source")
+      return {success(QJsonObject{{"steps", QJsonArray{QJsonObject{{"step_index", 0}, {"tool_id", "target-request"}},
+        QJsonObject{{"step_index", 1}, {"tool_id", "target-request"}}}}})};
+    return selectionHandler(method, path);
+  };
+  QJsonArray selectableFindings;
+  for (int index = 0; index < 12; ++index) {
+    QJsonObject finding{{"file", "fixture.c"}, {"start_line", index+1}, {"title", QString("Fixture %1").arg(index+1)}};
+    if (index == 11) {
+      finding["demonstration_supported"] = false;
+      finding["demonstration_reason"] = "需要正常对照和触发输入";
+    }
+    selectableFindings.append(QJsonObject{{"id", 201+index}, {"result_type", "source_finding"}, {"severity", "medium"},
+      {"result_data", QString::fromUtf8(QJsonDocument(finding).toJson(QJsonDocument::Compact))}});
+  }
+  sourcePage.renderGroupedResults(selectableFindings);
+  QTimer::singleShot(0, &sourcePage, [&]() {
+    auto *dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+    verify(dialog != nullptr, "multi-finding selection dialog opens");
+    dialog->setStyleSheet(Theme::GlobalStyle);
+    auto *candidates = dialog->findChild<QTableWidget*>("sourceDemonstrationCandidates");
+    QPushButton *generate = nullptr;
+    for (auto *button : dialog->findChildren<QPushButton*>())
+      if (button->text() == QStringLiteral("生成攻击测试预案")) generate = button;
+    verify(candidates && candidates->rowCount() == 12 && generate, "large source result set exposes every candidate");
+    auto clickRow = [&](int row) {
+      candidates->scrollToItem(candidates->item(row, 2));
+      app.processEvents();
+      QTest::mouseClick(candidates->viewport(), Qt::LeftButton, Qt::NoModifier,
+                        candidates->visualItemRect(candidates->item(row, 2)).center());
+    };
+    for (int row=0; row<10; ++row) clickRow(row);
+    verify(generate->isEnabled(), "ten checked findings can generate a plan");
+    clickRow(10);
+    verify(!generate->isEnabled(), "eleven checked findings clearly disable over-limit generation");
+    for (int row=0; row<9; ++row) clickRow(row);
+    verify(generate->isEnabled(), "deselecting back to two findings restores generation");
+    clickRow(11);
+    auto *unsupported = qobject_cast<QCheckBox*>(candidates->cellWidget(11, 0));
+    verify(unsupported && !unsupported->isEnabled() && !unsupported->isChecked()
+        && unsupported->toolTip().contains("正常对照"), "unsupported runtime finding retains a visible reason and cannot be selected");
+    dialog->grab().save(QCoreApplication::applicationDirPath()+"/source-selection-fixed.png");
+    generate->click();
+  });
+  const int selectionRequests = server.requests.value("POST /api/scan-tasks/scan-source/generate-playbook");
+  sourcePage.selectSourceDemonstration();
+  verify(awaitCondition([&]() { return !sourcePage.m_genPreviewWidget->isHidden()
+      && sourcePage.m_genStepTable->rowCount() == 2; }), "selected findings reach generation and display the returned plan steps");
+  const auto selectedBody = QJsonDocument::fromJson(server.requestBodies.value("POST /api/scan-tasks/scan-source/generate-playbook")).object();
+  verify(server.requests.value("POST /api/scan-tasks/scan-source/generate-playbook") == selectionRequests+1
+      && selectedBody["finding_ids"].toArray() == QJsonArray{210,211} && selectedBody["demonstration"].toBool(),
+      "generate button submits exactly the checked findings once");
+  server.handler = selectionHandler;
+  const auto afterSelectionRequests = server.requests;
+  const auto existingHandler = server.handler;
+  server.handler = [&](const QString &method, const QString &path) -> MockReply {
+    if (path == "/api/topology/from-pipeline/source-topology")
+      return {success(QJsonObject{{"topology", QJsonObject{{"target", "http://127.0.0.1:8089/"},
+        {"summary", "程序入口响应"}, {"nodes", QJsonArray{QJsonObject{{"id", "runtime"}, {"ip", "127.0.0.1"}, {"status", "up"}}}},
+        {"edges", QJsonArray()}}}})};
+    return existingHandler(method, path);
+  };
+  {
+    TopologyPage programTopology(&api, "user", "fixture-user");
+    programTopology.setPipelineContext("source-topology", "http://127.0.0.1:8089/", {"scan-source"}, false);
+    QJsonObject event{{"scanTaskId", "foreign-scan"}, {"scanType", "program_scan"}, {"status", "PARTIAL"}};
+    programTopology.onScanCompleted(event);
+    verify(!programTopology.m_autoTopologyGenerationIds.contains("foreign-scan"), "program topology ignores another task's event");
+    event["scanTaskId"] = "scan-source";
+    event["target"] = "http://127.0.0.1:8089/";
+    programTopology.onScanCompleted(event);
+    verify(awaitCondition([&]() { return !programTopology.m_progressDialog
+        && programTopology.m_topologyDocument.flowId == "source-topology"
+        && programTopology.m_autoTopologyGenerationIds.contains("scan-source")
+        && !programTopology.m_topologyDocument.nodes.isEmpty(); }),
+           "partial program scan event automatically displays its scoped runtime topology");
+    programTopology.m_documentDirty = true;
+    programTopology.m_autoTopologyGenerationIds.clear();
+    event["scanType"] = "source_scan";
+    event["status"] = "COMPLETED";
+    programTopology.onScanCompleted(event);
+    verify(programTopology.m_documentDirty && !programTopology.m_progressDialog,
+           "source scan completion preserves unsaved topology edits");
+  }
+  server.handler = existingHandler;
   sourcePage.clearTaskScope();
   verify(sourcePage.m_sourceScanTable->rowCount() == 0 && sourcePage.m_sourceScanCount->text().contains("0"), "clearing scope clears C/C++ rows and count");
   verify(sourcePage.m_currentTarget.isEmpty() && !sourcePage.m_sourceDemoBtn->isEnabled() && sourcePage.m_resultTree->topLevelItemCount() == 0,
@@ -307,12 +425,15 @@ int main(int argc, char **argv)
   verify(flow.m_scanTab->m_statusLabel->text().contains(QStringLiteral("fixture task load failed")), "task detail failure reaches scan workspace");
   bool readOnly = true;
   for (auto iterator = server.requests.cbegin(); iterator != server.requests.cend(); ++iterator)
-    readOnly = readOnly && iterator.key().startsWith("GET ");
-  verify(readOnly, "navigation emits no write request");
+    if (!iterator.key().startsWith("GET "))
+      readOnly = readOnly && iterator.value() == afterSelectionRequests.value(iterator.key());
+  verify(readOnly, "navigation emits no additional write request after explicit generation");
   // Exercise the actual source generation -> task draft navigation, including
   // a plan fetch still in flight when the generated playbook arrives.
   QJsonObject savedPlan;
   int generationDelay = 0;
+  int sourceDetailDelay = 0;
+  int failedGenerationsRemaining = 2;
   const QJsonArray generatedSteps{QJsonObject{{"step_id", "baseline"}, {"name", "Normal input"}, {"tool_id", "target-request"},
       {"args_template", QJsonArray{"fixture baseline"}}, {"optional", false}},
     QJsonObject{{"step_id", "verification"}, {"name", "Boundary input"}, {"tool_id", "target-request"},
@@ -333,8 +454,14 @@ int main(int argc, char **argv)
     if (path == "/api/pipelines/source") return {success(sourcePipeline())};
     if (path == "/api/pipelines") return {success(QJsonArray{sourcePipeline()})};
     if (path == "/api/scan-tasks") return {success(QJsonArray{sourceRecord()})};
-    if (path == "/api/scan-tasks/scan-source") return {success(sourceRecord())};
-    if (path.endsWith("/generate-playbook")) return {success(QJsonObject{{"playbook_id", "generated-source"}, {"name", "Input comparison"}, {"steps_count", 2}}), generationDelay};
+    if (path == "/api/scan-tasks/scan-source") return {success(sourceRecord()), sourceDetailDelay};
+    if (path.endsWith("/generate-playbook")) {
+      if (failedGenerationsRemaining > 0) {
+        --failedGenerationsRemaining;
+        return {QJsonObject{{"status", "error"}, {"error", QJsonObject{{"message", "预案草稿未覆盖实际发现：缺少编号 101"}}}}, 100};
+      }
+      return {success(QJsonObject{{"playbook_id", "generated-source"}, {"name", "Input comparison"}, {"steps_count", 2}}), generationDelay};
+    }
     if (path == "/api/playbooks/generated-source") return {success(QJsonObject{{"steps", generatedSteps}})};
     if (path == "/api/pipelines/source/plan/sources") return {success(QJsonArray{QJsonObject{{"playbook_id", "generated-source"}, {"name", "Input comparison"}, {"steps_count", 2}}})};
     if (path == "/api/pipelines/source/plan") {
@@ -350,6 +477,39 @@ int main(int argc, char **argv)
   };
   flow.openTaskAnalysis("source");
   verify(awaitCondition([&]() { return flow.m_scanTab->m_selectedTaskId == "scan-source" && flow.m_scanTab->m_sourceDemoBtn->isEnabled(); }), "source pipeline loads generation context");
+  const int beforeFailure = server.requests.value("POST /api/scan-tasks/scan-source/generate-playbook");
+  const int beforeFailedDraft = server.requests.value("POST /api/pipelines/source/plan");
+  flow.m_scanTab->m_lastGeneratedId = "stale-source";
+  flow.m_scanTab->m_genExecBtn->setEnabled(true);
+  flow.m_analysisTab->m_planButton->click();
+  verify(awaitCondition([&]() { return server.requests.value("POST /api/scan-tasks/scan-source/generate-playbook") > beforeFailure; }), "first generation sends a real request before failing");
+  flow.m_analysisTab->m_planButton->click();
+  flow.m_scanTab->generatePlaybook(QJsonArray{101});
+  verify(awaitCondition([&]() { return flow.m_scanTab->m_statusLabel->text().contains("预案生成失败"); }), "generation failure is shown in scan workspace");
+  verify(server.requests.value("POST /api/scan-tasks/scan-source/generate-playbook") == beforeFailure+1,
+      "repeat clicks while generation is pending do not duplicate requests");
+  verify(flow.m_scanTab->m_genBtn->isEnabled() && flow.m_scanTab->m_sourceDemoBtn->isEnabled()
+      && !flow.m_scanTab->m_generationInProgress, "failed generation restores both retry controls");
+  verify(flow.m_scanTab->m_lastGeneratedId.isEmpty() && !flow.m_scanTab->m_genExecBtn->isEnabled()
+      && savedPlan.isEmpty() && server.requests.value("POST /api/pipelines/source/plan") == beforeFailedDraft,
+      "failed generation cannot navigate to a stale playbook or create a task draft");
+  verify(awaitCondition([&]() { return !flow.m_planTab->m_busy; }), "plan button is ready for retry after failure");
+  // Re-selecting C/C++ used to clear the current task without restoring it.
+  flow.m_scanTab->m_scanTypeTabs->setCurrentIndex(0);
+  sourceDetailDelay = 100;
+  flow.m_scanTab->m_scanTypeTabs->setCurrentIndex(4);
+  verify(flow.m_scanTab->m_selectedTaskId == "scan-source" && flow.m_scanTab->m_currentScanType.isEmpty(),
+      "returning to C/C++ selects its task while details load");
+  flow.m_stageTabs->setCurrentWidget(flow.m_planTab);
+  flow.m_planTab->m_generateSource->click();
+  verify(flow.m_scanTab->m_pendingSourceVerification, "retry click waits for source details instead of only navigating");
+  verify(awaitCondition([&]() { return server.requests.value("POST /api/scan-tasks/scan-source/generate-playbook") == beforeFailure+2
+      && !flow.m_scanTab->m_generationInProgress && flow.m_scanTab->m_statusLabel->text().contains("预案生成失败"); }),
+      "task plan retry sends exactly one new request once source details are ready");
+  verify(flow.m_scanTab->m_sourceDemoBtn->isEnabled() && !flow.m_scanTab->m_pendingSourceVerification && savedPlan.isEmpty(),
+      "a second failure remains retryable without creating a draft");
+  sourceDetailDelay = 0;
+  flow.m_planTab->refresh();
   verify(flow.m_planTab->m_busy, "draft fetch overlaps source generation");
   verify(flow.m_analysisTab->m_planButton->isEnabled(), "analysis offers source generation without selecting an analysis note");
   flow.m_analysisTab->m_planButton->click();
