@@ -1,3 +1,4 @@
+import {isProgramMode} from '../services/programScan.js';
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { askTaskAssistant } from '../services/taskAssistant.js';
@@ -31,11 +32,18 @@ function validateTarget(target) {
 }
 
 async function normalizeProgramConfig(config, target) {
-  if (config.scan_mode !== 'source_assisted' && config.test_type !== 'source' && !/^tcp:\/\//i.test(target)) return {config,target};
+  if (!isProgramMode(config.scan_mode) && !['source','program'].includes(config.test_type) && !/^tcp:\/\//i.test(target)) return {config,target};
   target=sourceTarget(target);
-  const source=config.source_url ? httpSourceConnection(target,config.source_url) : null;
+  const inputKind=config.input_kind || 'runtime';
+  if(!['source','runtime'].includes(inputKind)) throw new Error('请选择源码目录或运行入口');
+  if(inputKind==='source' && !/^https?:/i.test(target)) throw new Error('源码目录须为HTTP/HTTPS地址');
+  const runtime=config.runtime_target ? sourceTarget(config.runtime_target) : null;
+  if(inputKind==='source' && runtime) httpSourceConnection(runtime,target);
+  const sourceValue=inputKind==='source' ? config.source_url || target : config.source_url;
+  const source=sourceValue ? httpSourceConnection(target,sourceValue) : null;
   if(!source && config.source_connection_id) await resolveSourceConnection(config.source_connection_id,target);
-  return {target,config:{...config,test_type:'source',scan_mode:'source_assisted',require_approval:true,
+  const legacy=config.scan_mode==='source_assisted' || config.test_type==='source';
+  return {target:inputKind==='source' && runtime ? runtime : target,config:{...config,test_type:legacy?'source':'program',scan_mode:legacy?'source_assisted':'program_dynamic',input_kind:inputKind,runtime_target:runtime,require_approval:true,
     source_url:source?.source_url || null,source_connection_id:source ? null : config.source_connection_id || null}};
 }
 
@@ -237,7 +245,7 @@ export default function (db) {
         const parsed = typeof config === 'string' ? JSON.parse(config) : config;
         // Only allow known config keys
         const sanitized = {};
-        const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id'];
+        const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id', 'input_kind', 'runtime_target'];
         for (const key of allowedKeys) {
           if (parsed[key] !== undefined) sanitized[key] = parsed[key];
         }
@@ -302,7 +310,7 @@ export default function (db) {
         if (typeof parsed === 'object' && parsed !== null) {
           // Only allow known config keys (same whitelist as create)
           const sanitized = {};
-          const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id'];
+          const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id', 'input_kind', 'runtime_target'];
           for (const key of allowedKeys) {
             if (parsed[key] !== undefined) sanitized[key] = parsed[key];
           }
@@ -312,7 +320,7 @@ export default function (db) {
       try {
         const normalized=await normalizeProgramConfig(JSON.parse(configStr),pipeline.target);
         const previous=JSON.parse(pipeline.config || '{}');
-        if(pipeline.status!=='created' && ['scan_mode','source_url','source_connection_id'].some(key=>(previous[key] ?? null)!==(normalized.config[key] ?? null))) {
+        if(pipeline.status!=='created' && ['scan_mode','source_url','source_connection_id','input_kind','runtime_target'].some(key=>(previous[key] ?? null)!==(normalized.config[key] ?? null))) {
           return res.status(409).json({status:'error',error:{message:'扫描已启动，不能改变程序测试模式或源码来源；请新建任务'}});
         }
         configStr=JSON.stringify(normalized.config);
@@ -440,7 +448,7 @@ export default function (db) {
       return res.status(403).json({ status: 'error', error: { message: '没有权限审批此流水线' } });
     }
     let approvalConfig={};try {approvalConfig=JSON.parse(pipeline.config || '{}');} catch {}
-    if(approvalConfig.scan_mode==='source_assisted') {
+    if(isProgramMode(approvalConfig.scan_mode)) {
       return res.status(409).json({status:'error',error:{message:'程序测试需先选择发现并建立任务预案，不能绕过演示对象清单直接执行'}});
     }
     if (db.prepare('SELECT pipeline_id FROM task_plans WHERE pipeline_id = ?').get(req.params.id)) {

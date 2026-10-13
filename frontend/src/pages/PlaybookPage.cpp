@@ -67,6 +67,7 @@ void PlaybookPage::setupUI() {
   m_groupFilter->addItem("信息篡改欺骗", "tampering-deception");
   m_groupFilter->addItem("关键设备夺控", "device-control");
   m_showGenerated = new QCheckBox("包含智能生成内容");
+  m_showGenerated->setToolTip(QStringLiteral("显示智能生成的来源预案；审批后的执行版本请在所属任务中查看。"));
   filterH->addWidget(new QLabel("基线组:"));
   filterH->addWidget(m_groupFilter);
   filterH->addWidget(m_showGenerated);
@@ -370,9 +371,9 @@ void PlaybookPage::onLoadList() {
     m_listTable->setRowCount(arr.size());
     for (int i = 0; i < arr.size(); i++) {
       auto pb = arr[i].toObject();
-      auto *nameItem = new QTableWidgetItem(pb["name"].toString());
+      auto *nameItem = new QTableWidgetItem(pb["display_name"].toString(pb["name"].toString()));
       nameItem->setData(Qt::UserRole, pb["playbook_id"].toString());
-      nameItem->setToolTip(pb["name"].toString());
+      nameItem->setToolTip(nameItem->text());
       m_listTable->setItem(i, 0, nameItem);
       auto *diffItem = new QTableWidgetItem(formatDifficulty(pb["difficulty"].toString()));
       auto *groupItem = new QTableWidgetItem(formatBaselineGroup(pb["baseline_group"].toString()));
@@ -407,9 +408,9 @@ void PlaybookPage::selectPlaybook(const QString &playbookId) {
     m_listTable->setRowCount(arr.size());
     for (int i = 0; i < arr.size(); i++) {
       auto pb = arr[i].toObject();
-      auto *nameItem = new QTableWidgetItem(pb["name"].toString());
+      auto *nameItem = new QTableWidgetItem(pb["display_name"].toString(pb["name"].toString()));
       nameItem->setData(Qt::UserRole, pb["playbook_id"].toString());
-      nameItem->setToolTip(pb["name"].toString());
+      nameItem->setToolTip(nameItem->text());
       m_listTable->setItem(i, 0, nameItem);
       auto *diffItem = new QTableWidgetItem(formatDifficulty(pb["difficulty"].toString()));
       auto *groupItem = new QTableWidgetItem(formatBaselineGroup(pb["baseline_group"].toString()));
@@ -464,7 +465,7 @@ void PlaybookPage::loadPlaybookDetail(const QString &id) {
     m_goExecBtn->setToolTip(m_selectedSnapshot ? QStringLiteral("批准预案为只读快照，请从所属任务的执行页操作")
       : access.value("direct_run").toBool() ? QString() : QStringLiteral("此预案不能作为当前账号的独立执行来源"));
     m_deleteBtn->setEnabled(m_canWrite && !m_selectedSnapshot);
-    m_detailLabel->setText(d["name"].toString());
+    m_detailLabel->setText(d["display_name"].toString(d["name"].toString()));
     m_detailMeta->setText(QString("%1 · %2 · %3 个步骤")
       .arg(formatDifficulty(d["difficulty"].toString()),
            formatBaselineGroup(d["baseline_group"].toString()),

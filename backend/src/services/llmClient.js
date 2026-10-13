@@ -44,6 +44,13 @@ export async function callLlm(messages, options = {}) {
     temperature: options.temperature ?? 0.4,
     max_tokens: options.maxTokens ?? 4096,
   };
+  // Structured source workflows request provider-enforced JSON where support
+  // is known. Other configured gateways keep their existing request contract.
+  if (options.json === true) {
+    try {
+      if (new URL(baseUrl).hostname === 'api.deepseek.com') body.response_format = {type:'json_object'};
+    } catch { /* Invalid URLs are reported by the request error path below. */ }
+  }
 
   const controller = new AbortController();
   const onAbort = () => controller.abort();
@@ -66,6 +73,7 @@ export async function callLlm(messages, options = {}) {
 
     const data = await res.json();
     const content = data.choices?.[0]?.message?.content || '';
+    if (options.json === true && !content.trim()) return {ok:false,error:'LLM returned empty JSON content'};
     return { ok: true, content, usage: data.usage };
 
   } catch (err) {

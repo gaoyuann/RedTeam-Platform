@@ -5,6 +5,14 @@ import { parseVariableContract } from '../services/executionVariables.js';
 import { requireActor } from '../middleware/recordAccess.js';
 import { canReadPlaybook, playbookScope } from '../services/playbookAccess.js';
 
+function displayName(row, scope) {
+  if (!scope.snapshot) return row.name;
+  // Keep the immutable approved name intact for report integrity checks.
+  try {const name=JSON.parse(row.metadata || '{}').task_plan?.display_name;if(typeof name==='string' && name.trim()) return name;}
+  catch {}
+  return row.name+' · 任务执行版本';
+}
+
 export default function (db) {
   const router = Router();
   router.use(requireActor(db));
@@ -43,7 +51,7 @@ export default function (db) {
   });
 
   router.get('/', (req, res) => {
-    const { baselineGroup, targetType, category, includeGenerated } = req.query;
+    const { baselineGroup, targetType, category, includeGenerated, includeSnapshots } = req.query;
     let sql = 'SELECT * FROM playbooks WHERE 1=1';
     const params = [];
     if (baselineGroup) { sql += ' AND baseline_group = ?'; params.push(baselineGroup); }
@@ -51,11 +59,16 @@ export default function (db) {
     if (category) { sql += ' AND category = ?'; params.push(category); }
     if (!includeGenerated || includeGenerated === 'false') { sql += ' AND is_generated = 0'; }
     sql += ' ORDER BY name';
-    const rows = db.prepare(sql).all(...params).filter(row => canReadPlaybook(db, row, req.user) && canAccessProgramPlaybook(db, req.user, row));
+    // Approved execution versions belong to their tasks, not the reusable
+    // catalogue. Explicit history queries keep the same owner access checks.
+    const rows = db.prepare(sql).all(...params).filter(row =>
+      (includeSnapshots === 'true' || !playbookScope(db, row).snapshot)
+      && canReadPlaybook(db, row, req.user) && canAccessProgramPlaybook(db, req.user, row));
     // Attach step count and promote target_class from metadata to top-level
     const stepCountStmt = db.prepare('SELECT COUNT(*) as cnt FROM playbook_steps WHERE playbook_id = ?');
     for (const row of rows) {
       const scope = playbookScope(db, row);
+      row.display_name = displayName(row, scope);
       row.access = { private: scope.private, owner: scope.owner, snapshot: scope.snapshot, direct_run: !scope.snapshot && (!scope.private || scope.owner === req.user.sub) };
       row.steps_count = stepCountStmt.get(row.playbook_id).cnt;
       // Promote target_class from metadata JSON to top-level for frontend convenience
@@ -78,6 +91,7 @@ export default function (db) {
     const row = db.prepare('SELECT * FROM playbooks WHERE playbook_id = ?').get(req.params.playbookId);
     if (!row) return res.status(404).json({ status: 'error', error: { message: 'Playbook not found' } });
     const scope = playbookScope(db, row);
+    row.display_name = displayName(row, scope);
     row.access = { private: scope.private, owner: scope.owner, snapshot: scope.snapshot, direct_run: !scope.snapshot && (!scope.private || scope.owner === req.user.sub) };
     row.steps = db.prepare('SELECT * FROM playbook_steps WHERE playbook_id = ? ORDER BY step_index').all(req.params.playbookId);
     // Promote target_class from metadata JSON to top-level

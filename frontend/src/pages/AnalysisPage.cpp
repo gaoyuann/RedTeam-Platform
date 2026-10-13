@@ -109,6 +109,10 @@ AnalysisPage::AnalysisPage(QWidget *parent) : QWidget(parent)
   m_planButton->setObjectName(QStringLiteral("analysisPlanButton"));
   detailHeader->addWidget(m_planButton);
   connect(m_planButton, &QPushButton::clicked, this, [this]() {
+    if (QStringList{"source_assisted","program_dynamic"}.contains(analysisObject(m_pipeline["config"])["scan_mode"].toString())) {
+      emit sourceVerificationRequested();
+      return;
+    }
     const int row = m_table->currentRow();
     if (row >= 0 && row < m_items.size())
       emit planCandidateRequested(m_categoryCombo->currentData().toString(), row, m_items.at(row));
@@ -226,7 +230,12 @@ void AnalysisPage::showSelection()
   const int row = m_table->currentRow();
   const bool selected = row >= 0 && row < m_items.size();
   m_askButton->setEnabled(selected);
-  m_planButton->setEnabled(selected && m_pipeline["status"].toString() == QStringLiteral("awaiting_approval"));
+  const bool sourceMode =QStringList{"source_assisted","program_dynamic"}.contains( analysisObject(m_pipeline["config"])["scan_mode"].toString());
+  m_planButton->setText(sourceMode ? QStringLiteral("生成攻击测试预案") : QStringLiteral("加入草稿候选备注"));
+  m_planButton->setToolTip(sourceMode
+      ? QStringLiteral("根据本任务实际漏洞发现生成预案，执行后查看攻击效果。")
+      : QStringLiteral("仅加入审阅备注，不新增执行步骤。"));
+  m_planButton->setEnabled((selected || sourceMode) && m_pipeline["status"].toString() == QStringLiteral("awaiting_approval"));
   if (!selected) {
     m_detail->setPlainText(QStringLiteral("选择分析条目查看完整数据。候选风险需要独立核验和原始证据才能成为正式结论。"));
     return;

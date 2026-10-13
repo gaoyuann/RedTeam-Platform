@@ -6,6 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {readdir} from 'node:fs/promises';
 import {getDb,closeDb} from '../src/db/connection.js';
 import {generateSourceVerification,validateSourceDemonstration,recordSourceVerification} from '../src/services/sourceVerification.js';
+import {executeRun} from '../src/services/executionEngine.js';
 
 // Only collection/analysis are replaced. The task API, selection, plan review,
 // execution engine and HTTP evidence use the real implementations and loopback.
@@ -56,6 +57,68 @@ const step=(id,phase,target)=>({name:phase+' #'+id,tool_id:'target-request',phas
   args_template:[JSON.stringify({url:target+'/check?id='+id+'&value='+(phase==='baseline'?'normal':'boundary')})],
   description:'Fixture input comparison, not a real exploit',expected_evidence:'Compare fixture response; no real vulnerability claim'});
 
+test('source plan corrects malformed model URLs once and still rejects unresolved scope or missing conditions',async t=>{
+  const {db}=await fixture(t),target='http://127.0.0.1:8999';
+  db.prepare("INSERT INTO scan_tasks(scan_task_id,scan_type,target,status) VALUES ('url-repair','source_scan',?,'COMPLETED')").run(target);
+  db.prepare("INSERT INTO scan_results(id,scan_task_id,result_type,result_data) VALUES (1,'url-repair','source_finding',?)")
+    .run(JSON.stringify({title:'fixture input',file:'input.c',start_line:1,code:'copy(input);'}));
+  const task={scan_task_id:'url-repair',target,status:'COMPLETED'};
+  const plan=url=>({name:'Input comparison',steps:[step(1,'baseline',url),step(1,'verification',url)]});
+  let calls=0;
+  const repaired=await generateSourceVerification(db,task,[1],{demonstration:true,llm:async messages=>{
+    calls++;
+    if(calls===2) {
+      const correction=JSON.parse(messages.at(-1).content);
+      assert.equal(correction.correction_required,true);assert.equal(correction.target,new URL(target).href);assert.match(correction.error,/Invalid URL/);
+      assert.equal(messages.at(-2).role,'assistant');
+    }
+    return {ok:true,content:JSON.stringify(plan(calls===1?'<target>':target))};
+  }});
+  assert.equal(repaired.ok,true,repaired.error);assert.equal(calls,2);
+  const metadata=JSON.parse(db.prepare('SELECT metadata FROM playbooks WHERE playbook_id=?').get(repaired.playbook_id).metadata);
+  assert.equal(metadata.source_verification.generation.corrective_attempts,1);
+  assert.deepEqual(metadata.source_verification.generation.validation_errors,['Invalid URL']);
+  const count=db.prepare('SELECT count(*) n FROM playbooks').get().n;
+  calls=0;
+  const refused=await generateSourceVerification(db,task,[1],{demonstration:true,llm:async()=>{
+    calls++;return {ok:true,content:JSON.stringify(plan('http://example.com:8999'))};
+  }});
+  assert.equal(refused.ok,false);assert.equal(calls,2);assert.match(refused.error,/纠正后仍未/);
+  assert.equal(db.prepare('SELECT count(*) n FROM playbooks').get().n,count,'no out-of-scope plan is saved');
+  calls=0;
+  const insufficient=await generateSourceVerification(db,task,[1],{demonstration:true,llm:async()=>{
+    calls++;return {ok:true,content:JSON.stringify({status:'needs_information',reason:'Need diagnostic support'})};
+  }});
+  assert.equal(insufficient.ok,false);assert.equal(calls,1);assert.equal(insufficient.error,'Need diagnostic support');
+  calls=0;
+  const disconnected=await generateSourceVerification(db,task,[1],{demonstration:true,llm:async()=>{calls++;return {ok:false,error:'model disconnected'};}});
+  assert.equal(disconnected.ok,false);assert.equal(calls,1);assert.equal(db.prepare('SELECT count(*) n FROM playbooks').get().n,count);
+});
+
+test('response comparison selects the same-address baseline and retains separate diagnostic source versions',async t=>{
+  const {db}=await fixture(t);
+  const target=await listen(t,http.createServer(async(req,res)=>{let body='';for await(const part of req) body+=part;res.end('fixture:'+body);}));
+  db.prepare("INSERT INTO scan_tasks(scan_task_id,scan_type,target,status) VALUES ('comparison','source_scan',?,'COMPLETED')").run(target);
+  const finding=Number(db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data) VALUES ('comparison','source_finding',?)")
+    .run(JSON.stringify({file:'input.c',start_line:2,title:'Fixture comparison',reason:'Controlled input',code:'copy(input);',source_sha256:'frozen',snapshot_id:'v1'})).lastInsertRowid);
+  db.prepare("INSERT INTO source_audits(scan_task_id,snapshot_id,connection_id,manifest,analysis,created_at) VALUES ('comparison','v1','fixture',?,'{}',datetime('now'))")
+    .run(JSON.stringify({files:[{path:'input.c',sha256:'frozen',end_line:8}]}));
+  const steps=[['baseline','/check','normal','POST'],['baseline','/other','other','POST'],['baseline','/check','','GET'],['verification','/check','boundary','POST']].map(([phase,path,body,method],index)=>({
+    name:phase+index,tool_id:'target-request',phase,finding_ids:[finding],description:'Controlled comparison',expected_evidence:'Fixture response difference only',
+    args_template:[JSON.stringify({url:target+path,method,body})],
+    ...(phase==='verification'?{criteria:{kind:'response_differs',limitations:'Fixture text differences do not prove a vulnerability'}}:{})}));
+  const generated=await generateSourceVerification(db,{scan_task_id:'comparison',target,status:'COMPLETED'},[finding],{
+    demonstration:true,llm:async()=>({ok:true,content:JSON.stringify({name:'Address comparison',steps})})});
+  assert.equal(generated.ok,true,generated.error);
+  db.prepare("INSERT INTO execution_runs(run_id,playbook_id,target,scan_task_id,status,engine_type) VALUES ('comparison-run',?,?,'comparison','PENDING','mechanical')").run(generated.playbook_id,target);
+  assert.equal((await executeRun('comparison-run')).ok,true);
+  const evidence=db.prepare("SELECT id,evidence_data FROM evidence_records WHERE run_id='comparison-run' ORDER BY step_index").all();
+  assert.equal(evidence.length,4);
+  const result=JSON.parse(evidence[3].evidence_data);
+  assert.equal(result.source_comparison.status,'matched');assert.equal(result.source_comparison.baseline_evidence_id,evidence[0].id);
+  assert.equal(result.source_verification.source_versions[0].end_line,8);assert.equal(result.source_comparison.runtime_verified,false);
+});
+
 test('task workbench preserves source mode, waits for object selection and executes each selected finding with linked evidence',async t=>{
   const {db,request}=await fixture(t),visits=[];
   const target=await listen(t,http.createServer((req,res)=>{visits.push(req.url);res.end('fixture response: '+req.url);}));
@@ -82,6 +145,8 @@ test('task workbench preserves source mode, waits for object selection and execu
   const task=db.prepare('SELECT * FROM scan_tasks').get();
   assert.equal(task.scan_type,'source_scan');assert.equal(JSON.parse(task.parameters).source_url,target+'/project/code/');
   assert.equal(JSON.parse(db.prepare('SELECT result FROM pipelines WHERE pipeline_id=?').get(id).result).paused_at,'source_selection');
+  assert.deepEqual((await request('/pipelines/'+id+'/plan/sources',undefined,'alice','GET')).data,[],
+    'source tasks do not offer unrelated templates before generation');
   assert.equal((await request('/pipelines/'+id+'/approve',{})).status,409,'legacy approve cannot bypass list');
   assert.equal((await request('/pipelines/'+id,{config:{scan_mode:'source_assisted',source_url:'/different/'}},'alice','PUT')).status,409);
   assert.equal((await request('/pipelines',{target,config:{scan_mode:'source_assisted',source_url:'http://example.com/source/'}})).status,400);
@@ -90,10 +155,23 @@ test('task workbench preserves source mode, waits for object selection and execu
   assert.equal((await request('/scans/'+task.scan_task_id+'/generate-playbook',{demonstration:true})).status,400);
   const generated=await request('/scans/'+task.scan_task_id+'/generate-playbook',{finding_ids:findingIds,demonstration:true,adaptive:false});
   assert.equal(generated.status,201);assert.equal(generated.data.steps_count,8,'four findings are not truncated to six total steps');
+  db.prepare("INSERT INTO playbooks(playbook_id,name) VALUES ('generic','Unrelated template')").run();
+  db.prepare("INSERT INTO playbook_steps(playbook_id,step_index,step_id,name,tool_id) VALUES ('generic',0,'generic-step','Unrelated step','nmap')").run();
+  const sources=await request('/pipelines/'+id+'/plan/sources',undefined,'alice','GET');
+  assert.deepEqual(sources.data.map(row=>row.playbook_id),[generated.data.playbook_id],
+    'saved source plan is recoverable through the task-scoped source list');
+  assert.equal(sources.data[0].steps_count,8);
+  assert.equal((await request('/pipelines/'+id+'/plan',{playbook_id:'generic'})).status,400);
+  assert.equal((await request('/pipelines/'+id+'/plan/sources',undefined,'bob','GET')).status,403);
   const metadata=JSON.parse(db.prepare('SELECT metadata FROM playbooks WHERE playbook_id=?').get(generated.data.playbook_id).metadata);
   assert.deepEqual(metadata.source_verification.demonstration.objects.map(row=>row.finding_id),findingIds);
   const draft=await request('/pipelines/'+id+'/plan',{playbook_id:generated.data.playbook_id});
   assert.equal(draft.status,200);assert.equal(draft.data.content.steps.length,8);
+  assert.equal(db.prepare("SELECT status FROM pipeline_steps WHERE pipeline_id=? AND step_type='generate'").get(id).status,'completed');
+  assert.equal(db.prepare('SELECT generated_playbook_id FROM pipelines WHERE pipeline_id=?').get(id).generated_playbook_id,null,
+    'draft generation does not bypass approval');
+  assert.equal((await request('/pipelines/'+id+'/plan',{playbook_id:generated.data.playbook_id})).status,409,
+    'repeated clicks cannot replace an existing draft');
   const reordered={...draft.data.content,steps:[draft.data.content.steps[1],draft.data.content.steps[0],...draft.data.content.steps.slice(2)]};
   const changed=await request('/pipelines/'+id+'/plan',{revision:draft.data.revision,content:reordered},'alice','PUT');
   assert.equal(changed.status,200);
@@ -130,6 +208,12 @@ test('demonstration rejects interleaved, combined, identical and incomplete test
   assert.throws(()=>validateSourceDemonstration([valid[0],{...valid[1],args_template:valid[0].args_template}],[1],target),/重复请求/);
   assert.throws(()=>validateSourceDemonstration([valid[0],{...valid[1],optional:true}],[1],target),/必执行/);
   assert.throws(()=>validateSourceDemonstration([valid[1],valid[0]],[1],target),/先正常对照/);
+  assert.throws(()=>validateSourceDemonstration([valid[0],{...valid[1],criteria:{kind:'response_differs'}}],[1],target),/同一URL/);
+  const bodyPair=['baseline','verification'].map((phase,index)=>({...step(1,phase,target),
+    args_template:[JSON.stringify({url:target+'/check',method:'POST',body:index?'boundary':'normal'})],
+    ...(index?{criteria:{kind:'response_differs'}}:{})}));
+  validateSourceDemonstration(bodyPair,[1],target);
+  assert.throws(()=>validateSourceDemonstration([bodyPair[0],{...bodyPair[1],args_template:[JSON.stringify({url:target+'/check',method:'GET'})]}],[1],target),/同一URL和请求方法/);
   const tcp='tcp://127.0.0.1:8999';
   const tcpPair=['baseline','verification'].map((phase,i)=>({...step(1,phase,target),args_template:[JSON.stringify({url:tcp,
     exchanges:[{send:'same\n',expect:i?'changed prompt':'prompt'}]})]}));

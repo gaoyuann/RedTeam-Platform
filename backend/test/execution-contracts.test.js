@@ -4,6 +4,13 @@ import { renderCommand, replaceTargetPlaceholder } from '../src/services/command
 import { classifyToolResult, normalizeToolArgs } from '../src/tools/toolContracts.js';
 import { parseAction, parseReflection } from '../src/services/reactEngine.js';
 
+test('missing local SAST image returns a deployment diagnosis rather than a generic tool exit', () => {
+  const result=classifyToolResult('cppcheck',{exitCode:125,stderr:"Error response from daemon: No such image: rt-sast-c:latest"});
+  assert.equal(result.success,false);
+  assert.match(result.error,/rt-sast-c.*构建或导入/);
+  assert.match(result.stderr,/No such image/);
+});
+
 test('embedded target placeholders use host and port, not a duplicated scheme', () => {
   assert.equal(replaceTargetPlaceholder('<target>', 'http://192.168.1.111:4280'), 'http://192.168.1.111:4280');
   assert.equal(replaceTargetPlaceholder('http://<target>/login.php', 'http://192.168.1.111:4280'), 'http://192.168.1.111:4280/login.php');

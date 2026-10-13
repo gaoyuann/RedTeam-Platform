@@ -421,6 +421,7 @@ QString edgeColor(const QString &type) {
 
 QString edgeTypeLabel(const QString &type) {
     if (type == QStringLiteral("task-request")) return QStringLiteral("任务请求");
+    if (type == QStringLiteral("application-request")) return QStringLiteral("程序入口响应");
     if (type == QStringLiteral("reachability")) return QStringLiteral("目标响应");
     if (type == QStringLiteral("virtual-link")) return QStringLiteral("逻辑归属");
     if (type == QStringLiteral("connection")) return QStringLiteral("连接");
@@ -839,7 +840,12 @@ void TopologyPage::setPipelineContext(const QString &pipelineId, const QString &
         return;
     }
     if (m_documentDirty || m_editorDirty || !m_topologyDocument.nodes.isEmpty()) return;
-    if (restoreCurrentArchive()) return;
+    if (restoreCurrentArchive()) {
+        if (scanFinished && m_topologyDocument.metadata.contains("manuallyEdited")
+            && !m_topologyDocument.metadata["manuallyEdited"].toBool())
+            loadExistingScanTopology(true);
+        return;
+    }
     if (scanFinished && !scanIds.isEmpty()) {
         loadExistingScanTopology();
     } else {
@@ -896,11 +902,18 @@ void TopologyPage::loadExistingScanTopology(bool replaceExisting)
         if (!guard || generation != m_contextGeneration || scanIds != m_pipelineScanIds
             || m_documentDirty || m_editorDirty || (!replaceExisting && !m_topologyDocument.nodes.isEmpty())) return;
         if (res["status"].toString() != "ok") {
+            m_autoLoadAttempted = false;
             setStatusMessage(QStringLiteral("读取已有拓扑结果失败，可在“扫描与记录”中刷新重试。"),
                              errorStatusStyle());
             return;
         }
         auto doc = TopologyDocument::fromJsonObject(res["data"].toObject()["topology"].toObject());
+        if (replaceExisting && doc.metadata["sourceFingerprint"] == m_topologyDocument.metadata["sourceFingerprint"]
+            && !doc.metadata["sourceFingerprint"].toString().isEmpty()
+            && doc.metadata["projectionVersion"] == m_topologyDocument.metadata["projectionVersion"]) {
+            setStatusMessage(QStringLiteral("当前拓扑与最新扫描结果一致。"), successStatusStyle());
+            return;
+        }
         if (doc.nodes.isEmpty()) {
             populateDocumentPlaceholder(QStringLiteral("暂无可展示的拓扑"),
                                          QStringLiteral("当前任务没有可用于拓扑展示的扫描结果。"));
@@ -1159,6 +1172,7 @@ void TopologyPage::setupUI() {
     m_edgeTypeCombo->setEditable(true);
     m_edgeTypeCombo->addItem(QStringLiteral("连接"), QStringLiteral("connection"));
     m_edgeTypeCombo->addItem(QStringLiteral("任务请求"), QStringLiteral("task-request"));
+    m_edgeTypeCombo->addItem(QStringLiteral("程序入口响应"), QStringLiteral("application-request"));
     m_edgeTypeCombo->addItem(QStringLiteral("目标响应（路径未确认）"), QStringLiteral("reachability"));
     m_edgeTypeCombo->addItem(QStringLiteral("逻辑归属"), QStringLiteral("virtual-link"));
     m_edgeTypeCombo->addItem(QStringLiteral("网关"), QStringLiteral("gateway"));
@@ -2085,7 +2099,7 @@ void TopologyPage::renderTopologyScene() {
         const bool selected = edge.id == m_selectedEdgeId;
         line->setPen(QPen(QColor(selected ? QString(Theme::Primary) : edgeColor(edge.type)),
                           selected ? 3.2 : 2.2,
-                          edge.type == QStringLiteral("task-request") ? Qt::DashDotLine
+                          (edge.type == QStringLiteral("task-request") || edge.type == QStringLiteral("application-request")) ? Qt::DashDotLine
                             : (edge.type == QStringLiteral("virtual-link") || edge.type == QStringLiteral("reachability"))
                               ? Qt::DashLine : Qt::SolidLine,
                           Qt::RoundCap));
@@ -2794,8 +2808,13 @@ bool TopologyPage::saveTopologyDocument(QString *errorMessage) const {
 
     QDir().mkpath(topologyDataDir());
     const QString targetPath = archiveDocumentPath();
-    const QByteArray payload =
-        QJsonDocument(m_topologyDocument.toJsonObject()).toJson(QJsonDocument::Indented);
+    auto document = m_topologyDocument.toJsonObject();
+    auto metadata = m_topologyDocument.metadata;
+    // Automatic archiving clears its path first. Explicit saves retain a path
+    // or editor changes, so reopening a task preserves the user's saved graph.
+    if (m_documentDirty && !m_loadedTopologyPath.isEmpty()) metadata["manuallyEdited"] = true;
+    document["metadata"] = metadata;
+    const QByteArray payload = QJsonDocument(document).toJson(QJsonDocument::Indented);
     QSaveFile file(targetPath);
     if (!file.open(QIODevice::WriteOnly) || file.write(payload) != payload.size() || !file.commit()) {
         if (errorMessage) *errorMessage = QStringLiteral("无法写入拓扑归档：%1").arg(file.errorString());

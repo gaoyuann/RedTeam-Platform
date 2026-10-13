@@ -18,6 +18,8 @@ import { normalizeToolArgs, redactToolArgs } from '../tools/toolContracts.js';
 import { getEngine } from '../tools/containerEngine.js';
 import { establishDvwaSession } from './dvwaSession.js';
 import { validateStepVariables, isDvwaSessionProducer } from './executionVariables.js';
+import {evaluateEvidenceCriteria,sameComparisonRequest} from './sourceEvidenceCriteria.js';
+import {parseSourceDiagnostics} from './sourceDiagnostics.js';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -119,6 +121,30 @@ function recordEvidence(db, runId, stepIndex, toolId, result, target, expectedMi
     console.warn(`[executionEngine] Rules engine failed for ${toolId}: ${e.message}`);
   }
 
+  let comparison=null;
+  let diagnostics=[];
+  if(sourceLinkage && toolId==='target-request') {
+    try {const observation=JSON.parse(result.stdout || '{}');diagnostics=parseSourceDiagnostics(observation.response,
+      (sourceLinkage.source_versions || []).filter(version=>version.file).map(version=>({...version,path:version.file})));
+    } catch { /* Non-JSON failures retain their raw output. */ }
+  }
+  if(sourceLinkage?.criteria && toolId==='target-request') {
+    const previous=db.prepare("SELECT id,evidence_data,raw_stdout FROM evidence_records WHERE run_id=? AND tool_id='target-request' ORDER BY id DESC").all(runId);
+    let currentObservation;
+    try {currentObservation=JSON.parse(result.stdout || '{}');} catch {}
+    const baseline=previous.find(row=>{
+      try {const linked=JSON.parse(row.evidence_data).source_verification;
+        return linked?.phase==='baseline' && linked.scan_task_id===sourceLinkage.scan_task_id
+          && linked.finding_ids?.length===1 && sourceLinkage.finding_ids?.length===1 && linked.finding_ids[0]===sourceLinkage.finding_ids[0]
+          && (sourceLinkage.criteria.kind!=='response_differs' || sameComparisonRequest(JSON.parse(row.raw_stdout),currentObservation));
+      } catch {return false;}
+    });
+    let observation;
+    try {observation=baseline ? {...JSON.parse(baseline.raw_stdout),success:JSON.parse(baseline.evidence_data).success} : null;} catch {}
+    comparison=evaluateEvidenceCriteria(sourceLinkage.criteria,result,observation);
+    if(comparison && baseline) comparison.baseline_evidence_id=baseline.id;
+  }
+
   const insertedEvidence=db.prepare(`
     INSERT INTO evidence_records
       (run_id, step_index, tool_id, evidence_type, evidence_data, raw_stdout, raw_stderr,
@@ -130,6 +156,9 @@ function recordEvidence(db, runId, stepIndex, toolId, result, target, expectedMi
       ...(structuredEvidence?.data || { summary: dataSummary, success: result.success }),
       success: result.success, exit_code: result.exitCode, error: result.error || null,
       ...(sourceLinkage ? {source_verification:sourceLinkage} : {}),
+      ...(comparison ? {source_comparison:comparison} : {}),
+      ...(diagnostics.length ? {source_diagnostics:{provenance:'untrusted_target_response',items:diagnostics,
+        note:'响应中的诊断文本需核对目标日志、构建版本及源码关联，不能单独证明漏洞'}} : {}),
       planned_mitre: tryJsonArr(expectedMitre),
       ...(payloadInfo ? { payload_id: payloadInfo.id, payload_name: payloadInfo.name } : {}),
     }),
@@ -501,7 +530,8 @@ export async function executeRun(runId) {
       // Record evidence (with structured parsing + rules engine)
       const evidenceResult = recordEvidence(db, runId, step.step_index, step.tool_id, result, run.target, step.expected_mitre,
         step.payload_data ? { id: step.payload_data.id, name: step.payload_data.name } : null, attemptId,
-        sourceVerification ? {...JSON.parse(step.evidence_config || '{"finding_ids":[]}'),scan_task_id:sourceVerification.scan_task_id} : null);
+        sourceVerification ? {...JSON.parse(step.evidence_config || '{"finding_ids":[]}'),scan_task_id:sourceVerification.scan_task_id,
+          source_versions:sourceVerification.reproducibility?.source_versions || [],deployment_version_verified:false} : null);
       db.prepare(`INSERT INTO audit_log (type, execution_id, run_id, tool_id, args, user_role, target, execution_mode, success, exit_code, duration_ms, output_size, reasons, timestamp)
         VALUES ('tool_execution', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         String(attemptId), runId, step.tool_id, JSON.stringify(redactToolArgs(args, step.tool_id)), run.user_role || null, run.target,

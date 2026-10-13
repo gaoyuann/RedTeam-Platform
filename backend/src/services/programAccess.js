@@ -1,4 +1,5 @@
-// Source-assisted playbooks carry code excerpts and must retain scan ownership.
+import {isProgramScan} from './programScan.js';
+// Program playbooks retain scan ownership, including optional code excerpts.
 export function canAccessProgramPlaybook(db,user,playbook) {
   let source;
   try {source=JSON.parse(playbook?.metadata || '{}').source_verification;} catch {}
@@ -16,7 +17,7 @@ export function canAccessProgramRun(db,user,run) {
 export function canAccessProgramTask(db, user, scanTaskId) {
   if (!scanTaskId) return true;
   const task = db.prepare('SELECT scan_type,created_by FROM scan_tasks WHERE scan_task_id=?').get(scanTaskId);
-  return !task || task.scan_type !== 'source_scan' || user?.role === 'admin' || !!user?.sub && task.created_by === user.sub;
+  return !task || !isProgramScan(task.scan_type) || user?.role === 'admin' || !!user?.sub && task.created_by === user.sub;
 }
 export function canAccessProgramReport(db, user, report) {
   if (!canAccessProgramTask(db, user, report?.scan_task_id)) return false;

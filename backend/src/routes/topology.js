@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { callLlm } from '../services/llmClient.js';
-import { readTopologyOrigin } from '../services/topologyOrigin.js';
+import { pipelineTopology } from '../services/topologyProjection.js';
+import {isProgramScan, programExecutionTarget} from '../services/programScan.js';
 
 import { extractTopologyFromResults, mergeTopologyEnhancement } from '../services/topologyBuilder.js';
 
@@ -53,18 +54,7 @@ export default function (db) {
     if (req.user.role !== 'admin' && req.user.sub !== pipeline.created_by) {
       return res.status(403).json({ status: 'error', error: { message: '没有权限查看此任务' } });
     }
-    const ids = [...new Set((pipeline.scan_task_id || '').split(',').map(id => id.trim()).filter(Boolean))];
-    const discoveries = db.prepare(
-      "SELECT scan_task_id FROM scan_tasks WHERE scan_type = 'topology_scan' AND json_valid(parameters) AND json_extract(parameters, '$.pipeline_id') = ?"
-    ).all(pipeline.pipeline_id);
-    ids.push(...discoveries.map(row => row.scan_task_id).filter(id => !ids.includes(id)));
-    const results = ids.length ? db.prepare(
-      'SELECT r.*, t.target AS scan_target FROM scan_results r JOIN scan_tasks t ON t.scan_task_id = r.scan_task_id WHERE r.scan_task_id IN ('
-        + ids.map(() => '?').join(',') + ') ORDER BY r.captured_at'
-    ).all(...ids) : [];
-    const topology = extractTopologyFromResults(pipeline.target, results, {
-      includeOrigin: true, origin: readTopologyOrigin(pipeline.config),
-    });
+    const topology = pipelineTopology(db, pipeline);
     topology.flowId = pipeline.pipeline_id;
     topology.target = pipeline.target;
     topology.generatedAt = new Date().toISOString();
@@ -94,12 +84,12 @@ export default function (db) {
         });
       }
 
-      if (task.scan_type === 'topology_scan' && task.created_by
+      if (['topology_scan','source_scan','program_scan'].includes(task.scan_type) && task.created_by
           && req.user.role !== 'admin' && req.user.sub !== task.created_by) {
         return res.status(403).json({ status: 'error', error: { message: '没有权限查看此拓扑探测' } });
       }
 
-      if (task.status !== 'COMPLETED') {
+      if (!['COMPLETED','PARTIAL'].includes(task.status)) {
         return res.status(409).json({
           status: 'error',
           error: { message: `Scan task is ${task.status}, topology requires a completed scan` },
@@ -114,11 +104,13 @@ export default function (db) {
         .all(scan_task_id);
 
       // ── Step 1: Rule-based extraction (always works) ────────────────
-      const ruleBased = extractTopologyFromResults(task.target, results);
+      const runtime=isProgramScan(task.scan_type) ? programExecutionTarget(task) : task.target;
+      const ruleBased = extractTopologyFromResults(runtime || '',runtime ? results.map(row=>({...row,scan_target:runtime})) : []);
+      if(!runtime) ruleBased.summary='仅提供源码输入，尚无程序运行地址；源码目录不作为运行资产或连接证据';
 
       // ── Step 2: Try LLM enhancement ──────────────────────────────────
       let topology = null;
-      if (results.length > 0 && task.scan_type !== 'topology_scan') {
+      if (results.length > 0 && !['topology_scan','source_scan','program_scan'].includes(task.scan_type)) {
         const userPrompt = buildUserPrompt(task.target, results);
 
         try {

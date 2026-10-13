@@ -11,13 +11,18 @@ function clipped(value,limit) {
 }
 function json(value) {try {return typeof value==='string'?JSON.parse(value):value;} catch {return null;}}
 export function buildProgramContext(rows) {
-  return rows.filter(row=>['source_finding','application_observation','source_coverage'].includes(row.result_type)).slice(0,24).map(row=>{
+  return rows.filter(row=>['program_finding','program_coverage','source_finding','application_observation','source_coverage'].includes(row.result_type)).slice(0,24).map(row=>{
     const data=json(row.result_data) || {};
+    if(row.result_type==='program_finding') return {scan_result_id:row.id,type:row.result_type,
+      data:{title:clipped(data.title,200),url:data.url,detector_id:data.detector_id,cwe:data.cwe,severity:data.severity,
+        reason:clipped(data.reason,3000),preconditions:clipped(data.preconditions,2000),
+        evidence_ids:data.evidence_ids,tool_result:data.tool_result,demonstration:data.demonstration,runtime_verified:false}};
     if(row.result_type==='source_finding') return {scan_result_id:row.id,type:row.result_type,
       data:{file:data.file,start_line:data.start_line,end_line:data.end_line,snapshot_id:data.snapshot_id,source_sha256:data.source_sha256,
         title:clipped(data.title,200),code:clipped(data.code,4000),reason:clipped(data.reason,1500),
         trace:(data.trace || []).slice(0,8).map(item=>({...item,code:clipped(item.code,1500),note:clipped(item.note,800)})),
          analyses:(data.analyses || []).slice(0,6).map(item=>({tool:item.tool,reason:clipped(item.reason,1000),preconditions:clipped(item.preconditions,800)})),
+         assessment:data.assessment,counter_review:data.counter_review,runtime_mapping:data.runtime_mapping,
          preconditions:clipped(data.preconditions,1000),cwe:data.cwe,severity:data.severity,runtime_verified:false}};
     if(row.result_type==='application_observation') return {scan_result_id:row.id,type:row.result_type,
       data:{url:data.url,protocol:data.protocol,connected:data.connected,status_code:data.status_code,
@@ -128,7 +133,7 @@ export async function decideProgramNext({target,findingIds=[],state,remainingSte
           request:{url:target},finding_ids:[],expected_evidence:'将检查什么',reason:'evidence_collected|needs_information|no_progress',
           observations:[{title:'发现的线索',kind:'hypothesis',reason:'依据与限制',evidence_ids:[1]}],
           assessments:[{finding_id:1,status:'inconclusive',reason:'还需什么证据',evidence_ids:[1]}]}})}
-    ],{temperature:0.1,maxTokens:4000,timeoutMs:45000,signal});
+    ],{temperature:0.1,maxTokens:4000,timeoutMs:45000,signal,json:true});
   } catch(error) {result={ok:false,error:error.message};}
   if(signal?.aborted) return null;
   if(!result?.ok) {

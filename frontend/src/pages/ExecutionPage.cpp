@@ -408,8 +408,8 @@ void ExecutionPage::attackFromVuln(const QString &target, const QString &vulnTex
     }
     if (!matched.isEmpty()) break;
   }
-  if (resultType == "source_vuln" || resultType == "source_finding") {
-    m_statusLabel->setText("请从程序测试任务根据源码发现生成验证预案；静态分析结果不能直接视为漏洞验证。");
+  if (resultType == "source_vuln" || resultType == "source_finding" || resultType == "program_finding") {
+    m_statusLabel->setText("请从程序测试任务根据具体发现生成攻击预案，并按实际证据查看攻击效果。");
     return;
   }
   if (matched.isEmpty()) matched = "web_vuln_exploit";
@@ -1097,6 +1097,8 @@ void ExecutionPage::applyRunDetails(const QString &runId, const QJsonObject &dat
       if (evDoc.isObject()) {
         auto evObj = evDoc.object();
         evSummary = evObj["summary"].toString();
+        const auto comparison=evObj["source_comparison"].toObject();
+        if(!comparison.isEmpty()) evSummary=comparison["status"].toString()=="matched" ? "观察符合预案条件，待复核" : comparison["status"].toString()=="not_matched" ? "本次观察未符合条件" : "判定条件不足";
         if (evSummary.isEmpty()) {
           QStringList parts;
           if (evObj.contains("success"))
