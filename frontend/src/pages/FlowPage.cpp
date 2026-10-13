@@ -77,6 +77,7 @@ static QString pipelineTypeText(const QJsonObject &pipeline)
   if (type == QStringLiteral("web")) return QStringLiteral("Web 安全测试");
   if (type == QStringLiteral("host")) return QStringLiteral("主机安全测试");
   if (type == QStringLiteral("internal")) return QStringLiteral("内网渗透测试");
+  if (type == QStringLiteral("source") || type == QStringLiteral("program")) return QStringLiteral("程序漏洞测试");
   return QStringLiteral("综合测试");
 }
 
@@ -467,6 +468,15 @@ void FlowPage::setupWorkbenchView()
     m_execTab->attackFromVuln(target, vulnText, resultType);
     m_stageTabs->setCurrentWidget(m_execTab);
   });
+  connect(m_scanTab, &ScanPage::playbookNavigateRequested, this, [this](const QString &playbookId, const QString &target) {
+    if (!m_selectedPipelineId.isEmpty()) {
+      m_stageTabs->setCurrentWidget(m_planTab);
+      m_planTab->useSourcePlaybook(playbookId);
+    } else {
+      m_execTab->selectPlaybook(playbookId, target);
+      m_stageTabs->setCurrentWidget(m_execTab);
+    }
+  });
 
   auto *workspace = new QSplitter(Qt::Horizontal, m_workbenchView);
   workspace->setObjectName(QStringLiteral("taskWorkspaceSplitter"));
@@ -524,6 +534,12 @@ void FlowPage::setupWorkbenchView()
     m_stageTabs->setCurrentWidget(m_planTab);
     m_planTab->addCandidate(category, index, source);
   });
+  const auto selectSource = [this]() {
+    m_stageTabs->setCurrentWidget(m_scanTab);
+    m_scanTab->beginSourceVerification();
+  };
+  connect(m_analysisTab, &AnalysisPage::sourceVerificationRequested, this, selectSource);
+  connect(m_planTab, &TaskPlanPage::sourceVerificationRequested, this, selectSource);
   connect(m_planTab, &TaskPlanPage::planChanged, this, [this]() {
     if (!m_selectedPipelineId.isEmpty()) loadFlowDetail(m_selectedPipelineId);
     refreshFlows();
@@ -750,7 +766,10 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     const QString taskTitle = pipelineTaskName(p);
     m_targetLabel->setText(QStringLiteral("%1 · %2").arg(taskTitle, target));
     m_targetLabel->setToolTip(QStringLiteral("任务：%1\n目标：%2").arg(taskTitle, target));
-    m_statusLabel->setText(QStringLiteral("%1  %2").arg(statusIcon(status), statusText(status)));
+    const bool selectingSource = status == "awaiting_approval" && p["generated_playbook_id"].toString().isEmpty()
+        && p["summary"].toObject()["plan"].toObject().isEmpty()
+        && QStringList{"source_selection","program_selection"}.contains(parseJsonObject(p["result"])["paused_at"].toString());
+    m_statusLabel->setText(QStringLiteral("%1  %2").arg(statusIcon(status), selectingSource ? QStringLiteral("待选择攻击演示对象 · 请进入扫描发现") : statusText(status)));
     m_statusLabel->setStyleSheet(statusBadgeStyle(status));
 
     // 从 pipeline 数据提取 run_id 和 playbook_id，自动加载到攻击 Tab.
@@ -946,7 +965,47 @@ void FlowPage::createFlow(bool quickMode)
   testType->addItem(QStringLiteral("Web 安全测试"), QStringLiteral("web"));
   testType->addItem(QStringLiteral("主机安全测试"), QStringLiteral("host"));
   testType->addItem(QStringLiteral("内网渗透测试"), QStringLiteral("internal"));
-  if (!quickMode) form->addRow(QStringLiteral("任务类型"), testType);
+  testType->addItem(QStringLiteral("程序漏洞测试（智能体）"), QStringLiteral("program"));
+  form->addRow(QStringLiteral("任务类型"), testType);
+  auto *programKind = new QComboBox(&dlg);
+  programKind->addItem("静态源码目录", "source");
+  programKind->addItem("程序运行入口", "runtime");
+  programKind->setCurrentIndex(1);
+  auto *programKindLabel = new QLabel("输入类型",&dlg);
+  form->addRow(programKindLabel,programKind);
+  auto *runtimeInput = new QLineEdit(&dlg);
+  runtimeInput->setPlaceholderText("可选：对应程序的运行入口；只有文件也可以扫描");
+  auto *runtimeLabel = new QLabel("攻击测试运行入口",&dlg);
+  form->addRow(runtimeLabel,runtimeInput);
+  programKind->hide();programKindLabel->hide();runtimeInput->hide();runtimeLabel->hide();
+  auto *sourceRow = new QWidget(&dlg);
+  auto *sourceLayout = new QHBoxLayout(sourceRow);
+  sourceLayout->setContentsMargins(0,0,0,0);
+  auto *sourceInput = new QLineEdit(sourceRow);
+  sourceInput->setPlaceholderText("/实际目录/ 或 HTTP 源码目录 URL；留空按项目配置匹配");
+  sourceLayout->addWidget(sourceInput,1);
+  auto *browseSource = new QPushButton("浏览目录…",sourceRow);
+  sourceLayout->addWidget(browseSource);
+  auto *sourceLabel = new QLabel("源码目录",&dlg);
+  form->addRow(sourceLabel,sourceRow);
+  sourceRow->hide(); sourceLabel->hide();
+  connect(browseSource,&QPushButton::clicked,&dlg,[this,targetInput,sourceInput,&dlg]() {
+    const QString selected=ScanPage::chooseHttpSourceDirectory(m_api,targetInput->text().trimmed(),sourceInput->text().trimmed(),&dlg);
+    if(!selected.isEmpty()) sourceInput->setText(selected);
+  });
+  connect(testType,QOverload<int>::of(&QComboBox::currentIndexChanged),&dlg,[testType,sourceRow,sourceLabel,targetInput,programKind,programKindLabel,runtimeInput,runtimeLabel](int) {
+    const bool source=testType->currentData().toString()=="program";
+    programKind->setVisible(source);programKindLabel->setVisible(source);
+    const bool files=source && programKind->currentData().toString()=="source";
+    runtimeInput->setVisible(files);runtimeLabel->setVisible(files);
+    sourceRow->setVisible(source); sourceLabel->setVisible(source);
+    targetInput->setPlaceholderText(source ? (files ? "源码目录完整地址；若另填测试主机根地址，源码目录在下方填写" : "程序测试地址：http://主机:端口/ 或 tcp://主机:端口；源码目录单独填写") : "例: 192.168.1.0/24 或 http://172.17.0.2");
+  });
+  connect(programKind,QOverload<int>::of(&QComboBox::currentIndexChanged),&dlg,[programKind,testType,targetInput,runtimeInput,runtimeLabel](int) {
+    const bool files=testType->currentData().toString()=="program" && programKind->currentData().toString()=="source";
+    runtimeInput->setVisible(files);runtimeLabel->setVisible(files);
+    targetInput->setPlaceholderText(files ? "源码目录完整地址；若另填测试主机根地址，源码目录在下方填写" : "程序测试地址：http://主机:端口/ 或 tcp://主机:端口");
+  });
 
   QLineEdit *scopeInput = nullptr;
   if (!quickMode) {
@@ -1000,6 +1059,12 @@ void FlowPage::createFlow(bool quickMode)
   config["auto_execute"] = true;
   config["task_name"] = taskName;
   config["test_type"] = testType->currentData().toString();
+  if (testType->currentData().toString()=="program") {
+    config["scan_mode"]="program_dynamic";
+    config["input_kind"]=programKind->currentData().toString();
+    if(!runtimeInput->text().trimmed().isEmpty()) config["runtime_target"]=runtimeInput->text().trimmed();
+    if(!sourceInput->text().trimmed().isEmpty()) config["source_url"]=sourceInput->text().trimmed();
+  }
   config["authorization_confirmed"] = authorizationCheck->isChecked();
   config["authorization_scope"] = scopeInput ? scopeInput->text().trimmed() : target;
   config["creation_mode"] = quickMode ? QStringLiteral("quick") : QStringLiteral("full");

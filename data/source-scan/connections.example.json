@@ -1,0 +1,49 @@
+[
+  {
+    "id": "vulnerable_webapp_113",
+    "name": "vulnerable-webapp 对应版本源码（靶场云笔电）",
+    "kind": "http",
+    "source_url": "http://192.168.1.113:8089/source/",
+    "targets": [
+      "http://192.168.1.113:8089/"
+    ],
+    "architecture": "arm64",
+    "analysis": {
+      "platform": "unix64",
+      "defines": []
+    }
+  },
+  {
+    "id": "vuln_demo_113",
+    "name": "vuln-demo 对应版本源码（靶场云笔电）",
+    "kind": "http",
+    "source_url": "http://192.168.1.113:8090/source/",
+    "targets": [
+      "http://192.168.1.113:8090/"
+    ],
+    "architecture": "arm64",
+    "analysis": {
+      "platform": "unix64",
+      "defines": []
+    }
+  },
+  {
+    "id": "exploit_me_113",
+    "name": "exploit_me 对应版本源码（靶场云笔电）",
+    "kind": "ssh",
+    "host": "192.168.1.113",
+    "port": 22,
+    "username": "target-reader",
+    "identity_file": "/etc/redteam/keys/target-readonly",
+    "known_hosts_file": "/etc/redteam/ssh/known_hosts",
+    "source_root": "/home/target-reader/targets/exploit_me",
+    "targets": [
+      "tcp://192.168.1.113:8091"
+    ],
+    "architecture": "arm64",
+    "analysis": {
+      "platform": "unix64",
+      "defines": []
+    }
+  }
+]

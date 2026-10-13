@@ -4,7 +4,7 @@ import { isLoopbackAddress } from './topologyOrigin.js';
 
 function hostKey(value) {
   let text = String(value || '').trim();
-  if (/^https?:\/\//i.test(text)) {
+  if (/^(?:https?|tcp):\/\//i.test(text)) {
     try { text = new URL(text).hostname; } catch { return ''; }
   } else if (!isIP(text) && /^[^/:]+:\d+$/.test(text)) {
     text = text.replace(/:\d+$/, '');
@@ -89,7 +89,27 @@ export function extractTopologyFromResults(target, results, { includeOrigin = fa
       continue;
     }
     if (!['host_discovery', 'open_port', 'vulnerability', 'web_vuln', 'credential',
-          'http_probe', 'technology_detection'].includes(type)) continue;
+          'http_probe', 'technology_detection', 'application_observation'].includes(type)) continue;
+    if (type === 'application_observation') {
+      try {
+        const url = new URL(data.url), runtime = new URL(row.scan_target || target);
+        if (!['http:', 'https:', 'tcp:'].includes(url.protocol) || url.username || url.password
+            || url.protocol !== runtime.protocol || url.hostname !== runtime.hostname || url.port !== runtime.port) continue;
+        const node = nodeFor(url.href);
+        if (!node) continue;
+        const port = url.port || (url.protocol === 'https:' ? '443' : url.protocol === 'http:' ? '80' : '');
+        if (!port) continue;
+        const connected = data.connected === true;
+        const service = {port, protocol:'tcp', service:url.protocol.slice(0,-1), product:'', version:'',
+          state:connected ? 'open' : 'unknown', note:connected ? '程序入口连接响应；不代表漏洞已验证' : '运行地址指定端口；尚无连接响应'};
+        const previous = node.services.find(item => item.port === port && item.protocol === 'tcp');
+        if (!previous) node.services.push(service);
+        else if (connected && previous.state !== 'open') Object.assign(previous, service);
+        if (connected) node.status = 'up';
+        appendNote(node, service.note);
+      } catch { /* Invalid legacy observations cannot create assets. */ }
+      continue;
+    }
     const explicitHost = data.host || data.ip || data.target || data.url;
     const known = knownHostsByScan.get(row.scan_task_id);
     // A legacy port without host context cannot safely be assigned to a CIDR
@@ -251,6 +271,20 @@ export function extractTopologyFromResults(target, results, { includeOrigin = fa
         note: 'HTTP 请求：' + origin.sourceAddress + ' → ' + origin.serverAddress
           + '；记录时间：' + origin.capturedAt + '。这是任务发起关系，不代表物理直连或探测路径。',
       });
+      for (const row of records.filter(r => r.result_type === 'application_observation')) {
+        const data = dataOf(row);
+        if (data?.connected !== true) continue;
+        try {
+          const url = new URL(data.url), runtime = new URL(row.scan_target || target);
+          if (!['http:', 'https:', 'tcp:'].includes(url.protocol) || url.username || url.password
+              || url.protocol !== runtime.protocol || url.hostname !== runtime.hostname || url.port !== runtime.port) continue;
+          const dest = nodeFor(url.href);
+          if (!dest || dest.id === server.id) continue;
+          const id = 'application-request:' + server.id + '>' + dest.id;
+          edges.set(id, {id,sourceId:server.id,targetId:dest.id,type:'application-request',label:'程序入口响应',
+            note:'后端已连接任务运行入口；这是应用请求关系，不代表物理直连或已验证漏洞。'});
+        } catch { /* Ignore malformed observations. */ }
+      }
     }
   }
   // Logical LAN membership is supported by interface scope + discovery records.

@@ -20,10 +20,12 @@ public:
   void setTaskContext(const QJsonObject &pipeline);
   void clearTaskContext();
   void addCandidate(const QString &category, int index, const QJsonValue &source);
+  void useSourcePlaybook(const QString &playbookId);
 
 signals:
   void planChanged();
   void executionStarted();
+  void sourceVerificationRequested();
 
 private:
   void refresh(bool discard = false);
@@ -51,10 +53,12 @@ private:
   bool m_busy = false;
   bool m_dirty = false;
   bool m_rendering = false;
+  QString m_pendingSourcePlaybookId;
   QLabel *m_status;
   QLabel *m_scope;
   QComboBox *m_source;
   QPushButton *m_create;
+  QPushButton *m_generateSource;
   QPushButton *m_refresh;
   QPushButton *m_save;
   QPushButton *m_submit;

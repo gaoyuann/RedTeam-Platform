@@ -64,10 +64,12 @@ export function parseNmapResults(stdout = '', { assumedUp = false } = {}) {
 
 export function normalizeTopologyTarget(value) {
   let target = String(value || '').trim();
-  if (/^https?:\/\//i.test(target)) {
+  if (/^(?:https?|tcp):\/\//i.test(target)) {
     try { target = new URL(target).hostname.replace(/^\[|\]$/g, ''); }
     catch { throw new Error('无效的目标地址'); }
   }
+  if (/^\[[^\]]+\]:\d+$/.test(target)) target=target.slice(1,target.indexOf(']'));
+  else if (/^[^/:]+:\d+$/.test(target)) target=target.replace(/:\d+$/, '');
   // Never expand a single target to a guessed /24.
   if (isIP(target)) return target;
   const cidr = target.match(/^(.+)\/(\d{1,2})$/);

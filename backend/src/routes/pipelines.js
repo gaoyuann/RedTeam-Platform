@@ -1,3 +1,4 @@
+import {isProgramMode} from '../services/programScan.js';
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { askTaskAssistant } from '../services/taskAssistant.js';
@@ -10,12 +11,17 @@ import { requireActor } from '../middleware/recordAccess.js';
 import { taskAnalysisIndex } from '../services/taskAnalysisIndex.js';
 import { recommendForScans } from '../services/playbookRecommendations.js';
 import { captureTopologyOrigin, readTopologyOrigin } from '../services/topologyOrigin.js';
+import { sourceTarget, httpSourceConnection, resolveSourceConnection } from '../services/sourceScanConnections.js';
 
 // ── Validation helpers ────────────────────────────────────────────────────
+const asyncRoute = handler => (req,res,next) => Promise.resolve().then(()=>handler(req,res,next)).catch(next);
 
-/** Validate target: IP, CIDR, or hostname. Reject protocol prefixes (SSRF). */
+/** Validate supported network target formats. Program URLs receive stricter validation below. */
 function validateTarget(target) {
-  if (!target || target.length > 256) return false;
+  if (typeof target !== 'string' || !target || target.length > 256) return false;
+  if (/^tcp:\/\//i.test(target)) {
+    try { sourceTarget(target); return true; } catch { return false; }
+  }
   // Allow URLs (http://, https://) — pipelines target web applications
   if (/^https?:\/\//i.test(target)) {
     try { new URL(target); return true; } catch { return false; }
@@ -23,6 +29,22 @@ function validateTarget(target) {
   const ipCidr = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/;
   const hostname = /^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$/;
   return ipCidr.test(target) || hostname.test(target);
+}
+
+async function normalizeProgramConfig(config, target) {
+  if (!isProgramMode(config.scan_mode) && !['source','program'].includes(config.test_type) && !/^tcp:\/\//i.test(target)) return {config,target};
+  target=sourceTarget(target);
+  const inputKind=config.input_kind || 'runtime';
+  if(!['source','runtime'].includes(inputKind)) throw new Error('请选择源码目录或运行入口');
+  if(inputKind==='source' && !/^https?:/i.test(target)) throw new Error('源码目录须为HTTP/HTTPS地址');
+  const runtime=config.runtime_target ? sourceTarget(config.runtime_target) : null;
+  if(inputKind==='source' && runtime) httpSourceConnection(runtime,target);
+  const sourceValue=inputKind==='source' ? config.source_url || target : config.source_url;
+  const source=sourceValue ? httpSourceConnection(target,sourceValue) : null;
+  if(!source && config.source_connection_id) await resolveSourceConnection(config.source_connection_id,target);
+  const legacy=config.scan_mode==='source_assisted' || config.test_type==='source';
+  return {target:inputKind==='source' && runtime ? runtime : target,config:{...config,test_type:legacy?'source':'program',scan_mode:legacy?'source_assisted':'program_dynamic',input_kind:inputKind,runtime_target:runtime,require_approval:true,
+    source_url:source?.source_url || null,source_connection_id:source ? null : config.source_connection_id || null}};
 }
 
 /** Only creator or admin can modify a pipeline. */
@@ -199,13 +221,13 @@ export default function (db) {
   });
 
   // Create pipeline
-  router.post('/', (req, res) => {
-    const { target, config } = req.body;
+  router.post('/', asyncRoute(async (req, res) => {
+    let { target, config } = req.body;
     if (!target) {
       return res.status(400).json({ status: 'error', error: { message: '目标地址不能为空' } });
     }
     if (target && !validateTarget(target)) {
-      return res.status(400).json({ status: 'error', error: { message: '目标地址格式无效（支持URL/IP/CIDR/主机名）' } });
+      return res.status(400).json({ status: 'error', error: { message: '目标地址格式无效（支持HTTP/HTTPS、tcp://主机:端口、IP/CIDR/主机名）' } });
     }
 
     const limitErr = checkPipelineLimits(db, req.user.sub);
@@ -223,7 +245,7 @@ export default function (db) {
         const parsed = typeof config === 'string' ? JSON.parse(config) : config;
         // Only allow known config keys
         const sanitized = {};
-        const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label'];
+        const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id', 'input_kind', 'runtime_target'];
         for (const key of allowedKeys) {
           if (parsed[key] !== undefined) sanitized[key] = parsed[key];
         }
@@ -233,7 +255,11 @@ export default function (db) {
       }
     }
 
-    configJson = JSON.stringify({ ...JSON.parse(configJson), topology_origin: captureTopologyOrigin(req) });
+    try {
+      const program=await normalizeProgramConfig(JSON.parse(configJson),target);
+      target=program.target;
+      configJson=JSON.stringify({...program.config,topology_origin:captureTopologyOrigin(req)});
+    } catch(error) {return res.status(400).json({status:'error',error:{message:error.message}});}
     try {
       db.prepare(`INSERT INTO pipelines (pipeline_id, target, status, config, created_by, created_at, updated_at)
         VALUES (?, ?, 'created', ?, ?, ?, ?)`).run(pipelineId, target, configJson, req.user.sub, now, now);
@@ -258,12 +284,12 @@ export default function (db) {
       }
       throw err;
     }
-  });
+  }));
 
   router.use('/:id/plan', taskPlanRoutes(db));
 
   // Update pipeline
-  router.put('/:id', (req, res) => {
+  router.put('/:id', asyncRoute(async (req, res) => {
     const pipeline = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(req.params.id);
     if (!pipeline) return res.status(404).json({ status: 'error', error: { message: '流水线不存在' } });
     if (!canModifyPipeline(req, pipeline)) {
@@ -284,13 +310,21 @@ export default function (db) {
         if (typeof parsed === 'object' && parsed !== null) {
           // Only allow known config keys (same whitelist as create)
           const sanitized = {};
-          const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label'];
+          const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id', 'input_kind', 'runtime_target'];
           for (const key of allowedKeys) {
             if (parsed[key] !== undefined) sanitized[key] = parsed[key];
           }
           configStr = JSON.stringify(sanitized);
         }
       } catch {}
+      try {
+        const normalized=await normalizeProgramConfig(JSON.parse(configStr),pipeline.target);
+        const previous=JSON.parse(pipeline.config || '{}');
+        if(pipeline.status!=='created' && ['scan_mode','source_url','source_connection_id','input_kind','runtime_target'].some(key=>(previous[key] ?? null)!==(normalized.config[key] ?? null))) {
+          return res.status(409).json({status:'error',error:{message:'扫描已启动，不能改变程序测试模式或源码来源；请新建任务'}});
+        }
+        configStr=JSON.stringify(normalized.config);
+      } catch(error) {return res.status(400).json({status:'error',error:{message:error.message}});}
       const origin = readTopologyOrigin(pipeline.config);
       if (origin) configStr = JSON.stringify({ ...JSON.parse(configStr), topology_origin: origin });
       sets.push('config = ?');
@@ -311,7 +345,7 @@ export default function (db) {
     const row = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(req.params.id);
     row.status_cn = statusCn(row.status);
     res.json({ status: 'ok', data: row });
-  });
+  }));
 
   // Delete pipeline
   router.delete('/:id', (req, res) => {
@@ -412,6 +446,10 @@ export default function (db) {
     if (!pipeline) return res.status(404).json({ status: 'error', error: { message: '流水线不存在' } });
     if (!canModifyPipeline(req, pipeline)) {
       return res.status(403).json({ status: 'error', error: { message: '没有权限审批此流水线' } });
+    }
+    let approvalConfig={};try {approvalConfig=JSON.parse(pipeline.config || '{}');} catch {}
+    if(isProgramMode(approvalConfig.scan_mode)) {
+      return res.status(409).json({status:'error',error:{message:'程序测试需先选择发现并建立任务预案，不能绕过演示对象清单直接执行'}});
     }
     if (db.prepare('SELECT pipeline_id FROM task_plans WHERE pipeline_id = ?').get(req.params.id)) {
       return res.status(409).json({ status: 'error', error: { message: '此任务已有预案草稿，请通过任务预案页提审并审批具体版本' } });

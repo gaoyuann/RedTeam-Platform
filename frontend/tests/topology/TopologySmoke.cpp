@@ -12,10 +12,13 @@ int main(int argc, char **argv) {
     ApiClient api("http://127.0.0.1:1");
     TopologyPage page(&api, "admin", "test");
     page.setPipelineContext("visual-fixture", "203.0.113.10", {}, false);
-    if (!page.m_createScanBtn->isHidden()) return 1;
+    if (page.m_createScanBtn->isHidden() || !page.m_createScanBtn->isEnabled()) return 1;
+    if (!page.m_targetInput->isReadOnly() || page.m_scanTypeCombo->currentData().toString() != "topology_scan") return 17;
     TopologyDocument doc;
     doc.target = "203.0.113.10";
     doc.summary = QStringLiteral("自动采集 · 界面测试示例数据");
+    doc.metadata = {{"sourceFingerprint", "fixture-fingerprint"}, {"projectionVersion", 2}, {"manuallyEdited", false}};
+    if (TopologyDocument::fromJsonObject(doc.toJsonObject()).metadata != doc.metadata) return 16;
     struct Asset { const char *id; const char *ip; const char *kind; const char *name; double x; double y; };
     const Asset assets[] = {
         {"origin","192.0.2.20","client","源主机",-280,0},

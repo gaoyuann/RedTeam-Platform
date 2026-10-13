@@ -1,3 +1,4 @@
+import {createProgramAgentState,observeProgramStep,decideProgramNext,summarizeProgramAgent,PROGRAM_AGENT_LIMITS} from './programAgent.js';
 import { getDb } from '../db/connection.js';
 import { runTool } from '../tools/toolRunner.js';
 import { reactDecide, determineEngineType } from './reactEngine.js';
@@ -17,6 +18,8 @@ import { normalizeToolArgs, redactToolArgs } from '../tools/toolContracts.js';
 import { getEngine } from '../tools/containerEngine.js';
 import { establishDvwaSession } from './dvwaSession.js';
 import { validateStepVariables, isDvwaSessionProducer } from './executionVariables.js';
+import {evaluateEvidenceCriteria,sameComparisonRequest} from './sourceEvidenceCriteria.js';
+import {parseSourceDiagnostics} from './sourceDiagnostics.js';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -56,6 +59,7 @@ const EVIDENCE_TYPE_MAP = {
   'ssh-exec': 'lateral_movement', rpcclient: 'lateral_movement',
   arjun: 'param_discovery', 'web-brute': 'param_discovery',
   'system-tools': 'command_execution',
+  'target-request': 'application_observation',
 };
 
 // ── Recommendation builder ─────────────────────────────────────────────
@@ -73,7 +77,7 @@ function buildRecommendations(evidenceType, success) {
 }
 
 // ── Record evidence for a step ─────────────────────────────────────────
-function recordEvidence(db, runId, stepIndex, toolId, result, target, expectedMitre, payloadInfo, attemptId) {
+function recordEvidence(db, runId, stepIndex, toolId, result, target, expectedMitre, payloadInfo, attemptId, sourceLinkage) {
   const evidenceType = EVIDENCE_TYPE_MAP[toolId] || 'tool_output';
   const mitreHits = [];
 
@@ -117,7 +121,31 @@ function recordEvidence(db, runId, stepIndex, toolId, result, target, expectedMi
     console.warn(`[executionEngine] Rules engine failed for ${toolId}: ${e.message}`);
   }
 
-  db.prepare(`
+  let comparison=null;
+  let diagnostics=[];
+  if(sourceLinkage && toolId==='target-request') {
+    try {const observation=JSON.parse(result.stdout || '{}');diagnostics=parseSourceDiagnostics(observation.response,
+      (sourceLinkage.source_versions || []).filter(version=>version.file).map(version=>({...version,path:version.file})));
+    } catch { /* Non-JSON failures retain their raw output. */ }
+  }
+  if(sourceLinkage?.criteria && toolId==='target-request') {
+    const previous=db.prepare("SELECT id,evidence_data,raw_stdout FROM evidence_records WHERE run_id=? AND tool_id='target-request' ORDER BY id DESC").all(runId);
+    let currentObservation;
+    try {currentObservation=JSON.parse(result.stdout || '{}');} catch {}
+    const baseline=previous.find(row=>{
+      try {const linked=JSON.parse(row.evidence_data).source_verification;
+        return linked?.phase==='baseline' && linked.scan_task_id===sourceLinkage.scan_task_id
+          && linked.finding_ids?.length===1 && sourceLinkage.finding_ids?.length===1 && linked.finding_ids[0]===sourceLinkage.finding_ids[0]
+          && (sourceLinkage.criteria.kind!=='response_differs' || sameComparisonRequest(JSON.parse(row.raw_stdout),currentObservation));
+      } catch {return false;}
+    });
+    let observation;
+    try {observation=baseline ? {...JSON.parse(baseline.raw_stdout),success:JSON.parse(baseline.evidence_data).success} : null;} catch {}
+    comparison=evaluateEvidenceCriteria(sourceLinkage.criteria,result,observation);
+    if(comparison && baseline) comparison.baseline_evidence_id=baseline.id;
+  }
+
+  const insertedEvidence=db.prepare(`
     INSERT INTO evidence_records
       (run_id, step_index, tool_id, evidence_type, evidence_data, raw_stdout, raw_stderr,
        target, mitre_hits, recommendations, rule_matches, structured_type, structured_data, recorded_at, attempt_id)
@@ -127,10 +155,14 @@ function recordEvidence(db, runId, stepIndex, toolId, result, target, expectedMi
     JSON.stringify({
       ...(structuredEvidence?.data || { summary: dataSummary, success: result.success }),
       success: result.success, exit_code: result.exitCode, error: result.error || null,
+      ...(sourceLinkage ? {source_verification:sourceLinkage} : {}),
+      ...(comparison ? {source_comparison:comparison} : {}),
+      ...(diagnostics.length ? {source_diagnostics:{provenance:'untrusted_target_response',items:diagnostics,
+        note:'响应中的诊断文本需核对目标日志、构建版本及源码关联，不能单独证明漏洞'}} : {}),
       planned_mitre: tryJsonArr(expectedMitre),
       ...(payloadInfo ? { payload_id: payloadInfo.id, payload_name: payloadInfo.name } : {}),
     }),
-    (result.stdout || '').slice(0, MAX_OUTPUT_LENGTH),
+    (result.stdout || '').slice(0, toolId==='target-request' ? 524288 : MAX_OUTPUT_LENGTH),
     (result.stderr || '').slice(0, MAX_OUTPUT_LENGTH),
     target || null,
     JSON.stringify(mitreHits),
@@ -141,7 +173,7 @@ function recordEvidence(db, runId, stepIndex, toolId, result, target, expectedMi
     now, attemptId
   );
 
-  return { structuredEvidence, ruleMatchResult };
+  return { structuredEvidence, ruleMatchResult, evidenceId:Number(insertedEvidence.lastInsertRowid) };
 }
 
 // ── Main entry: execute a run ──────────────────────────────────────────
@@ -160,7 +192,12 @@ export async function executeRun(runId) {
   if (!run) return { ok: false, error: 'Run not found' };
   if (run.status !== 'PENDING') return { ok: false, error: `Run status is ${run.status}, expected PENDING` };
 
-  let engineType = run.engine_type;
+  let sourceVerification;
+  try {sourceVerification=JSON.parse(db.prepare('SELECT metadata FROM playbooks WHERE playbook_id=?').get(run.playbook_id)?.metadata || '{}').source_verification;} catch {}
+  const programAgent=sourceVerification?.agent?.enabled === true && run.engine_type!=='mechanical'
+    ? createProgramAgentState(sourceVerification.context) : null;
+  // Program testing uses typed JSON decisions; the generic XML ReAct path is separate.
+  let engineType = sourceVerification ? (programAgent ? 'react' : 'mechanical') : run.engine_type;
   if (!engineType || engineType === 'auto' || engineType === 'playbook') {
     engineType = determineEngineType(db);
   }
@@ -169,7 +206,7 @@ export async function executeRun(runId) {
   // Get playbook steps (include payload_id and payload_variables for compiler)
   const steps = db.prepare(
     `SELECT step_index, step_id, name, tool_id, args_template, optional, expected_mitre,
-            payload_id, payload_variables, input_variables, output_variables
+            payload_id, payload_variables, input_variables, output_variables, description, evidence_config
      FROM playbook_steps WHERE playbook_id = ? ORDER BY step_index`
   ).all(run.playbook_id);
   if (!steps.length) return { ok: false, error: 'Playbook has no steps' };
@@ -260,7 +297,9 @@ export async function executeRun(runId) {
   }
 
   // ── Playbook compilation ────────────────────────────────────────────
-  const compiled = compilePlaybook({ steps, target: run.target, db, context: targetContext });
+  const compiled = sourceVerification
+    ? {ok:true,warnings:[],errors:[],compiledSteps:steps.map(step=>({...step,compile_status:'READY',resolved_args:JSON.parse(step.args_template)}))}
+    : compilePlaybook({ steps, target: run.target, db, context: targetContext });
   if (!compiled.ok) {
     console.warn(`[executionEngine] Playbook compilation warnings: ${compiled.warnings.join('; ')}`);
   }
@@ -327,7 +366,7 @@ export async function executeRun(runId) {
   let reactStopped = false;
   const sessionDirectory = resolve(PROJECT_ROOT, 'data/output', `run-${Buffer.from(runId).toString('hex')}`);
 
-    const executionEnvironment = await getEngine();
+    const executionEnvironment = sourceVerification ? 'builtin' : await getEngine();
     // Use mutable steps array (ReAct may insert new steps)
     const mutableSteps = runnableSteps.map(step => ({ ...step, source: 'playbook' }));
     const removedSteps = compiled.compiledSteps.filter(step => step.compile_status.startsWith('BLOCKED'));
@@ -336,7 +375,8 @@ export async function executeRun(runId) {
     // Global run deadline — prevents runaway execution from hanging forever.
     // Default 4h, configurable via RUN_TIMEOUT_MS env var (min 1 minute).
     const _parsedDeadline = parseInt(process.env.RUN_TIMEOUT_MS || '', 10);
-    const RUN_DEADLINE_MS = _parsedDeadline >= 60_000 ? _parsedDeadline : (4 * 60 * 60 * 1000);
+    const RUN_DEADLINE_MS = sourceVerification ? Math.min(_parsedDeadline>=60000 ? _parsedDeadline : PROGRAM_AGENT_LIMITS.duration_ms,PROGRAM_AGENT_LIMITS.duration_ms)
+      : _parsedDeadline >= 60_000 ? _parsedDeadline : (4 * 60 * 60 * 1000);
     const runStartTime = Date.now();
     deadlineTimer = setTimeout(() => { timeoutAbort = true; controller.abort(); }, RUN_DEADLINE_MS);
 
@@ -371,7 +411,7 @@ export async function executeRun(runId) {
         targetContext.auth_cookie = '';
         targetContext.dvwa_session_verified = false;
       }
-      preparationError ||= validateStepVariables(step, targetContext);
+      if(!sourceVerification) preparationError ||= validateStepVariables(step, targetContext);
 
       // Resolve args: use compiler-resolved args if available, otherwise parse args_template
       let args = [];
@@ -387,7 +427,7 @@ export async function executeRun(runId) {
       }
       // Always apply full context rendering via commandTemplateRenderer
       // (handles {{host}}, {{base_url}}, {{domain}}, etc. from targetAdapters)
-      if (targetContext) {
+      if (targetContext && !sourceVerification) {
         const { rendered, unresolvedTokens } = renderCommand(args, targetContext);
         args = rendered;
         if (unresolvedTokens.length > 0) {
@@ -451,7 +491,7 @@ export async function executeRun(runId) {
             }
             targetContext.dvwa_session_verified = result.success;
           } else {
-            result = await runTool(step.tool_id, args, { timeout: getToolTimeout(step.tool_id), signal: controller.signal });
+            result = await runTool(step.tool_id, args, { timeout: getToolTimeout(step.tool_id), signal: controller.signal, target: run.target });
           }
         } catch (err) {
           result = { success: false, exitCode: -1, stdout: '', stderr: err.message, executionMode: 'error' };
@@ -470,7 +510,7 @@ export async function executeRun(runId) {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         runId, step.step_index, step.step_id, source, step.tool_id, JSON.stringify(redactToolArgs(args, step.tool_id)),
         startedAt, new Date().toISOString(), result.success ? 1 : 0, result.exitCode ?? -1,
-        (result.stdout || '').slice(0, MAX_OUTPUT_LENGTH), (result.stderr || '').slice(0, MAX_OUTPUT_LENGTH), result.executionMode || null, durationMs,
+        (result.stdout || '').slice(0, step.tool_id==='target-request' ? 524288 : MAX_OUTPUT_LENGTH), (result.stderr || '').slice(0, MAX_OUTPUT_LENGTH), result.executionMode || null, durationMs,
       ).lastInsertRowid);
       attempts++;
       step.execution_finished = true;
@@ -489,7 +529,9 @@ export async function executeRun(runId) {
 
       // Record evidence (with structured parsing + rules engine)
       const evidenceResult = recordEvidence(db, runId, step.step_index, step.tool_id, result, run.target, step.expected_mitre,
-        step.payload_data ? { id: step.payload_data.id, name: step.payload_data.name } : null, attemptId);
+        step.payload_data ? { id: step.payload_data.id, name: step.payload_data.name } : null, attemptId,
+        sourceVerification ? {...JSON.parse(step.evidence_config || '{"finding_ids":[]}'),scan_task_id:sourceVerification.scan_task_id,
+          source_versions:sourceVerification.reproducibility?.source_versions || [],deployment_version_verified:false} : null);
       db.prepare(`INSERT INTO audit_log (type, execution_id, run_id, tool_id, args, user_role, target, execution_mode, success, exit_code, duration_ms, output_size, reasons, timestamp)
         VALUES ('tool_execution', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         String(attemptId), runId, step.tool_id, JSON.stringify(redactToolArgs(args, step.tool_id)), run.user_role || null, run.target,
@@ -561,7 +603,8 @@ export async function executeRun(runId) {
       const ws = getWsManager();
       const runInfo = ws ? db.prepare('SELECT user_sub FROM execution_runs WHERE run_id = ?').get(runId) : null;
       if (ws) {
-        ws.broadcast('run:step', {
+        const broadcast = sourceVerification ? (event,data) => ws.broadcastProgram(run.user_sub,event,data) : (event,data) => ws.broadcast(event,data);
+        broadcast('run:step', {
           run_id: runId,
           step_index: step.step_index,
           tool_id: step.tool_id,
@@ -583,7 +626,43 @@ export async function executeRun(runId) {
       // and would waste time building prompts just to get a 'continue' fallback.
       evidenceHistory.push({ stepIndex: step.step_index, attemptId, toolId: step.tool_id, success: result.success,
         output: output.slice(0, 2500), stderr: (result.stderr || '').slice(0, 1500), exitCode: result.exitCode });
-      if (!aborted && engineType === 'react') {
+      if(programAgent) {
+        const linkage=JSON.parse(step.evidence_config || '{"finding_ids":[]}');
+        observeProgramStep(programAgent,{evidenceId:evidenceResult.evidenceId,stepIndex:step.step_index,
+          findingIds:linkage.finding_ids || [],request:JSON.parse(args[0]),result});
+        if(!aborted) {
+          const decision=await decideProgramNext({target:run.target,findingIds:sourceVerification.finding_ids || [],
+            state:programAgent,remainingSteps:mutableSteps.slice(i+1),signal:controller.signal});
+          reactCallCount=programAgent.decisions;
+          if(abortFlags.get(runId) || timeoutAbort) {
+            aborted=true;manualAbort=!!abortFlags.get(runId);
+            stopReason=manualAbort?'操作员手动中止':'运行超时';
+          } else if(decision) {
+            const publicDecision={...decision,...(decision.request ? {request:JSON.parse(redactToolArgs([JSON.stringify(decision.request)],'target-request')[0])} : {})};
+            const actionData=JSON.stringify({type:decision.action,...publicDecision});
+            db.prepare('UPDATE execution_steps SET react_thought=?,react_action=? WHERE attempt_id=?').run(decision.summary,actionData,attemptId);
+            db.prepare('UPDATE execution_attempts SET react_thought=?,react_action=? WHERE id=?').run(decision.summary,actionData,attemptId);
+            reactThoughts.push({stepIndex:step.step_index,attemptId,toolId:step.tool_id,
+              thought:decision.summary,action:decision.action,decision:publicDecision,timestamp:new Date().toISOString()});
+            getWsManager()?.broadcastProgram(run.user_sub,'run:react',{run_id:runId,step_index:step.step_index,
+              thought:decision.summary,action:decision.action,userId:run.user_sub || null});
+            if(decision.action==='request') {
+              const newStepIndex=allocateStepIndex();
+              mutableSteps.splice(i+1,0,{step_index:newStepIndex,step_id:'program_agent_'+newStepIndex,
+                name:'Agent 补充验证',tool_id:'target-request',source:'react',
+                args_template:JSON.stringify([JSON.stringify(decision.request)]),
+                resolved_args:[JSON.stringify(decision.request)],optional:false,expected_mitre:'[]',
+                evidence_config:JSON.stringify({finding_ids:decision.finding_ids,expected_evidence:decision.expected_evidence,
+                  based_on_evidence_ids:decision.evidence_ids})});
+            } else if(decision.action==='stop') {
+              aborted=true;reactStopped=true;stopReason=decision.summary;
+            }
+          }
+        }
+        db.prepare('UPDATE execution_runs SET evidence_history=?,react_thoughts=? WHERE run_id=?')
+          .run(JSON.stringify(evidenceHistory),JSON.stringify(reactThoughts),runId);
+      }
+      if (!aborted && engineType === 'react' && !programAgent) {
         // Accumulate evidence
 
         // Get remaining steps
@@ -883,6 +962,10 @@ export async function executeRun(runId) {
     const final = buildExecutionSummary({ steps: [...mutableSteps, ...removedSteps], completed: completedSteps,
       failed: failedSteps, manualAbort, timeoutAbort, reactStopped, stopReason, engineType, reactCallCount, attempts });
     const finalStatus = final.status;
+    if(programAgent) {
+      if(manualAbort || timeoutAbort) {programAgent.status=manualAbort?'cancelled':'timed_out';programAgent.reason=stopReason;}
+      final.summary.program_agent=summarizeProgramAgent(programAgent);
+    }
     const summary = JSON.stringify(final.summary);
     db.prepare(`UPDATE execution_runs SET status = ?, final_summary = ?, stop_reason = ?,
       evidence_history = ?, react_thoughts = ?, updated_at = datetime('now') WHERE run_id = ?`)
@@ -911,7 +994,8 @@ export async function executeRun(runId) {
     if (wsEnd && finalRun && ['COMPLETED', 'FAILED', 'ABORTED'].includes(finalRun.status)) {
       let summary = {};
       try { summary = JSON.parse(finalRun.final_summary || '{}'); } catch {}
-      wsEnd.broadcast('run:complete', {
+      const broadcast = sourceVerification ? (event,data) => wsEnd.broadcastProgram(run.user_sub,event,data) : (event,data) => wsEnd.broadcast(event,data);
+      broadcast('run:complete', {
         run_id: runId, status: finalRun.status,
         completed_steps: summary.completed || 0, failed_steps: summary.failed || 0,
         total_steps: summary.total ?? steps.length, stop_reason: finalRun.stop_reason,

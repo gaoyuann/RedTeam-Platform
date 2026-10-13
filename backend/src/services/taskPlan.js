@@ -1,8 +1,11 @@
+import {isProgramMode, programExecutionTarget} from './programScan.js';
 import { randomUUID } from 'crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { parseVariableContract } from './executionVariables.js';
 import { appendTaskLog } from './taskActivity.js';
-import { assertPlaybookUse } from './playbookAccess.js';
+import { assertPlaybookUse, canReadPlaybook, playbookScope } from './playbookAccess.js';
+import { sourceTarget } from './sourceScanConnections.js';
+import { validateSourceDemonstration } from './sourceVerification.js';
 
 function fail(status, message) {
   throw Object.assign(new Error(message), { status });
@@ -35,6 +38,26 @@ export function getTaskPlan(db, pipelineId) {
     history: db.prepare(`SELECT id, revision, action, actor, actor_role, note, created_at
       FROM task_plan_history WHERE pipeline_id = ? ORDER BY id DESC LIMIT 50`).all(pipelineId),
   };
+}
+
+function isSourcePlanForTask(pipeline, playbook) {
+  try {
+    const source = json(playbook.metadata, {}).source_verification;
+    return !!source?.demonstration && sourceTarget(programExecutionTarget(pipeline)) === source.target
+      && String(pipeline.scan_task_id || '').split(',').includes(source.scan_task_id);
+  } catch { return false; }
+}
+
+export function getTaskPlanSources(db, pipeline, actor) {
+  const sourceMode = isProgramMode(json(pipeline.config, {}).scan_mode);
+  return db.prepare(`SELECT p.*, (SELECT COUNT(*) FROM playbook_steps s WHERE s.playbook_id=p.playbook_id) AS steps_count
+    FROM playbooks p ORDER BY p.generated_at DESC, p.name`).all().filter(playbook => {
+    const scope = playbookScope(db, playbook);
+    return canReadPlaybook(db, playbook, actor) && !scope.snapshot
+      && (!scope.private || scope.owner === pipeline.created_by)
+      && playbook.steps_count > 0 && playbook.steps_count <= 60
+      && (!sourceMode || isSourcePlanForTask(pipeline, playbook));
+  }).map(({playbook_id, name, steps_count}) => ({playbook_id, name, steps_count}));
 }
 
 function record(db, pipelineId, actor, action, note = '') {
@@ -80,6 +103,11 @@ export function createTaskPlan(db, pipeline, actor, playbookId) {
   const rows = db.prepare('SELECT * FROM playbook_steps WHERE playbook_id = ? ORDER BY step_index').all(sourceId);
   if (!rows.length || rows.length > 60) fail(400, '来源预案必须包含 1–60 个步骤');
   const config = json(pipeline.config, {});
+  if(isProgramMode(config.scan_mode)) {
+    if(!isSourcePlanForTask(pipeline, playbook)) {
+      fail(400,'请选择本任务程序发现生成的攻击测试预案，不能套用通用或其他任务预案');
+    }
+  }
   const content = {
     name: playbook.name,
     notes: '',
@@ -99,6 +127,10 @@ export function createTaskPlan(db, pipeline, actor, playbookId) {
   db.prepare("INSERT INTO task_plans (pipeline_id, state, content) VALUES (?, 'draft', ?)")
     .run(pipeline.pipeline_id, JSON.stringify(content));
   record(db, pipeline.pipeline_id, actor, 'create');
+  if (isProgramMode(config.scan_mode)) {
+    db.prepare("UPDATE pipeline_steps SET status='completed',completed_at=datetime('now'),output_data=? WHERE pipeline_id=? AND step_type='generate'")
+      .run(JSON.stringify({playbook_id:sourceId,method:'selected_source_demonstration',draft:true}),pipeline.pipeline_id);
+  }
   return getTaskPlan(db, pipeline.pipeline_id);
 }
 
@@ -172,7 +204,17 @@ export function transitionTaskPlan(db, pipeline, actor, action, body) {
   const playbookId = `task_plan_${randomUUID()}`;
   const source = plan.content.source_playbook;
   const metadata = json(source.metadata, {});
-  metadata.task_plan = { pipeline_id: pipeline.pipeline_id, revision: plan.revision, approved_by: actor.sub };
+  if(metadata.source_verification?.demonstration) {
+    try {
+      validateSourceDemonstration(plan.content.steps.map(step=>({...step,...json(step.evidence_config,{})})),
+        metadata.source_verification.finding_ids,metadata.source_verification.target);
+    } catch(error) {fail(400,error.message);}
+  }
+  const taskName = typeof config.task_name === 'string' && config.task_name.trim()
+    ? config.task_name.trim().slice(0,80) : pipeline.pipeline_id;
+  const executionName = `${plan.content.name} · ${taskName} · 执行版本 v${plan.revision}`;
+  metadata.task_plan = { pipeline_id: pipeline.pipeline_id, revision: plan.revision, approved_by: actor.sub,
+    source_playbook_id: plan.content.source_playbook_id, source_name: source.name, task_name: taskName, display_name: executionName };
   db.prepare(`INSERT INTO playbooks (playbook_id, name, description, target_type, not_suitable_for, baseline_group,
     expected_output_policy, roles_allowed, disable_auto_insert, enable_kg_context, requires_teacher_review,
     metadata, is_generated, generated_from, generated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 1, ?, datetime('now'))`)
@@ -189,5 +231,10 @@ export function transitionTaskPlan(db, pipeline, actor, action, body) {
   db.prepare("UPDATE pipelines SET generated_playbook_id = ?, updated_at = datetime('now') WHERE pipeline_id = ?")
     .run(playbookId, pipeline.pipeline_id);
   db.prepare('UPDATE task_plans SET approved_playbook_id = ? WHERE pipeline_id = ?').run(playbookId, pipeline.pipeline_id);
+  if(isProgramMode(config.scan_mode)) {
+    db.prepare("UPDATE pipeline_steps SET status='completed',completed_at=datetime('now'),output_data=? WHERE pipeline_id=? AND step_type='generate'")
+      .run(JSON.stringify({playbook_id:playbookId,source_playbook_id:plan.content.source_playbook_id,
+        method:'selected_source_demonstration',finding_ids:metadata.source_verification.finding_ids}),pipeline.pipeline_id);
+  }
   return update(db, pipeline.pipeline_id, actor, 'approve', 'approved', plan.content, note);
 }

@@ -1,3 +1,4 @@
+import {isProgramMode, isProgramScan, programExecutionTarget, programNetworkTarget} from './programScan.js';
 import { getDb } from '../db/connection.js';
 import { randomUUID } from 'crypto';
 import { resolveTargetProfile } from './targetProfileResolver.js';
@@ -152,7 +153,9 @@ async function runPipelineScan(db, pipeline) {
   const isWebLike = ['dvwa', 'local_ip', 'web_url', 'web_app', 'rest_api', 'graphql_api', 'spa_app'].includes(profile.target_class);
 
   // Determine scan types to run
-  const scanTypes = isWebLike ? ['port_scan', 'app_discovery', 'web_scan'] : ['port_scan'];
+  let config={}; try {config=JSON.parse(pipeline.config || '{}');} catch {}
+  const sourceMode=isProgramMode(config.scan_mode) || target.startsWith('tcp://');
+  const scanTypes = sourceMode ? [config.scan_mode==='source_assisted' ? 'source_scan' : 'program_scan', 'port_scan'] : isWebLike ? ['port_scan', 'app_discovery', 'web_scan'] : ['port_scan'];
 
   // Insert step record
   ensureStep(db, pipelineId, 0, STEP_SCAN);
@@ -176,7 +179,7 @@ async function runPipelineScan(db, pipeline) {
       db.prepare(
         `INSERT INTO scan_tasks (scan_task_id, target, scan_type, target_class, parameters, created_by, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`
-      ).run(scanTaskId, target, scanType, profile.target_class, JSON.stringify(scanType === 'port_scan' ? { discover_topology: true } : {}), pipeline.created_by || 'pipeline', now);
+      ).run(scanTaskId, sourceMode && scanType==='port_scan' ? programNetworkTarget(programExecutionTarget(pipeline) || target) : target, scanType, profile.target_class, JSON.stringify(isProgramScan(scanType) ? {connection_id:config.source_connection_id || null,source_url:config.source_url || null,ai_analysis:true,input_kind:config.input_kind || 'runtime',runtime_target:config.runtime_target || null} : scanType === 'port_scan' ? { discover_topology: true, pipeline_id:pipelineId } : {}), pipeline.created_by || 'pipeline', now);
 
       scanTaskIds.push(scanTaskId);
 
@@ -390,6 +393,9 @@ async function runPipelineGeneration(db, pipeline, analysisData, scanTaskIds) {
         pipelineLog(pipelineId, `AI 生成异常: ${err.message}，尝试匹配已有 Playbook`, 'warn');
       }
     }
+
+    const sourceTask=primaryScanId && db.prepare('SELECT scan_type FROM scan_tasks WHERE scan_task_id=?').get(primaryScanId);
+    if(!playbookId && isProgramScan(sourceTask?.scan_type)) throw new Error('程序验证预案生成失败或验证条件不足；请查看生成日志，不能用通用预案替代具体证据验证');
 
     // Strategy 2: Fall back to playbook matching if generation failed
     if (!playbookId) {
@@ -628,6 +634,20 @@ export async function runPipeline(pipelineId) {
         failPipeline(db, pipelineId, `分析阶段失败: ${analysisResult.error}`);
       }
       return { ok: false, pipeline_id: pipelineId, status: 'failed', error: analysisResult.error };
+    }
+
+    // Source demonstrations require an explicit object list before generation.
+    // Reuse the existing task-plan approval state rather than auto-picking defects.
+    if(isProgramMode(pipelineConfig.scan_mode)) {
+      if(isCancelled(pipelineId)) return {ok:false,pipeline_id:pipelineId,status:'cancelled'};
+      ensureStep(db,pipelineId,2,STEP_GENERATE);
+      updateStep(db,pipelineId,2,'pending',{step_type:STEP_GENERATE,
+        output_data:{scan_task_ids:scanResult.scanTaskIds,note:'请根据程序漏洞发现生成攻击测试预案'}});
+      updateStatus(db,pipelineId,'awaiting_approval',{result:{scan_task_ids:scanResult.scanTaskIds,
+        paused_at:pipelineConfig.scan_mode==='source_assisted' ? 'source_selection' : 'program_selection',paused_at_time:new Date().toISOString()}});
+      runningPipelines.delete(pipelineId);
+      pipelineLog(pipelineId,'程序扫描完成，请生成预案、执行攻击测试并查看效果');
+      return {ok:true,pipeline_id:pipelineId,status:'awaiting_approval'};
     }
 
     // ── Step 2: Generate ────────────────────────────────────────────────

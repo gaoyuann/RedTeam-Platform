@@ -181,18 +181,26 @@ export function inspectToolWordlists(toolId, args, projectRoot, engine = 'docker
 
 export function classifyToolResult(toolId, result) {
   const output = `${result.stdout || ''}\n${result.stderr || ''}`.replace(/\x1b\[[0-9;]*m/g, '');
+  const sourceImageMissing = ['cppcheck','flawfinder'].includes(toolId)
+    && /rt-sast-c/.test(output) && /unable to find image|no such image|image .*not (?:known|found)|pull access denied|failed to resolve reference/i.test(output);
   const semanticFailure = toolId === 'arjun' && /is not a valid URL|Skipped .* due to errors/i.test(output) ||
     toolId === 'ffuf' && /Errors:\s*[1-9]\d*/.test(output) ||
     toolId === 'nmap' && /Unable to split netmask|No targets were specified|Failed to resolve/i.test(output) ||
     toolId === 'system-tools' && /(?:^|\n)\s*(?:FATAL|VERIFY_FAILED|FILE_TAMPER_FAILED|UPLOAD_RESULT:\s*check|ERROR):/im.test(output) ||
     ['nikto', 'sqlmap', 'httpx'].includes(toolId) && /unable to connect|connection (?:refused|timed out)|no web server found|\[CRITICAL\]/i.test(output);
   const success = result.exitCode === 0 && !result.timedOut && !result.aborted && !result.outputLimitExceeded && !semanticFailure;
-  return { ...result, success, error: success ? null : result.error ||
+  return { ...result, success, error: success ? null : sourceImageMissing
+    ? '缺少或无法读取源码扫描镜像 rt-sast-c；请在扫描后端构建或导入镜像后新建扫描任务'
+    : result.error ||
     (result.aborted ? '操作员手动中止' : result.timedOut ? 'Tool timed out' :
       result.outputLimitExceeded ? 'Tool output limit exceeded' : semanticFailure ? 'Tool rejected input or requests failed' : `Tool exited with code ${result.exitCode}`) };
 }
 
 export function redactToolArgs(args, toolId = '') {
+  if (toolId === 'target-request') return args.map(arg => {
+    try { const value=JSON.parse(arg); if(value.headers) for(const key of Object.keys(value.headers)) if(/cookie|authorization/i.test(key)) value.headers[key]='[REDACTED]'; return JSON.stringify(value); }
+    catch { return '[INVALID REQUEST]'; }
+  });
   const sensitiveFlags = new Set(['--cookie', '-b', '--data', '--data-raw', '--data-urlencode', '-d', '--password', '--token', '-H', '--header']);
   if (['hydra', 'ssh-exec', 'evil-winrm', 'netexec', 'web-brute'].includes(toolId)) sensitiveFlags.add('-p');
   if (toolId === 'curl') sensitiveFlags.add('-u');
