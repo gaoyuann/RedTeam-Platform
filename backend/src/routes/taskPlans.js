@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getTaskPlan, createTaskPlan, saveTaskPlan, addTaskPlanSuggestion, transitionTaskPlan } from '../services/taskPlan.js';
+import { getTaskPlan, getTaskPlanSources, createTaskPlan, saveTaskPlan, addTaskPlanSuggestion, transitionTaskPlan } from '../services/taskPlan.js';
 
 export default function taskPlanRoutes(db, loadResume = async () => (await import('../services/pipelineEngine.js')).resumePipelineAfterApproval) {
   const router = Router({ mergeParams: true });
@@ -11,6 +11,10 @@ export default function taskPlanRoutes(db, loadResume = async () => (await impor
     next();
   });
   router.get('/', (req, res) => res.json({ status: 'ok', data: getTaskPlan(db, req.params.id) }));
+  router.get('/sources', (req, res) => {
+    const pipeline = db.prepare('SELECT * FROM pipelines WHERE pipeline_id=?').get(req.params.id);
+    res.json({status:'ok', data:getTaskPlanSources(db, pipeline, req.user)});
+  });
   const mutate = (action, operation) => async (req, res, next) => {
     try {
       const resume = action === 'approve' ? await loadResume() : null;

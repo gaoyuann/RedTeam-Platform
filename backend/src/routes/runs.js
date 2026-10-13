@@ -1,3 +1,4 @@
+import {isProgramScan} from '../services/programScan.js';
 import {canAccessProgramRun,canAccessProgramTask} from '../services/programAccess.js';
 import { Router } from 'express';
 import { sourceTarget } from '../services/sourceScanConnections.js';
@@ -269,7 +270,7 @@ export default function (db) {
     // WebSocket: notify run started
     const ws = getWsManager();
     const programTask=run.scan_task_id && db.prepare('SELECT scan_type FROM scan_tasks WHERE scan_task_id=?').get(run.scan_task_id);
-    if (ws) (programTask?.scan_type==='source_scan' ? (event,data)=>ws.broadcastProgram(run.user_sub,event,data) : (event,data)=>ws.broadcast(event,data))('run:started', {
+    if (ws) (isProgramScan(programTask?.scan_type) ? (event,data)=>ws.broadcastProgram(run.user_sub,event,data) : (event,data)=>ws.broadcast(event,data))('run:started', {
       runId: req.params.runId,
       userId: req.user?.sub || null,
       username: req.user?.sub || null,

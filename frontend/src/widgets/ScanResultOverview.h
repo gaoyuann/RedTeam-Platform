@@ -42,7 +42,7 @@ public:
     int ports = 0, findings = 0, credentials = 0, raw = 0, other = 0, source = 0;
     for (const auto &value : results) {
       const auto type = value.toObject().value("result_type").toString();
-      if (type == "source_finding" || type == "source_vuln") ++source;
+      if (type == "source_finding" || type == "program_finding" || type == "source_vuln") ++source;
       if (type == "open_port") ++ports;
       else if (type == "vulnerability" || type == "web_vuln" || type == "sql_injection" || type == "source_vuln" || type == "source_finding") ++findings;
       else if (type == "credential") ++credentials;

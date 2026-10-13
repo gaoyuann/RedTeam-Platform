@@ -16,6 +16,8 @@ int main(int argc, char **argv) {
     TopologyDocument doc;
     doc.target = "203.0.113.10";
     doc.summary = QStringLiteral("自动采集 · 界面测试示例数据");
+    doc.metadata = {{"sourceFingerprint", "fixture-fingerprint"}, {"projectionVersion", 2}, {"manuallyEdited", false}};
+    if (TopologyDocument::fromJsonObject(doc.toJsonObject()).metadata != doc.metadata) return 16;
     struct Asset { const char *id; const char *ip; const char *kind; const char *name; double x; double y; };
     const Asset assets[] = {
         {"origin","192.0.2.20","client","源主机",-280,0},

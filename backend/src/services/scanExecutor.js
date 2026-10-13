@@ -6,6 +6,8 @@ import { getWsManager } from './wsManager.js';
 import { normalizeTarget, probeTarget, buildDiscoveredProfile } from './targetDiscovery.js';
 import { classifyToolResult } from '../tools/toolContracts.js';
 import { auditSources } from './sourceAudit.js';
+import {isProgramScan} from './programScan.js';
+import {scanProgramAgent} from './programScanAgent.js';
 
 const MAX_OUTPUT_LENGTH = 8192;
 
@@ -678,7 +680,7 @@ export async function executeScan(scanTaskId) {
   if (!task) return { ok: false, error: 'Scan task not found' };
   if (task.status === 'RUNNING') return { ok: false, error: 'Scan is already running' };
 
-  if (task.scan_type === 'source_scan' && task.status !== 'PENDING') return {ok:false,error:'请新建程序测试任务以保留源码版本和复核证据'};
+  if (isProgramScan(task.scan_type) && task.status !== 'PENDING') return {ok:false,error:'请新建程序测试任务以保留发现和验证证据'};
 
   // Reset to PENDING if needed (for re-execution of COMPLETED/FAILED/CANCELLED)
   if (task.status !== 'PENDING') {
@@ -829,12 +831,14 @@ export async function executeScan(scanTaskId) {
         console.log(`[Scan] brute_force ${service}: hydra for ${task.target}`);
         totalResults = await runAndStore('brute_force', 'hydra', task.target, parameters, timeoutMs);
       }
-    } else if (task.scan_type === 'source_scan') {
+    } else if (isProgramScan(task.scan_type)) {
       db.prepare('DELETE FROM source_audits WHERE scan_task_id=?').run(scanTaskId);
       const controller = new AbortController();
-      const audit = await raceScanWithAbort(auditSources(task, {
-        db, parameters, signal: controller.signal, runTool, parseResults,
-      }), scanTaskId, controller);
+      const audit = await raceScanWithAbort((async () => {
+        const context = {db, parameters, signal:controller.signal, runTool, parseResults};
+        if (task.scan_type === 'source_scan') return auditSources(task, context);
+        return scanProgramAgent(task,context);
+      })(), scanTaskId, controller);
       if (!audit.outcomes) throw new Error(audit.stderr || '程序审计失败');
       totalResults += audit.count;
       outcomes.push(...audit.outcomes);
@@ -955,7 +959,7 @@ export async function executeScan(scanTaskId) {
     // WebSocket: notify scan completed (include operator info)
     const ws = getWsManager();
     const taskInfo = db.prepare('SELECT created_by FROM scan_tasks WHERE scan_task_id = ?').get(scanTaskId);
-    if (ws) (task.scan_type==='source_scan' ? (event,data)=>ws.broadcastProgram(taskInfo?.created_by,event,data) : (event,data)=>ws.broadcast(event,data))('scan:completed', {
+    if (ws) (isProgramScan(task.scan_type) ? (event,data)=>ws.broadcastProgram(taskInfo?.created_by,event,data) : (event,data)=>ws.broadcast(event,data))('scan:completed', {
       scanTaskId, status: finalStatus, resultsCount: totalResults, error: warnings || null,
       scanType: task.scan_type, target: task.target,
       userId: taskInfo?.created_by || null,
@@ -973,7 +977,7 @@ export async function executeScan(scanTaskId) {
     // WebSocket: notify scan failed/cancelled (include operator info)
     const ws = getWsManager();
     const taskInfo = db.prepare('SELECT created_by FROM scan_tasks WHERE scan_task_id = ?').get(scanTaskId);
-    if (ws) (task.scan_type==='source_scan' ? (event,data)=>ws.broadcastProgram(taskInfo?.created_by,event,data) : (event,data)=>ws.broadcast(event,data))('scan:completed', {
+    if (ws) (isProgramScan(task.scan_type) ? (event,data)=>ws.broadcastProgram(taskInfo?.created_by,event,data) : (event,data)=>ws.broadcast(event,data))('scan:completed', {
       scanTaskId, status: finalStatus, error: err.message,
       scanType: task.scan_type, target: task.target,
       userId: taskInfo?.created_by || null,

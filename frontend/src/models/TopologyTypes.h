@@ -55,6 +55,7 @@ struct TopologyDocument {
     QString target;
     QString generatedAt;
     QString summary;
+    QJsonObject metadata;
     QList<TopologyNodeRecord> nodes;
     QList<TopologyEdgeRecord> edges;
 

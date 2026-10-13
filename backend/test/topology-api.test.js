@@ -109,3 +109,66 @@ test('origin ignores untrusted forwarded addresses and normalizes mapped IPv4', 
   assert.equal(origin.sourceAddress,'192.0.2.5');
   assert.equal(origin.serverAddress,'192.0.2.10');
 });
+
+test('partial source audits project HTTP and TCP entry evidence without inventing routes or leaking source', async t => {
+  const {db,request}=await fixture(t);
+  const origin={sourceAddress:'192.0.2.20',serverAddress:'192.0.2.10',transport:'http-request',capturedAt:'fixture'};
+  for (const [suffix,target] of [['http','http://192.0.2.30:8089/'],['tcp','tcp://192.0.2.30:8091']]) {
+    const pid='source-'+suffix, sid='scan-'+suffix;
+    db.prepare('INSERT INTO pipelines(pipeline_id,target,scan_task_id,config,created_by) VALUES (?,?,?,?,?)')
+      .run(pid,target,sid,JSON.stringify({scan_mode:'source_assisted',topology_origin:origin}),'alice');
+    db.prepare("INSERT INTO scan_tasks(scan_task_id,target,scan_type,status,created_by) VALUES (?,?,'source_scan','PARTIAL','alice')").run(sid,target);
+    const insert=db.prepare('INSERT INTO scan_results(scan_task_id,result_type,result_data,source_tool) VALUES (?,?,?,?)');
+    insert.run(sid,'application_observation',JSON.stringify({url:target,connected:true,response:'private response'}),'target-request');
+    insert.run(sid,'application_observation',JSON.stringify({url:'http://192.0.2.99:8089/',connected:true}),'target-request');
+    insert.run(sid,'source_finding',JSON.stringify({title:'Input bounds candidate',file:'input.c',code:'private source code'}),'source-ai');
+    const response=await request('/topology/from-pipeline/'+pid);
+    assert.equal(response.status,200);
+    const graph=response.body.data.topology;
+    const node=graph.nodes.find(node=>node.ip==='192.0.2.30');
+    assert.equal(node.status,'up');assert.equal(node.services[0].state,'open');
+    assert.equal(node.services[0].port,suffix==='http'?'8089':'8091');
+    assert.equal(graph.nodes.some(node=>node.ip==='192.0.2.99'),false);
+    assert.equal(graph.edges.filter(edge=>edge.type==='route').length,0);
+    assert.equal(graph.edges.filter(edge=>edge.type==='application-request').length,1);
+    assert.equal(graph.edges.find(edge=>edge.type==='application-request').provenance.sources.length,1,
+      'edge evidence excludes observations outside the runtime endpoint');
+    assert.equal(graph.risks[0].status,'candidate');assert.equal(graph.metadata.projectionVersion,2);
+    assert.ok(!JSON.stringify(graph).includes('private source code'));
+    assert.ok(!JSON.stringify(graph).includes('private response'));
+    assert.equal((await request('/topology/generate-from-scan',{scan_task_id:sid},'bob')).status,403);
+    assert.equal((await request('/topology/generate-from-scan',{scan_task_id:sid})).status,200);
+  }
+});
+
+test('task topology excludes another owner discovery even when it references this task', async t => {
+  const {db,request}=await fixture(t);
+  db.prepare("INSERT INTO pipelines(pipeline_id,target,created_by) VALUES ('scope','192.0.2.1','alice')").run();
+  db.prepare("INSERT INTO scan_tasks(scan_task_id,target,scan_type,status,parameters,created_by) VALUES ('foreign','192.0.2.1','topology_scan','COMPLETED',?,'bob')")
+    .run(JSON.stringify({pipeline_id:'scope'}));
+  db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data) VALUES ('foreign','host_discovery',?)")
+    .run(JSON.stringify({host:'192.0.2.99',status:'up'}));
+  const graph=(await request('/topology/from-pipeline/scope')).body.data.topology;
+  assert.equal(graph.nodes.some(node=>node.ip==='192.0.2.99'),false);
+});
+
+test('source directory input is not projected as a running program and an explicit runtime stays separate',async t=>{
+  const {db,request}=await fixture(t),source='http://192.0.2.40:18090/code/',runtime='tcp://192.0.2.30:8091';
+  db.prepare("INSERT INTO pipelines(pipeline_id,target,scan_task_id,created_by,config) VALUES ('code-only',?,'code-scan','alice',?)")
+    .run(source,JSON.stringify({scan_mode:'program_dynamic',input_kind:'source'}));
+  db.prepare("INSERT INTO scan_tasks(scan_task_id,target,scan_type,status,created_by,parameters) VALUES ('code-scan',?,'program_scan','PARTIAL','alice',?)")
+    .run(source,JSON.stringify({input_kind:'source'}));
+  let graph=(await request('/topology/from-pipeline/code-only')).body.data.topology;
+  assert.deepEqual(graph.nodes,[]);assert.match(graph.summary,/尚无程序运行地址/);
+  const direct=await request('/topology/generate-from-scan',{scan_task_id:'code-scan'});
+  assert.equal(direct.status,200);assert.deepEqual(direct.body.data.topology.nodes,[]);
+  db.prepare("UPDATE pipelines SET config=? WHERE pipeline_id='code-only'")
+    .run(JSON.stringify({scan_mode:'program_dynamic',input_kind:'source',runtime_target:runtime}));
+  db.prepare("UPDATE scan_tasks SET parameters=? WHERE scan_task_id='code-scan'")
+    .run(JSON.stringify({input_kind:'source',runtime_target:runtime}));
+  db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data) VALUES ('code-scan','application_observation',?)")
+    .run(JSON.stringify({url:runtime,connected:true}));
+  graph=(await request('/topology/from-pipeline/code-only')).body.data.topology;
+  assert.equal(graph.nodes.some(node=>node.ip==='192.0.2.40'),false);
+  assert.equal(graph.nodes.find(node=>node.ip==='192.0.2.30').status,'up');
+});

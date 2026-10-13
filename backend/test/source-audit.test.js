@@ -192,6 +192,32 @@ test('remote-only audits never claim source coverage, and source failures retain
   assert.equal(coverage.source_read,false);assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='source_finding'").get().n,0);
   const result=await auditSources({scan_task_id:'missing',target:'tcp://127.0.0.1:8091'},{db,parameters:{connection_id:'missing'},runTool:run,parseResults});
   assert.equal(result.outcomes[0].success,true);assert.equal(result.outcomes[1].success,false);
+  const failedCoverage=JSON.parse(db.prepare("SELECT result_data FROM scan_results WHERE scan_task_id='missing' AND result_type='source_coverage'").get().result_data);
+  assert.equal(failedCoverage.source_read,false);assert.equal(failedCoverage.ai_complete,false);
+  assert.equal(failedCoverage.source_errors.length,1);
+});
+
+test('tool and model exceptions preserve the frozen snapshot and explicit incomplete coverage',async t=>{
+  const db=auditDb(t),path=await temp(t),config=join(path,'config.json');
+  const previous=process.env.SOURCE_SCAN_CONNECTIONS_FILE;
+  process.env.SOURCE_SCAN_CONNECTIONS_FILE=config;
+  t.after(()=>{if(previous===undefined) delete process.env.SOURCE_SCAN_CONNECTIONS_FILE;else process.env.SOURCE_SCAN_CONNECTIONS_FILE=previous;});
+  await writeFile(config,JSON.stringify([{id:'p',kind:'local',source_root:path,targets:['http://127.0.0.1:8090/']}]));
+  const document={path:'main.c',content:'int main(){return 0;}',start_line:1,end_line:1,sha256:'fixture'};
+  const calls=[];
+  const result=await auditSources({scan_task_id:'exceptions',target:'http://127.0.0.1:8090/'},{db,
+    parameters:{connection_id:'p'},
+    snapshot:async()=>({snapshot_id:'frozen',connection_id:'p',files:[{path:'main.c'}],skipped:[],documents:[document],sourceDir:path}),
+    runTool:async tool=>{calls.push(tool);if(tool==='cppcheck') throw new Error('fixture tool unavailable');return {success:true,stdout:'{}'};},
+    parseResults:()=>{throw new Error('fixture malformed tool output');},
+    llm:async()=>{throw new Error('fixture model disconnected');}});
+  assert.deepEqual(calls,['target-request','cppcheck','flawfinder']);
+  assert.equal(result.outcomes.filter(o=>['cppcheck','flawfinder','source-ai'].includes(o.tool_id) && !o.success).length,3);
+  const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
+  assert.equal(coverage.snapshot_id,'frozen');assert.equal(coverage.ai_complete,false);
+  assert.deepEqual(coverage.ai_errors,['fixture model disconnected']);
+  assert.equal(coverage.static_tools.every(item=>!item.success),true);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='source_coverage'").get().n,1);
 });
 
 test('audit accepts cited findings but rejects invented locations and marks coverage incomplete',async t=>{
@@ -201,19 +227,44 @@ test('audit accepts cited findings but rejects invented locations and marks cove
   t.after(()=>{if(previous===undefined) delete process.env.SOURCE_SCAN_CONNECTIONS_FILE;else process.env.SOURCE_SCAN_CONNECTIONS_FILE=previous;});
   await writeFile(config,JSON.stringify([{id:'p',kind:'local',source_root:path,targets:['http://127.0.0.1:8090']}]));
   const document={path:'a.c',content:'void f(char *s) {\n char b[8]; strcpy(b,s);\n}',start_line:1,end_line:3,sha256:'hash'};
+  let calls=0;
   const result=await auditSources({scan_task_id:'audit',target:'http://127.0.0.1:8090'},{
     db,parameters:{connection_id:'p'},parseResults,
     snapshot:async()=>({snapshot_id:'version',connection_id:'p',architecture:'arm64',files:[{path:'a.c'}],skipped:[],documents:[document],sourceDir:path}),
     runTool:async tool=>({success:true,stdout:tool==='target-request'?'{"connected":true,"response":"OK"}':''}),
-    llm:async()=>({ok:true,content:JSON.stringify({findings:[
+    llm:async messages=>{
+      calls++;
+      if(calls===2) {
+        assert.match(messages.at(-1).content,/imaginary.c/);
+        return {ok:true,content:JSON.stringify({findings:[{file:'a.c',start_line:2,title:'unchecked copy',reason:'no length check',cwe:'CWE-120'}]})};
+      }
+      return {ok:true,content:JSON.stringify({findings:[
       {file:'a.c',start_line:2,title:'unchecked copy',reason:'no length check',cwe:'CWE-120'},
       {file:'imaginary.c',start_line:1,title:'fake',reason:'fake'}
-    ]})})
+    ]})};}
   });
   assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='source_finding'").get().n,1);
   const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
   assert.equal(coverage.ai_rejected_findings,1);assert.equal(coverage.ai_complete,false);
+  assert.equal(calls,2);assert.equal(coverage.ai_correction_attempts,1);assert.equal(coverage.ai_corrected_findings,1);
+  assert.equal(coverage.ai_rejected_details[0].file,'imaginary.c');
+  assert.match(coverage.ai_rejected_details[0].reason,/未读取/);
   assert.ok(result.outcomes.some(o=>!o.success));
+});
+
+test('invalid AI citations cannot trigger unlimited corrections or enter accepted findings',async t=>{
+  const db=auditDb(t),document={path:'main.c',content:Array.from({length:250},()=> 'int fixture;').join('\n'),
+    start_line:1,end_line:250,sha256:'fixture'};
+  let calls=0;
+  await auditSources({scan_task_id:'budget',target:'http://127.0.0.1:8090/'},{db,
+    parameters:{source_url:'/code/',ai_batches:3},parseResults:()=>[],
+    runTool:async()=>({success:true,stdout:'{}'}),
+    snapshot:async()=>({snapshot_id:'frozen',connection_id:'fixture',files:[{path:'main.c'}],skipped:[],documents:[document],sourceDir:'/fixture'}),
+    llm:async()=>{calls++;return {ok:true,content:JSON.stringify({findings:[{file:'invented.c',start_line:1,title:'invalid',reason:'no evidence'}]})};}});
+  const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
+  assert.equal(calls,5);assert.equal(coverage.ai_model_calls,5);assert.equal(coverage.ai_correction_attempts,2);
+  assert.equal(coverage.ai_rejected_findings,5);assert.equal(coverage.ai_complete,false);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='source_finding'").get().n,0);
 });
 
 test('generated TCP verification executes through the real engine and links manual review to evidence',async t=>{
@@ -286,13 +337,19 @@ test('source review retrieves related callers and preserves corroboration and re
       ?'<results><errors><error id="bufferAccessOutOfBounds" severity="error" msg="Buffer overflow" cwe="120"><location file="/src/project/copy.c" line="2"/></error></errors></results>':''}),
     llm:async messages=>{
       prompts++;
+      if(messages[0].content.includes('独立的源码反证复核员')) {
+        const payload=JSON.parse(messages[1].content);
+        return {ok:true,content:JSON.stringify({reviews:payload.candidates.map(item=>({finding_id:item.finding_id,
+          assessment:{verdict:'needs_information',input_control:'unknown',reachability:'unknown',guard:'unknown',
+            reason:'Caller citation alone does not establish runtime reachability',missing_conditions:['Need actual runtime linkage'],citations:[],counter_evidence:[]}}))})};
+      }
       const payload=JSON.parse(messages[1].content);
       assert.equal(payload.document.file,'copy.c');
       assert.ok(payload.related_context.some(d=>d.file==='entry.c' && d.numbered_code.includes('copy(request)')));
-      return {ok:true,content:JSON.stringify({findings:[finding,{...finding,trace:[{...finding.trace[0],file:'unrelated.c',start_line:1,end_line:1}]}]})};
+      return {ok:true,content:JSON.stringify({findings:prompts===1 ? [finding,{...finding,trace:[{...finding.trace[0],file:'unrelated.c',start_line:1,end_line:1}]}] : [finding]})};
     }
   });
-  assert.equal(prompts,1);
+  assert.equal(prompts,3);
   const rows=db.prepare("SELECT * FROM scan_results WHERE result_type='source_finding'").all();
   assert.equal(rows.length,1);
   const saved=JSON.parse(rows[0].result_data);
@@ -302,6 +359,7 @@ test('source review retrieves related callers and preserves corroboration and re
   assert.equal(saved.trace[0].code,' copy(request);');
   assert.equal(saved.trace[0].source_sha256,'entryhash');
   assert.equal(saved.runtime_verified,false);
+  assert.equal(saved.counter_review.verdict,'needs_information');
   const planContext=buildProgramContext(rows);
   assert.equal(planContext[0].data.trace[0].file,'entry.c');
   assert.equal(planContext[0].data.analyses.length,2);

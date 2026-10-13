@@ -5,6 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { httpSourceConnection } from './sourceScanConnections.js';
+import {prepareSourceCompilation,hostCompilationUnits} from './sourceCompilation.js';
 const exec = promisify(execFile);
 const directory = dirname(fileURLToPath(import.meta.url));
 export const SNAPSHOT_ROOT = resolve(directory, '../../../data/source-scan/snapshots');
@@ -124,7 +125,18 @@ async function collectHttpSource(connection, { signal, fetchImpl = globalThis.fe
     } catch (error) { skipped.push({path: relative, reason: error.message}); }
   }
   if (!files.length) throw new Error('HTTP 源码目录中未读取到 C/C++ 源码文件');
-  return { files, skipped, bytes: total };
+  let compilation;
+  if(connection.analysis?.compile_database) {
+    const url=new URL(connection.analysis.compile_database,root);
+    try {
+      const response=await fetchImpl(url.href,{redirect:'error',signal:controller.signal});
+      if(!response.ok) {await response.body?.cancel();throw new Error('HTTP '+response.status);}
+      const body=await boundedHttpBody(response);
+      if(!body) throw new Error('编译数据库超过 HTTP 采集大小限制');
+      compilation={content:new TextDecoder('utf-8',{fatal:true}).decode(body)};
+    } catch {if(signal?.aborted) throw new Error('源码获取已取消');compilation={error:'指定编译数据库无法从源码目录读取'};}
+  }
+  return { files, skipped, bytes: total,compilation };
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', cancel);
@@ -134,10 +146,12 @@ export async function collectSource(connection, { signal, execute = exec } = {})
   if (connection.kind === 'http') return collectHttpSource(connection, { signal });
   const collector = await readFile(resolve(directory, 'sourceCollector.py'), 'utf8');
   const root = Buffer.from(connection.source_root).toString('base64');
-  let binary = 'python3', args = ['-c', collector, root];
+  const compilePath=connection.analysis?.compile_database || '';
+  let binary = 'python3', args = ['-c', collector, root, compilePath];
   if (connection.kind === 'ssh') {
     const encoded = Buffer.from(collector).toString('base64');
-    const command = `python3 -c "import base64;exec(base64.b64decode('${encoded}'))" '${root}'`;
+    const compileEncoded=Buffer.from(compilePath).toString('base64');
+    const command = `python3 -c "import base64,sys;sys.argv[2]=base64.b64decode(sys.argv[2]).decode();exec(base64.b64decode('${encoded}'))" '${root}' '${compileEncoded}'`;
     args = ['-T', '-p', String(connection.port), '-o', 'ConnectTimeout=10', '-o', 'ConnectionAttempts=1',
       '-o', 'StrictHostKeyChecking=yes', '-o', 'ServerAliveInterval=10', '-o', 'ServerAliveCountMax=2'];
     if (connection.known_hosts_file) args.push('-o', `UserKnownHostsFile=${connection.known_hosts_file}`);
@@ -166,6 +180,7 @@ export async function collectSource(connection, { signal, execute = exec } = {})
     seen.add(file.path);
   }
   if (!result.files.length) throw new Error('未读取到 C/C++ 源码文件，请检查项目目录和读取权限');
+  if(result.compilation?.content && (typeof result.compilation.content!=='string' || Buffer.byteLength(result.compilation.content)>2*1024*1024)) throw new Error('编译数据库超过大小限制');
   return result;
 }
 export async function createSourceSnapshot(connection, options = {}) {
@@ -182,7 +197,13 @@ export async function createSourceSnapshot(connection, options = {}) {
     await writeFile(path, file.content, { flag: 'wx', mode: 0o400 });
     documents.push({ ...file, sha256: createHash('sha256').update(file.content).digest('hex'), start_line: 1, end_line: file.content.split('\n').length });
   }
+  const compilation=prepareSourceCompilation(collected,connection);
+  if(compilation.summary.available) {
+    await writeFile(resolve(sourceDir,'.rt-compile-commands.json'),JSON.stringify(compilation.units),{flag:'wx',mode:0o400});
+    await writeFile(resolve(sourceDir,'.rt-host-compile-commands.json'),JSON.stringify(hostCompilationUnits(compilation.units,sourceDir)),{flag:'wx',mode:0o400});
+  }
   const manifest = { snapshot_id: id, connection_id: connection.id, source_url: connection.source_url || null, architecture: connection.architecture,
+    compilation:compilation.summary,
     created_at: new Date().toISOString(), files: documents.map(({ content, ...info }) => info), skipped: collected.skipped };
   await writeFile(resolve(root, 'manifest.json'), JSON.stringify(manifest), { flag: 'wx', mode: 0o400 });
   return { ...manifest, documents, sourceDir };

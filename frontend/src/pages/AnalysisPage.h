@@ -24,6 +24,7 @@ signals:
   void scanRequested();
   void assistantRequested(const QString &question);
   void planCandidateRequested(const QString &category, int index, const QJsonValue &source);
+  void sourceVerificationRequested();
 
 private:
   void rebuildTable();

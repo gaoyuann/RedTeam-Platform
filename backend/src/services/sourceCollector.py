@@ -6,6 +6,7 @@ if root == "/" or not os.path.isdir(root):
 extensions = {".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".hxx"}
 excluded = {".git", "node_modules", "vendor", "build", "dist", ".cache"}
 files, skipped = [], []
+compilation = None
 total, visited = 0, 0
 def walk_error(error):
     skipped.append({"path": os.path.relpath(error.filename, root), "reason": "directory unreadable"})
@@ -48,4 +49,21 @@ for directory, dirs, names in os.walk(root, followlinks=False, onerror=walk_erro
             skipped.append({"path": relative, "reason": str(error)})
     if visited > 20000:
         break
-print(json.dumps({"files": files, "skipped": skipped, "bytes": total}, ensure_ascii=True))
+if len(sys.argv) > 2 and sys.argv[2]:
+    try:
+        relative = sys.argv[2]
+        if relative.startswith('/') or any(p in ('', '.', '..') for p in relative.split('/')):
+            raise ValueError('invalid compilation database path')
+        path = os.path.join(root, relative)
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, 'rb') as stream:
+            opened = os.path.realpath('/proc/self/fd/' + str(stream.fileno()))
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode) or os.path.commonpath([root, opened]) != root:
+                raise ValueError('compilation database outside source root')
+            data = stream.read(2 * 1024 * 1024 + 1)
+        if len(data) > 2 * 1024 * 1024:
+            raise ValueError('compilation database size limit')
+        compilation = {'content': data.decode('utf-8-sig')}
+    except (OSError, ValueError, UnicodeError):
+        compilation = {'error': '指定编译数据库无法读取、超限或不在项目内'}
+print(json.dumps({"files": files, "skipped": skipped, "bytes": total, "compilation": compilation}, ensure_ascii=True))

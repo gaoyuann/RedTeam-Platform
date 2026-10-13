@@ -9,16 +9,21 @@ export function sourceAnalysisOptions(value = {}) {
   const defines = value.defines || [];
   if (!Array.isArray(defines) || defines.length > 32 || defines.some(item => typeof item !== 'string'
     || !/^[A-Za-z_]\w*(?:=[A-Za-z0-9_.+-]{1,64})?$/.test(item))) throw new Error('源码宏定义配置无效');
-  return {standard, platform, defines: [...new Set(defines)]};
+  const compileDatabase=value.compile_database || null;
+  if(compileDatabase && (typeof compileDatabase!=='string' || compileDatabase.length>256
+    || !/^(?:[A-Za-z0-9_.-]+\/)*compile_commands\.json$/.test(compileDatabase)
+    || compileDatabase.split('/').some(part=>part==='.' || part==='..'))) throw new Error('编译数据库须为项目内的 compile_commands.json 相对路径');
+  return {standard, platform, defines: [...new Set(defines)],...(compileDatabase ? {compile_database:compileDatabase} : {})};
 }
 
-export function sourceToolArgs(tool, options = {}) {
+export function sourceToolArgs(tool, options = {}, compilation = {}) {
   if (tool === 'flawfinder') return ['--csv', '--minlevel=1', '/src/project'];
   const config = sourceAnalysisOptions(options);
   return ['-q', '--enable=warning,portability,performance', '--xml', '--xml-version=2',
     '--max-configs=12', `--platform=${config.platform}`,
     ...(config.standard ? [`--std=${config.standard}`] : []),
-    ...config.defines.map(item => `-D${item}`), '/src/project'];
+    ...config.defines.map(item => `-D${item}`),
+    ...(compilation.available ? ['--project=/src/project/.rt-compile-commands.json'] : ['/src/project'])];
 }
 
 // Center the first AI chunks on static alerts and risky operations. Keep the

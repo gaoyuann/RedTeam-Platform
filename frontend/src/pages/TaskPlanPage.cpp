@@ -106,6 +106,12 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   m_create->setObjectName(QStringLiteral("planCreateButton"));
   sourceRow->addWidget(m_create);
   layout->addLayout(sourceRow);
+  m_generateSource = new QPushButton(QStringLiteral("生成攻击测试预案"), this);
+  m_generateSource->setObjectName(QStringLiteral("planGenerateSourceButton"));
+  m_generateSource->setProperty("primary", true);
+  m_generateSource->hide();
+  layout->addWidget(m_generateSource);
+  connect(m_generateSource, &QPushButton::clicked, this, &TaskPlanPage::sourceVerificationRequested);
 
   auto *form = new QFormLayout;
   m_name = new QLineEdit(this);
@@ -210,7 +216,7 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   actions->addWidget(m_reject);
   actions->addWidget(m_approve);
   layout->addLayout(actions);
-  auto *footer = new QLabel(QStringLiteral("未保存内容在切换任务后丢弃。提审后锁定编辑，修改须返回编辑并重新提审；批准快照使用机械执行，仍需通过既有预检。"), this);
+  auto *footer = new QLabel(QStringLiteral("草稿只修改当前任务，来源预案保持原样。提审后锁定编辑，修改须返回编辑并重新提审；批准的执行版本仅保存在所属任务，执行前检查仍需通过。"), this);
   footer->setWordWrap(true);
   footer->setStyleSheet(QStringLiteral("font-size:12px; color:#64748b;"));
   layout->addWidget(footer);
@@ -274,6 +280,7 @@ void TaskPlanPage::clearTaskContext()
   m_content = {};
   m_busy = false;
   m_dirty = false;
+  m_pendingSourcePlaybookId.clear();
   m_source->clear();
   render();
   message(QStringLiteral("请选择任务；预案生成后可建立草稿并提交审批。"));
@@ -324,6 +331,12 @@ void TaskPlanPage::refresh(bool discard)
     guard->m_content = guard->m_plan.value("content").toObject();
     guard->m_dirty = false;
     guard->render();
+    if (!guard->m_pendingSourcePlaybookId.isEmpty()) {
+      const QString pending = guard->m_pendingSourcePlaybookId;
+      guard->m_pendingSourcePlaybookId.clear();
+      guard->useSourcePlaybook(pending);
+      return;
+    }
     if (guard->m_plan.isEmpty()) guard->loadSources(request);
   });
 }
@@ -332,7 +345,7 @@ void TaskPlanPage::loadSources(int requestVersion)
 {
   const int context = m_contextVersion;
   QPointer<TaskPlanPage> guard(this);
-  m_api->get("/api/playbooks?includeGenerated=true", 8000, [guard, context, requestVersion](const QJsonObject &response) {
+  m_api->get(QStringLiteral("/api/pipelines/%1/plan/sources").arg(m_pipeline.value("pipeline_id").toString()), 8000, [guard, context, requestVersion](const QJsonObject &response) {
     if (!guard || context != guard->m_contextVersion || requestVersion != guard->m_requestVersion || !guard->m_plan.isEmpty()) return;
     guard->m_source->clear();
     if (response["status"].toString() != "ok") {
@@ -346,6 +359,11 @@ void TaskPlanPage::loadSources(int requestVersion)
     }
     const int selected = guard->m_source->findData(guard->m_pipeline.value("generated_playbook_id").toString());
     if (selected >= 0) guard->m_source->setCurrentIndex(selected);
+    const auto config = QJsonDocument::fromJson(guard->m_pipeline["config"].toString().toUtf8()).object();
+    const bool sourceMode =QStringList{"source_assisted","program_dynamic"}.contains( (guard->m_pipeline["config"].isObject() ? guard->m_pipeline["config"].toObject() : config)["scan_mode"].toString());
+    if (sourceMode) guard->message(guard->m_source->count() == 0
+        ? QStringLiteral("尚未生成本任务的验证预案。点击“生成攻击测试预案”，选定对象后会生成步骤并自动建立草稿。")
+        : QStringLiteral("已找到本任务生成的验证预案；选择来源并建立草稿即可查看执行步骤。"));
     guard->updateControls();
   });
 }
@@ -358,7 +376,7 @@ void TaskPlanPage::render()
   m_notes->setPlainText(m_content["notes"].toString());
   if (!m_plan.isEmpty()) {
     m_source->clear();
-    m_source->addItem(m_content["source_playbook_id"].toString(), m_content["source_playbook_id"].toString());
+    m_source->addItem(m_content["source_playbook"].toObject()["name"].toString(m_content["source_playbook_id"].toString()), m_content["source_playbook_id"].toString());
   }
   const auto steps = m_content["steps"].toArray();
   m_steps->setRowCount(steps.size());
@@ -414,7 +432,11 @@ void TaskPlanPage::render()
   const auto config = m_pipeline.value("config").isObject() ? m_pipeline.value("config").toObject()
       : QJsonDocument::fromJson(m_pipeline.value("config").toString().toUtf8()).object();
   m_scope->setText(QStringLiteral("任务：%1 · 目标：%2\n授权范围记录：%3（用户自述，不代表后端已验证范围）")
-      .arg(m_pipeline.value("pipeline_id").toString(), m_pipeline.value("target").toString(), config["authorization_scope"].toString(QStringLiteral("未填写"))));
+      .arg(config["task_name"].toString(m_pipeline.value("pipeline_id").toString()), m_pipeline.value("target").toString(), config["authorization_scope"].toString(QStringLiteral("未填写"))));
+  if (!m_content.isEmpty()) {
+    const QString sourceName = m_content["source_playbook"].toObject()["name"].toString(m_content["source_playbook_id"].toString());
+    m_scope->setText(m_scope->text() + QStringLiteral("\n来源预案：%1 · 当前任务独立审阅，批准后保留本任务执行版本。").arg(sourceName));
+  }
   message(QStringLiteral("%1%2%3").arg(planState(m_plan.value("state").toString()),
       m_plan.isEmpty() ? QString() : QStringLiteral(" · v%1").arg(m_plan.value("revision").toInt()),
       m_dirty ? QStringLiteral(" · 未保存") : QString()));
@@ -437,6 +459,9 @@ void TaskPlanPage::updateControls()
   const auto config = m_pipeline.value("config").isObject() ? m_pipeline.value("config").toObject()
       : QJsonDocument::fromJson(m_pipeline.value("config").toString().toUtf8()).object();
   const bool selected = m_steps->currentRow() >= 0;
+  const bool sourceMode =QStringList{"source_assisted","program_dynamic"}.contains( config["scan_mode"].toString());
+  m_generateSource->setVisible(sourceMode && m_plan.isEmpty());
+  m_generateSource->setEnabled(waiting && !m_busy && !m_dirty);
   m_refresh->setEnabled(!m_busy && !m_pipeline.isEmpty());
   m_source->setEnabled(waiting && m_plan.isEmpty() && !m_busy);
   m_create->setEnabled(waiting && m_plan.isEmpty() && !m_busy && m_source->count() > 0);
@@ -585,6 +610,11 @@ void TaskPlanPage::mutate(const QString &suffix, const QJsonObject &body, bool p
     guard->render();
     emit guard->planChanged();
     if (after && guard && context == guard->m_contextVersion) after();
+    if (guard && context == guard->m_contextVersion && !guard->m_pendingSourcePlaybookId.isEmpty()) {
+      const QString pending = guard->m_pendingSourcePlaybookId;
+      guard->m_pendingSourcePlaybookId.clear();
+      guard->useSourcePlaybook(pending);
+    }
   };
   const auto path = QStringLiteral("/api/pipelines/%1/plan%2").arg(m_pipeline.value("pipeline_id").toString(), suffix);
   if (put) m_api->put(path, body, 12000, callback);
@@ -599,6 +629,13 @@ void TaskPlanPage::addCandidate(const QString &category, int index, const QJsonV
   }
   const QJsonObject candidate{{"category", category}, {"index", index}, {"source", source}};
   if (m_plan.isEmpty()) {
+    const auto config = m_pipeline["config"].isObject() ? m_pipeline["config"].toObject()
+        : QJsonDocument::fromJson(m_pipeline["config"].toString().toUtf8()).object();
+    if (QStringList{"source_assisted","program_dynamic"}.contains(config["scan_mode"].toString())) {
+      message(QStringLiteral("请先根据本任务漏洞发现生成预案；分析备注不会生成执行步骤。"), true);
+      emit sourceVerificationRequested();
+      return;
+    }
     const QString playbookId = m_source->currentData().toString();
     if (playbookId.isEmpty()) {
       message(QStringLiteral("请先选择来源预案并建立草稿，再加入候选。"), true);
@@ -610,12 +647,18 @@ void TaskPlanPage::addCandidate(const QString &category, int index, const QJsonV
 
 void TaskPlanPage::useSourcePlaybook(const QString &playbookId)
 {
-  if (m_busy || m_dirty || m_pipeline.value("status").toString() != "awaiting_approval") {
+  if (m_dirty || m_pipeline.value("status").toString() != "awaiting_approval") {
     message(QStringLiteral("仅待审批任务可建立演示草稿；请等待加载并先保存现有编辑。"), true);
     return;
   }
+  if (m_busy) {
+    m_pendingSourcePlaybookId = playbookId;
+    message(QStringLiteral("验证预案已生成，任务草稿加载完成后会自动加入。"));
+    return;
+  }
   if (!m_plan.isEmpty()) {
-    message(QStringLiteral("当前任务已有预案草稿，已保留。请在新任务中建立另一份攻击演示清单。"), true);
+    if (m_content["source_playbook_id"].toString() == playbookId) render();
+    else message(QStringLiteral("当前任务已有草稿，已保留。新预案已保存，可在扫描页预览；现有草稿不会自动替换。"), true);
     return;
   }
   mutate({}, {{"playbook_id", playbookId}});

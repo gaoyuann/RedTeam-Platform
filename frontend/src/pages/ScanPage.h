@@ -34,6 +34,7 @@ signals:
 
 public slots:
   void onRefreshTasks();
+  void beginSourceVerification();
 
 private slots:
   void onCreateScan();
@@ -90,6 +91,8 @@ private:
   QLineEdit *m_bruteTargetInput;
   QLineEdit *m_sourceTargetInput;
   QLineEdit *m_sourceDirectoryInput;
+  QComboBox *m_programInputKind;
+  QLineEdit *m_programRuntimeInput;
   QComboBox *m_sourceConnectionCombo;
   QCheckBox *m_sourceAiCheck;
   QCheckBox *m_sourceAdaptiveCheck;
@@ -107,6 +110,7 @@ private:
   // ── Right panel ──
   ScanResultOverview *m_resultOverview;
   QTreeWidget *m_resultTree;       // grouped results by result_type
+  QTabWidget *m_detailTabs;
   QLabel *m_statusLabel;
   QLabel *m_resultHint;
   QPushButton *m_sourceDemoBtn;

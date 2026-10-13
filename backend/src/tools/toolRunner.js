@@ -174,13 +174,15 @@ export async function runTool(toolId, args, options = {}) {
   }
 
   if (engine === 'host' || !image) {
-    if (SAST_TOOLS.has(toolId)) args = args.map(arg => arg === '/src/project' ? resolve(options.sourceDir) : arg);
+    if (SAST_TOOLS.has(toolId)) args = args.map(arg => arg === '--project=/src/project/.rt-compile-commands.json'
+      ? '--project='+resolve(options.sourceDir,'.rt-host-compile-commands.json')
+      : arg === '/src/project' ? resolve(options.sourceDir) : arg);
     return runProcess(bin, args, { ...options, toolId }, 'host');
   }
 
   ensureOutputDir();
   const name = `rt-tool-${randomUUID()}`;
-  const containerArgs = ['run', '--rm', '--name', name, '--network', SAST_TOOLS.has(toolId) ? 'none' : 'host',
+  const containerArgs = ['run', '--rm', ...(SAST_TOOLS.has(toolId) ? ['--pull=never'] : []), '--name', name, '--network', SAST_TOOLS.has(toolId) ? 'none' : 'host',
     ...getVolumeMounts(toolId, options), ...(PRIVILEGED_TOOLS.has(toolId) ? ['--privileged'] : []), image, bin, ...args];
   return runProcess(engine, containerArgs, { ...options, toolId }, engine, () => {
     const cleanup = spawn(engine, ['rm', '-f', name], { stdio: 'ignore' });

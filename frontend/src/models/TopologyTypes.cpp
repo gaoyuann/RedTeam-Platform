@@ -331,6 +331,7 @@ QJsonObject TopologyDocument::toJsonObject() const {
         {QStringLiteral("target"), target},
         {QStringLiteral("generatedAt"), generatedAt},
         {QStringLiteral("summary"), summary},
+        {QStringLiteral("metadata"), metadata},
         {QStringLiteral("nodes"), nodesArray},
         {QStringLiteral("edges"), edgesArray},
     };
@@ -339,6 +340,7 @@ QJsonObject TopologyDocument::toJsonObject() const {
 TopologyDocument TopologyDocument::fromJsonObject(const QJsonObject &object) {
     TopologyDocument document;
     const QJsonObject root = effectiveRootObject(object);
+    document.metadata = root[QStringLiteral("metadata")].toObject();
     document.flowId = firstStringValue(root, {
         QStringLiteral("flowId"), QStringLiteral("flow_id"), QStringLiteral("sourceFlowId"), QStringLiteral("source_flow_id")
     });

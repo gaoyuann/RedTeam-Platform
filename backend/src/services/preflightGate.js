@@ -19,6 +19,7 @@ import { ensureBuiltinWordlists } from './wordlistBootstrap.js';
 import { discoverTargetProfile, loadTargetProfile } from './targetDiscovery.js';
 import { validateVariablePlan } from './executionVariables.js';
 import { ensureNucleiTemplates, getRequiredNucleiTemplateIds, inspectNucleiTemplates } from './nucleiTemplates.js';
+import {normalizeEvidenceCriteria} from './sourceEvidenceCriteria.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = dirname(__filename);
@@ -60,17 +61,21 @@ export async function runPreflightChecks({ playbookId, target, db, scanTaskIds =
     // These plans need only the built-in transport; HTTP discovery can change ports
     // through redirects and unrelated wordlists/images are not prerequisites.
     const profile=resolveTargetProfile(target);
-    const steps=db.prepare('SELECT tool_id,args_template FROM playbook_steps WHERE playbook_id=? ORDER BY step_index').all(playbookId);
+    const steps=db.prepare('SELECT tool_id,args_template,evidence_config FROM playbook_steps WHERE playbook_id=? ORDER BY step_index').all(playbookId);
     try {
       if(sourceTarget(target)!==source.target || !steps.length) throw new Error('预案目标不一致或没有步骤');
       for(const step of steps) {
         if(step.tool_id!=='target-request') throw new Error('程序验证只支持有界的目标请求');
         parseTargetRequest(JSON.parse(step.args_template),target);
+        normalizeEvidenceCriteria(JSON.parse(step.evidence_config || '{}').criteria);
       }
       checks.push({name:'source_verification_scope',passed:true,message:'运行地址与每一步请求的协议、主机、端口已核对'});
     } catch(error) {checks.push({name:'source_verification_scope',passed:false,message:error.message});}
     checks.push({name:'target_class_compatibility',passed:true,message:'保留部署程序的协议类型',target_profile:profile});
     checks.push({name:'tool_binaries',passed:true,message:'使用后端内置 HTTP/TCP 请求工具'});
+    if(source.reproducibility) checks.push({name:'source_reproducibility',passed:true,
+      message:'源码快照已关联；部署程序版本与运行条件仍需根据实际环境确认',
+      source_versions:source.reproducibility.source_versions,required_conditions:source.reproducibility.required_conditions});
     if(runId) db.prepare('UPDATE execution_runs SET target_class=?,target_profile=? WHERE run_id=?').run(profile.target_class,JSON.stringify(profile),runId);
     return {passed:checks.every(c=>c.passed),checks};
   }

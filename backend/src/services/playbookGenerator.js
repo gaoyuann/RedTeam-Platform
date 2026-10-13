@@ -1,5 +1,6 @@
 import { getDb } from '../db/connection.js';
 import { generateSourceVerification } from './sourceVerification.js';
+import {isProgramScan} from './programScan.js';
 import { callLlm } from './llmClient.js';
 import { loadTargetProfile } from './targetDiscovery.js';
 import { parseVariableContract, validateVariablePlan } from './executionVariables.js';
@@ -25,10 +26,10 @@ export async function generatePlaybook(scanTaskId, analysisResult = null, { scan
 
   // Get scan task + results
   const task = db.prepare(
-    'SELECT scan_task_id, target, scan_type, status, created_by FROM scan_tasks WHERE scan_task_id = ?'
+    'SELECT scan_task_id, target, scan_type, status, created_by, parameters FROM scan_tasks WHERE scan_task_id = ?'
   ).get(scanTaskId);
   if (!task) return { ok: false, error: 'Scan task not found' };
-  if(task.scan_type==='source_scan') return generateSourceVerification(db,task,findingIds,{adaptive,demonstration});
+  if(isProgramScan(task.scan_type)) return generateSourceVerification(db,task,findingIds,{adaptive,demonstration});
   const ids = Array.isArray(scanTaskIds) && scanTaskIds.length ? scanTaskIds : [scanTaskId];
 
   const results = db.prepare(
@@ -155,7 +156,10 @@ Rules:
 - Set target_type based on the detected target class: ${targetProfile.target_class}
 - Do not assume DVWA unless the observed application fingerprint is DVWA.
 - For verified DVWA, reference {{login_url}} and {{sqli_url}} rather than appending guessed paths to <target>.
-- Declare inputs and outputs as arrays of variable names. A DVWA curl login step produces ["dvwa_cookie", "auth_cookie"]; authenticated steps consume these variables.
+- inputs and outputs are execution variable contracts, not descriptions of reports or tool findings.
+- outputs MUST be [] for every step except a verified DVWA curl login using {{login_url}} and POST username data, which may produce only ["dvwa_cookie", "auth_cookie"].
+- Never declare outputs such as scan_results, open_ports, vulnerabilities, urls, cookies or report. The executor cannot extract these variables from tool output.
+- inputs may reference only provided target context or a preceding supported DVWA login producer; otherwise use [].
 - Session cookies are runtime outputs, never use placeholder cookies or invent session values.
 - For windows_ad targets, use tools like netexec, evil-winrm, responder
 - For cloud targets, use tools like cloudmapper, pacu
@@ -166,39 +170,43 @@ Rules:
     { role: 'user', content: prompt },
   ];
 
-  const result = await callLlm(messages, { temperature: 0.3, maxTokens: 4096 });
-  if (!result.ok) return { ok: false, error: result.error };
-
-  // Parse LLM response
   let playbookJson;
-  try {
-    const content = result.content.trim();
-    const jsonStr = content.replace(/^```json?\n?/, '').replace(/\n?```$/, '').trim();
-    playbookJson = JSON.parse(jsonStr);
-  } catch {
-    return { ok: false, error: 'Failed to parse LLM response as JSON', raw: result.content.slice(0, 500) };
-  }
   let steps;
-  try {
-    if (!playbookJson || Array.isArray(playbookJson) || !playbookJson.name || !Array.isArray(playbookJson.steps) || !playbookJson.steps.length) {
-      throw new Error('Generated playbook must have a name and nonempty steps array');
-    }
-    steps = playbookJson.steps.map((step, index) => {
-      if (!step || !step.name || !TOOL_LIST.includes(step.tool_id) || !Array.isArray(step.args_template) || step.args_template.some(arg => typeof arg !== 'string')) {
-        throw new Error(`Invalid generated step ${index}`);
+  // One corrective model turn keeps strict validation and never silently drops
+  // dependencies the generated requests actually need.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await callLlm(messages, { temperature: 0.3, maxTokens: 4096 });
+    if (!result.ok) return { ok: false, error: result.error };
+    try {
+      const jsonStr = result.content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+      playbookJson = JSON.parse(jsonStr);
+      if (!playbookJson || Array.isArray(playbookJson) || !playbookJson.name || !Array.isArray(playbookJson.steps) || !playbookJson.steps.length) {
+        throw new Error('Generated playbook must have a name and nonempty steps array');
       }
-      return { ...step, step_index: index, step_id: step.step_id || `step_${index}`,
-        inputs: parseVariableContract(step.inputs ?? step.input_variables),
-        outputs: parseVariableContract(step.outputs ?? step.output_variables) };
-    });
-  } catch (error) { return { ok: false, error: error.message }; }
-  const declaredTypes = Array.isArray(playbookJson.target_type) ? playbookJson.target_type : [playbookJson.target_type];
-  if (declaredTypes.includes('dvwa') && targetProfile.application?.name !== 'dvwa') {
-    return { ok: false, error: 'Generated DVWA playbook has no verified application fingerprint' };
+      steps = playbookJson.steps.map((step, index) => {
+        if (!step || !step.name || !TOOL_LIST.includes(step.tool_id) || !Array.isArray(step.args_template) || step.args_template.some(arg => typeof arg !== 'string')) {
+          throw new Error(`Invalid generated step ${index}`);
+        }
+        return { ...step, step_index: index, step_id: step.step_id || `step_${index}`,
+          inputs: parseVariableContract(step.inputs ?? step.input_variables),
+          outputs: parseVariableContract(step.outputs ?? step.output_variables) };
+      });
+      const declaredTypes = Array.isArray(playbookJson.target_type) ? playbookJson.target_type : [playbookJson.target_type];
+      if (declaredTypes.includes('dvwa') && targetProfile.application?.name !== 'dvwa') {
+        throw new Error('Generated DVWA playbook has no verified application fingerprint');
+      }
+      const variablePlan = validateVariablePlan(steps.map(step => ({ ...step,
+        input_variables: step.inputs, output_variables: step.outputs })), buildContextForTarget(targetProfile));
+      if (!variablePlan.passed) throw new Error(`Invalid generated variable plan: ${variablePlan.issues.join('; ')}`);
+      break;
+    } catch (error) {
+      if (attempt === 1) return {ok:false,error:error.message};
+      messages.push({role:'assistant',content:result.content.slice(0,16000)}, {role:'user',content:
+        `The generated playbook failed validation: ${error.message}. Return a corrected full JSON playbook using the original evidence and target. `
+        + 'Do not invent missing values or remove required authentication. outputs must be [] except for the supported verified DVWA curl login cookie producer. '
+        + 'Tool findings and reports are evidence, not output variables. If necessary choose steps with no unsupported runtime dependencies.'});
+    }
   }
-  const variablePlan = validateVariablePlan(steps.map(step => ({ ...step,
-    input_variables: step.inputs, output_variables: step.outputs })), buildContextForTarget(targetProfile));
-  if (!variablePlan.passed) return { ok: false, error: `Invalid generated variable plan: ${variablePlan.issues.join('; ')}` };
 
   // Insert into DB
   const playbookId = `gen_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;

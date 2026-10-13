@@ -1,0 +1,8 @@
+[
+  {"id":"bounds-vulnerable","pair":"bounds","file":"vulnerable/bounds.c","line":4,"vulnerable":true,"cwe":"CWE-120","expected_cwes":["CWE-120","CWE-121","CWE-787","CWE-788"]},
+  {"id":"bounds-fixed","pair":"bounds","file":"fixed/bounds.c","line":7,"vulnerable":false,"cwe":"CWE-120"},
+  {"id":"null-vulnerable","pair":"null","file":"vulnerable/null.c","line":3,"vulnerable":true,"cwe":"CWE-476"},
+  {"id":"null-fixed","pair":"null","file":"fixed/null.c","line":2,"vulnerable":false,"cwe":"CWE-476"},
+  {"id":"lifetime-vulnerable","pair":"lifetime","file":"vulnerable/lifetime.cpp","line":4,"vulnerable":true,"cwe":"CWE-416","expected_cwes":["CWE-416","CWE-672"]},
+  {"id":"lifetime-fixed","pair":"lifetime","file":"fixed/lifetime.cpp","line":3,"vulnerable":false,"cwe":"CWE-416"}
+]

@@ -273,7 +273,7 @@ int main(int argc, char **argv)
   sourcePage.setTaskScope({"scan-source"});
   verify(awaitCondition([&]() { return sourcePage.m_selectedTaskId == "scan-source" && sourcePage.m_sourceDemoBtn->isEnabled(); }), "source task loads in scoped workbench with demonstration selector");
   verify(sourcePage.m_sourceScanTable->rowCount() == 1 && sourcePage.m_scanTypeTabs->currentIndex() == 4, "C/C++ task selects its existing scan tab");
-  verify(sourcePage.m_genBtn->text().contains("攻击演示"), "source generation does not show generic web action");
+  verify(sourcePage.m_genBtn->text().contains("攻击测试预案"), "source generation offers the program test plan action");
   sourceStatus = "RUNNING";
   emit sourcePage.m_sourceScanTable->cellClicked(0, 0);
   verify(awaitCondition([&]() { return !sourcePage.m_genBtn->isEnabled(); }), "running source task disables generation");
@@ -290,7 +290,7 @@ int main(int argc, char **argv)
     if (candidates) candidates->item(0, 0)->setCheckState(Qt::Checked);
     dialog->reject();
   });
-  sourcePage.onGeneratePlaybook();
+  sourcePage.selectSourceDemonstration();
   verify(selectionLoaded, "generation opens source object list before sending any plan request");
   sourcePage.clearTaskScope();
   verify(sourcePage.m_sourceScanTable->rowCount() == 0 && sourcePage.m_sourceScanCount->text().contains("0"), "clearing scope clears C/C++ rows and count");
@@ -309,6 +309,80 @@ int main(int argc, char **argv)
   for (auto iterator = server.requests.cbegin(); iterator != server.requests.cend(); ++iterator)
     readOnly = readOnly && iterator.key().startsWith("GET ");
   verify(readOnly, "navigation emits no write request");
+  // Exercise the actual source generation -> task draft navigation, including
+  // a plan fetch still in flight when the generated playbook arrives.
+  QJsonObject savedPlan;
+  int generationDelay = 0;
+  const QJsonArray generatedSteps{QJsonObject{{"step_id", "baseline"}, {"name", "Normal input"}, {"tool_id", "target-request"},
+      {"args_template", QJsonArray{"fixture baseline"}}, {"optional", false}},
+    QJsonObject{{"step_id", "verification"}, {"name", "Boundary input"}, {"tool_id", "target-request"},
+      {"args_template", QJsonArray{"fixture boundary"}}, {"optional", false}}};
+  auto sourcePipeline = [&]() {
+    auto record = taskRecord("source");
+    record["target"] = "http://127.0.0.1:8089/";
+    record["status"] = "awaiting_approval";
+    record["run_id"] = QJsonValue::Null;
+    record["result"] = QJsonObject{{"paused_at", "source_selection"}};
+    record["config"] = QJsonObject{{"scan_mode", "source_assisted"}, {"authorization_confirmed", true}};
+    record["summary"] = QJsonObject{{"scan_task_ids", QJsonArray{"scan-source"}},
+      {"plan", savedPlan.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(QJsonObject{{"state", "draft"}, {"revision", 0}})}};
+    return record;
+  };
+  server.handler = [&](const QString &method, const QString &requestPath) -> MockReply {
+    const QString path = QUrl(requestPath).path();
+    if (path == "/api/pipelines/source") return {success(sourcePipeline())};
+    if (path == "/api/pipelines") return {success(QJsonArray{sourcePipeline()})};
+    if (path == "/api/scan-tasks") return {success(QJsonArray{sourceRecord()})};
+    if (path == "/api/scan-tasks/scan-source") return {success(sourceRecord())};
+    if (path.endsWith("/generate-playbook")) return {success(QJsonObject{{"playbook_id", "generated-source"}, {"name", "Input comparison"}, {"steps_count", 2}}), generationDelay};
+    if (path == "/api/playbooks/generated-source") return {success(QJsonObject{{"steps", generatedSteps}})};
+    if (path == "/api/pipelines/source/plan/sources") return {success(QJsonArray{QJsonObject{{"playbook_id", "generated-source"}, {"name", "Input comparison"}, {"steps_count", 2}}})};
+    if (path == "/api/pipelines/source/plan") {
+      if (method == "POST") {
+        savedPlan = {{"pipeline_id", "source"}, {"state", "draft"}, {"revision", 0}, {"content", QJsonObject{
+          {"name", "Input comparison"}, {"source_playbook_id", "generated-source"},
+          {"source_playbook", QJsonObject{{"name", "Input comparison"}}}, {"steps", generatedSteps}, {"suggestions", QJsonArray()}}}};
+        return {success(savedPlan)};
+      }
+      return {success(savedPlan.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(savedPlan)), 250};
+    }
+    return {success(QJsonArray())};
+  };
+  flow.openTaskAnalysis("source");
+  verify(awaitCondition([&]() { return flow.m_scanTab->m_selectedTaskId == "scan-source" && flow.m_scanTab->m_sourceDemoBtn->isEnabled(); }), "source pipeline loads generation context");
+  verify(flow.m_planTab->m_busy, "draft fetch overlaps source generation");
+  verify(flow.m_analysisTab->m_planButton->isEnabled(), "analysis offers source generation without selecting an analysis note");
+  flow.m_analysisTab->m_planButton->click();
+  verify(awaitCondition([&]() { return flow.m_planTab->m_steps->rowCount() == 2; }), "generated source steps automatically become a visible task draft");
+  verify(flow.m_stageTabs->currentWidget() == flow.m_planTab, "source generation opens task plan stage");
+  verify(flow.m_scanTab->m_detailTabs->currentIndex() == 1 && flow.m_scanTab->m_genStepTable->rowCount() == 2,
+      "generated source preview opens the details tab with steps");
+  verify(flow.m_planTab->m_source->currentText() == "Input comparison", "draft source shows a readable playbook name");
+  verify(server.requests.value("POST /api/pipelines/source/plan") == 1, "overlapping fetch creates the source draft exactly once");
+  verify(awaitCondition([&]() { return !flow.m_statusLabel->text().contains("待选择"); }), "draft creation clears stale source-selection header");
+  flow.m_planTab->useSourcePlaybook("generated-source");
+  QTest::qWait(50);
+  verify(server.requests.value("POST /api/pipelines/source/plan") == 1, "reopening the same generated source preserves the existing draft");
+  flow.onBackToList();
+  savedPlan = {};
+  flow.openTaskAnalysis("source");
+  verify(awaitCondition([&]() { return flow.m_planTab->m_source->count() == 1; }), "saved source playbook can be recovered after reopening without a draft");
+  flow.m_planTab->m_create->click();
+  verify(awaitCondition([&]() { return flow.m_planTab->m_steps->rowCount() == 2; }), "recovered source playbook creates a draft with executable steps");
+  flow.onBackToList();
+  savedPlan = {};
+  generationDelay = 250;
+  flow.openTaskAnalysis("source");
+  verify(awaitCondition([&]() { return flow.m_scanTab->m_sourceDemoBtn->isEnabled(); }), "source context reloads before delayed generation");
+  const int previousGenerations = server.requests.value("POST /api/scan-tasks/scan-source/generate-playbook");
+  const int previousDrafts = server.requests.value("POST /api/pipelines/source/plan");
+  flow.m_analysisTab->m_planButton->click();
+  verify(awaitCondition([&]() { return server.requests.value("POST /api/scan-tasks/scan-source/generate-playbook") > previousGenerations; }), "delayed generation is in flight");
+  flow.onBackToList();
+  QTest::qWait(350);
+  verify(server.requests.value("POST /api/pipelines/source/plan") == previousDrafts
+      && flow.m_planTab->m_steps->rowCount() == 0 && flow.m_selectedPipelineId.isEmpty(),
+      "late generation cannot create a draft or restore content after leaving the task");
   std::cout << "TOTAL " << checks << " checks passed" << std::endl;
   return 0;
 }
