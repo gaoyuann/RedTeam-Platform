@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import { callLlm } from '../services/llmClient.js';
+import { llmFailure } from '../services/llmFailure.js';
 
 function maskConfig(row) {
   if (!row || row.category !== 'llm') return row;
@@ -16,6 +18,29 @@ function maskConfig(row) {
 
 export default function (db) {
   const router = Router();
+
+  // Test the same effective configuration used by generation, including env overrides.
+  // No scan context, database writes or provider response bodies are returned.
+  router.post('/llm/test-connection', async (req, res) => {
+    if (req.user?.role !== 'admin') return res.status(403).json({ status: 'error', error: { code: 'FORBIDDEN', message: '只有管理员可以测试模型连接' } });
+    try {
+      const result = await callLlm([{ role: 'user', content: 'Reply only OK.' }], { maxTokens: 256, timeoutMs: 20_000 });
+      const truncated = result.finishReason === 'length';
+      const hasOutput = !!result.content?.trim() || result.hasReasoning === true;
+      if (!result.ok || !hasOutput) {
+        const failure = llmFailure(result.ok ? { error: 'LLM returned empty content' } : result);
+        return res.status(400).json({ status: 'error', error: { code: failure.code, message: failure.error } });
+      }
+      res.json({ status: 'ok', data: {
+        truncated,
+        message: truncated ? '模型连接成功；测试输出达到长度上限，未验证完整回答'
+          : !result.content?.trim() ? '模型连接成功；已返回推理内容，未返回最终回答'
+          : '当前生效配置的模型连接测试通过',
+      } });
+    } catch {
+      res.status(500).json({ status: 'error', error: { code: 'LLM_SERVICE_ERROR', message: '模型连接测试失败，请检查服务配置' } });
+    }
+  });
 
   router.get('/', (_req, res) => {
     const rows = db.prepare('SELECT * FROM system_config ORDER BY category, config_key').all();

@@ -1094,10 +1094,11 @@ void SimpleMainWindow::advanceStage()
       return;
     }
 
-    // Try AI generate-playbook first (30s timeout); on failure, fall back to
+    // Allow the shared 120 s generation/correction budget plus network overhead.
+    // On failure, fall back to
     // playbook matcher recommendations (no LLM needed)
     QJsonObject empty;
-    m_api->post("/api/scan-tasks/" + scanId + "/generate-playbook", empty, 30000,
+    m_api->post("/api/scan-tasks/" + scanId + "/generate-playbook", empty, 150000,
       [this, scanId](const QJsonObject &res) {
         if (res["status"].toString() != "ok") {
           // AI generation failed — fall back to playbook matcher
