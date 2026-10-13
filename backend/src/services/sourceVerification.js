@@ -36,7 +36,8 @@ export function validateSourceDemonstration(steps, findingIds, target) {
   let offset=0;
   for(const findingId of findingIds) {
     const group=steps.filter(step=>step.finding_ids?.length===1 && step.finding_ids[0]===findingId);
-    if(group.length<2 || group.length>6 || group.some((step,index)=>steps[offset+index]!==step)) throw new Error('攻击演示必须按清单逐项执行，每项独立保留2至6步');
+    if(group.length<2 || group.length>6) throw new Error(`漏洞 #${findingId} 逐项演示需要2至6步，实际独立步骤为${group.length}步；每步 finding_ids 必须仅包含该编号`);
+    if(group.some((step,index)=>steps[offset+index]!==step)) throw new Error(`漏洞 #${findingId} 的步骤未按清单逐项连续排列`);
     let verified=false;
     const baselines=new Set();
     const baselineAddresses=new Set();
@@ -162,6 +163,8 @@ export async function generateSourceVerification(db, task, findingIds = [], {llm
     const prompt=attempt===0 ? messages : [...messages,
       {role:'assistant',content:String(response.content).slice(0,64000)},
       {role:'user',content:JSON.stringify({correction_required:true,error:generation.validation_errors[0],target,
+        selected_finding_ids:findings.map(row=>row.id),
+        step_groups:findings.map(row=>({finding_id:row.id,minimum_steps:2,maximum_steps:6,phases:['baseline','verification']})),
         requirements:['仅纠正一次，重新输出完整 JSON，仍须遵守原始范围、发现ID、正常对照与验证要求。',
           '每个请求的 url 必须是完整的真实地址，或严格等于 <target>。不能使用 <target>/path、{{target}} 或相对 URL；按已看到的路由写出完整地址。',
           '不降低判定要求，不替换为通用扫描。如果缺少验证条件，返回 status=needs_information 并说明原因。']})}];
@@ -187,7 +190,14 @@ export async function generateSourceVerification(db, task, findingIds = [], {llm
       if(plan.required_conditions!==undefined && (!Array.isArray(plan.required_conditions) || plan.required_conditions.length>20
         || plan.required_conditions.some(item=>typeof item!=='string' || !item.trim() || item.length>1000))) throw new Error('预案运行条件格式无效');
       if(findings.some(row=>!plan.steps.some(step=>step.finding_ids.includes(row.id)))) throw new Error('预案没有覆盖选中的源码发现');
-      if(demonstration) validateSourceDemonstration(plan.steps,findings.map(row=>row.id),target);
+      if(demonstration) {
+        // Only group independently attributed steps. Preserve each object's input
+        // order; never invent missing steps or move a verification before its baseline.
+        if(plan.steps.some(step=>step.finding_ids.length!==1))
+          throw new Error('逐项演示不能合并漏洞：每步 finding_ids 必须仅包含一个所选编号');
+        plan.steps=findings.flatMap(row=>plan.steps.filter(step=>step.finding_ids[0]===row.id));
+        validateSourceDemonstration(plan.steps,findings.map(row=>row.id),target);
+      }
       break;
     } catch(error) {
       generation.validation_errors.push(error.message);

@@ -20,6 +20,7 @@ public:
   void setTaskContext(const QJsonObject &pipeline);
   void clearTaskContext();
   void addCandidate(const QString &category, int index, const QJsonValue &source);
+  void showGenerationStatus(const QString &text, bool error) { message(text, error); }
   void useSourcePlaybook(const QString &playbookId);
 
 signals:

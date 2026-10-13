@@ -28,6 +28,8 @@ public:
   void showTaskContextError(const QString &message);
 
 signals:
+  void sourceGenerationStatus(const QString &message, bool error);
+  void sourcePlaybookGenerated(const QString &playbookId);
   void playbookNavigateRequested(const QString &playbookId, const QString &target = "");
   /// 从扫描结果漏洞一键发起攻击（演示动线：扫描 → 漏洞列表 → 攻击）
   void attackRequested(const QString &target, const QString &vulnText, const QString &resultType);
@@ -76,6 +78,8 @@ private:
   static QString buildResultSummary(const QJsonArray &results, const QString &scanType);
   static bool hasStructuredResults(const QJsonArray &results);
 
+  QJsonArray m_lastSourceSelection;
+  QString m_lastSourceSelectionTask;
   ApiClient *m_api;
 
   // ── Left panel: 5-Tab scan type layout ──

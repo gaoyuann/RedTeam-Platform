@@ -534,11 +534,15 @@ void FlowPage::setupWorkbenchView()
     m_stageTabs->setCurrentWidget(m_planTab);
     m_planTab->addCandidate(category, index, source);
   });
+  connect(m_scanTab, &ScanPage::sourceGenerationStatus, m_planTab, &TaskPlanPage::showGenerationStatus);
+  connect(m_scanTab, &ScanPage::sourcePlaybookGenerated, m_planTab, &TaskPlanPage::useSourcePlaybook);
   const auto selectSource = [this]() {
-    m_stageTabs->setCurrentWidget(m_scanTab);
     m_scanTab->beginSourceVerification();
   };
-  connect(m_analysisTab, &AnalysisPage::sourceVerificationRequested, this, selectSource);
+  connect(m_analysisTab, &AnalysisPage::sourceVerificationRequested, this, [this, selectSource]() {
+    m_stageTabs->setCurrentWidget(m_planTab);
+    selectSource();
+  });
   connect(m_planTab, &TaskPlanPage::sourceVerificationRequested, this, selectSource);
   connect(m_planTab, &TaskPlanPage::planChanged, this, [this]() {
     if (!m_selectedPipelineId.isEmpty()) loadFlowDetail(m_selectedPipelineId);
@@ -769,7 +773,7 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     const bool selectingSource = status == "awaiting_approval" && p["generated_playbook_id"].toString().isEmpty()
         && p["summary"].toObject()["plan"].toObject().isEmpty()
         && QStringList{"source_selection","program_selection"}.contains(parseJsonObject(p["result"])["paused_at"].toString());
-    m_statusLabel->setText(QStringLiteral("%1  %2").arg(statusIcon(status), selectingSource ? QStringLiteral("待选择攻击演示对象 · 请进入扫描发现") : statusText(status)));
+    m_statusLabel->setText(QStringLiteral("%1  %2").arg(statusIcon(status), selectingSource ? QStringLiteral("待生成攻击测试预案") : statusText(status)));
     m_statusLabel->setStyleSheet(statusBadgeStyle(status));
 
     // 从 pipeline 数据提取 run_id 和 playbook_id，自动加载到攻击 Tab.
@@ -884,12 +888,17 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
         ps.status = "failed";
         ps.summary = QStringLiteral("任务执行失败，请查看日志");
       } else if (i == 3 && status == "awaiting_approval") {
-        ps.status = "awaiting_approval";
-        ps.summary = QStringLiteral("预案已就绪，等待人工审批");
+        const auto plan = p["summary"].toObject()["plan"].toObject();
+        const QString planState = plan["state"].toString();
+        ps.status = planState == "submitted" ? "awaiting_approval" : "pending";
+        ps.summary = plan.isEmpty() ? QStringLiteral("尚未生成任务预案")
+            : planState == "submitted" ? QStringLiteral("预案已提交，等待审批")
+            : planState == "approved" ? QStringLiteral("预案已批准")
+            : QStringLiteral("预案草稿待编辑、提交");
       }
       if (ps.phaseType == "execute" && status == "awaiting_approval") {
-        ps.status = "awaiting_approval";
-        ps.summary = QStringLiteral("预案已就绪，等待确认");
+        ps.status = "pending";
+        ps.summary = QStringLiteral("等待预案批准后执行");
       }
       phaseSteps.append(ps);
     }

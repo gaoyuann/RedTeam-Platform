@@ -543,8 +543,26 @@ int main(int argc, char **argv)
     }
     return {success(QJsonArray())};
   };
+  int selectionDialogs = 0;
+  QTimer chooseFinding;
+  chooseFinding.setInterval(10);
+  QObject::connect(&chooseFinding, &QTimer::timeout, [&]() {
+    auto *dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+    if (!dialog || dialog->property("testSelected").toBool()) return;
+    auto *table = dialog->findChild<QTableWidget*>("sourceDemonstrationCandidates");
+    if (!table) return;
+    dialog->setProperty("testSelected", true);
+    auto *check = qobject_cast<QCheckBox*>(table->cellWidget(0, 0));
+    verify(check != nullptr, "generation presents explicit finding selection on the current page");
+    if (selectionDialogs++ > 0) verify(check->isChecked(), "retry retains the previously selected finding");
+    check->setChecked(true);
+    for (auto *button : dialog->findChildren<QPushButton*>())
+      if (button->text() == QStringLiteral("生成攻击测试预案")) { button->click(); break; }
+  });
+  chooseFinding.start();
   flow.openTaskAnalysis("source");
   verify(awaitCondition([&]() { return flow.m_scanTab->m_selectedTaskId == "scan-source" && flow.m_scanTab->m_sourceDemoBtn->isEnabled(); }), "source pipeline loads generation context");
+  verify(flow.m_stepIndicator->phases()[3].summary == QStringLiteral("尚未生成任务预案"), "empty plan never claims to be ready for approval");
   const int beforeFailure = server.requests.value("POST /api/scan-tasks/scan-source/generate-playbook");
   const int beforeFailedDraft = server.requests.value("POST /api/pipelines/source/plan");
   flow.m_scanTab->m_lastGeneratedId = "stale-source";
@@ -574,6 +592,8 @@ int main(int argc, char **argv)
   verify(awaitCondition([&]() { return server.requests.value("POST /api/scan-tasks/scan-source/generate-playbook") == beforeFailure+2
       && !flow.m_scanTab->m_generationInProgress && flow.m_scanTab->m_statusLabel->text().contains("预案生成失败"); }),
       "task plan retry sends exactly one new request once source details are ready");
+  verify(flow.m_stageTabs->currentWidget() == flow.m_planTab, "failed generation stays on the task plan page");
+  verify(flow.m_planTab->m_status->text().contains("缺少编号 101"), "plan page shows the concrete generation failure");
   verify(flow.m_scanTab->m_sourceDemoBtn->isEnabled() && !flow.m_scanTab->m_pendingSourceVerification && savedPlan.isEmpty(),
       "a second failure remains retryable without creating a draft");
   sourceDetailDelay = 0;
@@ -582,7 +602,7 @@ int main(int argc, char **argv)
   verify(flow.m_analysisTab->m_planButton->isEnabled(), "analysis offers source generation without selecting an analysis note");
   flow.m_analysisTab->m_planButton->click();
   verify(awaitCondition([&]() { return flow.m_planTab->m_steps->rowCount() == 2; }), "generated source steps automatically become a visible task draft");
-  verify(flow.m_stageTabs->currentWidget() == flow.m_planTab, "source generation opens task plan stage");
+  verify(flow.m_stageTabs->currentWidget() == flow.m_planTab, "successful generation preserves the current task plan stage");
   verify(flow.m_scanTab->m_detailTabs->currentIndex() == 1 && flow.m_scanTab->m_genStepTable->rowCount() == 2,
       "generated source preview opens the details tab with steps");
   verify(flow.m_planTab->m_source->currentText() == "Input comparison", "draft source shows a readable playbook name");
@@ -611,6 +631,7 @@ int main(int argc, char **argv)
   verify(server.requests.value("POST /api/pipelines/source/plan") == previousDrafts
       && flow.m_planTab->m_steps->rowCount() == 0 && flow.m_selectedPipelineId.isEmpty(),
       "late generation cannot create a draft or restore content after leaving the task");
+  chooseFinding.stop();
   std::cout << "TOTAL " << checks << " checks passed" << std::endl;
   return 0;
 }

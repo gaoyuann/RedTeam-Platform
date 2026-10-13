@@ -1819,6 +1819,7 @@ void ScanPage::beginSourceVerification() {
   m_detailTabs->setCurrentIndex(0);
   if (m_generationInProgress) {
     m_statusLabel->setText(QStringLiteral("预案正在生成，请等待结果；失败后可重新生成。"));
+    emit sourceGenerationStatus(m_statusLabel->text(), false);
     return;
   }
   if (m_scopedTasks && !m_scopeTaskIds.isEmpty()
@@ -1830,14 +1831,16 @@ void ScanPage::beginSourceVerification() {
       m_selectInitialScopeTask = true;
       onRefreshTasks();
     }
+    emit sourceGenerationStatus(m_statusLabel->text(), false);
     return;
   }
   if (!isProgramScan(m_currentScanType) || !m_sourceDemoBtn->isEnabled()) {
     m_statusLabel->setText(QStringLiteral("请选择已完成的程序扫描并检查漏洞发现，再生成预案。"));
     m_statusLabel->setStyleSheet(Theme::StatusWarningStyle);
+    emit sourceGenerationStatus(m_statusLabel->text(), false);
     return;
   }
-  onGeneratePlaybook();
+  selectSourceDemonstration();
 }
 
 void ScanPage::selectSourceDemonstration() {
@@ -1874,7 +1877,8 @@ void ScanPage::selectSourceDemonstration() {
       auto *check = new QCheckBox(QString("#%1").arg(id), table);
       check->setObjectName(QString("sourceFindingSelection%1").arg(id));
       check->setEnabled(supported);
-      check->setChecked(supported && item == m_resultTree->currentItem());
+      check->setChecked(supported && (m_lastSourceSelectionTask == m_selectedTaskId
+          ? m_lastSourceSelection.contains(QJsonValue(id)) : item == m_resultTree->currentItem()));
       if (!supported) check->setToolTip(data["demonstration_reason"].toString());
       table->setCellWidget(row, 0, check);
       table->setItem(row, 1, new QTableWidgetItem(item->text(0)));
@@ -1923,6 +1927,8 @@ void ScanPage::selectSourceDemonstration() {
     auto *check = qobject_cast<QCheckBox*>(table->cellWidget(row, 0));
     if (check && check->isChecked()) ids.append(table->item(row, 0)->data(Qt::UserRole).toInt());
   }
+  m_lastSourceSelection = ids;
+  m_lastSourceSelectionTask = taskId;
   generatePlaybook(ids);
 }
 
@@ -1932,6 +1938,7 @@ void ScanPage::generatePlaybook(const QJsonArray &findingIds) {
   const bool sourceDemo = isProgramScan(m_currentScanType) && !findingIds.isEmpty();
   const bool selectionEnabled = m_sourceDemoBtn->isEnabled();
   m_generationInProgress = true;
+  emit sourceGenerationStatus(QStringLiteral("正在生成所选漏洞的验证步骤，请等待…"), false);
   const int generationRevision = ++m_generationRevision;
   m_lastGeneratedId.clear();
   m_genExecBtn->setEnabled(false);
@@ -1963,6 +1970,7 @@ void ScanPage::generatePlaybook(const QJsonArray &findingIds) {
       if(data["requires_runtime_target"].toBool()) {
         m_statusLabel->setText("预案草稿已保存；缺少程序运行条件，尚未执行攻击。");
         m_statusLabel->setStyleSheet(Theme::StatusWarningStyle);
+        emit sourceGenerationStatus(m_statusLabel->text(), true);
         m_lastGeneratedId.clear();m_genExecBtn->setEnabled(false);
         QDialog draftDialog(this);draftDialog.setWindowTitle("攻击测试预案 · 待补充运行条件");draftDialog.resize(900,600);
         auto *layout=new QVBoxLayout(&draftDialog);
@@ -1989,6 +1997,7 @@ void ScanPage::generatePlaybook(const QJsonArray &findingIds) {
         if (pbRes["status"].toString() != "ok") {
           m_statusLabel->setText(QStringLiteral("预案已生成，但步骤加载失败，请在推荐列表中重新打开预案。"));
           m_statusLabel->setStyleSheet(Theme::StatusWarningStyle);
+          emit sourceGenerationStatus(m_statusLabel->text(), true);
           return;
         }
         auto pb = pbRes["data"].toObject();
@@ -2018,7 +2027,7 @@ void ScanPage::generatePlaybook(const QJsonArray &findingIds) {
         m_genStepTable->horizontalHeader()->setStretchLastSection(true);
         m_genExecBtn->setEnabled(!stepsArr.isEmpty());
         if (sourceDemo && m_scopedTasks && !stepsArr.isEmpty())
-          emit playbookNavigateRequested(pbId, m_currentTarget);
+          emit sourcePlaybookGenerated(pbId);
       });
 
       // 显示预览区
@@ -2042,8 +2051,9 @@ void ScanPage::generatePlaybook(const QJsonArray &findingIds) {
         errMsg = "未配置模型服务密钥，请在「系统管理→系统配置」中设置模型服务配置";
       else if (errMsg.isEmpty())
         errMsg = "未知错误";
-      m_statusLabel->setText(QString("✗ 预案生成失败: %1。可重新选择漏洞或点击生成重试。").arg(errMsg.left(120)));
+      m_statusLabel->setText(QString("✗ 预案生成失败: %1。可重新选择漏洞或点击生成重试。").arg(errMsg));
       m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
+      emit sourceGenerationStatus(m_statusLabel->text(), true);
     }
   });
 }
