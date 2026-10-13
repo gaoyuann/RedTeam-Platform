@@ -394,3 +394,35 @@ test('demonstration rejects interleaved, combined, identical and incomplete test
     llm:async()=>({ok:true,content:JSON.stringify({status:'needs_information',reason:'Local-only memory issue needs a process diagnostic interface'})})});
   assert.equal(result.ok,false);assert.match(result.error,/Local-only/);assert.equal(db.prepare('SELECT COUNT(*) n FROM playbooks').get().n,playbookCount);
 });
+
+test('generation groups independent findings and corrects exact missing-step errors',async t=>{
+  const {db}=await fixture(t),task=sourceOnlyTask(db,2),target='http://127.0.0.1:8999';
+  task.target=target;task.parameters=JSON.stringify({input_kind:'runtime'});
+  const a=1622,b=1623;
+  const original=[step(b,'baseline',target),step(a,'baseline',target),step(b,'verification',target),step(a,'verification',target)];
+  const result=await generateSourceVerification(db,task,[a,b],{demonstration:true,
+    llm:async()=>({ok:true,content:JSON.stringify({name:'Grouped fixture',steps:original})})});
+  assert.equal(result.ok,true,result.error);
+  const saved=db.prepare('SELECT args_template FROM playbook_steps WHERE playbook_id=? ORDER BY step_index').all(result.playbook_id);
+  assert.deepEqual(saved.map(row=>JSON.parse(row.args_template)),[original[1],original[3],original[0],original[2]].map(item=>item.args_template));
+  let calls=0;
+  const repaired=await generateSourceVerification(db,task,[a],{demonstration:true,llm:async messages=>{
+    calls++;
+    if(calls===2) {
+      const correction=JSON.parse(messages.at(-1).content);
+      assert.match(correction.error,/#1622.*实际独立步骤为1步/);
+      assert.deepEqual(correction.selected_finding_ids,[a]);
+      assert.deepEqual(correction.step_groups[0].phases,['baseline','verification']);
+    }
+    return {ok:true,content:JSON.stringify({name:'Correction',steps:calls===1?[step(a,'baseline',target)]:[step(a,'baseline',target),step(a,'verification',target)]})};
+  }});
+  assert.equal(repaired.ok,true,repaired.error);assert.equal(calls,2);
+  const count=db.prepare('SELECT count(*) n FROM playbooks').get().n;
+  for(const steps of [[step(a,'verification',target),step(a,'baseline',target),step(b,'baseline',target),step(b,'verification',target)],
+    [step(a,'baseline',target),{...step(a,'verification',target),finding_ids:[a,b]}]]) {
+    const failed=await generateSourceVerification(db,task,[a,b],{demonstration:true,
+      llm:async()=>({ok:true,content:JSON.stringify({name:'Invalid fixture',steps})})});
+    assert.equal(failed.ok,false);
+  }
+  assert.equal(db.prepare('SELECT count(*) n FROM playbooks').get().n,count);
+});
