@@ -87,6 +87,7 @@ export default function (db) {
 
   router.post('/', async (req, res) => {
     let { target, scan_type, parameters } = req.body;
+    let createdBy=req.user.sub;
     if (!target || !scan_type) return res.status(400).json({ status: 'error', error: { message: 'target, scan_type are required' } });
     if (isProgramScan(scan_type)) {
       try {
@@ -96,7 +97,7 @@ export default function (db) {
         const runtimeTarget=parameters?.runtime_target ? sourceTarget(parameters.runtime_target) : null;
         if(inputKind==='source' && !/^https?:/i.test(target)) throw new Error('源码目录须为 HTTP/HTTPS 目录地址');
         if(inputKind==='source' && runtimeTarget) httpSourceConnection(runtimeTarget,target);
-        if(inputKind==='source') parameters={...parameters,source_url:target};
+        if(inputKind==='source') parameters={...parameters,source_url:parameters?.source_url || target};
         const suppliedSource = parameters?.source_url ? httpSourceConnection(target, parameters.source_url) : null;
         const matched = suppliedSource ? null : parameters?.connection_id
           ? await resolveSourceConnection(parameters.connection_id,target)
@@ -122,6 +123,7 @@ export default function (db) {
         catch (error) { return res.status(400).json({ status: 'error', error: { message: error.message } }); }
         if (target !== expectedTarget)
           return res.status(400).json({ status: 'error', error: { message: '拓扑探测范围必须与当前任务目标一致' } });
+        createdBy=pipeline.created_by;
       }
       parameters = { ...(pipelineId ? { pipeline_id: pipelineId } : {}), timeout: 300 };
     }
@@ -131,7 +133,7 @@ export default function (db) {
     // Source-assisted tasks retain the deployment protocol and target class.
     const targetProfile = resolveTargetProfile(target);
     db.prepare(`INSERT INTO scan_tasks (scan_task_id, target, scan_type, target_class, parameters, created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(scan_task_id, target, scan_type, targetProfile.target_class, parameters ? JSON.stringify(parameters) : null, req.user.sub, now);
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(scan_task_id, target, scan_type, targetProfile.target_class, parameters ? JSON.stringify(parameters) : null, createdBy, now);
     const row = db.prepare('SELECT * FROM scan_tasks WHERE scan_task_id = ?').get(scan_task_id);
     // WebSocket: notify all clients about new scan (include operator info)
     const ws = getWsManager();

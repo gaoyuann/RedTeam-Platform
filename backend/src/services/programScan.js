@@ -7,8 +7,25 @@ export const isProgramMode = mode => ['program_dynamic', 'source_assisted'].incl
 export const isProgramFinding = type => ['program_finding', 'source_finding'].includes(type);
 export function programExecutionTarget(task) {
   let parameters = {};
-  try {parameters = JSON.parse(task.parameters || task.config || '{}');} catch {}
-  return parameters.input_kind === 'source' ? parameters.runtime_target || null : task.target;
+  try {const value=task.parameters || task.config || {}; parameters=typeof value==='string' ? JSON.parse(value) : value;} catch {}
+  if(parameters.input_kind !== 'source') return task.target;
+  if(parameters.runtime_target) return parameters.runtime_target;
+  // Older task forms stored the declared application root separately from its
+  // source directory. Do not interpret the source hosting URL itself as runtime.
+  try {
+    const target=new URL(sourceTarget(task.target)),source=new URL(sourceTarget(parameters.source_url));
+    if(['http:','https:'].includes(target.protocol) && target.origin===source.origin
+      && target.pathname==='/' && !target.search && source.pathname!=='/') return target.href;
+  } catch {}
+  return null;
+}
+
+export function programNetworkTarget(target) {
+  if(/^tcp:\/\//i.test(target)) {
+    const url=new URL(sourceTarget(target));
+    return url.host;
+  }
+  return target;
 }
 const projectsFile = new URL('../../../data/program-tests/projects.json', import.meta.url);
 

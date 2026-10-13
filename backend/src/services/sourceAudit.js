@@ -6,6 +6,7 @@ import { createSourceContextIndex, relatedSourceContext } from './sourceContext.
 import { callLlm } from './llmClient.js';
 import {counterReviewSources,SOURCE_ASSESSMENT_INSTRUCTION} from './sourceCounterReview.js';
 import {sourceRuntimeMapping} from './sourceRuntimeMapping.js';
+import {programExecutionTarget} from './programScan.js';
 
 export async function auditSources(task, {db, parameters, signal, runTool, parseResults, llm=callLlm, snapshot=createSourceSnapshot}) {
   const insert=db.prepare('INSERT INTO scan_results (scan_task_id,result_type,result_data,severity,source_tool,captured_at) VALUES (?,?,?,?,?,?)');
@@ -17,7 +18,7 @@ export async function auditSources(task, {db, parameters, signal, runTool, parse
   const outcomes=[];
   const checkAbort=()=>{if(signal?.aborted) throw new Error('源码审计已取消');};
   let observation={};
-  const runtimeTarget=parameters.input_kind==='source' ? parameters.runtime_target : task.target;
+  const runtimeTarget=programExecutionTarget({...task,parameters});
   if(runtimeTarget) {
     let observe;
     try {observe=await runTool('target-request',[JSON.stringify({url:runtimeTarget})],{signal,timeout:15000,target:runtimeTarget});}

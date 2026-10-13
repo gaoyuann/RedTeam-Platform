@@ -32,6 +32,21 @@ function addSources(destination, source) {
     if (!destination.sources.some(existing => existing.result_id === entry.result_id)) destination.sources.push(entry);
 }
 
+// Network evidence remains useful even when only source files are available.
+// Exclude source/application records so a source server is not shown as the app.
+export function networkOnlyResults(results) {
+  const types=new Set(['open_port','service_info','host_discovery','network_context','network_link',
+    'scan_evidence','scan_warning','lan_scope','lan_host_discovery']);
+  return results.filter(row=>types.has(row.result_type) || row.result_type==='raw_output' && row.source_tool==='nmap');
+}
+
+export function sourceNetworkTopology(target, scans, results, flowId, owner, origin=null) {
+  let host=''; try {host=normalizeTopologyTarget(target);} catch {}
+  const topology=projectTopology(host,scans,networkOnlyResults(results),flowId,owner,origin);
+  topology.summary+=' · 网络探测独立于程序执行';
+  return topology;
+}
+
 export function projectTopology(target, scans, results, flowId, owner, origin = null) {
   const nodes = new Map();
   const risks = [];
@@ -116,7 +131,7 @@ export function projectTopology(target, scans, results, flowId, owner, origin = 
   const fingerprint = createHash('sha256').update(JSON.stringify({ target, scans, results })).digest('hex');
   const projection = { flowId, target, generatedAt: new Date().toISOString(),
     summary: `扫描关联资产 ${observed} 项${observed ? '' : '（目标占位不代表存活）'} · 未提供网络连接证据`,
-    nodes: nodeList, edges: [], risks, metadata: { projectionVersion: 2, owner, scanIds: scans.map(scan => scan.scan_task_id),
+    nodes: nodeList, edges: [], risks, metadata: { projectionVersion: 3, owner, scanIds: scans.map(scan => scan.scan_task_id),
       sourceCount: results.filter(row => !['raw_output', 'scan_error'].includes(row.result_type)).length,
       sourceFingerprint: fingerprint, source: 'structured_scan_results', manuallyEdited: false } };
   // Preserve the task projection contract while retaining observed network relations.
@@ -162,15 +177,16 @@ export function pipelineTopology(db, pipeline) {
   try {config=typeof pipeline.config==='string' ? JSON.parse(pipeline.config) : pipeline.config || {};} catch {}
   const runtime=isProgramMode(config.scan_mode) ? programExecutionTarget(pipeline) : pipeline.target;
   const ids = [...new Set((pipeline.scan_task_id || '').split(',').map(identifier => identifier.trim()).filter(Boolean))];
-  const discoveries = db.prepare("SELECT scan_task_id FROM scan_tasks WHERE scan_type = 'topology_scan' AND json_valid(parameters) AND json_extract(parameters, '$.pipeline_id') = ? AND created_by = ?")
+  const discoveries = db.prepare("SELECT scan_task_id FROM scan_tasks WHERE scan_type IN ('topology_scan','port_scan') AND json_valid(parameters) AND json_extract(parameters, '$.pipeline_id') = ? AND created_by = ?")
     .all(pipeline.pipeline_id, pipeline.created_by);
   for (const row of discoveries) if (!ids.includes(row.scan_task_id)) ids.push(row.scan_task_id);
   const scans = (ids.length ? db.prepare(`SELECT * FROM scan_tasks
     WHERE scan_task_id IN (${ids.map(() => '?').join(',')}) AND created_by = ? ORDER BY scan_task_id`)
     .all(...ids, pipeline.created_by) : []).filter(scan => {
       if (scan.target === pipeline.target) return true;
-      if (scan.scan_type !== 'topology_scan') return false;
-      try { return normalizeTopologyTarget(scan.target) === normalizeTopologyTarget(pipeline.target); }
+      if (!['topology_scan','port_scan'].includes(scan.scan_type)) return false;
+      try { return normalizeTopologyTarget(scan.target) === normalizeTopologyTarget(pipeline.target)
+        || normalizeTopologyTarget(scan.target) === normalizeTopologyTarget(runtime); }
       catch { return false; }
     });
   const results = scans.length ? db.prepare(`SELECT r.id, r.scan_task_id, r.result_type, r.result_data, r.severity, r.source_tool, r.captured_at,
@@ -178,9 +194,7 @@ export function pipelineTopology(db, pipeline) {
     WHERE r.scan_task_id IN (${scans.map(() => '?').join(',')})
       AND r.result_type != 'scan_error' ORDER BY r.id`).all(...scans.map(scan => scan.scan_task_id)) : [];
   if(!runtime) {
-    const topology=projectTopology('',scans,[],pipeline.pipeline_id,pipeline.created_by);
-    topology.summary='仅提供源码输入，尚无程序运行地址；源码目录不作为运行资产或连接证据';
-    return topology;
+    return sourceNetworkTopology(pipeline.target,scans,results,pipeline.pipeline_id,pipeline.created_by,readTopologyOrigin(pipeline.config));
   }
   return projectTopology(runtime, scans, results.map(row=>({...row,scan_target:
     isProgramScan(scans.find(scan=>scan.scan_task_id===row.scan_task_id)?.scan_type) ? runtime : row.scan_target})),

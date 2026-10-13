@@ -834,8 +834,9 @@ void TopologyPage::setPipelineContext(const QString &pipelineId, const QString &
     m_targetInput->setReadOnly(!pipelineId.isEmpty());
     if (!pipelineId.isEmpty()) m_scanTypeCombo->setCurrentIndex(0);
     m_scanTypeCombo->setEnabled(pipelineId.isEmpty());
-    m_createScanBtn->setEnabled(pipelineId.isEmpty());
-    m_createScanBtn->setVisible(pipelineId.isEmpty());
+    m_createScanBtn->setEnabled(true);
+    m_createScanBtn->setVisible(true);
+    m_createScanBtn->setText(pipelineId.isEmpty() ? QStringLiteral("开始探测") : QStringLiteral("补充网络探测"));
     m_scanTypeCombo->setVisible(pipelineId.isEmpty());
     if (changed || m_scanTaskTable->rowCount() == 0) {
         // Filter the existing table immediately; a scoped refresh can populate it.
