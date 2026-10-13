@@ -41,8 +41,10 @@ echo "Mode: $([ -x "$SCRIPT_DIR/bin/RedTeam-Platform" ] && echo 'portable' || ec
 # Auto-detect and configure Chinese input method for Qt5 on Linux/X11.
 # Priority: fcitx5 > fcitx > ibus. Must be set BEFORE the Qt app starts.
 
-# 0a. Ensure D-Bus session bus is available (WSL2 often lacks this)
-if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] || [ ! -S "${DBUS_SESSION_BUS_ADDRESS#unix:path=}" ]; then
+# 0a. Probe the bus instead of treating an abstract D-Bus address as a file.
+if ! dbus-send --session --print-reply --reply-timeout=1500 \
+    --dest=org.freedesktop.DBus /org/freedesktop/DBus \
+    org.freedesktop.DBus.ListNames >/dev/null 2>&1; then
   if command -v dbus-launch >/dev/null 2>&1; then
     eval "$(dbus-launch --sh-syntax)"
     export DBUS_SESSION_BUS_ADDRESS
@@ -50,45 +52,38 @@ if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] || [ ! -S "${DBUS_SESSION_BUS_ADDRESS#
   fi
 fi
 
-# 0b. Detect / start IME framework
+# 0b. Select the framework, respecting an explicitly configured module.
 if [ -z "${QT_IM_MODULE:-}" ]; then
-  if pgrep -x fcitx5 >/dev/null 2>&1; then
-    export QT_IM_MODULE=fcitx
-    export GTK_IM_MODULE=fcitx
-    export XMODIFIERS=@im=fcitx
-    echo "[env] IME: fcitx5 (detected running)"
-  elif pgrep -x fcitx >/dev/null 2>&1; then
-    export QT_IM_MODULE=fcitx
-    export GTK_IM_MODULE=fcitx
-    export XMODIFIERS=@im=fcitx
-    echo "[env] IME: fcitx (detected running)"
-  elif pgrep -x ibus-daemon >/dev/null 2>&1; then
-    export QT_IM_MODULE=ibus
-    export GTK_IM_MODULE=ibus
-    export XMODIFIERS=@im=ibus
-    echo "[env] IME: ibus (detected running)"
+  if pgrep -u "$(id -u)" -x fcitx5 >/dev/null 2>&1 || pgrep -u "$(id -u)" -x fcitx >/dev/null 2>&1; then
+    export QT_IM_MODULE=fcitx GTK_IM_MODULE=fcitx XMODIFIERS=@im=fcitx
+  elif pgrep -u "$(id -u)" -x ibus-daemon >/dev/null 2>&1; then
+    export QT_IM_MODULE=ibus GTK_IM_MODULE=ibus XMODIFIERS=@im=ibus
   elif command -v fcitx5 >/dev/null 2>&1; then
-    # fcitx5 installed but not running — auto-start
-    echo "[env] Starting fcitx5..."
-    fcitx5 -d 2>/dev/null &>/dev/null || true
-    sleep 1
-    if pgrep -x fcitx5 >/dev/null 2>&1; then
-      export QT_IM_MODULE=fcitx
-      export GTK_IM_MODULE=fcitx
-      export XMODIFIERS=@im=fcitx
-      echo "[env] IME: fcitx5 (auto-started)"
-    else
-      echo "[env] WARNING: fcitx5 auto-start failed (needs D-Bus + X11 session)"
-      echo "       Hint: run 'fcitx5 -d' in your desktop terminal first"
-      export QT_IM_MODULE=ibus
-      export GTK_IM_MODULE=ibus
-      export XMODIFIERS=@im=ibus
-    fi
+    export QT_IM_MODULE=fcitx GTK_IM_MODULE=fcitx XMODIFIERS=@im=fcitx
   else
-    export QT_IM_MODULE=ibus
-    export GTK_IM_MODULE=ibus
-    export XMODIFIERS=@im=ibus
-    echo "[env] IME: ibus (default — run 'sudo bash scripts/setup-ime.sh' to install fcitx5)"
+    export QT_IM_MODULE=ibus GTK_IM_MODULE=ibus XMODIFIERS=@im=ibus
+  fi
+fi
+
+# Setting QT_IM_MODULE does not start the daemon. Check even when it was set.
+if [ "${QT_IM_MODULE:-}" = fcitx ] && command -v fcitx5 >/dev/null 2>&1; then
+  if ! pgrep -u "$(id -u)" -x fcitx5 >/dev/null 2>&1 && \
+     ! pgrep -u "$(id -u)" -x fcitx >/dev/null 2>&1; then
+    ime_args=(-d)
+    # WSLg's Wayland IM connection can disappear immediately. The X11 Qt
+    # client needs only the X11 backend; do not affect native Wayland desktops.
+    if [[ "$(uname -r)" == *microsoft* ]] && [ -n "${DISPLAY:-}" ] && \
+       [ "${QT_QPA_PLATFORM:-xcb}" = xcb ]; then
+      ime_args+=(--disable=wayland,waylandim)
+    fi
+    echo "[env] Starting fcitx5 for this desktop session..."
+    fcitx5 "${ime_args[@]}" >/dev/null 2>&1 || true
+    sleep 1
+  fi
+  if command -v fcitx5-remote >/dev/null 2>&1 && \
+     pgrep -u "$(id -u)" -x fcitx5 >/dev/null 2>&1 && \
+     ! fcitx5-remote >/dev/null 2>&1; then
+    echo "[env] WARNING: fcitx5 is not reachable on this D-Bus session"
   fi
 fi
 

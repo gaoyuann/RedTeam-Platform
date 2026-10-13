@@ -320,12 +320,8 @@ void FlowPage::setupWorkbenchView()
   auto *topBar = new QFrame(m_workbenchView);
   topBar->setObjectName("flowToolbar");
   topBar->setStyleSheet("QFrame#flowToolbar { background:#ffffff; border-bottom:1px solid #dbe3ef; }");
-  auto *toolbarLayout = new QVBoxLayout(topBar);
-  toolbarLayout->setContentsMargins(0, 8, 0, 8);
-  toolbarLayout->setSpacing(6);
-  auto *topLayout = new QHBoxLayout;
-  toolbarLayout->addLayout(topLayout);
-  topLayout->setContentsMargins(14, 0, 14, 0);
+  auto *topLayout = new QHBoxLayout(topBar);
+  topLayout->setContentsMargins(14, 8, 14, 8);
   topLayout->setSpacing(8);
 
   m_backBtn = new QPushButton(QStringLiteral("← 返回列表"), topBar);
@@ -354,17 +350,12 @@ void FlowPage::setupWorkbenchView()
   m_statusLabel->setStyleSheet(statusBadgeStyle({}));
   topLayout->addWidget(m_statusLabel);
 
-  auto *actionLayout = new QHBoxLayout;
-  actionLayout->setContentsMargins(14, 0, 14, 0);
-  actionLayout->setSpacing(8);
-  toolbarLayout->addLayout(actionLayout);
-
   m_startBtn = new QPushButton(QStringLiteral("▶ 启动任务"), topBar);
   m_startBtn->setProperty("primary", true);
   UiUtil::styleToolbarButton(m_startBtn);
   m_startBtn->setVisible(false);
   connect(m_startBtn, &QPushButton::clicked, this, &FlowPage::onStartFlow);
-  actionLayout->addWidget(m_startBtn);
+  topLayout->addWidget(m_startBtn);
 
   // Approve button (visible only when awaiting_approval)
   m_approveBtn = new QPushButton(QStringLiteral("审阅任务预案"), topBar);
@@ -372,13 +363,13 @@ void FlowPage::setupWorkbenchView()
   UiUtil::styleToolbarButton(m_approveBtn);
   m_approveBtn->setVisible(false);
   connect(m_approveBtn, &QPushButton::clicked, this, &FlowPage::onApproveFlow);
-  actionLayout->addWidget(m_approveBtn);
+  topLayout->addWidget(m_approveBtn);
   m_resultBtn = new QPushButton(QStringLiteral("查看结果"), topBar);
   m_resultBtn->setObjectName("flowResultButton");
   m_resultBtn->setProperty("primary", true);
   UiUtil::styleToolbarButton(m_resultBtn);
   m_resultBtn->hide();
-  actionLayout->addWidget(m_resultBtn);
+  topLayout->addWidget(m_resultBtn);
   connect(m_resultBtn, &QPushButton::clicked, this, [this]() {
     m_stageTabs->setCurrentWidget(m_evalTab);
     if (!m_lastLoadedRunId.isEmpty()) m_evalTab->showRun(m_lastLoadedRunId);
@@ -404,8 +395,7 @@ void FlowPage::setupWorkbenchView()
     m_stageTabs->setCurrentWidget(m_evalTab);
     m_evalTab->showReports();         // 切到"测试报告"子页 + 刷新
   });
-  actionLayout->addWidget(m_moreBtn);
-  actionLayout->addStretch();
+  topLayout->addWidget(m_moreBtn);
 
   m_aiToggleBtn = new QPushButton(QStringLiteral("AI 协作"), topBar);
   m_aiToggleBtn->setObjectName(QStringLiteral("taskAiToggleButton"));
@@ -413,14 +403,14 @@ void FlowPage::setupWorkbenchView()
   m_aiToggleBtn->setChecked(true);
   m_aiToggleBtn->setToolTip(QStringLiteral("显示或收起任务级 AI 协作面板"));
   UiUtil::styleToolbarButton(m_aiToggleBtn);
-  actionLayout->addWidget(m_aiToggleBtn);
+  topLayout->addWidget(m_aiToggleBtn);
 
   m_logToggleBtn = new QPushButton(QStringLiteral("任务日志"), topBar);
   m_logToggleBtn->setObjectName(QStringLiteral("taskLogToggleButton"));
   m_logToggleBtn->setCheckable(true);
   m_logToggleBtn->setEnabled(false);
   UiUtil::styleToolbarButton(m_logToggleBtn);
-  actionLayout->addWidget(m_logToggleBtn);
+  topLayout->addWidget(m_logToggleBtn);
 
   layout->addWidget(topBar);
 

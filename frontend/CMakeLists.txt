@@ -9,6 +9,7 @@ endif()
 
 set(SOURCES
     src/main.cpp
+    src/GlobalSearchDialog.cpp
     src/MainWindow.cpp
     src/SimpleMainWindow.cpp
     src/ApiClient.cpp
@@ -49,6 +50,7 @@ set(SOURCES
 )
 
 set(HEADERS
+    src/GlobalSearchDialog.h
     src/MainWindow.h
     src/SimpleMainWindow.h
     src/ApiClient.h
@@ -187,4 +189,14 @@ if(BUILD_UI_CHECKS)
   target_link_libraries(RedTeam-DashboardChecks Qt5::Widgets Qt5::Network Qt5::Test)
   add_test(NAME ui-dashboard COMMAND RedTeam-DashboardChecks)
   set_tests_properties(ui-dashboard PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+endif()
+
+if(BUILD_UI_CHECKS)
+  add_executable(RedTeam-GlobalSearchChecks
+    src/ApiClient.cpp src/GlobalSearchDialog.cpp
+    test/global_search_checks.cpp)
+  target_include_directories(RedTeam-GlobalSearchChecks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(RedTeam-GlobalSearchChecks Qt5::Widgets Qt5::Network Qt5::Test)
+  add_test(NAME ui-global-search COMMAND RedTeam-GlobalSearchChecks)
+  set_tests_properties(ui-global-search PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endif()

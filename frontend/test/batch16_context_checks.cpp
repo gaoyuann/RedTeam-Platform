@@ -6,8 +6,11 @@
 
 #include "ApiClient.h"
 #include "UiUtil.h"
+#include "GlobalSearchDialog.h"
+#include "WsClient.h"
 #include "AppStyle.h"
 #define private public
+#include "MainWindow.h"
 #include "pages/FlowPage.h"
 #include "pages/ScanPage.h"
 #include "pages/AnalysisPage.h"
@@ -176,6 +179,16 @@ int main(int argc, char **argv)
     if (sourceOnly && path == "/api/scan-tasks") return {success(QJsonArray{sourceRecord()})};
     if (sourceOnly && path == "/api/scan-tasks/scan-source") return {success(sourceRecord())};
     const QString taskId = path.split('/').value(3);
+    if (path == "/api/pipelines/analysis-index" || path == "/api/reports/index") {
+      const QUrlQuery query{QUrl(requestPath)};
+      const bool task = path.contains("pipelines");
+      const QJsonObject row{{"pipeline_id", "B"}, {"report_id", "trace-B"},
+        {"task_name", "fixture task B"}, {"title", "fixture report B"},
+        {"owner", "fixture-user"}, {"kind", "trace_snapshot"}};
+      return {success(QJsonObject{{"schema_version", 1}, {"records", QJsonArray{row}},
+        {"total", 1}, {"offset", 0}, {"limit", 50}, {"search", query.queryItemValue("search", QUrl::FullyDecoded)},
+        {task ? "state" : "kind", "all"}})};
+    }
     if (path == "/api/pipelines") return {success(QJsonArray{taskRecord("A"), taskRecord("B")})};
     if (path == "/api/scan-tasks") return {success(QJsonArray{scanRecord("A"), scanRecord("B")}), delayedScans ? 250 : 0};
     if (path == "/api/scan-tasks/scan-A") return {success(scanRecord("A")), delayedScans ? 250 : 0};
@@ -425,6 +438,59 @@ int main(int argc, char **argv)
   verify(flow.m_overviewTab->m_state->text().contains(QStringLiteral("fixture task load failed"))
       && flow.m_analysisTab->m_stateLabel->text().contains(QStringLiteral("fixture task load failed")), "task detail failure reaches overview and analysis");
   verify(flow.m_scanTab->m_statusLabel->text().contains(QStringLiteral("fixture task load failed")), "task detail failure reaches scan workspace");
+  // Exercise the actual shell wiring, not just the dialog's output signal.
+  failedTask = false;
+  flow.hide();
+  MainWindow window(&api, "user", "fixture-user");
+  window.m_dongleTimer->stop(); // Exercise lock transitions explicitly; never access hardware.
+  window.m_ws->disconnectFromServer();
+  window.show();
+  auto *search = window.findChild<QLineEdit*>("globalSearch");
+  verify(search && search->isEnabled(), "shell search is enabled");
+  auto openSearch = [&]() {
+    search->setText("fixture");
+    search->setFocus();
+    QTest::keyClick(search, Qt::Key_Return);
+    auto *dialog = window.findChild<GlobalSearchDialog*>();
+    verify(dialog && dialog->isVisible(), "Enter opens the search dialog");
+    return dialog;
+  };
+  auto activateResult = [&](int page) {
+    auto *dialog = openSearch();
+    auto *results = dialog->findChild<QListWidget*>("searchResults");
+    verify(awaitCondition([&]() { return results->count() == 2; }), "shell search loads both indexes");
+    int row = -1;
+    for (int i = 0; i < results->count(); ++i)
+      if (results->item(i)->data(Qt::UserRole).toJsonObject()["page"].toInt() == page) row = i;
+    verify(row >= 0, "requested result type exists");
+    results->setCurrentRow(row);
+    results->setFocus();
+    QTest::keyClick(results, Qt::Key_Return);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  };
+  activateResult(1);
+  verify(awaitCondition([&]() { return window.m_flowPage->m_selectedPipelineId == "B" && window.m_flowPage->m_overviewTab->m_identity->text().contains("B.invalid"); }), "search task opens exact task overview");
+  verify(window.m_stackWidget->currentIndex() == 1 && window.m_flowPage->m_stageTabs->currentIndex() == 0,
+    "task result selects overview in task module");
+  activateResult(5);
+  verify(awaitCondition([&]() { return window.m_flowPage->m_evalTab->m_taskResults->m_selectedReportId == "trace-B"; }),
+    "search report opens exact task report");
+  verify(window.m_flowPage->m_stageTabs->currentWidget() == window.m_flowPage->m_evalTab,
+    "report result selects results stage");
+  auto *lockedDialog = openSearch();
+  QPointer<GlobalSearchDialog> lockedGuard(lockedDialog);
+  window.setDongleLocked(true, "fixture lock");
+  verify(!search->isEnabled() && !lockedDialog->isVisible(), "lock disables entry and dismisses search");
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  verify(lockedGuard.isNull(), "lock destroys search dialog safely");
+  window.setDongleLocked(false);
+  verify(search->isEnabled() && window.m_stackWidget->currentIndex() == 1, "unlock restores entry and module");
+  auto *escapeDialog = openSearch();
+  QPointer<GlobalSearchDialog> escapeGuard(escapeDialog);
+  QTest::keyClick(escapeDialog, Qt::Key_Escape);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  verify(escapeGuard.isNull(), "Escape destroys search with requests in flight");
+  QTest::qWait(100);
   bool readOnly = true;
   for (auto iterator = server.requests.cbegin(); iterator != server.requests.cend(); ++iterator)
     if (!iterator.key().startsWith("GET "))
