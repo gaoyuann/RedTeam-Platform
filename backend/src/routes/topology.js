@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { callLlm } from '../services/llmClient.js';
-import { pipelineTopology } from '../services/topologyProjection.js';
+import { pipelineTopology, sourceNetworkTopology } from '../services/topologyProjection.js';
 import {isProgramScan, programExecutionTarget} from '../services/programScan.js';
 
 import { extractTopologyFromResults, mergeTopologyEnhancement } from '../services/topologyBuilder.js';
@@ -105,8 +105,8 @@ export default function (db) {
 
       // ── Step 1: Rule-based extraction (always works) ────────────────
       const runtime=isProgramScan(task.scan_type) ? programExecutionTarget(task) : task.target;
-      const ruleBased = extractTopologyFromResults(runtime || '',runtime ? results.map(row=>({...row,scan_target:runtime})) : []);
-      if(!runtime) ruleBased.summary='仅提供源码输入，尚无程序运行地址；源码目录不作为运行资产或连接证据';
+      const ruleBased = runtime ? extractTopologyFromResults(runtime,results.map(row=>({...row,scan_target:runtime})))
+        : sourceNetworkTopology(task.target,[task],results,null,task.created_by);
 
       // ── Step 2: Try LLM enhancement ──────────────────────────────────
       let topology = null;

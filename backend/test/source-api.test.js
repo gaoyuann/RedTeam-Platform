@@ -77,6 +77,10 @@ test('source directory browsing and task input support arbitrary same-origin pat
   assert.equal(parameters.source_url,`http://127.0.0.1:${server.address().port}/project/code/`);
   assert.equal(parameters.connection_id,null);
   assert.equal(created.body.data.target,target);
+  const root=new URL(target).origin+'/';
+  const legacy=await request('/scans',{target:root,scan_type:'program_scan',parameters:{input_kind:'source',source_url:'/project/code/'}});
+  assert.equal(legacy.status,201);assert.equal(legacy.body.data.target,root);
+  assert.equal(JSON.parse(legacy.body.data.parameters).source_url,root+'project/code/');
   for(const source_url of ['http://example.com/code/','http://user:pass@127.0.0.1/code/','file:///etc/','relative-directory']) {
     assert.equal((await request('/scans/source-directory',{target,source_url})).status,400);
     assert.equal((await request('/scans',{target,scan_type:'source_scan',parameters:{source_url}})).status,400);

@@ -980,6 +980,7 @@ void FlowPage::createFlow(bool quickMode)
   auto *programKind = new QComboBox(&dlg);
   programKind->addItem("静态源码目录", "source");
   programKind->addItem("程序运行入口", "runtime");
+  programKind->setCurrentIndex(1);
   auto *programKindLabel = new QLabel("输入类型",&dlg);
   form->addRow(programKindLabel,programKind);
   auto *runtimeInput = new QLineEdit(&dlg);
@@ -1005,9 +1006,15 @@ void FlowPage::createFlow(bool quickMode)
   connect(testType,QOverload<int>::of(&QComboBox::currentIndexChanged),&dlg,[testType,sourceRow,sourceLabel,targetInput,programKind,programKindLabel,runtimeInput,runtimeLabel](int) {
     const bool source=testType->currentData().toString()=="program";
     programKind->setVisible(source);programKindLabel->setVisible(source);
-    runtimeInput->setVisible(source);runtimeLabel->setVisible(source);
+    const bool files=source && programKind->currentData().toString()=="source";
+    runtimeInput->setVisible(files);runtimeLabel->setVisible(files);
     sourceRow->setVisible(source); sourceLabel->setVisible(source);
-    targetInput->setPlaceholderText(source ? "源码目录：http://192.168.1.113:8089/source/；或选择运行入口" : "例: 192.168.1.0/24 或 http://172.17.0.2");
+    targetInput->setPlaceholderText(source ? (files ? "源码目录完整地址；若另填测试主机根地址，源码目录在下方填写" : "程序测试地址：http://主机:端口/ 或 tcp://主机:端口；源码目录单独填写") : "例: 192.168.1.0/24 或 http://172.17.0.2");
+  });
+  connect(programKind,QOverload<int>::of(&QComboBox::currentIndexChanged),&dlg,[programKind,testType,targetInput,runtimeInput,runtimeLabel](int) {
+    const bool files=testType->currentData().toString()=="program" && programKind->currentData().toString()=="source";
+    runtimeInput->setVisible(files);runtimeLabel->setVisible(files);
+    targetInput->setPlaceholderText(files ? "源码目录完整地址；若另填测试主机根地址，源码目录在下方填写" : "程序测试地址：http://主机:端口/ 或 tcp://主机:端口");
   });
 
   QLineEdit *scopeInput = nullptr;

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { callLlm } from './llmClient.js';
 import { sourceTarget } from './sourceScanConnections.js';
 import { buildProgramContext } from './programAgent.js';
-import { parseTargetRequest } from '../tools/targetRequest.js';
+import { parseTargetRequest, runTargetRequest } from '../tools/targetRequest.js';
 import {isProgramFinding, programExecutionTarget} from './programScan.js';
 import {normalizeEvidenceCriteria} from './sourceEvidenceCriteria.js';
 
@@ -58,7 +58,7 @@ export function validateSourceDemonstration(steps, findingIds, target) {
   if(!findingIds.length || offset!==steps.length) throw new Error('攻击演示步骤必须只关联清单内的一条发现');
 }
 
-export async function generateSourceVerification(db, task, findingIds = [], {llm=callLlm,adaptive=false,demonstration=false} = {}) {
+export async function generateSourceVerification(db, task, findingIds = [], {llm=callLlm,request=runTargetRequest,adaptive=false,demonstration=false} = {}) {
   if (!['COMPLETED','PARTIAL'].includes(task.status)) return {ok:false,error:'请等待程序测试结束后生成预案'};
   let target;
   const executionTarget=programExecutionTarget(task);
@@ -73,6 +73,28 @@ export async function generateSourceVerification(db, task, findingIds = [], {llm
   if (findingIds.some(id=>!findings.some(row=>row.id===id))) return {ok:false,error:'所选发现不属于当前扫描任务'};
   if (!findingIds.length && findings.length>10) return {ok:false,error:'发现较多，请在结果列表中选择具体发现后生成预案'};
   if(findings.some(row=>JSON.parse(row.result_data).demonstration_supported===false)) return {ok:false,error:'选中的发现缺少正常对照或具体触发输入，请先补充验证条件'};
+  let parameters={}; try {parameters=typeof task.parameters==='string' ? JSON.parse(task.parameters) : task.parameters || {};} catch {}
+  const recoveredRuntime=parameters.input_kind==='source' && !parameters.runtime_target && executionTarget;
+  const observed=rows.some(row=>{
+    if(row.result_type!=='application_observation') return false;
+    try {const data=JSON.parse(row.result_data);return data.connected===true && sourceTarget(data.url)===target;} catch {return false;}
+  });
+  if(recoveredRuntime && !observed) {
+    // Legacy scans ignored the separately declared application root. Collect its
+    // actual response before asking for executable steps; never invent a route.
+    let result;
+    try {result=await request([JSON.stringify({url:target,method:'GET',timeout_ms:10000})],{target,timeout:10000});}
+    catch(error) {return {ok:false,error:'测试地址响应采集失败：'+error.message};}
+    if(!result.success) return {ok:false,error:'测试地址响应采集失败：'+(result.error || result.stderr || '连接失败')+'；请确认目标服务可访问后重试'};
+    let data;try {data=JSON.parse(result.stdout);} catch {return {ok:false,error:'测试地址未返回有效的响应证据'};}
+    try {if(data.connected!==true || sourceTarget(data.url)!==target) throw new Error();}
+    catch {return {ok:false,error:'响应证据不属于当前测试地址'};}
+    const now=new Date().toISOString();
+    const saved={...data,response:String(data.response || '').slice(0,12000),note:'实际测试地址响应，仅证明可访问性；尚未验证源码与部署版本一致或漏洞存在'};
+    const inserted=db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data,severity,source_tool,captured_at) VALUES (?,'application_observation',?,'info','target-request',?)")
+      .run(task.scan_task_id,JSON.stringify(saved),now);
+    rows.unshift({id:Number(inserted.lastInsertRowid),scan_task_id:task.scan_task_id,result_type:'application_observation',result_data:JSON.stringify(saved),source_tool:'target-request',captured_at:now});
+  }
   const context=buildProgramContext([...findings,...rows.filter(row=>!isProgramFinding(row.result_type))]);
   const evidence=context.filter(row=>!isProgramFinding(row.type));
   if(!executionTarget) {

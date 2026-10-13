@@ -12,7 +12,8 @@ int main(int argc, char **argv) {
     ApiClient api("http://127.0.0.1:1");
     TopologyPage page(&api, "admin", "test");
     page.setPipelineContext("visual-fixture", "203.0.113.10", {}, false);
-    if (!page.m_createScanBtn->isHidden()) return 1;
+    if (page.m_createScanBtn->isHidden() || !page.m_createScanBtn->isEnabled()) return 1;
+    if (!page.m_targetInput->isReadOnly() || page.m_scanTypeCombo->currentData().toString() != "topology_scan") return 17;
     TopologyDocument doc;
     doc.target = "203.0.113.10";
     doc.summary = QStringLiteral("自动采集 · 界面测试示例数据");

@@ -833,6 +833,7 @@ void ScanPage::setupUI() {
     m_programInputKind = new QComboBox;
     m_programInputKind->addItem("静态源码目录", "source");
     m_programInputKind->addItem("程序运行入口", "runtime");
+    m_programInputKind->setCurrentIndex(1);
     h->addWidget(m_programInputKind, 0, 2);
     m_programRuntimeInput = new QLineEdit;
     m_programRuntimeInput->setPlaceholderText("可选：对应程序的 HTTP/TCP 运行入口；只有文件也能扫描");
@@ -890,7 +891,7 @@ void ScanPage::setupUI() {
     m_sourceAdaptiveCheck = new QCheckBox("生成预案时允许 Agent 根据执行证据补充验证请求");
     m_sourceAdaptiveCheck->setChecked(true);
     h->addWidget(m_sourceAdaptiveCheck, 5, 1, 1, 2);
-    auto *hint = new QLabel("扫描 → 生成预案 → 攻击测试 → 攻击效果。智能体根据实际文件和响应选择检测方法。可直接输入 /source/ 的完整地址扫描静态源码；执行攻击需要对应程序的运行入口。运行程序测试时，源码目录为可选辅助。仅扫描文件不会被判定为攻击成功。");
+    auto *hint = new QLabel("扫描 → 生成预案 → 攻击测试 → 攻击效果。程序测试默认填写 HTTP/CGI 地址或 TCP 服务地址，源码目录单独填写，结合源码与实际响应验证。只有源码时可生成验证草稿；动态执行需对应程序的调用方式，不要求源码包含 main 函数。网络拓扑独立探测，不依赖预案执行条件。");
     hint->setWordWrap(true);
     hint->setStyleSheet("color:#64748b; font-size:12px;");
     h->addWidget(hint, 6, 0, 1, 3);

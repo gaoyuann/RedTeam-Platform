@@ -14,6 +14,11 @@ await mock.module('../src/services/scanExecutor.js',{namedExports:{
   executeScan:async id=>{
     const db=getDb();
     db.prepare("UPDATE scan_tasks SET status='COMPLETED' WHERE scan_task_id=?").run(id);
+    if(db.prepare('SELECT scan_type FROM scan_tasks WHERE scan_task_id=?').get(id).scan_type==='port_scan') {
+      db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data,severity) VALUES (?,'host_discovery',?,'info')")
+        .run(id,JSON.stringify({host:'127.0.0.1',status:'up'}));
+      return {ok:true,status:'COMPLETED',resultsCount:1};
+    }
     for(let i=0;i<4;i++) db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data,severity) VALUES (?,'source_finding',?,'medium')")
       .run(id,JSON.stringify({title:'Fixture input '+i,file:'input.c',start_line:i+1,end_line:i+1,
         code:'fixture_input(value);',reason:'Compare controlled test input',preconditions:'Fixture HTTP /check endpoint',cwe:'CWE-20'}));
@@ -231,6 +236,54 @@ test('response comparison selects the same-address baseline and retains separate
   assert.equal(result.source_verification.source_versions[0].end_line,8);assert.equal(result.source_comparison.runtime_verified,false);
 });
 
+test('legacy source task with a separately declared HTTP root collects real response and executes reviewed verification',async t=>{
+  const {db}=await fixture(t),visits=[];
+  const target=await listen(t,http.createServer((req,res)=>{visits.push(req.url);res.end(req.url==='/' ? '<a href="/check">Fixture CGI handler</a>' : 'fixture response '+req.url);}));
+  const task=sourceOnlyTask(db,1);
+  task.target=target+'/';task.parameters=JSON.stringify({input_kind:'source',source_url:target+'/source/'});
+  db.prepare('UPDATE scan_tasks SET target=?,parameters=? WHERE scan_task_id=?').run(task.target,task.parameters,task.scan_task_id);
+  const llm=async messages=>{
+    const context=JSON.parse(messages[1].content);
+    assert.equal(context.target,target+'/');
+    assert.ok(context.evidence.some(row=>row.type==='application_observation' && row.data.connected===true));
+    return {ok:true,content:JSON.stringify({name:'Fixture CGI verification',steps:[step(1622,'baseline',target),step(1622,'verification',target)]})};
+  };
+  const result=await generateSourceVerification(db,task,[1622],{demonstration:true,llm});
+  assert.equal(result.ok,true,result.error);assert.deepEqual(visits,['/']);
+  assert.equal(db.prepare("SELECT count(*) n FROM scan_results WHERE result_type='program_plan'").get().n,0);
+  const metadata=JSON.parse(db.prepare('SELECT metadata FROM playbooks WHERE playbook_id=?').get(result.playbook_id).metadata);
+  assert.equal(metadata.source_verification.reproducibility.deployment_version_verified,false);
+  // Repeated generation uses existing matching evidence, never performs attack requests.
+  assert.equal((await generateSourceVerification(db,task,[1622],{demonstration:true,llm})).ok,true);
+  assert.deepEqual(visits,['/']);
+  db.prepare("INSERT INTO execution_runs(run_id,playbook_id,target,scan_task_id,status,engine_type) VALUES ('legacy-cgi',?,?,?,'PENDING','mechanical')")
+    .run(result.playbook_id,result.target,task.scan_task_id);
+  assert.equal((await executeRun('legacy-cgi')).ok,true);
+  assert.deepEqual(visits,['/','/check?id=1622&value=normal','/check?id=1622&value=boundary']);
+  assert.equal(db.prepare("SELECT count(*) n FROM evidence_records WHERE run_id='legacy-cgi'").get().n,2);
+});
+
+test('legacy runtime recovery stops on unreachable or mismatched response and can retry without saving a false plan',async t=>{
+  const {db}=await fixture(t),task=sourceOnlyTask(db,1);
+  const existingPlans=db.prepare('SELECT count(*) n FROM playbooks').get().n;
+  task.target='http://192.0.2.30:8089/';task.parameters=JSON.stringify({input_kind:'source',source_url:task.target+'source/'});
+  let modelCalls=0;
+  const llm=async()=>{modelCalls++;return {ok:true,content:JSON.stringify({status:'needs_information',reason:'缺少实际 CGI 路由'})};};
+  for(const response of [{success:false,error:'ECONNREFUSED'},
+    {success:true,stdout:JSON.stringify({connected:true,url:'http://192.0.2.99:8089/'})}]) {
+    const result=await generateSourceVerification(db,task,[1622],{llm,request:async()=>response});
+    assert.equal(result.ok,false);assert.match(result.error,/响应采集失败|不属于当前测试地址/);
+  }
+  assert.equal(modelCalls,0);
+  const retried=await generateSourceVerification(db,task,[1622],{llm,request:async(args,options)=>{
+    assert.equal(options.target,task.target);assert.equal(JSON.parse(args[0]).method,'GET');
+    return {success:true,stdout:JSON.stringify({connected:true,url:task.target,status_code:200,response:'index'})};
+  }});
+  assert.equal(retried.ok,false);assert.match(retried.error,/缺少实际 CGI 路由/);assert.equal(modelCalls,1);
+  assert.equal(db.prepare('SELECT count(*) n FROM playbooks').get().n,existingPlans);
+  assert.equal(db.prepare("SELECT count(*) n FROM scan_results WHERE result_type='program_plan'").get().n,0);
+});
+
 test('task workbench preserves source mode, waits for object selection and executes each selected finding with linked evidence',async t=>{
   const {db,request}=await fixture(t),visits=[];
   const target=await listen(t,http.createServer((req,res)=>{visits.push(req.url);res.end('fixture response: '+req.url);}));
@@ -255,6 +308,9 @@ test('task workbench preserves source mode, waits for object selection and execu
   await until(()=>db.prepare('SELECT status FROM pipelines WHERE pipeline_id=?').get(id).status==='awaiting_approval');
   assert.equal(modelCalls,0);assert.equal(visits.length,0,'no automatic attack before selection');
   const task=db.prepare('SELECT * FROM scan_tasks').get();
+  const network=db.prepare("SELECT * FROM scan_tasks WHERE scan_type='port_scan'").get();
+  assert.equal(network.target,task.target);assert.equal(JSON.parse(network.parameters).pipeline_id,id);
+  assert.equal(JSON.parse(network.parameters).discover_topology,true);
   assert.equal(task.scan_type,'source_scan');assert.equal(JSON.parse(task.parameters).source_url,target+'/project/code/');
   assert.equal(JSON.parse(db.prepare('SELECT result FROM pipelines WHERE pipeline_id=?').get(id).result).paused_at,'source_selection');
   assert.deepEqual((await request('/pipelines/'+id+'/plan/sources',undefined,'alice','GET')).data,[],
@@ -263,7 +319,7 @@ test('task workbench preserves source mode, waits for object selection and execu
   assert.equal((await request('/pipelines/'+id,{config:{scan_mode:'source_assisted',source_url:'/different/'}},'alice','PUT')).status,409);
   assert.equal((await request('/pipelines',{target,config:{scan_mode:'source_assisted',source_url:'http://example.com/source/'}})).status,400);
   assert.equal((await request('/pipelines',{target:'tcp://127.0.0.1:8091',config:{scan_mode:'source_assisted',source_url:'/code/'}})).status,400);
-  const findingIds=db.prepare('SELECT id FROM scan_results ORDER BY id DESC').all().map(row=>row.id);
+  const findingIds=db.prepare("SELECT id FROM scan_results WHERE scan_task_id=? AND result_type='source_finding' ORDER BY id DESC").all(task.scan_task_id).map(row=>row.id);
   assert.equal((await request('/scans/'+task.scan_task_id+'/generate-playbook',{demonstration:true})).status,400);
   const generated=await request('/scans/'+task.scan_task_id+'/generate-playbook',{finding_ids:findingIds,demonstration:true,adaptive:false});
   assert.equal(generated.status,201);assert.equal(generated.data.steps_count,8,'four findings are not truncated to six total steps');

@@ -82,7 +82,7 @@ export async function scanProgramAgent(task, context, {llm=callLlm} = {}) {
           input_kind:parameters.input_kind,runtime_target:runtime},llm});
         count+=result.count;outcomes.push(...result.outcomes);
       } else {
-        if(!runtime) throw new Error('只有静态源码，没有运行入口；可完成源码扫描，不能执行运行检测');
+        if(!runtime) throw new Error('当前仅有源码文件，未提供 HTTP/CGI 地址或 TCP 服务等调用方式；静态分析和预案草稿可继续，动态请求尚无法发送');
         if(['nuclei','nikto'].includes(decision.action) && !/^https?:/i.test(runtime))
           throw new Error('HTTP 扫描器不适用于 TCP 程序；需要实际协议交互或登记的检测用例');
         if(decision.action==='request') {

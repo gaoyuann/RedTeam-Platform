@@ -1,4 +1,4 @@
-import {isProgramMode, isProgramScan, programExecutionTarget} from './programScan.js';
+import {isProgramMode, isProgramScan, programExecutionTarget, programNetworkTarget} from './programScan.js';
 import { getDb } from '../db/connection.js';
 import { randomUUID } from 'crypto';
 import { resolveTargetProfile } from './targetProfileResolver.js';
@@ -155,7 +155,7 @@ async function runPipelineScan(db, pipeline) {
   // Determine scan types to run
   let config={}; try {config=JSON.parse(pipeline.config || '{}');} catch {}
   const sourceMode=isProgramMode(config.scan_mode) || target.startsWith('tcp://');
-  const scanTypes = sourceMode ? [config.scan_mode==='source_assisted' ? 'source_scan' : 'program_scan'] : isWebLike ? ['port_scan', 'app_discovery', 'web_scan'] : ['port_scan'];
+  const scanTypes = sourceMode ? [config.scan_mode==='source_assisted' ? 'source_scan' : 'program_scan', 'port_scan'] : isWebLike ? ['port_scan', 'app_discovery', 'web_scan'] : ['port_scan'];
 
   // Insert step record
   ensureStep(db, pipelineId, 0, STEP_SCAN);
@@ -179,7 +179,7 @@ async function runPipelineScan(db, pipeline) {
       db.prepare(
         `INSERT INTO scan_tasks (scan_task_id, target, scan_type, target_class, parameters, created_by, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`
-      ).run(scanTaskId, target, scanType, profile.target_class, JSON.stringify(isProgramScan(scanType) ? {connection_id:config.source_connection_id || null,source_url:config.source_url || null,ai_analysis:true,input_kind:config.input_kind || 'runtime',runtime_target:config.runtime_target || null} : scanType === 'port_scan' ? { discover_topology: true } : {}), pipeline.created_by || 'pipeline', now);
+      ).run(scanTaskId, sourceMode && scanType==='port_scan' ? programNetworkTarget(programExecutionTarget(pipeline) || target) : target, scanType, profile.target_class, JSON.stringify(isProgramScan(scanType) ? {connection_id:config.source_connection_id || null,source_url:config.source_url || null,ai_analysis:true,input_kind:config.input_kind || 'runtime',runtime_target:config.runtime_target || null} : scanType === 'port_scan' ? { discover_topology: true, pipeline_id:pipelineId } : {}), pipeline.created_by || 'pipeline', now);
 
       scanTaskIds.push(scanTaskId);
 

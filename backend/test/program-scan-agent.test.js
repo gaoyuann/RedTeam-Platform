@@ -37,6 +37,27 @@ test('explicit source input is actually reviewed before an immediate finish deci
   assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='application_observation'").get().n,0);
 });
 
+test('legacy source input inspects its separately declared CGI root even when source has no main function',async t=>{
+  const db=database(t),visits=[];
+  const port=await listen(t,http.createServer((req,res)=>{visits.push(req.url);res.end('Fixture CGI response');}));
+  const target='http://127.0.0.1:'+port+'/',parameters={input_kind:'source',source_url:target+'source/'};
+  const result=await scanProgramAgent({scan_task_id:'cgi',target,parameters:JSON.stringify(parameters)},
+    {db,parameters,parseResults:()=>[],
+      snapshot:async()=>({snapshot_id:'fixture',connection_id:'task-http-source',files:[{path:'handler.c'}],skipped:[],
+        documents:[{path:'handler.c',content:'void handler(void) {}',start_line:1,end_line:1,sha256:'fixture'}],sourceDir:'/fixture'}),
+      runTool:async(tool,args,options)=>tool==='target-request' ? runTargetRequest(args,options) : {success:true,stdout:''}},
+    {llm:async messages=>{
+      if(messages[0].content.includes('C/C++ 源码审计员')) return answer({findings:[]});
+      assert.equal(JSON.parse(messages[1].content).runtime_target,target);
+      return answer({action:'finish',reason:'保留实际入口与源码证据',summary:'Fixture inspection'});
+    }});
+  assert.deepEqual(visits,['/']);assert.equal(result.outcomes.every(outcome=>outcome.success),true);
+  const observation=JSON.parse(db.prepare("SELECT result_data FROM scan_results WHERE result_type='application_observation'").get().result_data);
+  assert.equal(observation.url,target);assert.equal(observation.connected,true);
+  const coverage=JSON.parse(db.prepare("SELECT result_data FROM scan_results WHERE result_type='source_coverage'").get().result_data);
+  assert.equal(coverage.runtime_target,target);
+});
+
 test('model disconnection preserves actual runtime inspection and incomplete coverage',async t=>{
   const db=database(t),port=await listen(t,http.createServer((req,res)=>res.end('fixture runtime')));
   const target='http://127.0.0.1:'+port+'/';let visits=0;

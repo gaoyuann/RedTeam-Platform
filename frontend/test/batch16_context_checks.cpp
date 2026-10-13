@@ -278,6 +278,8 @@ int main(int argc, char **argv)
   verify(flow.m_scanTab->m_currentTarget.isEmpty() && flow.m_scanTab->m_resultTree->topLevelItemCount() == 0, "late scan detail cannot restore old target or results");
   sourceOnly = true;
   ScanPage sourcePage(&api, "user", "fixture-user");
+  verify(sourcePage.m_programInputKind->currentData().toString() == "runtime",
+      "program testing defaults to a callable target with a separate source directory");
   sourcePage.setTaskScope({"scan-source"});
   verify(awaitCondition([&]() { return sourcePage.m_selectedTaskId == "scan-source" && sourcePage.m_sourceDemoBtn->isEnabled(); }), "source task loads in scoped workbench with demonstration selector");
   verify(sourcePage.m_sourceScanTable->rowCount() == 1 && sourcePage.m_scanTypeTabs->currentIndex() == 4, "C/C++ task selects its existing scan tab");
