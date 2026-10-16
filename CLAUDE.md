@@ -76,7 +76,7 @@ RedTeam-Platform/
 ├── data/                   # SQLite 数据库 + 知识图谱 + Playbook（Phase 1）
 ├── scripts/                # 打包/分发脚本（Phase 6）
 └── docs/                   # 项目文档
-    └── 系统重构需求与功能模块分析.md  # 完整规划文档
+    └── 系统重构实现文档.md  # 重构实现参考
 ```
 
 ## 开发环境
@@ -88,5 +88,5 @@ RedTeam-Platform/
 
 ## 关键参考
 
-- 完整规划文档：`docs/系统重构需求与功能模块分析.md`
+- 重构实现参考：`docs/系统重构实现文档.md`（旧规划已清理，可从 Git 历史查阅）
 - 原项目（后端复用来源）：`/home/gaoyuan/RedTeam-Edu/`

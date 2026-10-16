@@ -8,8 +8,7 @@ from pptx.dml.color import RGBColor
 
 ROOT=Path(__file__).resolve().parents[1]
 TEMPLATE=ROOT/'docs/演示/交大ppt模板.pptx'
-OUTPUT=ROOT/'docs/演示/信息系统渗透智能化测试平台_甲方项目介绍_13页占位符版.pptx'
-STANDARD_OUTPUT=ROOT/'docs/演示/信息系统渗透智能化测试平台_甲方项目介绍_13页.pptx'
+OUTPUT=ROOT/'docs/演示/信息系统渗透智能化测试平台_甲方项目介绍_13页.pptx'
 FONT='Microsoft YaHei'; NAVY=RGBColor(15,20,35); TEXT=RGBColor(35,49,73); MUTED=RGBColor(96,111,132); BLUE=RGBColor(96,150,230); CYAN=RGBColor(88,182,229); GREEN=RGBColor(86,202,149); PURPLE=RGBColor(149,77,114); AMBER=RGBColor(255,186,85); GRID=RGBColor(222,230,240); BG=RGBColor(247,250,254); WHITE=RGBColor(255,255,255)
 def fill(s,c,t=0): s.fill.solid(); s.fill.fore_color.rgb=c; s.fill.transparency=t
 def border(s,c=GRID,w=.8,d=None): s.line.color.rgb=c; s.line.width=Pt(w); s.line.dash_style=d if d else s.line.dash_style
@@ -91,7 +90,6 @@ def build():
     txt(s,'构建可验证、可管控、可追溯的安全测试能力',1.10,2.10,11.10,.70,29,NAVY,True,PP_ALIGN.CENTER)
     txt(s,'统一管理｜智能辅助｜受控验证｜证据追溯',1.10,3.05,11.10,.35,17,MUTED,False,PP_ALIGN.CENTER)
     txt(s,'[文本占位-P13-C01：正式致谢语或单位署名]',3.20,5.76,6.90,.25,12,BLUE,True,PP_ALIGN.CENTER); footer(s,13)
-    for target in (OUTPUT, STANDARD_OUTPUT):
-        prs.save(str(target))
+    prs.save(str(OUTPUT))
     print(OUTPUT)
 if __name__=='__main__': build()
