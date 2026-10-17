@@ -31,7 +31,10 @@ export function validateExecutionScope({ target, toolId, args, scope }) {
   }
   if (/^tcp:\/\//i.test(target || '')) return {allowed:false,reason:'TCP 程序目标须使用 target-request 进行有界交互'};
   if (!/^https?:\/\//i.test(target || '')) {
-    if(scope && !isTargetInScope(scope,target)) return {allowed:false,reason:'验证目标超出任务范围'};
+    if(scope) {
+      const reason=scopeBlockReason(scope,target,toolId==='nmap'?'port_scan':'');
+      if(reason) return {allowed:false,reason};
+    }
     return { allowed: true };
   }
   let authorized;

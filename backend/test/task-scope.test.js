@@ -30,4 +30,6 @@ test('remote prerequisite and execution requests are checked against task scope'
   assert.equal(request('https://example.invalid/app/admin/').allowed,false);
   assert.equal(request('https://other.invalid/app/').allowed,false);
   assert.equal(validateExecutionScope({target:'https://example.invalid/app/',toolId:'nikto',args:['-h','https://example.invalid/app/'],scope}).allowed,false);
+  const cidr=normalizeTaskScope({task_scope:{includes:['192.0.2.0/28'],excludes:['192.0.2.3']}},'192.0.2.0/28');
+  assert.equal(validateExecutionScope({target:'192.0.2.0/28',toolId:'nmap',args:['-sV','192.0.2.0/28'],scope:cidr}).allowed,false);
 });
