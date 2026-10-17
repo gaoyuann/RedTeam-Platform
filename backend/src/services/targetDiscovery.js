@@ -119,7 +119,7 @@ export function buildDiscoveredProfile(target, results = []) {
     detected_at: new Date().toISOString() };
 }
 
-export async function probeTarget(target, { request = fetch, timeoutMs = 8000, signal } = {}) {
+export async function probeTarget(target, { request = fetch, timeoutMs = 8000, signal, allowUrl } = {}) {
   const profile = normalizeTarget(target);
   if (!profile.origin) throw new Error('HTTP discovery requires a single host or HTTP URL');
   const controller = new AbortController();
@@ -132,7 +132,8 @@ export async function probeTarget(target, { request = fetch, timeoutMs = 8000, s
   try {
     let url = new URL(profile.target_url);
     for (let redirects = 0; redirects <= 5; redirects++) {
-      if (url.origin !== profile.origin || url.username || url.password) throw new Error('HTTP discovery redirected outside the selected target');
+      if (url.origin !== profile.origin || url.username || url.password || allowUrl && !allowUrl(url.href))
+        throw new Error('HTTP discovery redirected outside the selected target scope');
       const response = await request(url, { signal: controller.signal, redirect: 'manual' });
       let body = '';
       const observation={result_type:'http_probe',source_tool:'http-discovery',severity:'info',result_data:{url:url.href,requested_url:profile.target_url,status_code:response.status,title:'',body:'',body_incomplete:true,body_limit_bytes:65536}};

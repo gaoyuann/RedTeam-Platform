@@ -440,7 +440,8 @@ export async function executeScan(scanTaskId) {
       if (scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');
       const httpRun=beginToolRun(db,scanTaskId,'http-discovery','app_discovery');
       const controller=new AbortController();
-      const probes=await raceScanWithAbort(probeTarget(task.target,{signal:controller.signal}),scanTaskId,controller);
+      const probes=await raceScanWithAbort(probeTarget(task.target,{signal:controller.signal,
+        allowUrl:scope ? url=>isTargetInScope(scope,url) : undefined}),scanTaskId,controller);
       const records=Array.isArray(probes)?probes:probes.partialResults || [];
       const success=Array.isArray(probes) && !scanAbortFlags.get(scanTaskId);
       const httpResult={success,exitCode:success?0:-1,timedOut:!!probes.timedOut,aborted:!!scanAbortFlags.get(scanTaskId),error:success?null:probes.stderr || '扫描被操作员中止'};
@@ -448,6 +449,10 @@ export async function executeScan(scanTaskId) {
       totalResults+=finishToolRun(db,httpRun,scanTaskId,'http-discovery',httpResult,{records,diagnostics:{parser_version:1,tool_reported_count:null,parsed_records:records.length}});
       outcomes.push({tool_id:'http-discovery',success,error:httpResult.error});
       if(httpResult.aborted) throw new Error('扫描被操作员中止');
+      if(scope) {
+        insertResult.run(scanTaskId,'scan_warning',JSON.stringify({message:'结构化任务范围启用：仅执行受控 HTTP 探测，跳过可能跟随链接或重定向的通用指纹工具'}),
+          'info',null,null,'scope-gate',new Date().toISOString());
+      } else {
       // ── Dual-step: whatweb (tech fingerprint) + httpx (HTTP probe) ──
       console.log(`[Scan] app_discovery step 1/2: whatweb for ${task.target}`);
       try {
@@ -461,6 +466,7 @@ export async function executeScan(scanTaskId) {
         totalResults += await runAndStore('app_discovery_httpx', 'httpx', task.target, parameters, 120_000);
       } catch (err) {
         console.warn(`[Scan] httpx failed: ${err.message}`);
+      }
       }
 
     } else if (task.scan_type === 'api_fuzz') {

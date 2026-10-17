@@ -90,7 +90,11 @@ export function isTargetInScope(scope, candidate) {
 export function scopeBlockReason(scope, candidate, scanType = '') {
   if (!isTargetInScope(scope, candidate)) return '目标超出任务范围或命中排除项';
   const requested=address(candidate);
-  const broadScan=['web_scan','vuln_scan','api_fuzz','auth_audit','app_discovery','program_scan','source_scan'].includes(scanType);
+  const broadScan=['web_scan','vuln_scan','api_fuzz','auth_audit','program_scan','source_scan'].includes(scanType);
+  if(broadScan && scanType!=='source_scan' && requested.kind==='url' && !scope.includes.some(value=>{
+    const rule=address(value);
+    return contains(rule,requested) && (rule.kind==='host' || rule.kind==='cidr' || rule.kind==='url' && rule.path==='/');
+  })) return '当前扫描器无法保证不越过授权 URL 路径，请使用受控入口探测或扩大明确授权范围';
   if (broadScan && scope.excludes.some(value => {
     const excluded=address(value);
     return requested.kind==='url' && excluded.kind==='url' && contains(requested,excluded);
