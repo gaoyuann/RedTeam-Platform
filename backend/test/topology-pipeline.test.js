@@ -96,7 +96,8 @@ test('original pipeline automatically collects topology without a second scan ta
     db.prepare("INSERT INTO scan_tasks (scan_task_id,target,scan_type,parameters) VALUES ('fallback','198.51.100.10','port_scan',?)")
       .run(JSON.stringify({discover_topology:true}));
     const fallback = await executeScan('fallback');
-    assert.equal(fallback.status,'COMPLETED');
+    assert.equal(fallback.status,'PARTIAL', 'fallback retains incomplete route discovery instead of claiming all checks completed');
+    assert.ok(db.prepare("SELECT * FROM scan_results WHERE scan_task_id='fallback' AND result_type='scan_error'").get(), 'failed attempt remains traceable');
     assert.ok(db.prepare("SELECT * FROM scan_results WHERE scan_task_id='fallback' AND result_type='scan_warning'").all()
       .some(r => JSON.parse(r.result_data).phase === 'lan-discovery'));
     assert.ok(db.prepare("SELECT * FROM scan_results WHERE scan_task_id='fallback' AND result_type='lan_host_discovery'").get());

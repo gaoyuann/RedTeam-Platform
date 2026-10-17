@@ -1,15 +1,16 @@
-import {parseCppcheck,parseFlawfinder} from './sourceToolParsers.js';
+import { parseResults, createScanOutputCollector } from './scanResultParsers.js';
+export { parseResults } from './scanResultParsers.js';
+import { beginToolRun, finishToolRun } from './scanResultStore.js';
 import { parseNmapResults, parseNmapInterfaces, topologyScanArgs, selectLanDiscoveryScope } from './nmapTopology.js';
 import { getDb } from '../db/connection.js';
 import { runTool } from '../tools/toolRunner.js';
 import { getWsManager } from './wsManager.js';
 import { normalizeTarget, probeTarget, buildDiscoveredProfile } from './targetDiscovery.js';
-import { classifyToolResult } from '../tools/toolContracts.js';
+import { classifyToolResult, redactToolArgs } from '../tools/toolContracts.js';
 import { auditSources } from './sourceAudit.js';
 import {isProgramScan} from './programScan.js';
 import {scanProgramAgent} from './programScanAgent.js';
 
-const MAX_OUTPUT_LENGTH = 8192;
 
 
 // Track running scans to prevent duplicates
@@ -18,6 +19,8 @@ const runningScans = new Set();
 // ── Module-level abort flags ───────────────────────────────────────────
 // Allows external API (POST /api/scan-tasks/:scanTaskId/abort) to cancel a running scan.
 const scanAbortFlags = new Map();
+
+export function isScanActive(scanTaskId) { return runningScans.has(scanTaskId); }
 
 export function requestScanAbort(scanTaskId) {
   scanAbortFlags.set(scanTaskId, true);
@@ -31,10 +34,8 @@ function raceScanWithAbort(toolPromise, scanTaskId, controller) {
     const interval = setInterval(() => {
       if (scanAbortFlags.get(scanTaskId)) {
         if (!done) {
-          done = true;
           clearInterval(interval);
-          controller?.abort();
-          resolve({ success: false, exitCode: -2, stdout: '', stderr: '扫描被操作员中止', executionMode: 'aborted' });
+          controller?.abort(); // Wait for the tool's bounded shutdown and buffered output.
         }
       }
     }, 500);
@@ -48,7 +49,7 @@ function raceScanWithAbort(toolPromise, scanTaskId, controller) {
       if (!done) {
         done = true;
         clearInterval(interval);
-        resolve({ success: false, exitCode: -1, stdout: '', stderr: err.message, executionMode: 'error' });
+        resolve({ success: false, exitCode: -1, stdout: err.stdout || '', stderr: err.stderr || err.message, partialResults:err.partialResults || [], timedOut:!!err.timedOut, aborted:!!err.aborted, executionMode: 'error' });
       }
     });
   });
@@ -217,6 +218,7 @@ export function buildArgs(scanType, target, parameters = {}) {
       args.push('-u', ffufUrl);
       args.push('-w', ffufWordlist);
       args.push('-mc', '200,201,204,301,302,307,401,403');
+      args.push('-json');
       args.push('-ac');          // auto-calibrate filtering
       if (threads) args.push('-t', String(threads));
       break;
@@ -228,7 +230,7 @@ export function buildArgs(scanType, target, parameters = {}) {
       args.push('-t', '/root/nuclei-templates/vulnerabilities/generic/');
       // Include auth-related templates if they exist
       args.push('-include-templates', '/root/nuclei-templates/vulnerabilities/');
-      args.push('-severity', 'low,medium,high,critical');
+      args.push('-severity', 'info,low,medium,high,critical');
       if (parameters.auth_template) args.push('-t', parameters.auth_template);
       break;
   }
@@ -242,428 +244,6 @@ export function buildArgs(scanType, target, parameters = {}) {
   }
 
   return args;
-}
-
-// ── Simple result parsers per scan type ────────────────────────────────
-export function parseResults(scanType, stdout) {
-  const results = [];
-  const lines = stdout.split('\n').filter(l => l.trim());
-
-  switch (scanType) {
-    case 'port_scan':
-    case 'topology_scan':
-      results.push(...parseNmapResults(stdout, { assumedUp: scanType === 'port_scan' }));
-      break;
-
-    case 'vuln_scan': {
-      // Parse nuclei v3 output: [template-id] [protocol] [severity] URL [extra]
-      // Strip ANSI escape codes as safety net
-      const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
-      // nuclei v3 -no-color format: [template-id] [protocol] [severity] URL [extra]
-      const nucleiV3 = /^\[([^\]]+)\]\s+\[(\w+)\]\s+\[(\w+)\]\s+(.+)/;
-      // nuclei v2 legacy format: [severity] [template-id] detail
-      const nucleiV2 = /^\[(\w+)\]\s+\[([^\]]+)\]\s+(.+)/;
-      for (const line of lines) {
-        const clean = stripAnsi(line);
-        let match = clean.match(nucleiV3);
-        if (match) {
-          // [template-id] [protocol] [severity] detail
-          const templateId = match[1];
-          const protocol = match[2];
-          const sev = match[3].toLowerCase();
-          const detail = match[4];
-          if (sev === 'inf' || sev === 'info') continue;
-          results.push({
-            result_type: 'vulnerability',
-            result_data: { template: templateId, protocol, detail },
-            severity: sev,
-            source_tool: 'nuclei',
-          });
-        } else {
-          // Try legacy format: [severity] [template-id] detail
-          match = clean.match(nucleiV2);
-          if (match) {
-            const sev = match[1].toLowerCase();
-            if (sev === 'inf' || sev === 'info') continue;
-            results.push({
-              result_type: 'vulnerability',
-              result_data: { template: match[2], detail: match[3] },
-              severity: sev,
-              source_tool: 'nuclei',
-            });
-          }
-        }
-      }
-      break;
-    }
-
-    case 'web_scan_nikto': {
-      // Parse nikto text output:
-      //   + OSVDB-3268: /config/: Directory indexing found.
-      //   + /config/: Configuration information may be available remotely.
-      //   + The anti-clickjacking X-Frame-Options header is not present.
-      // Skip: lines starting with "-", "-----", "Nikto v", "Target", "Start", "End", "requests"
-      const osvdbLine = /^\+\s+(OSVDB-\d+):\s+(\S+)\s+(.+)/;   // + OSVDB-XXX: /path/: finding
-      const pathLine  = /^\+\s+(\/\S+):\s+(.+)/;                 // + /path: finding
-      const infoLine  = /^\+\s+(The\s+.+|Cookie\s+.+|Allowed\s+.+|Server\s+.+)/i;  // + The X-Frame...
-
-      for (const line of lines) {
-        // Skip header/footer lines
-        if (line.startsWith('-') || line.startsWith('---') || line.includes('Nikto v') ||
-            line.includes('Target IP') || line.includes('Start Time') || line.includes('End Time') ||
-            line.includes('requests:') || line.includes('host(s) tested') ||
-            line.includes('submit this') || line.includes('CIRT.net')) continue;
-
-        let osvdbId = '', path = '', finding = '';
-
-        // Pattern 1: + OSVDB-XXXX: /path/: finding
-        const m1 = line.match(osvdbLine);
-        if (m1) {
-          osvdbId = m1[1];
-          path = m1[2];
-          finding = m1[3].trim();
-        } else {
-          // Pattern 2: + /path: finding
-          const m2 = line.match(pathLine);
-          if (m2) {
-            path = m2[1];
-            finding = m2[2].trim();
-          } else {
-            // Pattern 3: + The X-Frame... / + Cookie ... / + Allowed ...
-            const m3 = line.match(infoLine);
-            if (m3) {
-              finding = m3[1].trim();
-            } else {
-              continue; // skip unrecognized lines
-            }
-          }
-        }
-
-        if (!finding) continue;
-
-        // Determine severity from finding content
-        let sev = 'low';
-        const fl = finding.toLowerCase();
-        if (fl.includes('admin') || fl.includes('login') || fl.includes('config')) sev = 'medium';
-        if (fl.includes('x-frame') || fl.includes('x-xss') || fl.includes('x-content-type')) sev = 'medium';
-        if (fl.includes('httponly') || fl.includes('directory indexing') || fl.includes('default file')) sev = 'medium';
-        if (fl.includes('sql') || fl.includes('inject') || fl.includes('exec') || fl.includes('vulnerable')) sev = 'high';
-        if (fl.includes('leak') || fl.includes('expos')) sev = 'medium';
-
-        results.push({
-          result_type: 'web_vuln',
-          result_data: { finding, ...(path && { path }), ...(osvdbId && { osvdb_id: osvdbId }) },
-          severity: sev,
-          source_tool: 'nikto',
-        });
-      }
-      break;
-    }
-
-    case 'web_scan_sqlmap': {
-      // Enhanced sqlmap output parsing
-      // Pattern 1: "is vulnerable"
-      if (stdout.includes('is vulnerable')) {
-        // Try to extract more detail
-        let param = '', technique = '', dbms = '';
-        const paramMatch = stdout.match(/Parameter:\s*(\S+)/i);
-        if (paramMatch) param = paramMatch[1];
-        const techMatch = stdout.match(/Type:\s*(.+)/i);
-        if (techMatch) technique = techMatch[1].trim();
-        const dbmsMatch = stdout.match(/back-end DBMS:\s*(.+)/i);
-        if (dbmsMatch) dbms = dbmsMatch[1].trim();
-
-        results.push({
-          result_type: 'sql_injection',
-          result_data: {
-            detail: 'Target is vulnerable to SQL injection',
-            ...(param && { parameter: param }),
-            ...(technique && { technique }),
-            ...(dbms && { dbms }),
-          },
-          severity: 'critical',
-          source_tool: 'sqlmap',
-        });
-      }
-      // Pattern 2: "Parameter: X appears to be injectable"
-      const injectablePattern = /Parameter:\s*'([^']+)'.*appears to be ('[^']+' )?injectable/gi;
-      let injectMatch;
-      while ((injectMatch = injectablePattern.exec(stdout)) !== null) {
-        const param = injectMatch[1];
-        // Avoid duplicate if already captured by "is vulnerable"
-        if (!results.some(r => r.result_data?.parameter === param)) {
-          results.push({
-            result_type: 'sql_injection',
-            result_data: { detail: `Parameter '${param}' is injectable`, parameter: param },
-            severity: 'critical',
-            source_tool: 'sqlmap',
-          });
-        }
-      }
-      break;
-    }
-
-    case 'brute_force': {
-      // Parse hydra output:
-      //   [80][http-post-form] host: 172.17.0.2   login: admin   password: password
-      //   [22][ssh] host: 192.168.1.1   login: root   password: toor
-      const hydraLine = /\[(\d+)\]\[([^\]]+)\]\s+host:\s*(\S+)\s+login:\s*(\S+)\s+password:\s*(\S+)/;
-      for (const line of lines) {
-        const match = line.match(hydraLine);
-        if (match) {
-          const [, port, service, host, login, password] = match;
-          results.push({
-            result_type: 'credential',
-            result_data: { login, password, host, port: Number(port), service },
-            severity: 'critical',
-            source_tool: 'hydra',
-          });
-        }
-      }
-      break;
-    }
-
-    case 'ad_scan': {
-      // Parse netexec SMB output
-      // Patterns:
-      //   [+] 192.168.1.10    445    HOSTNAME   Windows Server 2019 ...
-      //   SMB    192.168.1.10    445    HOSTNAME   ...
-      const netexecLine = /(?:\[?\+?\]?\s*)?(\S+)\s+(\d+)\s+(\S+)\s+(.+)/;
-      for (const line of lines) {
-        const match = line.match(netexecLine);
-        if (match && (line.startsWith('[+]') || !line.startsWith('['))) {
-          const [, host, portStr, hostname, detail] = match;
-          if (host && portStr && hostname) {
-            results.push({
-              result_type: 'service_info',
-              result_data: { host, port: Number(portStr), hostname, os: detail.trim() },
-              severity: 'medium',
-              source_tool: 'netexec',
-            });
-          }
-        }
-      }
-      break;
-    }
-
-    case 'cloud_scan': {
-      // Parse cloudmapper audit output (may be JSON or text)
-      try {
-        const auditResults = JSON.parse(stdout);
-        const findings = Array.isArray(auditResults) ? auditResults : (auditResults.findings || []);
-        for (const finding of findings) {
-          results.push({
-            result_type: 'misconfiguration',
-            result_data: { ...finding },
-            severity: finding.severity || 'medium',
-            source_tool: 'cloudmapper',
-          });
-        }
-      } catch {
-        // Fallback: parse line-by-line for text output
-        for (const line of lines) {
-          if (line.includes('S3') || line.includes('EC2') || line.includes('IAM') ||
-              line.includes('RDS') || line.includes('Lambda') || line.includes('finding')) {
-            results.push({
-              result_type: 'misconfiguration',
-              result_data: { detail: line.trim() },
-              severity: 'medium',
-              source_tool: 'cloudmapper',
-            });
-          }
-        }
-      }
-      break;
-    }
-
-    // ── Application target scan type parsers ─────────────────────────
-
-    case 'app_discovery_whatweb': {
-      // Parse whatweb output: "URL [Title] ..."
-      // Lines: "http://host.domain.com [200 OK] Apache[2.4.41], PHP[7.4], HTML5"
-      const whatwebLine = /^(\S+)\s+(.+)$/;
-      for (const line of lines) {
-        const match = line.match(whatwebLine);
-        if (!match) continue;
-        const [, url, techStr] = match;
-        const status = techStr.match(/^\[(\d{3})(?:\s[^\]]*)?\]/);
-        if (!/^https?:\/\//i.test(url) || !status) continue;
-        // Extract individual technologies: "Apache[2.4.41]" or just "PHP"
-        const techs = [];
-        const techPattern = /([A-Za-z0-9_/.-]+)(?:\[([^\]]*)\])?/g;
-        let techMatch;
-        while ((techMatch = techPattern.exec(techStr.slice(status[0].length))) !== null) {
-          const name = techMatch[1].trim();
-          const version = techMatch[2] || '';
-          if (name && name !== url) {
-            techs.push({ name, version });
-          }
-        }
-        if (techs.length > 0) {
-          results.push({
-            result_type: 'technology_detection',
-            result_data: { url, status_code: Number(status[1]), technologies: techs, raw: techStr },
-            severity: 'info',
-            source_tool: 'whatweb',
-          });
-        }
-      }
-      break;
-    }
-
-    case 'app_discovery_httpx': {
-      // Parse httpx output:
-      // "http://host.domain.com [200] [Page Title] [Apache/PHP]"
-      // or JSON output if -json flag used
-      for (const line of lines) {
-        // Try JSON first
-        try {
-          const json = JSON.parse(line);
-          if (json.url) {
-            results.push({
-              result_type: 'http_probe',
-              result_data: {
-                url: json.url,
-                status_code: json.status_code || json['status-code'],
-                title: json.title,
-                technologies: json.tech || json.technologies,
-                content_length: json.content_length || json['content-length'],
-                webserver: json.webserver,
-              },
-              severity: 'info',
-              source_tool: 'httpx',
-            });
-          }
-          continue;
-        } catch { /* not JSON, try text parsing */ }
-
-        // Text format: URL [status] [title] [technologies]
-        const textMatch = line.match(/^(\S+)\s+\[(\d+)\]\s+\[([^\]]*)\]\s+\[([^\]]*)\]/);
-        if (textMatch) {
-          const [, url, statusCode, title, technologies] = textMatch;
-          results.push({
-            result_type: 'http_probe',
-            result_data: { url, status_code: parseInt(statusCode), title, technologies: technologies || '' },
-            severity: 'info',
-            source_tool: 'httpx',
-          });
-        }
-      }
-      break;
-    }
-
-    case 'api_fuzz_arjun': {
-      // Parse arjun output for discovered parameters
-      // arjun shows: [+] Parameter: id found in URL query
-      //              [+] Parameter: token found in POST body
-      const paramPattern = /\[\+\]\s*Parameter:\s*(\S+)\s+found\s+in\s+(.+)/i;
-      for (const line of lines) {
-        const match = line.match(paramPattern);
-        if (match) {
-          const [, paramName, location] = match;
-          results.push({
-            result_type: 'api_parameter',
-            result_data: { parameter: paramName, location: location.trim() },
-            severity: 'low',
-            source_tool: 'arjun',
-          });
-        }
-      }
-      break;
-    }
-
-    case 'api_fuzz_ffuf': {
-      // Parse ffuf JSON output lines (when using -json flag)
-      // Otherwise parse text lines: "200 123 http://host/api/FUZZ"
-      for (const line of lines) {
-        // Try JSON format first
-        try {
-          const json = JSON.parse(line);
-          if (json.url) {
-            results.push({
-              result_type: 'api_endpoint',
-              result_data: {
-                url: json.url,
-                status_code: json.status || json.status_code,
-                length: json.length || json.content_length,
-                words: json.words,
-              },
-              severity: 'info',
-              source_tool: 'ffuf',
-            });
-          }
-          continue;
-        } catch { /* not JSON */ }
-
-        // Text format: status_code size url
-        const textMatch = line.match(/^(\d+)\s+(\d+)\s+(\S+)/);
-        if (textMatch) {
-          const [, statusCode, size, url] = textMatch;
-          results.push({
-            result_type: 'api_endpoint',
-            result_data: { url, status_code: parseInt(statusCode), length: parseInt(size) },
-            severity: 'info',
-            source_tool: 'ffuf',
-          });
-        }
-      }
-      break;
-    }
-
-    case 'auth_audit': {
-      // Parse nuclei auth template output (same JSON-lines format as vuln_scan)
-      for (const line of lines) {
-        try {
-          const finding = JSON.parse(line);
-          if (finding.type === 'finding' || finding.templateID) {
-            results.push({
-              result_type: 'auth_finding',
-              result_data: {
-                template_id: finding.templateID || finding.template_id || '',
-                template_name: finding.info?.name || finding.name || '',
-                severity: finding.info?.severity || finding.severity || 'info',
-                host: finding.host || finding.matched || '',
-                type: finding.type || '',
-                extracted: finding.extracted || finding.matcher_name || '',
-              },
-              severity: finding.info?.severity || finding.severity || 'info',
-              source_tool: 'nuclei',
-            });
-          }
-        } catch {
-          // Non-JSON line — try text format: "[template] http://host"
-          const textMatch = line.match(/\[([^\]]+)\]\s+(https?:\/\/\S+)/);
-          if (textMatch) {
-            results.push({
-              result_type: 'auth_finding',
-              result_data: { template: textMatch[1], host: textMatch[2] },
-              severity: 'info',
-              source_tool: 'nuclei',
-            });
-          }
-        }
-      }
-      break;
-    }
-
-    case 'source_scan_cppcheck':
-      results.push(...parseCppcheck(stdout));
-      break;
-    case 'source_scan_flawfinder':
-      results.push(...parseFlawfinder(stdout));
-      break;
-  }
-
-  if (results.length === 0 && stdout.length > 0) {
-    results.push({
-      result_type: 'raw_output',
-      result_data: { output: stdout.slice(0, MAX_OUTPUT_LENGTH) },
-      severity: 'info',
-      source_tool: SCAN_TOOL_MAP[scanType] || 'unknown',
-    });
-  }
-
-  return results;
 }
 
 // ── Main entry: executeScan ───────────────────────────────────────────
@@ -682,29 +262,28 @@ export async function executeScan(scanTaskId) {
 
   if (isProgramScan(task.scan_type) && task.status !== 'PENDING') return {ok:false,error:'请新建程序测试任务以保留发现和验证证据'};
 
-  // Reset to PENDING if needed (for re-execution of COMPLETED/FAILED/CANCELLED)
-  if (task.status !== 'PENDING') {
-    db.prepare('DELETE FROM scan_results WHERE scan_task_id = ?').run(scanTaskId);
-    db.prepare("UPDATE scan_tasks SET status = 'PENDING', started_at = NULL, completed_at = NULL, error_message = NULL WHERE scan_task_id = ?")
-      .run(scanTaskId);
-  }
+  if (task.status !== 'PENDING') return {ok:false,error:'请新建关联扫描重试，原结果保留'};
 
   runningScans.add(scanTaskId);
 
   // Mark as RUNNING
   const now = new Date().toISOString();
+  try {
   db.prepare("UPDATE scan_tasks SET status = 'RUNNING', started_at = ?, target_profile = NULL, target_class = ? WHERE scan_task_id = ?")
     .run(now, normalizeTarget(task.target).target_class, scanTaskId);
 
-  try {
     let parameters = {};
     try { parameters = JSON.parse(task.parameters || '{}'); } catch {}
     const timeoutSec = parameters.timeout || 300;
     const timeoutMs = timeoutSec * 1000;
 
-    const runAbortableTool = (toolId, args, options) => {
+    const runAbortableTool = async (toolId, args, options) => {
+      if (scanAbortFlags.get(scanTaskId)) return {success:false,aborted:true,exitCode:-2,stdout:'',stderr:'扫描被操作员中止'};
       const controller = new AbortController();
-      return raceScanWithAbort(runTool(toolId, args, { ...options, signal: controller.signal }), scanTaskId, controller);
+      const traceId=!options.onOutput?beginToolRun(db,scanTaskId,toolId,args.includes('--iflist')?'network_context':'lan_discovery'):null;
+      const result=await raceScanWithAbort(runTool(toolId,args,{...options,signal:controller.signal}),scanTaskId,controller);
+      if(traceId) finishToolRun(db,traceId,scanTaskId,toolId,result,{records:[],diagnostics:{parser_version:1,tool_reported_count:null,parsed_records:null,coverage:'auxiliary output retained'}});
+      return {...result,toolRunId:traceId};
     };
 
     // Helper: run one tool, parse results, store them
@@ -713,6 +292,12 @@ export async function executeScan(scanTaskId) {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const outcomes = [];
+    function linkAuxiliaryResult(id, toolRunId, index) {
+      if(!toolRunId) return;
+      db.prepare('UPDATE scan_results SET tool_run_id=?,record_index=? WHERE id=?').run(toolRunId,index,id);
+      db.prepare("UPDATE scan_tool_runs SET diagnostics=json_set(diagnostics,'$.persisted_records',(SELECT COUNT(*) FROM scan_results WHERE tool_run_id=?)) WHERE tool_run_id=?").run(toolRunId,toolRunId);
+    }
+
 
     function recordFailure(toolId, error, result = {}) {
       const details = { error, exit_code: result.exitCode ?? null, timed_out: !!result.timedOut };
@@ -720,67 +305,37 @@ export async function executeScan(scanTaskId) {
       outcomes.push({ tool_id: toolId, success: false, ...details });
     }
 
-    function recordWarning(toolId, error, result = {}) {
-      const details = { warning: error, exit_code: result.exitCode ?? null, timed_out: !!result.timedOut };
-      insertResult.run(scanTaskId, 'scan_warning', JSON.stringify(details), 'info', null, null, toolId, new Date().toISOString());
-      outcomes.push({ tool_id: toolId, success: false, non_blocking: true, warning: error, ...details });
-    }
-
     async function runAndStore(scanType, toolId, target, params, timeout, { nonFatal = false } = {}) {
       if (scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');
-      let args = buildArgs(scanType, target, params);
+      const args = buildArgs(scanType, target, params);
+      const runId = beginToolRun(db,scanTaskId,toolId,scanType);
+      const collector = createScanOutputCollector(scanType);
       let result;
       try {
-        result = classifyToolResult(toolId, await runAbortableTool(toolId, args, { timeout }));
-      } catch (error) {
-        if (nonFatal) {
-          recordWarning(toolId, error.message);
-          return 0;
-        }
-        recordFailure(toolId, error.message);
-        throw error;
+        result = classifyToolResult(toolId, await runAbortableTool(toolId,args,{timeout,onOutput:collector.push}));
+      } catch(error) {
+        result={success:false,exitCode:-1,stdout:'',stderr:'',error:error.message};
       }
-      if (result.executionMode === 'aborted') throw new Error('扫描被操作员中止');
-      if (!result.success && scanType === 'port_scan' && params.discover_topology
-          && !result.timedOut && /traceroute|root|privileg|raw socket/i.test((result.stderr || '') + (result.error || ''))) {
-        insertResult.run(scanTaskId, 'scan_warning', JSON.stringify({ message: '路由探测不可用，已回退到原端口扫描' }), 'info', null, null, toolId, new Date().toISOString());
-        args = buildArgs(scanType, target, { ...params, discover_topology: false });
-        result = classifyToolResult(toolId, await runAbortableTool(toolId, args, { timeout }));
-        if (result.executionMode === 'aborted') throw new Error('扫描被操作员中止');
+      if (scanAbortFlags.get(scanTaskId) || result.executionMode === 'aborted') result={...result,success:false,aborted:true,error:'扫描被操作员中止'};
+      const parsed=collector.finish(result);
+      for(const row of parsed.records) if(row.result_type==='scan_evidence') Object.assign(row.result_data,{args:redactToolArgs(args,toolId),executionMode:result.executionMode});
+      if (['app_discovery_httpx','app_discovery_whatweb'].includes(scanType) && !parsed.records.some(r=>['http_probe','technology_detection'].includes(r.result_type)))
+        result={...result,success:false,error:result.error || 'HTTP probe returned no reachable endpoints'};
+      if (!result.success) parsed.records.push({result_type:nonFatal?'scan_warning':'scan_error',severity:'info',source_tool:toolId,
+        result_data:{error:result.error,exit_code:result.exitCode,timed_out:!!result.timedOut,aborted:!!result.aborted,output_limit_exceeded:!!result.outputLimitExceeded}});
+      parsed.diagnostics.evidence_truncated=!!result.outputLimitExceeded || !!parsed.diagnostics.evidence_truncated;
+      // Store output and recognized records atomically before deciding task status.
+      const count=finishToolRun(db,runId,scanTaskId,toolId,result,parsed);
+      outcomes.push({tool_id:toolId,success:result.success,error:result.error,non_blocking:nonFatal,tool_run_id:runId});
+      if(result.aborted) throw new Error('扫描被操作员中止');
+      if (!result.success && scanType==='port_scan' && params.discover_topology && !result.timedOut
+          && /traceroute|root|privileg|raw socket/i.test((result.stderr || '')+(result.error || ''))) {
+        // Retain this attempt and its evidence before the fallback attempt.
+        outcomes[outcomes.length-1].non_blocking=true;
+        return count + await runAndStore(scanType,toolId,target,{...params,discover_topology:false},timeout,{nonFatal});
       }
-      const output = (result.stdout || '') + (result.stderr ? '\n' + result.stderr : '');
-      if (!result.success) {
-        if (nonFatal) {
-          recordWarning(toolId, result.error || `${toolId} failed`, result);
-          return 0;
-        }
-        recordFailure(toolId, result.error || `${toolId} failed`, result);
-        throw new Error(result.error || `${toolId} failed`);
-      }
-      outcomes.push({ tool_id: toolId, success: true, exit_code: result.exitCode, timed_out: false });
-      const results = parseResults(scanType, output);
-      if (toolId === 'nmap' && (scanType === 'topology_scan' || params.discover_topology)) {
-        results.push({ result_type: 'scan_evidence', source_tool: toolId, severity: 'info',
-          result_data: { output, args, executionMode: result.executionMode } });
-      }
-      if (['app_discovery_httpx', 'app_discovery_whatweb'].includes(scanType) && !results.some(result => ['http_probe', 'technology_detection'].includes(result.result_type))) {
-        outcomes.pop();
-        if (nonFatal) {
-          recordWarning(toolId, 'HTTP probe returned no reachable endpoints', result);
-          return 0;
-        }
-        recordFailure(toolId, 'HTTP probe returned no reachable endpoints', result);
-        throw new Error('HTTP probe returned no reachable endpoints');
-      }
-      for (const r of results) {
-        insertResult.run(
-          scanTaskId, r.result_type,
-          r.result_data ? JSON.stringify(r.result_data) : null,
-          r.severity || null, null, null,
-          r.source_tool || null, new Date().toISOString()
-        );
-      }
-      return results.length;
+      if(!result.success && !nonFatal) throw new Error(result.error || `${toolId} failed`);
+      return count;
     }
 
     let totalResults = 0;
@@ -788,12 +343,14 @@ export async function executeScan(scanTaskId) {
     let networkContext = null;
     if (task.scan_type === 'topology_scan' || (task.scan_type === 'port_scan' && parameters.discover_topology)) {
       const context = await runAbortableTool('nmap', ['--iflist'], { timeout: 15000 });
-      if (context.success) {
+      if (context.success || context.stdout) {
         const data = { ...parseNmapInterfaces(context.stdout), executionMode: context.executionMode };
         networkContext = data;
-        insertResult.run(scanTaskId, 'network_context', JSON.stringify(data), 'info', null, null, 'nmap', new Date().toISOString());
+        const saved=insertResult.run(scanTaskId, 'network_context', JSON.stringify(data), 'info', null, null, 'nmap', new Date().toISOString());
+        linkAuxiliaryResult(saved.lastInsertRowid,context.toolRunId,0);
         contextResults++;
-      } else if (context.executionMode !== 'aborted') {
+      }
+      if (!context.success && context.executionMode !== 'aborted') {
         insertResult.run(scanTaskId, 'scan_warning', JSON.stringify({ message: '未能读取扫描环境路由，仅展示探测结果' }), 'info', null, null, 'nmap', new Date().toISOString());
       }
     }
@@ -866,15 +423,17 @@ export async function executeScan(scanTaskId) {
 
     // ── Application target scan types ─────────────────────────────────
     } else if (task.scan_type === 'app_discovery') {
-      try {
-        const probes = await probeTarget(task.target);
-        if (scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');
-        for (const probe of probes) insertResult.run(scanTaskId, probe.result_type, JSON.stringify(probe.result_data), 'info', null, null, probe.source_tool, new Date().toISOString());
-        totalResults += probes.length;
-        outcomes.push({ tool_id: 'http-discovery', success: true, exit_code: 0, timed_out: false });
-      } catch (err) {
-        recordFailure('http-discovery', err.message);
-      }
+      if (scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');
+      const httpRun=beginToolRun(db,scanTaskId,'http-discovery','app_discovery');
+      const controller=new AbortController();
+      const probes=await raceScanWithAbort(probeTarget(task.target,{signal:controller.signal}),scanTaskId,controller);
+      const records=Array.isArray(probes)?probes:probes.partialResults || [];
+      const success=Array.isArray(probes) && !scanAbortFlags.get(scanTaskId);
+      const httpResult={success,exitCode:success?0:-1,timedOut:!!probes.timedOut,aborted:!!scanAbortFlags.get(scanTaskId),error:success?null:probes.stderr || '扫描被操作员中止'};
+      if(!success) records.push({result_type:'scan_error',source_tool:'http-discovery',severity:'info',result_data:{error:httpResult.error}});
+      totalResults+=finishToolRun(db,httpRun,scanTaskId,'http-discovery',httpResult,{records,diagnostics:{parser_version:1,tool_reported_count:null,parsed_records:records.length}});
+      outcomes.push({tool_id:'http-discovery',success,error:httpResult.error});
+      if(httpResult.aborted) throw new Error('扫描被操作员中止');
       // ── Dual-step: whatweb (tech fingerprint) + httpx (HTTP probe) ──
       console.log(`[Scan] app_discovery step 1/2: whatweb for ${task.target}`);
       try {
@@ -923,8 +482,10 @@ export async function executeScan(scanTaskId) {
       const targetHosts = db.prepare("SELECT result_data FROM scan_results WHERE scan_task_id = ? AND result_type = 'host_discovery'")
         .all(scanTaskId).map(row => JSON.parse(row.result_data)).filter(data => !data.traceTarget).map(data => data.host);
       const scope = selectLanDiscoveryScope(task.target, networkContext, targetHosts);
+      let lanToolRunId=null,lanRecordIndex=0;
       const storeLanResult = (type, data) => {
-        insertResult.run(scanTaskId, type, JSON.stringify(data), 'info', null, null, 'nmap', new Date().toISOString());
+        const saved=insertResult.run(scanTaskId, type, JSON.stringify(data), 'info', null, null, 'nmap', new Date().toISOString());
+        linkAuxiliaryResult(saved.lastInsertRowid,lanToolRunId,lanRecordIndex++);
         contextResults++;
       };
       if (!scope.cidr) storeLanResult('scan_warning', { phase: 'lan-discovery', message: scope.reason });
@@ -932,12 +493,13 @@ export async function executeScan(scanTaskId) {
         const args = ['-sn', '-n', '--reason', '-e', scope.device, '--max-retries', '1', scope.cidr];
         try {
           const discovery = await runAbortableTool('nmap', args, { timeout: Math.min(timeoutMs, 120000) });
-          if (discovery.executionMode === 'aborted' || scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');
+          lanToolRunId=discovery.toolRunId;
           storeLanResult('scan_evidence', { phase: 'lan-discovery', args, output: discovery.stdout || '',
             error: discovery.stderr || discovery.error || '', executionMode: discovery.executionMode });
           const hosts = parseNmapResults(discovery.stdout || '').filter(row => row.result_type === 'host_discovery' && row.result_data.status === 'up');
-          storeLanResult('lan_scope', { ...scope, complete: discovery.success === true && !discovery.timedOut });
           for (const host of hosts) storeLanResult('lan_host_discovery', { ...host.result_data, scope: scope.cidr });
+          if (discovery.aborted || discovery.executionMode==='aborted' || scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');
+          storeLanResult('lan_scope', { ...scope, complete: discovery.success === true && !discovery.timedOut });
           if (!discovery.success || discovery.timedOut) storeLanResult('scan_warning', { phase: 'lan-discovery',
             message: '局域网发现未完成，仅展示已响应主机；' + (discovery.error || discovery.stderr || '探测超时或失败') });
         } catch (error) {
@@ -946,7 +508,7 @@ export async function executeScan(scanTaskId) {
         }
       }
     }
-    totalResults += contextResults;
+    totalResults = db.prepare('SELECT COUNT(*) n FROM scan_results WHERE scan_task_id=?').get(scanTaskId).n;
     if (scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');
     if (!outcomes.some(outcome => outcome.success)) throw new Error(outcomes.map(outcome => `${outcome.tool_id}: ${outcome.error}`).join('; ') || 'No scan tool succeeded');
     const finalStatus = outcomes.some(outcome => !outcome.success) ? 'PARTIAL' : 'COMPLETED';
@@ -970,7 +532,8 @@ export async function executeScan(scanTaskId) {
 
   } catch (err) {
     const isAbort = scanAbortFlags.get(scanTaskId);
-    const finalStatus = isAbort ? 'CANCELLED' : 'FAILED';
+    const usable = !isProgramScan(task.scan_type) && db.prepare("SELECT 1 FROM scan_results WHERE scan_task_id=? AND result_type NOT IN ('scan_error','scan_warning','scan_evidence','raw_output','network_context') LIMIT 1").get(scanTaskId);
+    const finalStatus = isAbort ? 'CANCELLED' : usable ? 'PARTIAL' : 'FAILED';
     const completedAt = new Date().toISOString();
     db.prepare("UPDATE scan_tasks SET status = ?, completed_at = ?, error_message = ? WHERE scan_task_id = ?")
       .run(finalStatus, completedAt, err.message, scanTaskId);
@@ -984,7 +547,7 @@ export async function executeScan(scanTaskId) {
       username: taskInfo?.created_by || null,
     });
 
-    return { ok: false, scanTaskId, status: finalStatus, error: err.message };
+    return { ok: false, scanTaskId, status: finalStatus, error: err.message,resultsCount:db.prepare('SELECT COUNT(*) n FROM scan_results WHERE scan_task_id=?').get(scanTaskId).n };
   } finally {
     scanAbortFlags.delete(scanTaskId);
     runningScans.delete(scanTaskId);

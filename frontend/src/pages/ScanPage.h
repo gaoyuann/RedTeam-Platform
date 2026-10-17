@@ -22,6 +22,7 @@ public:
 
   /// Pre-fill all 4 target inputs (used when embedded in FlowPage workbench)
   void setTarget(const QString &target);
+  void setPipelineScope(const QString &pipelineId, const QStringList &taskIds, const QString &state = {});
   void setTaskScope(const QStringList &taskIds);
   void clearTaskScope();
   static QString chooseHttpSourceDirectory(ApiClient *api, const QString &target, const QString &initial, QWidget *parent);
@@ -51,6 +52,23 @@ private slots:
 
 private:
   void setupUI();
+  void loadPipelineResults(bool append = false);
+  QString m_pipelineId;
+  QString m_pipelineScanState;
+  QString m_retryRequestId;
+  QString m_retryRequestSource;
+  bool m_allScanResults = false;
+  bool m_scanPageBusy = false;
+  int m_scanPageRequest = 0;
+  qint64 m_scanCursor = 0;
+  qint64 m_scanThrough = 0;
+  QJsonArray m_aggregateRecords;
+  QWidget *m_aggregateControls;
+  QPushButton *m_allResultsButton;
+  QPushButton *m_moreResultsButton;
+  QComboBox *m_resultCategory;
+  QComboBox *m_resultSource;
+
   void loadResults(const QString &taskId);
   void loadRecommendations(const QString &taskId);
   void clearDetailPanel();

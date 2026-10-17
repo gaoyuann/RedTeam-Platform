@@ -4,6 +4,7 @@
 #include <QWidget>
 
 class ApiClient;
+class ScanPage;
 class QLabel;
 class QPushButton;
 class QPlainTextEdit;
@@ -67,6 +68,7 @@ private:
   QPushButton *m_exportHtml;
   MetricCard *m_metrics[4];
   QTabWidget *m_tabs;
+  ScanPage *m_scanRecords;
   QTableWidget *m_findings;
   QTableWidget *m_steps;
   QTableWidget *m_evidence;

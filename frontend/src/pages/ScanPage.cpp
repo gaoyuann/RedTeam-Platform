@@ -30,6 +30,7 @@
 #include <QRegularExpression>
 #include <QPointer>
 #include <QUrl>
+#include <QUuid>
 
 static bool isProgramScan(const QString &type) { return type == "program_scan" || type == "source_scan"; }
 static bool isProgramFinding(const QString &type) { return type == "program_finding" || type == "source_finding"; }
@@ -461,6 +462,77 @@ void ScanPage::setTarget(const QString &target)
   m_sourceTargetInput->setText(target);
 }
 
+void ScanPage::setPipelineScope(const QString &pipelineId, const QStringList &taskIds, const QString &state)
+{
+  if (m_pipelineId == pipelineId && m_scopeTaskIds == taskIds) {
+    if (m_pipelineScanState != state && m_allScanResults) { m_pipelineScanState = state; loadPipelineResults(); }
+    return;
+  }
+  setTaskScope(taskIds);
+  m_pipelineId = pipelineId; m_pipelineScanState = state;
+  m_resultSource->blockSignals(true); m_resultSource->clear(); m_resultSource->addItem(QStringLiteral("全部来源"), QString()); m_resultSource->blockSignals(false);
+  m_allScanResults = true;
+  m_selectInitialScopeTask = false;
+  m_aggregateControls->show();
+  loadPipelineResults();
+}
+
+void ScanPage::loadPipelineResults(bool append)
+{
+  if (m_pipelineId.isEmpty()) return;
+  const int request = ++m_scanPageRequest;
+  const QString pipeline = m_pipelineId;
+  const int scope = m_scopeRevision;
+  if (!append) { m_scanCursor = 0; m_aggregateRecords = {}; m_resultTree->clear(); m_resultOverview->clear(); }
+  m_allScanResults = true;
+  m_selectedTaskId.clear();
+  m_reexecBtn->hide(); m_genBtn->setEnabled(false);
+  m_scanPageBusy = true; m_moreResultsButton->setEnabled(false);
+  QString path = "/api/pipelines/" + pipeline + "/results?view=scans&limit=100&after=" + QString::number(m_scanCursor)
+      + "&category=" + m_resultCategory->currentData().toString();
+  if (append) path += "&through=" + QString::number(m_scanThrough);
+  if (!m_resultSource->currentData().toString().isEmpty()) path += "&scan_task_id=" + m_resultSource->currentData().toString();
+  QPointer<ScanPage> guard(this);
+  m_api->get(path, 10000, [this, guard, request, pipeline, scope](const QJsonObject &response) {
+    if (!guard || request != m_scanPageRequest || pipeline != m_pipelineId || scope != m_scopeRevision || !m_allScanResults) return;
+    m_scanPageBusy = false;
+    if (response["status"].toString() != "ok") {
+      m_statusLabel->setText(QStringLiteral("任务扫描结果加载失败，请点击全部子扫描重试")); return;
+    }
+    const auto data = response["data"].toObject();
+    const auto page = data["page"].toObject();
+    for (const auto &row : data["scan_records"].toArray()) m_aggregateRecords.append(row);
+    m_scanCursor = page["next_after"].toVariant().toLongLong();
+    m_scanThrough = page["through"].toVariant().toLongLong();
+    renderGroupedResults(m_aggregateRecords);
+    m_moreResultsButton->setEnabled(page["has_more"].toBool());
+    m_resultHint->setText(QStringLiteral("当前筛选已加载 %1 / %2 条记录 · 未去重 · 双击查看脱敏记录与来源")
+        .arg(m_aggregateRecords.size()).arg(page["total"].toInt()));
+    const auto summary = data["scan_summary"].toObject();
+    QStringList states;
+    bool active = false;
+    const QString selected = m_resultSource->currentData().toString();
+    m_resultSource->blockSignals(true); m_resultSource->clear();
+    m_resultSource->addItem(QStringLiteral("全部来源"), QString());
+    for (const auto &value : data["scan_sources"].toArray()) {
+      const auto source = value.toObject(); const QString id = source["scan_task_id"].toString();
+      m_resultSource->addItem(formatScanType(source["scan_type"].toString()) + " · " + id, id);
+      active = active || source["status"].toString() == "RUNNING" || source["status"].toString() == "PENDING";
+      states << formatScanType(source["scan_type"].toString()) + "：" + formatStatus(source["status"].toString())
+          + (source["error_message"].toString().isEmpty() ? QString() : "（" + source["error_message"].toString() + "）");
+    }
+    const bool unresolvedCalls = !summary["active_calls"].toArray().isEmpty();
+    if (unresolvedCalls) states << QStringLiteral("工具调用尚未结束或停止状态未确认，请勿据此恢复环境");
+    if (active || unresolvedCalls) m_pollTimer->start(2000); else m_pollTimer->stop();
+    m_resultSource->setCurrentIndex(qMax(0, m_resultSource->findData(selected))); m_resultSource->blockSignals(false);
+    for (const auto &value : summary["unexecuted_checks"].toArray()) states << formatScanType(value.toString()) + "：未执行";
+    m_statusLabel->setText(QStringLiteral("本任务扫描：%1 · 共 %2 条记录（非去重漏洞数）\n%3")
+        .arg(active ? QStringLiteral("进行中") : summary["completeness"].toString() == "complete" ? QStringLiteral("已结束") : QStringLiteral("结果不完整 / 待核对"))
+        .arg(summary["record_count"].toInt()).arg(states.join("；")));
+    m_statusLabel->setToolTip(QString::fromUtf8(QJsonDocument(data["scan_runs"].toArray()).toJson(QJsonDocument::Indented)));
+  });
+}
+
 void ScanPage::setTaskScope(const QStringList &taskIds)
 {
   if (m_scopedTasks && taskIds == m_scopeTaskIds) return;
@@ -478,6 +550,8 @@ void ScanPage::setTaskScope(const QStringList &taskIds)
 void ScanPage::clearTaskScope()
 {
   ++m_scopeRevision;
+  ++m_scanPageRequest; m_scanPageBusy = false; m_pipelineId.clear(); m_allScanResults = false;
+  if (m_aggregateControls) m_aggregateControls->hide();
   m_scopedTasks = true;
   m_scopeTaskIds.clear();
   m_selectInitialScopeTask = false;
@@ -1038,6 +1112,26 @@ void ScanPage::setupUI() {
   auto *resLabel = new QLabel(QStringLiteral("结果概览"));
   resLabel->setStyleSheet(Theme::SectionStyle);
   right->addWidget(resLabel);
+  m_aggregateControls = new QWidget(resultsPage);
+  auto *aggregateLayout = new QHBoxLayout(m_aggregateControls);
+  aggregateLayout->setContentsMargins(0, 0, 0, 0);
+  m_allResultsButton = new QPushButton(QStringLiteral("全部子扫描"));
+  m_allResultsButton->setObjectName("allScanResults");
+  m_moreResultsButton = new QPushButton(QStringLiteral("加载更多"));
+  m_moreResultsButton->setObjectName("moreScanResults");
+  m_resultCategory = new QComboBox;
+  m_resultSource = new QComboBox;
+  const QStringList categoryNames{"全部记录", "漏洞候选", "资产 / 端口 / 指纹", "信息级发现", "凭据记录", "工具错误 / 警告", "输出证据", "其他记录"};
+  const QStringList categoryKeys{"all", "vulnerability", "asset", "information", "credential", "error", "evidence", "other"};
+  for (int i = 0; i < categoryNames.size(); ++i) m_resultCategory->addItem(categoryNames[i], categoryKeys[i]);
+  m_resultSource->addItem(QStringLiteral("全部来源"), QString());
+  aggregateLayout->addWidget(m_allResultsButton); aggregateLayout->addWidget(m_resultCategory);
+  aggregateLayout->addWidget(m_resultSource); aggregateLayout->addWidget(m_moreResultsButton);
+  connect(m_allResultsButton, &QPushButton::clicked, this, [this]() { loadPipelineResults(); });
+  connect(m_moreResultsButton, &QPushButton::clicked, this, [this]() { loadPipelineResults(true); });
+  connect(m_resultCategory, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { if (!m_pipelineId.isEmpty()) loadPipelineResults(); });
+  connect(m_resultSource, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() { if (!m_pipelineId.isEmpty()) loadPipelineResults(); });
+  right->addWidget(m_aggregateControls); m_aggregateControls->hide();
   m_resultOverview = new ScanResultOverview(resultsPage);
   right->addWidget(m_resultOverview);
   m_resultHint = new QLabel(QStringLiteral("完整结果  ·  右键复制内容 / 发起攻击，双击漏洞行进入攻击测试"));
@@ -1053,6 +1147,14 @@ void ScanPage::setupUI() {
   m_resultTree = new QTreeWidget;
   m_resultTree->setMinimumHeight(180);
   m_resultTree->setObjectName("scanResultTree");
+  connect(m_resultTree, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem *item, int) {
+    if (!m_allScanResults || !item->parent()) return;
+    auto *dialog = new QDialog(this); dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(QStringLiteral("扫描记录与来源")); dialog->resize(850, 600);
+    auto *layout = new QVBoxLayout(dialog); auto *text = new QPlainTextEdit;
+    text->setReadOnly(true); text->setPlainText(item->text(2) + "\n" + item->toolTip(1));
+    layout->addWidget(text); dialog->show();
+  });
   UiUtil::EmptyHint::attach(m_resultTree, QStringLiteral("扫描完成后在此展示结果"));
   m_resultTree->setHeaderLabels({"严重度", "数据", "工具"});
   m_resultTree->setAlternatingRowColors(true);
@@ -1072,7 +1174,7 @@ void ScanPage::setupUI() {
     menu.addAction("复制内容", [text]() { QApplication::clipboard()->setText(text); });
     // 演示动线：漏洞结果一键发起攻击
     const QString resultType = item->data(0, Qt::UserRole).toString();
-    if (isProgramFinding(resultType) || resultType == "application_observation" || resultType == "source_coverage" || resultType == "program_coverage") {
+    if (!m_allScanResults && (isProgramFinding(resultType) || resultType == "application_observation" || resultType == "source_coverage" || resultType == "program_coverage")) {
       menu.addAction("查看源码 / 请求证据", [this,item]() { showSourceEvidence(item); });
       if (isProgramFinding(resultType) && m_sourceDemoBtn->isEnabled()) {
         menu.addAction("生成此项攻击演示预案", [this,item]() {
@@ -1081,7 +1183,7 @@ void ScanPage::setupUI() {
       }
     }
     const QStringList attackable = {"vulnerability", "web_vuln", "sql_injection", "credential"};
-    if (!m_currentTaskTarget.isEmpty() && attackable.contains(resultType)) {
+    if (!m_allScanResults && !m_currentTaskTarget.isEmpty() && attackable.contains(resultType)) {
       menu.addSeparator();
       menu.addAction("⚔ 对此漏洞发起攻击", [this, item, resultType]() {
         const QString raw = item->toolTip(1);  // 优先原始 JSON（关键词更全），展示文本兜底
@@ -1092,6 +1194,7 @@ void ScanPage::setupUI() {
   });
   connect(m_resultTree, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem *item, int) {
     // 双击漏洞行 = 直接发起攻击（分组头/不可攻击类型忽略）
+    if (m_allScanResults) return;
     if (!item || item->parent() == nullptr) return;
     const QString resultType = item->data(0, Qt::UserRole).toString();
     if (isProgramFinding(resultType) || resultType == "application_observation" || resultType == "source_coverage" || resultType == "program_coverage") {showSourceEvidence(item); return;}
@@ -1362,7 +1465,7 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
       child->setData(0, Qt::UserRole, resultType);  // 供右键"发起攻击"判断类型
       child->setText(1, formatResultData(rawData, resultType));
       child->setToolTip(1, rawData);
-      child->setText(2, tool);
+      child->setText(2, tool + (m_allScanResults ? " · " + obj["scan_task_id"].toString() + " #" + QString::number(obj["id"].toVariant().toLongLong()) : QString()));
 
       // Dim raw_output items
       if (resultType == "raw_output") {
@@ -1409,13 +1512,13 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
       child->setData(0, Qt::UserRole, resultType);  // 供右键"发起攻击"判断类型
       child->setText(1, formatResultData(rawData, resultType));
       child->setToolTip(1, rawData);
-      child->setText(2, tool);
+      child->setText(2, tool + (m_allScanResults ? " · " + obj["scan_task_id"].toString() + " #" + QString::number(obj["id"].toVariant().toLongLong()) : QString()));
     }
     groupItem->setExpanded(true);
   }
 
-  m_resultTree->setColumnWidth(0, 90);
-  m_resultTree->setColumnWidth(2, 80);
+  m_resultTree->setColumnWidth(0, m_allScanResults ? 110 : 90);
+  m_resultTree->setColumnWidth(2, m_allScanResults ? 260 : 80);
 }
 
 // ── Create scan (auto-execute) ───────────────────────────────────────
@@ -1538,6 +1641,7 @@ void ScanPage::startPollingIfNeeded() {
 
 // ── Refresh task list ─────────────────────────────────────────────────
 void ScanPage::onRefreshTasks() {
+  if (m_allScanResults && !m_pipelineId.isEmpty()) { loadPipelineResults(); return; }
   if (m_scopedTasks && m_scopeTaskIds.isEmpty()) return;
   const int scopeRevision = m_scopeRevision;
   QPointer<ScanPage> guard(this);
@@ -1626,7 +1730,7 @@ void ScanPage::onRefreshTasks() {
     }
 
     // Opening a pipeline should show its results, not unrelated global tasks.
-    if (m_scopedTasks && m_selectInitialScopeTask && m_selectedTaskId.isEmpty()) {
+    if (!m_allScanResults && m_scopedTasks && m_selectInitialScopeTask && m_selectedTaskId.isEmpty()) {
       const QList<QTableWidget*> tables{m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable, m_sourceScanTable};
       for (int tab = 0; tab < tables.size(); ++tab) {
         if (tables[tab]->rowCount() == 0) continue;
@@ -1645,6 +1749,7 @@ void ScanPage::onRefreshTasks() {
 
 // ── Task clicked → show detail in right panel ────────────────────────
 void ScanPage::onTaskClicked(int row, int) {
+  m_allScanResults = false; ++m_scanPageRequest; m_scanPageBusy = false;
   // Determine which table sent the signal
   auto *table = qobject_cast<QTableWidget*>(sender());
   if (!table) return;
@@ -2092,14 +2197,27 @@ void ScanPage::onGenExecClicked() {
 // ── Re-execute scan ──────────────────────────────────────────────────
 void ScanPage::onReexecScan() {
   if (m_selectedTaskId.isEmpty()) return;
+  const QString originalId = m_selectedTaskId;
+  const int revision = m_scopeRevision;
+  QPointer<ScanPage> guard(this);
   m_reexecBtn->setVisible(false);
   clearDetailPanel();
-  m_statusLabel->setText("重新执行中...");
+  m_statusLabel->setText("创建关联扫描中...");
   m_statusLabel->setStyleSheet(Theme::StatusInfoStyle);
 
-  QJsonObject empty;
-  m_api->post("/api/scan-tasks/" + m_selectedTaskId + "/execute", empty, 5000, [this](const QJsonObject &res) {
+  if (m_retryRequestSource != originalId || m_retryRequestId.isEmpty()) {
+    m_retryRequestSource = originalId;
+    m_retryRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  }
+  QJsonObject empty{{"request_id", m_retryRequestId}};
+  m_api->post("/api/scan-tasks/" + originalId + "/retry", empty, 5000, [this, guard, originalId, revision](const QJsonObject &res) {
+    if (!guard || revision != m_scopeRevision || m_selectedTaskId != originalId) return;
     if (res["status"].toString() == "ok") {
+      m_retryRequestId.clear();
+      m_selectedTaskId = res["data"].toObject()["scan_task_id"].toString();
+      // Explicit follow-up scope; the parent run's original evidence is unchanged.
+      m_pipelineId.clear(); m_allScanResults = false; m_aggregateControls->hide();
+      m_scopeTaskIds = QStringList{m_selectedTaskId};
       if (!m_runningTaskIds.contains(m_selectedTaskId)) m_runningTaskIds << m_selectedTaskId;
       startPollingIfNeeded();
       onRefreshTasks();
@@ -2115,7 +2233,11 @@ void ScanPage::onReexecScan() {
 void ScanPage::onDeleteTask() {
   if (m_selectedTaskId.isEmpty()) return;
 
-  m_api->get("/api/scan-tasks/" + m_selectedTaskId, 5000, [this](const QJsonObject &res) {
+  const QString taskId = m_selectedTaskId;
+  const int revision = m_scopeRevision;
+  QPointer<ScanPage> guard(this);
+  m_api->get("/api/scan-tasks/" + taskId, 5000, [this, guard, taskId, revision](const QJsonObject &res) {
+    if (!guard || revision != m_scopeRevision || taskId != m_selectedTaskId) return;
     if (res["status"].toString() != "ok") return;
     auto d = res["data"].toObject();
     QString status = d["status"].toString();
@@ -2131,9 +2253,13 @@ void ScanPage::onDeleteTask() {
     auto reply = QMessageBox::question(this->window(), "确认删除",
       QString("确定要删除此扫描任务吗？\n目标: %1 | %2\n此操作不可撤销。").arg(target, type),
       QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-    if (reply != QMessageBox::Yes) return;
+    if (reply != QMessageBox::Yes || revision != m_scopeRevision || taskId != m_selectedTaskId) return;
 
-    m_api->del("/api/scan-tasks/" + m_selectedTaskId, 5000, [this](const QJsonObject &) {
+    m_api->del("/api/scan-tasks/" + taskId, 5000, [this, guard, taskId, revision](const QJsonObject &response) {
+      if (!guard || revision != m_scopeRevision || taskId != m_selectedTaskId) return;
+      if (response["status"].toString() != "ok") {
+        m_statusLabel->setText(response["error"].toObject()["message"].toString(QStringLiteral("删除失败，原结果仍保留"))); return;
+      }
       m_selectedTaskId.clear();
       clearDetailPanel();  // also disables delete button
       onRefreshTasks();
@@ -2172,6 +2298,7 @@ void ScanPage::clearDetailPanel() {
 
 // ── Poll scan status ──────────────────────────────────────────────────
 void ScanPage::onPollStatus() {
+  if (m_allScanResults) { if (!m_scanPageBusy) loadPipelineResults(); return; }
   if (m_runningTaskIds.isEmpty()) {
     m_pollTimer->stop();
     return;
@@ -2180,7 +2307,7 @@ void ScanPage::onPollStatus() {
   const int scopeRevision = m_scopeRevision;
   QPointer<ScanPage> guard(this);
   m_api->get("/api/scan-tasks", 5000, [this, guard, scopeRevision](const QJsonObject &res) {
-    if (!guard || scopeRevision != m_scopeRevision) return;
+    if (!guard || scopeRevision != m_scopeRevision || m_allScanResults) return;
     if (res["status"].toString() != "ok") {
       // API error — tolerate transient failures, then stop polling to avoid spin
       if (++m_pollErrorCount >= 10) {

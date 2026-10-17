@@ -161,6 +161,10 @@ void AnalysisPage::setTaskContext(const QJsonObject &pipeline)
     state = fallback ? QStringLiteral("来源：规则降级分析（模型不可用）；以下均为待验证候选项。")
                      : QStringLiteral("来源：任务结构化分析；以下均为待验证候选项，不是正式漏洞结论。");
   }
+  const auto coverage = m_analysis.value("analysis_scope").toObject();
+  if (!coverage.isEmpty()) state += QStringLiteral("\nAI 输入 %1 / %2 条记录（最多 %3 条，单条最多 %4 字符）；完整发现请查看扫描结果。")
+      .arg(coverage.value("input_records").toInt()).arg(coverage.value("eligible_records").toInt())
+      .arg(coverage.value("record_limit").toInt()).arg(coverage.value("per_record_char_limit").toInt());
   m_stateLabel->setText(state);
   m_stateLabel->setStyleSheet(fallback ? Theme::StatusWarningStyle : Theme::StatusInfoStyle);
   m_sourceLabel->setText(QStringLiteral("任务：%1 · 扫描作业：%2\n仅列出任务级来源；后端尚未提供逐条风险与证据的映射。")

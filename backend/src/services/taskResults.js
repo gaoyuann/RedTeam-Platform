@@ -1,3 +1,5 @@
+import { scanCollection } from './scanResultQuery.js';
+import { publicScanRecord, redactScanValue, resultCategory } from './scanResultCatalog.js';
 import { createHash, randomUUID } from 'crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { taskExecutionSnapshot, taskDisplayText, taskDisplayValue } from './taskExecution.js';
@@ -48,7 +50,13 @@ function frozenContent(row, pipeline) {
     if (key === 'findings' && rows.some(value => value.state !== 'unreviewed')) return null;
     if (['evidence', 'attempts'].includes(key) && rows.some(value => value.run_id !== row.run_id || !Number.isSafeInteger(value.id) || value.id < 1)) return null;
   }
-  return taskDisplayValue(content, 0, 200);
+  const safe=taskDisplayValue(content,0,200);
+  if(Array.isArray(content.results.scan_records)) {
+    safe.results.scan_records=content.results.scan_records.map(publicScanRecord);
+    safe.results.scan_summary=redactScanValue(content.results.scan_summary);
+    safe.results.scan_runs=redactScanValue(content.results.scan_runs || []);
+  }
+  return safe;
 }
 
 function reportMetadata(db, row, pipeline) {
@@ -72,12 +80,8 @@ export function taskResultsSnapshot(db, pipeline) {
   return db.transaction(() => {
     const execution = taskExecutionSnapshot(db, pipeline);
     if (!execution) fail(409, '任务关联执行记录的所有者或目标不匹配，请核对来源');
-    const linkedIds = [...new Set((pipeline.scan_task_id || '').split(',').map(id => id.trim()).filter(Boolean))];
-    const scans = linkedIds.length ? db.prepare(`SELECT * FROM scan_tasks
-      WHERE scan_task_id IN (${linkedIds.map(() => '?').join(',')}) AND created_by = ? AND target = ? ORDER BY scan_task_id`)
-      .all(...linkedIds, pipeline.created_by, pipeline.target) : [];
-    const scanIds = scans.map(scan => scan.scan_task_id);
-    const scanResults = scanIds.length ? db.prepare(`SELECT * FROM scan_results WHERE scan_task_id IN (${scanIds.map(() => '?').join(',')}) ORDER BY id`).all(...scanIds) : [];
+    const collection=scanCollection(db,pipeline);
+    const {scans,rows:scanResults}=collection;
     const run = execution.run ? db.prepare('SELECT * FROM execution_runs WHERE run_id = ?').get(execution.run.run_id) : null;
     const records = table => run ? db.prepare(`SELECT * FROM ${table} WHERE run_id = ? ORDER BY id`).all(run.run_id) : [];
     const plan = approvedSource(db, pipeline, run);
@@ -86,14 +90,13 @@ export function taskResultsSnapshot(db, pipeline) {
     const candidateItems = Array.isArray(risks) ? risks : risks ? [risks] : [];
     const candidates = candidateItems.filter(candidate => typeof candidate === 'string' ? Boolean(candidate.trim())
       : candidate && typeof candidate === 'object' && !Array.isArray(candidate) && Object.keys(candidate).length > 0);
-    const riskTypes = new Set(['vulnerability', 'web_vuln', 'sql_injection', 'misconfiguration', 'auth_finding', 'credential']);
     const scanCandidates = scanResults.filter(row => {
       const data = json(row.result_data);
-      return riskTypes.has(row.result_type) && data && typeof data === 'object' && !Array.isArray(data);
+      return resultCategory(row)==='vulnerability' && data && typeof data === 'object' && !Array.isArray(data);
     });
     const findings = scanCandidates.slice(0, 150).map((row, index) => {
       const data = json(row.result_data);
-      return { id: `scan:${index}`, category: 'scan_candidate',
+      return { id: `scan:${row.id}`, category: 'scan_candidate',
         name: row.result_type === 'credential' ? '凭证相关候选（不展示凭证内容）'
           : taskDisplayText(data.name || data.finding || data.template || row.result_type),
         severity: taskDisplayText(row.severity || data.severity), state: 'unreviewed', source: 'structured_scan',
@@ -109,21 +112,25 @@ export function taskResultsSnapshot(db, pipeline) {
     const cachedScore = score && score.ok === true && score.runId === run?.run_id && Number.isFinite(score.percent) && score.percent >= 0 && score.percent <= 100
       ? { percent: score.percent, earned: Number.isFinite(score.earned) ? score.earned : null,
         total: Number.isFinite(score.total) ? score.total : null, source: 'stored_teaching_score' } : null;
-    const fingerprint = createHash('sha256').update(JSON.stringify({ pipeline, scans, scanResults, run,
+    const fingerprint = createHash('sha256').update(JSON.stringify({ pipeline, scans, scanResults, scanToolRuns:collection.runs, run,
       steps: records('execution_steps'), attempts: records('execution_attempts'), evidence: records('evidence_records'), plan,
       playbook: run ? db.prepare('SELECT * FROM playbooks WHERE playbook_id = ?').get(run.playbook_id) : null,
       definitions: run ? db.prepare('SELECT * FROM playbook_steps WHERE playbook_id = ? ORDER BY step_index').all(run.playbook_id) : [] })).digest('hex');
     return { version: 1, pipeline_id: pipeline.pipeline_id, owner: pipeline.created_by, target: taskDisplayText(pipeline.target),
       pipeline_status: pipeline.status, task_name: taskDisplayText(json(pipeline.config, {})?.task_name || pipeline.pipeline_id),
       source_fingerprint: fingerprint, captured_at: new Date().toISOString(), execution, findings,
-      finding_count: scanCandidates.length + candidates.length,
+      finding_count: findings.length,
+      candidate_total:scanCandidates.length+candidates.length,
+      scan_summary:collection.summary,
+      scan_records:scanResults.map(publicScanRecord),
+      scan_runs:collection.runs.map(({evidence,...run})=>({...run,outcome:json(run.outcome),diagnostics:json(run.diagnostics)})),
       assessment: { risk_level: '未评级（需人工复核证据）', teaching_score: cachedScore,
         notice: '扫描和 AI 发现均为候选；工具成功、规则命中、教学得分及 MITRE 标签不等于漏洞成立。失败、未记录和未执行项不代表安全。' },
       trace: { plan, scan_source_count: scans.length, scan_sources: scans.slice(0, 200).map(row => ({ scan_task_id: row.scan_task_id, target: taskDisplayText(row.target), status: row.status })),
         scan_result_ids: scanResults.filter(row => !['raw_output', 'scan_error'].includes(row.result_type)).slice(0, 200).map(row => row.id),
         evidence_ids: execution.evidence.map(row => row.id), attempt_ids: execution.attempts.map(row => row.id) },
       reports: reportRows(db, pipeline).map(row => reportMetadata(db, row, pipeline)),
-      limits: { findings: 200, scan_candidates: 150, analysis_candidates: 50, reports: 50, records: 200, text: 2000 } };
+      limits: { candidate_preview:true, findings: 200, scan_candidates: 150, analysis_candidates: 50, reports: 50, records: 200, text: 2000 } };
   })();
 }
 
@@ -144,6 +151,9 @@ export function createTaskReport(db, pipeline, actor, body) {
         run_id: body.run_id, playbook_id: snapshot.execution.run.playbook_id, plan: snapshot.trace.plan,
         source_fingerprint: snapshot.source_fingerprint, captured_at: snapshot.captured_at },
       notice: '此报告是脱敏、限长的来源快照，不是完整原始证据、审批结论或风险评级；历史快照不随后续记录变化自动更新。', results }, 0, 200);
+    content.results.scan_records=results.scan_records;
+    content.results.scan_summary=results.scan_summary;
+    content.results.scan_runs=results.scan_runs;
     const reportId = `task_rpt_${randomUUID()}`;
     const title = taskDisplayText(body.title?.trim() || `任务结果记录 - ${snapshot.task_name}`).slice(0, 120);
     const now = new Date().toISOString();
@@ -194,6 +204,8 @@ export function taskReportHtml(document) {
     <p class="notice">${escapeHtml(content.notice)}<br>${escapeHtml(results.assessment.notice)}</p>
     <h2>来源链</h2><pre>${escapeHtml(JSON.stringify(content.provenance, null, 2))}</pre>
     <p>Run 状态：${escapeHtml(results.execution.run.status)} · 风险：${escapeHtml(results.assessment.risk_level)} · 教学得分：${escapeHtml(results.assessment.teaching_score?.percent ?? '未记录')}</p>
+    ${table('扫描全量记录（未去重）', ['记录 ID','子扫描','类别','工具','内容'], (results.scan_records || []).map(row=>[row.id,row.scan_task_id,row.category,row.source_tool,row.result_data]))}
+    <pre>${escapeHtml(JSON.stringify(results.scan_summary || {completeness:'legacy_unknown'},null,2))}</pre>
     ${table('发现候选（未复核）', ['类别', '名称', '风险标签', '来源'], results.findings.map(row => [row.category, row.name, row.severity, row.source]))}
     ${table('工具结果（不是漏洞验证结论）', ['步骤', '工具', '工具状态', '尝试编号', '退出码'], results.execution.steps.map(row => [row.step_index, row.tool_id, row.state, row.attempt_id, row.exit_code]))}
     ${table('证据来源', ['证据编号', 'Run', '步骤', '工具', '尝试编号', '来源校验', '采集时间'], results.execution.evidence.map(row => [row.id, row.run_id, row.step_index, row.tool_id, row.attempt_id, row.source_state, row.recorded_at]))}

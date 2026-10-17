@@ -12,7 +12,8 @@
     "benchmark:source": "node scripts/source-benchmark.js",
     "check:source-env": "node scripts/check-source-environment.js",
     "test:topology": "node --test test/topology.test.js test/topology-api.test.js",
-    "test:topology:pipeline": "node --experimental-test-module-mocks --test test/topology-pipeline.test.js test/topology-analysis.test.js"
+    "test:topology:pipeline": "node --experimental-test-module-mocks --test test/topology-pipeline.test.js test/topology-analysis.test.js",
+    "test:scan-results": "node --experimental-test-module-mocks --test test/scan-result-integrity.test.js test/scan-tool-output.test.js test/scan-result-acceptance.test.js test/scan-process-acceptance.test.js"
   },
   "dependencies": {
     "@pdf-lib/fontkit": "^1.1.1",
