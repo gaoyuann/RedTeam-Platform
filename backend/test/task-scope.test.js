@@ -17,6 +17,7 @@ test('structured scope bounds hosts, URLs, CIDRs and exclusions', () => {
   assert.equal(isTargetInScope(scope,'https://example.invalid/app/admin/'),false);
   assert.equal(isTargetInScope(scope,'https://example.invalid/other'),false);
   assert.equal(isTargetInScope(scope,'http://example.invalid/app/'),false);
+  assert.equal(isTargetInScope(scope,'https://example.invalid/app/%2fadmin'),false);
   assert.match(scopeBlockReason(scope,'https://example.invalid/app/','web_scan'),/授权 URL 路径|排除/);
   assert.equal(scopeBlockReason(scope,'https://example.invalid/app/check','target-request'),null);
   assert.throws(()=>normalizeTaskScope({task_scope:{includes:['192.0.2.0/28'],excludes:['192.0.2.1']}},'192.0.2.1'),/排除/);
