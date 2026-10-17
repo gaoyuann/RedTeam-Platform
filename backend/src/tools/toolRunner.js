@@ -1,3 +1,4 @@
+import { StringDecoder } from 'node:string_decoder';
 import { spawn } from 'child_process';
 import { runTargetRequest } from './targetRequest.js';
 import { resolve, dirname } from 'path';
@@ -99,47 +100,56 @@ function runProcess(bin, args, options, executionMode, stopContainer) {
     const timeout = options.timeout || 300_000;
     const maxBytes = (options.maxOutputKB || 2048) * 1024;
     let stdout = '', stderr = '';
+    const stdoutDecoder = new StringDecoder('utf8'), stderrDecoder = new StringDecoder('utf8');
     let outputBytes = 0;
     let timedOut = false, aborted = false, outputLimitExceeded = false;
     let settled = false, killed = false;
     let sigkillTimer;
+    let cleanupResult = Promise.resolve(true);
+    let outputConsumerError = null;
     let timer, hardTimer;
     const started = Date.now();
     const child = spawn(bin, args, { shell: false });
     function settle(result) {
       if (settled) return;
       settled = true;
+      stdout += stdoutDecoder.end(); stderr += stderrDecoder.end();
       clearTimeout(timer);
       clearTimeout(hardTimer);
       clearTimeout(sigkillTimer);
       options.signal?.removeEventListener('abort', onAbort);
-      resolveResult(classifyToolResult(options.toolId, {
+      cleanupResult.then(stopped => resolveResult(classifyToolResult(options.toolId, {
         ...result, stdout: stdout.trim(), stderr: stderr.trim(), executionMode,
-        timedOut, aborted, outputLimitExceeded, durationMs: Date.now() - started,
-      }));
+        timedOut, aborted, outputLimitExceeded, outputBytes, durationMs: Date.now() - started,
+        processStopped: result.processStopped !== false && stopped !== false,
+        ...(outputConsumerError ? {exitCode:-1,error:'Output collection failed: '+outputConsumerError} : {}),
+      })));
     }
     function forceKill() {
       if (killed) return;
       killed = true;
-      stopContainer?.();
+      if (stopContainer) cleanupResult = Promise.resolve().then(stopContainer).catch(() => false);
       child.kill('SIGTERM');
       sigkillTimer = setTimeout(() => child.kill('SIGKILL'), 5000);
-      hardTimer = setTimeout(() => settle({ exitCode: -1 }), 15000);
+      hardTimer = setTimeout(() => settle({ exitCode: -1, processStopped: false }), 15000);
     }
     function onAbort() {
       aborted = true;
       forceKill();
     }
     function collect(data, isError) {
+      if (settled) return;
+      try { options.onOutput?.(data, isError ? 'stderr' : 'stdout'); }
+      catch (error) { outputConsumerError=error.message; forceKill(); }
       const remaining = Math.max(0, maxBytes - outputBytes);
-      const text = Buffer.from(data).subarray(0, remaining).toString('utf8');
+      const text = (isError ? stderrDecoder : stdoutDecoder).write(Buffer.from(data).subarray(0, remaining));
       if (isError) stderr += text; else stdout += text;
       outputBytes += Buffer.byteLength(data);
       if (outputBytes > maxBytes) { outputLimitExceeded = true; forceKill(); }
     }
     child.stdout.on('data', data => collect(data, false));
     child.stderr.on('data', data => collect(data, true));
-    child.on('close', code => settle({ exitCode: code ?? -1 }));
+    child.on('close', code => settle({ exitCode: code ?? -1, processStopped: true }));
     child.on('error', error => { stderr += error.message; settle({ exitCode: -1 }); });
     timer = setTimeout(() => { timedOut = true; forceKill(); }, timeout);
     options.signal?.addEventListener('abort', onAbort, { once: true });
@@ -149,6 +159,8 @@ function runProcess(bin, args, options, executionMode, stopContainer) {
 
 // ── Main entry: runTool ─────────────────────────────────────────────────
 export async function runTool(toolId, args, options = {}) {
+  const cancelled=()=>({success:false,exitCode:-1,stdout:'',stderr:'操作员手动中止',aborted:true,processStopped:true});
+  if(options.signal?.aborted) return cancelled();
   if (toolId === 'target-request') return runTargetRequest(args, options);
   if (SAST_TOOLS.has(toolId) && !options.sourceDir) return {success:false,exitCode:1,stdout:'',stderr:'源码工具必须从源码审计任务运行',error:'缺少任务源码快照'};
   if (VIRTUAL_TOOLS.has(toolId)) {
@@ -173,6 +185,7 @@ export async function runTool(toolId, args, options = {}) {
     return { success: false, exitCode: -1, stdout: '', stderr: error.message, error: error.message, executionMode: engine };
   }
 
+  if(options.signal?.aborted) return cancelled();
   if (engine === 'host' || !image) {
     if (SAST_TOOLS.has(toolId)) args = args.map(arg => arg === '--project=/src/project/.rt-compile-commands.json'
       ? '--project='+resolve(options.sourceDir,'.rt-host-compile-commands.json')
@@ -184,12 +197,12 @@ export async function runTool(toolId, args, options = {}) {
   const name = `rt-tool-${randomUUID()}`;
   const containerArgs = ['run', '--rm', ...(SAST_TOOLS.has(toolId) ? ['--pull=never'] : []), '--name', name, '--network', SAST_TOOLS.has(toolId) ? 'none' : 'host',
     ...getVolumeMounts(toolId, options), ...(PRIVILEGED_TOOLS.has(toolId) ? ['--privileged'] : []), image, bin, ...args];
-  return runProcess(engine, containerArgs, { ...options, toolId }, engine, () => {
+  return runProcess(engine, containerArgs, { ...options, toolId }, engine, () => new Promise(resolveCleanup => {
     const cleanup = spawn(engine, ['rm', '-f', name], { stdio: 'ignore' });
-    cleanup.on('error', () => {});
-    const cleanupTimer = setTimeout(() => cleanup.kill('SIGKILL'), 10000);
-    cleanup.on('close', () => clearTimeout(cleanupTimer));
-  });
+    cleanup.on('error', () => resolveCleanup(false));
+    const cleanupTimer = setTimeout(() => { cleanup.kill('SIGKILL'); resolveCleanup(false); }, 10000);
+    cleanup.on('close', code => { clearTimeout(cleanupTimer); resolveCleanup(code === 0); });
+  }));
 }
 
 export { IMAGE_MAP, BIN_MAP, PRIVILEGED_TOOLS, VIRTUAL_TOOLS, CAPTURE_TOOLS };

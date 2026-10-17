@@ -1,3 +1,4 @@
+#include "ScanPage.h"
 #include "TaskResultsPanel.h"
 #include "../ApiClient.h"
 #include "../Theme.h"
@@ -126,7 +127,7 @@ TaskResultsPanel::TaskResultsPanel(ApiClient *api, const QString &role, const QS
     connect(table, &QTableWidget::itemSelectionChanged, this, &TaskResultsPanel::showSelection);
     return table;
   };
-  m_findings = makeTable("发现候选", {"类别", "名称", "风险标签", "复核状态", "来源"}, "暂无扫描或分析候选；不表示目标安全");
+  m_findings = makeTable("候选摘要（限量）", {"类别", "名称", "风险标签", "复核状态", "来源"}, "暂无扫描或分析候选；不表示目标安全");
   m_steps = makeTable("工具结果", {"步骤", "工具", "工具状态", "尝试编号", "来源", "退出码"}, "暂无执行结果，不自动计算评分或判定验证成功");
   m_evidence = makeTable("证据清单", {"证据编号", "步骤", "工具", "尝试编号", "来源校验", "采集时间"}, "暂无本任务证据记录");
   m_reports = makeTable("报告记录", {"报告编号", "标题", "来源完整性", "状态", "创建时间"}, "暂无当前任务报告；生成操作需单独确认");
@@ -142,6 +143,8 @@ TaskResultsPanel::TaskResultsPanel(ApiClient *api, const QString &role, const QS
   m_trace = new QPlainTextEdit(m_tabs);
   m_trace->setReadOnly(true);
   m_tabs->addTab(m_trace, QStringLiteral("来源链"));
+  m_scanRecords = new ScanPage(m_api, m_role, m_username, m_tabs);
+  m_tabs->addTab(m_scanRecords, QStringLiteral("全部扫描记录"));
   auto *detailCard = new QFrame(splitter);
   detailCard->setProperty("softCard", true);
   auto *detailLayout = new QVBoxLayout(detailCard);
@@ -195,12 +198,14 @@ void TaskResultsPanel::setTaskContext(const QString &pipelineId, const QString &
   m_pipelineId = pipelineId;
   m_expectedRunId = runId;
   m_target = target;
+  if (!pipelineId.isEmpty()) m_scanRecords->setPipelineScope(pipelineId, {});
   m_refresh->setEnabled(!pipelineId.isEmpty());
   if (!pipelineId.isEmpty()) { m_state->setText(QStringLiteral("正在读取本任务结果来源…")); m_timer->start(); refresh(); }
 }
 
 void TaskResultsPanel::clearTaskContext()
 {
+  m_scanRecords->clearTaskScope();
   ++m_contextVersion;
   ++m_requestVersion;
   ++m_selectionVersion;
@@ -358,6 +363,10 @@ void TaskResultsPanel::loadLinkedReport()
 
 void TaskResultsPanel::render()
 {
+  QStringList scanIds;
+  for (const auto &value : m_snapshot.value("trace").toObject().value("scan_sources").toArray())
+    scanIds.append(value.toObject().value("scan_task_id").toString());
+  if (!m_pipelineId.isEmpty()) m_scanRecords->setPipelineScope(m_pipelineId, scanIds, m_snapshot.value("pipeline_status").toString());
   const auto execution = m_snapshot.value("execution").toObject();
   const auto run = execution.value("run").toObject();
   const auto counts = run.value("counts").toObject();
@@ -372,6 +381,7 @@ void TaskResultsPanel::render()
   m_assessment->setText(assessment.value("risk_level").toString() + "\n" + assessment.value("notice").toString()
       + QStringLiteral(" 教学分仅展示历史存储值，本页不会自动评分；没有人工复核记录时不标为已验证。"));
   m_metrics[0]->setValue(number(m_snapshot.value("finding_count")));
+  m_metrics[0]->setToolTip(QStringLiteral("当前候选摘要中的记录数，包含 AI 候选；不是去重漏洞数。完整扫描记录见同名标签。"));
   m_metrics[1]->setValue(run.isEmpty() ? QStringLiteral("—") : number(counts.value("returned")) + " / " + number(counts.value("steps")));
   m_metrics[2]->setValue(run.isEmpty() ? QStringLiteral("—") : number(counts.value("evidence")));
   m_metrics[3]->setValue(score.value("percent").isDouble() ? QString::number(score.value("percent").toDouble(), 'f', 1) + "%" : QStringLiteral("—"));

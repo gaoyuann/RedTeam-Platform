@@ -9,6 +9,7 @@
 #include "GlobalSearchDialog.h"
 #include "WsClient.h"
 #include "AppStyle.h"
+#include "widgets/ScanResultOverview.h"
 #define private public
 #include "MainWindow.h"
 #include "pages/FlowPage.h"
@@ -158,6 +159,65 @@ int main(int argc, char **argv)
     std::cout << "PASS " << name << std::endl;
   };
 
+  {
+    MockServer aggregateServer;
+    bool delay = false;
+    aggregateServer.handler = [&](const QString &, const QString &requestPath) -> MockReply {
+      const QUrl url(requestPath); const QUrlQuery query(url);
+      if (!url.path().contains("/results")) return {success(QJsonArray())};
+      const QString task = url.path().split('/').value(3);
+      const int after = query.queryItemValue("after").toInt();
+      const bool errors = query.queryItemValue("category") == "error";
+      const int total = errors ? 1 : 235;
+      QJsonArray rows;
+      for (int i = after; i < qMin(after + 100, total); ++i) rows.append(QJsonObject{
+        {"id", i + 1}, {"scan_task_id", "scan-" + task}, {"result_type", errors ? "scan_error" : "vulnerability"},
+        {"severity", errors ? "info" : "high"}, {"source_tool", "fixture"}, {"result_data", errors ? QStringLiteral("{\"error\":\"fixture timeout\"}") : "{\"finding\":\"" + task + " fixture\"}"}});
+      const QJsonObject page{{"total", total}, {"next_after", after + rows.size()}, {"through", total}, {"has_more", after + rows.size() < total}};
+      const QJsonObject data{{"scan_records", rows}, {"page", page},
+        {"scan_summary", QJsonObject{{"record_count",235}, {"completeness","incomplete"}, {"unexecuted_checks",QJsonArray{"web_scan"}}}},
+        {"scan_sources", QJsonArray{QJsonObject{{"scan_task_id","scan-"+task},{"scan_type","vuln_scan"},{"status","PARTIAL"},{"error_message","fixture timeout"}}}}};
+      return {success(data), delay && task == "A" ? 250 : 0};
+    };
+    ApiClient aggregateApi(QStringLiteral("http://127.0.0.1:%1").arg(aggregateServer.serverPort()));
+    ScanPage aggregate(&aggregateApi, "user", "fixture-user"); aggregate.resize(1360,860); aggregate.show();
+    aggregate.setPipelineScope("A", {});
+    verify(awaitCondition([&]() { return aggregate.m_aggregateRecords.size() == 100; }), "aggregate first page returns 100 stable records");
+    aggregate.m_moreResultsButton->click();
+    verify(awaitCondition([&]() { return aggregate.m_aggregateRecords.size() == 200; }), "aggregate second page passes former 150 limit");
+    aggregate.m_moreResultsButton->click();
+    verify(awaitCondition([&]() { return aggregate.m_aggregateRecords.size() == 235; }), "all 235 records are reachable without payloads");
+    verify(!aggregate.m_moreResultsButton->isEnabled() && aggregate.m_resultHint->text().contains("235 / 235"), "list count and paging completion agree");
+    verify(aggregate.m_statusLabel->text().contains("未执行") && aggregate.m_statusLabel->text().contains("部分完成"), "incomplete checks remain visible beside findings");
+    aggregate.m_resultCategory->setCurrentIndex(aggregate.m_resultCategory->findData("error"));
+    verify(awaitCondition([&]() { return aggregate.m_aggregateRecords.size() == 1; }), "tool errors have their own queryable category");
+    verify(aggregate.m_resultTree->topLevelItem(0)->child(0)->text(1).contains("fixture timeout"), "tool error reason is visible in the result list");
+    delay = true; aggregate.loadPipelineResults();
+    aggregate.setPipelineScope("B", {});
+    verify(awaitCondition([&]() { return aggregate.m_aggregateRecords.size() == 1 && aggregate.m_aggregateRecords.first().toObject()["scan_task_id"].toString() == "scan-B"; }), "task switch loads only B records");
+    QTest::qWait(300);
+    verify(aggregate.m_aggregateRecords.first().toObject()["scan_task_id"].toString() == "scan-B", "late A page cannot overwrite B records");
+    const QString capture = qEnvironmentVariable("F04_SCREENSHOT_DIR");
+    if (!capture.isEmpty()) aggregate.grab().save(capture + "/scan-results-errors.png");
+    aggregate.m_resultCategory->setCurrentIndex(0);
+    verify(awaitCondition([&]() { return aggregate.m_aggregateRecords.size() == 100; }), "clearing filter restarts a bounded page");
+    if (!capture.isEmpty()) aggregate.grab().save(capture + "/scan-results-unified.png");
+    aggregate.clearTaskScope();
+    verify(aggregate.m_resultTree->topLevelItemCount() == 0 && aggregate.m_pipelineId.isEmpty(), "leaving aggregate clears all visible records and identity");
+  }
+
+  {
+    ScanResultOverview overview;
+    overview.setResults(QJsonArray{
+      QJsonObject{{"result_type", "auth_finding"}, {"severity", "INFO"}},
+      QJsonObject{{"result_type", "vulnerability"}, {"severity", "high"}},
+      QJsonObject{{"result_type", "open_port"}, {"result_data", "{\"state\":\"closed\"}"}},
+      QJsonObject{{"result_type", "open_port"}, {"result_data", "{\"state\":\"open\"}"}}
+    });
+    verify(overview.findChild<QFrame*>("findingMetric")->findChild<QLabel*>("metricValue")->text() == "1", "INFO legacy severity is not counted as a vulnerability");
+    verify(overview.findChild<QFrame*>("portMetric")->findChild<QLabel*>("metricValue")->text() == "1", "closed port records are not counted as open ports");
+  }
+
   MockServer server;
   bool delayedTask = false;
   bool delayedScans = false;
@@ -210,6 +270,8 @@ int main(int argc, char **argv)
   flow.show();
   verify(awaitCondition([&]() { return flow.m_flowListFresh; }), "task index loads from isolated loopback");
   flow.openTaskAnalysis("A");
+  verify(awaitCondition([&]() { return flow.m_scanTab->m_allScanResults && flow.m_scanTab->m_portScanTable->rowCount() == 1; }), "network task defaults to aggregate results and scoped child list");
+  emit flow.m_scanTab->m_portScanTable->cellClicked(0, 0);
   verify(awaitCondition([&]() { return flow.m_aiPanel->m_pipelineId == "A" && flow.m_scanTab->m_selectedTaskId == "scan-A"; }), "selected task and scan finish loading");
   verify(flow.m_selectedPipelineId == "A", "task keeps exact identity");
   verify(flow.m_stepIndicator->phases().first().status == "pending", "missing authorization never displays confirmed preparation");
@@ -240,6 +302,7 @@ int main(int argc, char **argv)
   verify(flow.m_evalTab->m_taskResults->m_selectedReportId == "trace-B", "global report opens exact report ID");
   verify(flow.m_scanTab->m_scopeTaskIds == QStringList{"scan-B"}, "scan scope switches to task B");
 
+  emit flow.m_scanTab->m_portScanTable->cellClicked(0, 0);
   delayedScans = true;
   const int oldListRequests = server.requests.value("GET /api/scan-tasks");
   flow.m_scanTab->onRefreshTasks();
@@ -274,6 +337,8 @@ int main(int argc, char **argv)
   delayedTask = false;
   delayedScans = false;
   flow.openTaskAnalysis("A");
+  verify(awaitCondition([&]() { return flow.m_scanTab->m_portScanTable->rowCount() == 1; }), "child list reopens for explicit selection");
+  emit flow.m_scanTab->m_portScanTable->cellClicked(0, 0);
   verify(awaitCondition([&]() { return flow.m_scanTab->m_selectedTaskId == "scan-A"; }), "reopening restores exact task scope");
   delayedScans = true;
   const int oldDetailRequests = server.requests.value("GET /api/scan-tasks/scan-A");
@@ -282,6 +347,8 @@ int main(int argc, char **argv)
   flow.onBackToList();
   delayedScans = false;
   flow.openTaskAnalysis("A");
+  verify(awaitCondition([&]() { return flow.m_scanTab->m_portScanTable->rowCount() == 1; }), "fresh scoped child list loads");
+  emit flow.m_scanTab->m_portScanTable->cellClicked(0, 0);
   verify(awaitCondition([&]() { return flow.m_scanTab->m_currentTarget == "A.invalid"; }), "same task can reopen with fresh scan context");
   flow.m_scanTab->m_currentTarget = QStringLiteral("fresh-context-marker");
   QTest::qWait(350);

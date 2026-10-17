@@ -30,7 +30,7 @@ function buildFindingsSummary(scanResults) {
     }
 
     lines.push(
-      `- [${r.severity || 'info'}] ${r.result_type}: ${dataStr} (tool: ${r.source_tool || '?'}, mitre: ${r.mitre_technique_id || 'N/A'})`
+      `- [record:${r.result_id}] [${r.severity || 'info'}] ${r.result_type}: ${dataStr} (tool: ${r.source_tool || '?'}, mitre: ${r.mitre_technique_id || 'N/A'})`
     );
   }
 
@@ -52,9 +52,9 @@ function getScanResults(db, scanTaskIds) {
 
   const placeholders = ids.map(() => '?').join(',');
   return db.prepare(
-    `SELECT result_type, result_data, severity, mitre_technique_id, source_tool
+    `SELECT rowid AS result_id, scan_task_id, result_type, result_data, severity, mitre_technique_id, source_tool
      FROM scan_results WHERE scan_task_id IN (${placeholders})
-     AND result_type NOT IN ('lan_scope', 'lan_host_discovery', 'scan_evidence', 'network_context', 'network_link')
+     AND result_type NOT IN ('lan_scope', 'lan_host_discovery', 'scan_evidence', 'network_context', 'network_link', 'raw_output', 'scan_error', 'scan_warning')
      ORDER BY CASE severity
        WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2
        WHEN 'low' THEN 3 ELSE 4 END
@@ -133,6 +133,7 @@ export async function analyzeScanResults(scanTaskIds, options = {}) {
   // Gather all scan results
   const results = getScanResults(db, ids);
   const findingsSummary = buildFindingsSummary(results);
+  const eligibleCount=db.prepare(`SELECT COUNT(*) n FROM scan_results WHERE scan_task_id IN (${placeholders}) AND result_type NOT IN ('lan_scope','lan_host_discovery','scan_evidence','network_context','network_link','raw_output','scan_error','scan_warning')`).get(...ids).n;
 
   // Determine which scan types were run
   const scanTypesRun = [...new Set(tasks.map(t => t.scan_type))];
@@ -224,7 +225,8 @@ ${findingsSummary}
     target_class: targetClass,
     target_profile: targetProfile,
     scan_types: scanTypesRun,
-    findings_count: results.length,
+    findings_count: results.filter(r=>!['raw_output','scan_error'].includes(r.result_type)).length,
+    analysis_scope:{eligible_records:eligibleCount,input_records:results.filter(r=>!['raw_output','scan_error'].includes(r.result_type)).length,record_limit:MAX_FINDINGS_ENTRIES,per_record_char_limit:MAX_DATA_STR_LEN,text_char_limit:MAX_FINDINGS_TEXT_LEN,input_record_ids:results.map(r=>r.result_id),partial:eligibleCount>results.length || results.some(r=>String(r.result_data || '').length>MAX_DATA_STR_LEN),count_basis:'AI input records, not all discoveries'},
     ...validated,
     _raw_fields: Object.keys(parsed),
   };

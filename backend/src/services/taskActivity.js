@@ -1,3 +1,5 @@
+import { pipelineScans } from './scanResultQuery.js';
+import { summarizeScanRecords } from './scanResultCatalog.js';
 import { getWsManager } from './wsManager.js';
 
 export function broadcastTaskEvent(db, event, data) {
@@ -39,14 +41,10 @@ export function appendTaskLog(db, pipelineId, message, level = 'info') {
 }
 
 export function taskSummary(db, pipeline) {
-  const requestedScanIds = [...new Set((pipeline.scan_task_id || '').split(',').map(value => value.trim()).filter(Boolean))];
-  const verifiedScanIds = requestedScanIds.length ? db.prepare(`SELECT scan_task_id FROM scan_tasks
-    WHERE scan_task_id IN (${requestedScanIds.map(() => '?').join(',')}) AND target = ? AND created_by = ?`)
-    .all(...requestedScanIds, pipeline.target, pipeline.created_by).map(row => row.scan_task_id) : [];
-  const scanIds = requestedScanIds.filter(identifier => verifiedScanIds.includes(identifier));
-  const scanFindings = scanIds.length ? db.prepare(`SELECT COUNT(*) AS count FROM scan_results AS result
-    WHERE result.scan_task_id IN (${scanIds.map(() => '?').join(',')}) AND result.result_type NOT IN ('raw_output', 'scan_error')`)
-    .get(...scanIds).count : 0;
+  const scanIds=pipelineScans(db,pipeline).map(s=>s.scan_task_id);
+  const scanRows=scanIds.length ? db.prepare(`SELECT result_type,severity FROM scan_results WHERE scan_task_id IN (${scanIds.map(()=>'?').join(',')})`).all(...scanIds) : [];
+  const counts=summarizeScanRecords(scanRows);
+  const scanFindings=counts.categories.vulnerability;
   let analysis = {};
   try { analysis = typeof pipeline.analysis_result === 'string' ? JSON.parse(pipeline.analysis_result || '{}') : pipeline.analysis_result || {}; } catch {}
   if (!analysis || typeof analysis !== 'object' || Array.isArray(analysis)) analysis = {};
@@ -57,7 +55,7 @@ export function taskSummary(db, pipeline) {
     .get(pipeline.run_id, pipeline.target, pipeline.created_by) : null;
   const countForRun = table => run ? db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE run_id = ?`).get(run.run_id).count : 0;
   const plan = db.prepare('SELECT state, revision FROM task_plans WHERE pipeline_id = ?').get(pipeline.pipeline_id);
-  return { scan_task_ids: scanIds, scan_findings: scanFindings, candidate_risks: candidateRisks,
+  return { scan_task_ids: scanIds, scan_findings: scanFindings, scan_record_counts:counts, candidate_risks: candidateRisks,
     evidence_records: countForRun('evidence_records'), reports: countForRun('test_reports'),
     execution: run || null, plan: plan || null };
 }

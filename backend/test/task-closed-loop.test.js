@@ -378,6 +378,25 @@ test('isolated task closes the loop without crossing owner, target, or evidence 
     const unsupported = await request('GET', `/api/pipelines/${pipelineId}/results/reports/${reportId}/export?format=pdf`, 'alice');
     assert.equal(unsupported.response.status, 400);
   });
+  await context.test('full scan report appendix keeps over 200 records and stable source IDs',async()=>{
+    const insert=db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data,severity,source_tool) VALUES ('scan-closed-loop','vulnerability',?,'high','fixture')");
+    for(let i=0;i<230;i++) insert.run(JSON.stringify({finding:'full-appendix-'+i}));
+    const snapshot=await request('GET',`/api/pipelines/${pipelineId}/results`,'alice');
+    assert.equal(snapshot.response.status,200);
+    assert.equal(snapshot.data.data.scan_records.length,100,'API page remains bounded');
+    assert.ok(snapshot.data.data.scan_summary.record_count>=230);
+    const created=await request('POST',`/api/pipelines/${pipelineId}/results/reports`,'alice',{
+      run_id:'run-closed-loop',source_fingerprint:snapshot.data.data.source_fingerprint});
+    assert.equal(created.response.status,201);
+    const id=created.data.data.report.report_id;
+    const report=await request('GET',`/api/pipelines/${pipelineId}/results/reports/${id}/export?format=json`,'alice');
+    assert.equal(report.response.status,200);
+    const records=report.data.report.content.results.scan_records;
+    assert.equal(records.length,snapshot.data.data.scan_summary.record_count);
+    assert.ok(records.some(row=>row.result_data.includes('full-appendix-229')));
+    assert.equal(new Set(records.map(row=>row.id)).size,records.length);
+    assert.equal(report.data.report.content.results.scan_summary.deduplicated,false);
+  });
   assert.deepEqual(db.pragma('foreign_key_check'), []);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM task_report_reviews WHERE report_id = ?").get(reportId).count, 0);
   assert.ok(db.prepare("SELECT 1 FROM audit_log WHERE type = 'task_report_export' AND execution_id = ?").get(reportId));

@@ -1,9 +1,11 @@
+import { publicScanRecord, summarizeScanRecords } from '../services/scanResultCatalog.js';
+import { hasScanIntegrity } from '../services/scanResultStore.js';
 import { normalizeTopologyTarget } from '../services/nmapTopology.js';
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { recommendForScans } from '../services/playbookRecommendations.js';
 import { generatePlaybook } from '../services/playbookGenerator.js';
-import { executeScan, requestScanAbort } from '../services/scanExecutor.js';
+import { executeScan, requestScanAbort, isScanActive } from '../services/scanExecutor.js';
 import { getWsManager } from '../services/wsManager.js';
 import { resolveTargetProfile } from '../services/targetProfileResolver.js';
 import { requireActor, recordParam } from '../middleware/recordAccess.js';
@@ -74,7 +76,9 @@ export default function (db) {
     const row = db.prepare('SELECT * FROM scan_tasks WHERE scan_task_id = ?').get(req.params.scanTaskId);
     if (!row) return res.status(404).json({ status: 'error', error: { message: 'Scan task not found' } });
     if (!sourceAccess(req,row)) return res.status(403).json({status:'error',error:{message:'没有权限查看源码任务'}});
-    row.results = db.prepare('SELECT * FROM scan_results WHERE scan_task_id = ? ORDER BY captured_at').all(req.params.scanTaskId);
+    row.results = db.prepare('SELECT * FROM scan_results WHERE scan_task_id = ? ORDER BY captured_at,id').all(req.params.scanTaskId);
+    if(!isProgramScan(row.scan_type)) row.results=row.results.map(publicScanRecord);
+    row.scan_summary=summarizeScanRecords(row.results);
     if(isProgramScan(row.scan_type)) {
       for(const result of row.results) {
         if(!isProgramFinding(result.result_type)) continue;
@@ -134,6 +138,8 @@ export default function (db) {
     const targetProfile = resolveTargetProfile(target);
     db.prepare(`INSERT INTO scan_tasks (scan_task_id, target, scan_type, target_class, parameters, created_by, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)`).run(scan_task_id, target, scan_type, targetProfile.target_class, parameters ? JSON.stringify(parameters) : null, createdBy, now);
+    if(scan_type==='topology_scan' && parameters?.pipeline_id && hasScanIntegrity(db))
+      db.prepare('UPDATE scan_tasks SET pipeline_id=? WHERE scan_task_id=?').run(parameters.pipeline_id,scan_task_id);
     const row = db.prepare('SELECT * FROM scan_tasks WHERE scan_task_id = ?').get(scan_task_id);
     // WebSocket: notify all clients about new scan (include operator info)
     const ws = getWsManager();
@@ -165,6 +171,10 @@ export default function (db) {
   });
 
   router.delete('/:scanTaskId', (req, res) => {
+    if(isScanActive(req.params.scanTaskId) || db.prepare("SELECT 1 FROM scan_tasks WHERE scan_task_id=? AND status='RUNNING'").get(req.params.scanTaskId))
+      return res.status(409).json({status:'error',error:{message:'扫描尚未收束，不能删除'}});
+    if(hasScanIntegrity(db) && db.prepare('SELECT 1 FROM scan_tasks WHERE retry_of_scan_task_id=?').get(req.params.scanTaskId))
+      return res.status(409).json({status:'error',error:{message:'存在关联重试，须保留原扫描来源'}});
     const result = db.prepare('DELETE FROM scan_tasks WHERE scan_task_id = ?').run(req.params.scanTaskId);
     if (result.changes === 0) return res.status(404).json({ status: 'error', error: { message: 'Scan task not found' } });
     res.json({ status: 'ok', data: { deleted: true } });
@@ -186,13 +196,7 @@ export default function (db) {
     if (task.status === 'RUNNING') return res.status(409).json({ status: 'error', error: { message: 'Scan is already running' } });
 
     if(isProgramScan(task.scan_type) && task.status!=='PENDING') return res.status(409).json({status:'error',error:{message:'请新建程序测试任务以保留发现和验证证据'}});
-    // Reset to PENDING if not already (allows re-execution of COMPLETED/FAILED/CANCELLED)
-    if (task.status !== 'PENDING') {
-      // Clear old results for re-execution
-      db.prepare('DELETE FROM scan_results WHERE scan_task_id = ?').run(req.params.scanTaskId);
-      db.prepare("UPDATE scan_tasks SET status = 'PENDING', started_at = NULL, completed_at = NULL, error_message = NULL WHERE scan_task_id = ?")
-        .run(req.params.scanTaskId);
-    }
+    if (task.status !== 'PENDING') return res.status(409).json({status:'error',error:{message:'原扫描结果保留，请通过 retry 新建关联扫描'}});
 
     // Fire and forget — execution happens in background
     executeScan(req.params.scanTaskId).catch(err => {
@@ -209,6 +213,34 @@ export default function (db) {
       role: req.user?.role || null,
     });
     res.status(202).json({ status: 'ok', data: { scan_task_id: req.params.scanTaskId, message: 'Scan execution started' } });
+  });
+
+  // A retry is a new immutable scan identity, never a reset of old evidence.
+  router.post('/:scanTaskId/retry', (req,res) => {
+    const task=db.prepare('SELECT * FROM scan_tasks WHERE scan_task_id=?').get(req.params.scanTaskId);
+    if(isProgramScan(task.scan_type)) return res.status(409).json({status:'error',error:{message:'程序测试请新建任务'}});
+    if(isScanActive(task.scan_task_id) || ['RUNNING','PENDING'].includes(task.status)) return res.status(409).json({status:'error',error:{message:'原扫描尚未收束'}});
+    if(!hasScanIntegrity(db)) return res.status(409).json({status:'error',error:{message:'扫描结果迁移尚未安装'}});
+    if(db.prepare("SELECT 1 FROM scan_tool_runs WHERE scan_task_id=? AND (state='running' OR json_extract(outcome,'$.stopped')=0)").get(task.scan_task_id))
+      return res.status(409).json({status:'error',error:{message:'工具停止状态尚未确认'}});
+    const requestId=req.body?.request_id;
+    if(typeof requestId!=='string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(requestId))
+      return res.status(400).json({status:'error',error:{message:'重试需要 request_id（8—128 位字母、数字、横线或下划线）'}});
+    const {retry,created}=db.transaction(()=>{
+      let retry=db.prepare('SELECT * FROM scan_tasks WHERE retry_of_scan_task_id=? AND retry_request_id=?').get(task.scan_task_id,requestId);
+      if(retry) return {retry,created:false};
+      retry=db.prepare("SELECT * FROM scan_tasks WHERE retry_of_scan_task_id=? AND status IN ('PENDING','RUNNING') ORDER BY id DESC LIMIT 1").get(task.scan_task_id);
+      if(retry) return {retry,created:false};
+      const id=`scan_${randomUUID().slice(0,12)}`;
+      // A retry is an explicitly selected follow-up, outside the original parent run.
+      let parameters={};try{parameters=JSON.parse(task.parameters || '{}');}catch{}
+      delete parameters.pipeline_id;
+      db.prepare(`INSERT INTO scan_tasks(scan_task_id,target,scan_type,target_class,parameters,created_by,created_at,retry_of_scan_task_id,retry_request_id)
+        VALUES (?,?,?,?,?,?,?,?,?)`).run(id,task.target,task.scan_type,task.target_class,JSON.stringify(parameters),task.created_by,new Date().toISOString(),task.scan_task_id,requestId);
+      return {retry:db.prepare('SELECT * FROM scan_tasks WHERE scan_task_id=?').get(id),created:true};
+    })();
+    if(created) executeScan(retry.scan_task_id).catch(error=>console.error('[scan retry]',error.message));
+    res.status(202).json({status:'ok',data:{scan_task_id:retry.scan_task_id,retry_of_scan_task_id:task.scan_task_id}});
   });
 
   // ── Playbook Recommendations ────────────────────────────────────────

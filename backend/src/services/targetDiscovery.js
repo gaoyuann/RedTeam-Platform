@@ -126,7 +126,8 @@ export async function probeTarget(target, { request = fetch, timeoutMs = 8000, s
   const onAbort = () => controller.abort();
   signal?.addEventListener('abort', onAbort, { once: true });
   if (signal?.aborted) onAbort();
-  const timer = setTimeout(onAbort, timeoutMs);
+  let timedOut=false;
+  const timer = setTimeout(() => {timedOut=true;onAbort();}, timeoutMs);
   const results = [];
   try {
     let url = new URL(profile.target_url);
@@ -134,6 +135,8 @@ export async function probeTarget(target, { request = fetch, timeoutMs = 8000, s
       if (url.origin !== profile.origin || url.username || url.password) throw new Error('HTTP discovery redirected outside the selected target');
       const response = await request(url, { signal: controller.signal, redirect: 'manual' });
       let body = '';
+      const observation={result_type:'http_probe',source_tool:'http-discovery',severity:'info',result_data:{url:url.href,requested_url:profile.target_url,status_code:response.status,title:'',body:'',body_incomplete:true,body_limit_bytes:65536}};
+      results.push(observation);
       const reader = response.body?.getReader();
       if (reader) {
         const decoder = new TextDecoder();
@@ -144,13 +147,12 @@ export async function probeTarget(target, { request = fetch, timeoutMs = 8000, s
             if (chunk.done) break;
             body += decoder.decode(chunk.value.subarray(0, 65536 - bytes), { stream: true });
             bytes += chunk.value.length;
+            observation.result_data.body=body;
+            observation.result_data.title=body.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim() || '';
           }
         } finally { await reader.cancel(); }
       } else body = (await response.text()).slice(0, 65536);
-      results.push({ result_type: 'http_probe', source_tool: 'http-discovery', severity: 'info', result_data: {
-        url: url.href, requested_url: profile.target_url, status_code: response.status,
-        title: body.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim() || '', body,
-      } });
+      Object.assign(observation.result_data,{body,title:body.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim() || '',body_incomplete:false,body_may_be_truncated:Buffer.byteLength(body)>=65536});
       if (response.status >= 300 && response.status < 400 && response.headers.get('location')) {
         url = new URL(response.headers.get('location'), url);
         continue;
@@ -159,7 +161,7 @@ export async function probeTarget(target, { request = fetch, timeoutMs = 8000, s
     }
     throw new Error('HTTP discovery redirect limit exceeded');
   } catch (error) {
-    throw new Error(`HTTP discovery failed: ${error.cause?.message || error.message}`, { cause: error });
+    throw Object.assign(new Error(`HTTP discovery failed: ${error.cause?.message || error.message}`, { cause: error }), {partialResults:results,timedOut,aborted:!!signal?.aborted});
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);

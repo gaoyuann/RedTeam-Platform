@@ -23,7 +23,7 @@ await mock.module('../src/services/scanExecutor.js',{namedExports:{
       .run(id,JSON.stringify({title:'Fixture input '+i,file:'input.c',start_line:i+1,end_line:i+1,
         code:'fixture_input(value);',reason:'Compare controlled test input',preconditions:'Fixture HTTP /check endpoint',cwe:'CWE-20'}));
     return {ok:true,status:'COMPLETED',resultsCount:4};
-  },requestScanAbort:()=>{}
+  },requestScanAbort:()=>{}, isScanActive:()=>false
 }});
 await mock.module('../src/services/scanAnalyzer.js',{namedExports:{
   analyzeScanResults:async()=>({ok:true,data:{tech_stack:[],attack_surface:[],risk_assessment:[],recommended_strategy:[]}})

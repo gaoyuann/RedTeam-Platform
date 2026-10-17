@@ -759,7 +759,11 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
       for (const auto &value : summary.value("scan_task_ids").toArray()) scopedScanIds.append(value.toString());
     } else scopedScanIds = p.value("scan_task_id").toString().split(',', QString::SkipEmptyParts);
     m_topoTab->setPipelineContext(pipelineId, target, scopedScanIds, scanFinished);
-    m_scanTab->setTaskScope(scopedScanIds);
+    const auto scanConfig = p.value("config").toObject();
+    const QString scanMode = scanConfig.value("scan_mode").toString();
+    if (scanMode == "program_dynamic" || scanMode == "source_assisted" || target.startsWith("tcp://"))
+      m_scanTab->setTaskScope(scopedScanIds);
+    else m_scanTab->setPipelineScope(pipelineId, scopedScanIds, status);
     m_scanTab->setTarget(target);
     m_execTab->setPipelineContext(pipelineId, status, p["run_id"].toString(), target);
     m_evalTab->setPipelineContext(pipelineId, p["run_id"].toString(), target);

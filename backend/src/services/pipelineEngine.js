@@ -1,3 +1,6 @@
+import { pipelineScans } from './scanResultQuery.js';
+import { hasScanIntegrity } from './scanResultStore.js';
+import { requestScanAbort } from './scanExecutor.js';
 import {isProgramMode, isProgramScan, programExecutionTarget, programNetworkTarget} from './programScan.js';
 import { getDb } from '../db/connection.js';
 import { randomUUID } from 'crypto';
@@ -176,11 +179,16 @@ async function runPipelineScan(db, pipeline) {
       // Create scan task
       const scanTaskId = `scan_${randomUUID().slice(0, 12)}`;
       const now = new Date().toISOString();
-      db.prepare(
-        `INSERT INTO scan_tasks (scan_task_id, target, scan_type, target_class, parameters, created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
-      ).run(scanTaskId, sourceMode && scanType==='port_scan' ? programNetworkTarget(programExecutionTarget(pipeline) || target) : target, scanType, profile.target_class, JSON.stringify(isProgramScan(scanType) ? {connection_id:config.source_connection_id || null,source_url:config.source_url || null,ai_analysis:true,input_kind:config.input_kind || 'runtime',runtime_target:config.runtime_target || null} : scanType === 'port_scan' ? { discover_topology: true, pipeline_id:pipelineId } : {}), pipeline.created_by || 'pipeline', now);
+      db.transaction(() => {
+        db.prepare(
+          `INSERT INTO scan_tasks (scan_task_id, target, scan_type, target_class, parameters, created_by, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+        ).run(scanTaskId, sourceMode && scanType==='port_scan' ? programNetworkTarget(programExecutionTarget(pipeline) || target) : target, scanType, profile.target_class, JSON.stringify(isProgramScan(scanType) ? {connection_id:config.source_connection_id || null,source_url:config.source_url || null,ai_analysis:true,input_kind:config.input_kind || 'runtime',runtime_target:config.runtime_target || null} : scanType === 'port_scan' ? { discover_topology: true, pipeline_id:pipelineId } : {}), pipeline.created_by || 'pipeline', now);
 
+        if(hasScanIntegrity(db)) db.prepare('UPDATE scan_tasks SET pipeline_id=? WHERE scan_task_id=?').run(pipelineId,scanTaskId);
+        db.prepare('UPDATE pipelines SET scan_task_id=? WHERE pipeline_id=?').run([...scanTaskIds,scanTaskId].join(','),pipelineId);
+
+      })();
       scanTaskIds.push(scanTaskId);
 
       // Execute the scan
@@ -216,6 +224,7 @@ async function runPipelineScan(db, pipeline) {
       scan_types_run: scanTypes,
       total_results: totalResults,
       outcomes: scanOutcomes,
+      completeness:scanOutcomes.every(o=>o.status==='COMPLETED')?'complete':'incomplete',
       target_profile: loadTargetProfile(db, target, scanTaskIds),
     };
 
@@ -775,6 +784,11 @@ export function cancelPipeline(pipelineId) {
   if (!pipeline) return { ok: false, error: 'Pipeline not found' };
   if (!['running', 'awaiting_approval'].includes(pipeline.status)) {
     return { ok: false, error: `Pipeline is "${pipeline.status}", not running or awaiting_approval` };
+  }
+
+  // Stop the currently linked scan before another check can be dispatched.
+  for(const scan of pipelineScans(db,pipeline)) {
+    if(['RUNNING','PENDING'].includes(scan.status)) requestScanAbort(scan.scan_task_id);
   }
 
   // Remove from running set — step functions check this to abort

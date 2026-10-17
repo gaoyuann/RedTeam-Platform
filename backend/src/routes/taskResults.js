@@ -1,3 +1,5 @@
+import { scanPage, scanCollection } from '../services/scanResultQuery.js';
+import { publicScanRecord, parseResultData, redactScanValue } from '../services/scanResultCatalog.js';
 import { Router } from 'express';
 import { taskResultsSnapshot, createTaskReport, readTaskReport, taskReportHtml, recordTaskReportExport } from '../services/taskResults.js';
 import { requireActor } from '../middleware/recordAccess.js';
@@ -13,7 +15,14 @@ export default function (db) {
     req.taskPipeline = pipeline;
     next();
   });
-  router.get('/', (req, res) => res.json({ status: 'ok', data: taskResultsSnapshot(db, req.taskPipeline) }));
+  router.get('/', (req, res) => res.json({ status: 'ok', data: req.query.view==='scans' ? scanPage(db,req.taskPipeline,req.query) : {...taskResultsSnapshot(db, req.taskPipeline),...scanPage(db,req.taskPipeline,req.query)} }));
+  router.get('/records/:recordId', (req,res) => {
+    const collection=scanCollection(db,req.taskPipeline);
+    const row=collection.rows.find(r=>String(r.id)===req.params.recordId);
+    if(!row) return res.status(404).json({status:'error',error:{message:'结果不存在或不属于此任务'}});
+    const run=collection.runs.find(r=>r.tool_run_id===row.tool_run_id);
+    res.json({status:'ok',data:{record:publicScanRecord(row),evidence:redactScanValue(parseResultData(run?.evidence))}});
+  });
   router.post('/reports', (req, res) => {
     const result = createTaskReport(db, req.taskPipeline, req.user, req.body);
     res.status(result.reused ? 200 : 201).json({ status: 'ok', data: result });
