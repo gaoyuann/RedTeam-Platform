@@ -1,8 +1,9 @@
 import { parseResults, createScanOutputCollector } from './scanResultParsers.js';
 export { parseResults } from './scanResultParsers.js';
-import { beginToolRun, finishToolRun } from './scanResultStore.js';
+import { beginToolRun, finishToolRun, hasScanIntegrity } from './scanResultStore.js';
 import { parseNmapResults, parseNmapInterfaces, topologyScanArgs, selectLanDiscoveryScope } from './nmapTopology.js';
 import { getDb } from '../db/connection.js';
+import { isTargetInScope, scopeBlockReason, taskScope } from './taskScope.js';
 import { runTool } from '../tools/toolRunner.js';
 import { getWsManager } from './wsManager.js';
 import { normalizeTarget, probeTarget, buildDiscoveredProfile } from './targetDiscovery.js';
@@ -255,7 +256,7 @@ export async function executeScan(scanTaskId) {
   const db = getDb();
 
   const task = db.prepare(
-    'SELECT scan_task_id, target, scan_type, parameters, status, created_by FROM scan_tasks WHERE scan_task_id = ?'
+    `SELECT scan_task_id, target, scan_type, parameters, status, created_by, ${hasScanIntegrity(db)?'pipeline_id':'NULL AS pipeline_id'} FROM scan_tasks WHERE scan_task_id = ?`
   ).get(scanTaskId);
   if (!task) return { ok: false, error: 'Scan task not found' };
   if (task.status === 'RUNNING') return { ok: false, error: 'Scan is already running' };
@@ -263,6 +264,19 @@ export async function executeScan(scanTaskId) {
   if (isProgramScan(task.scan_type) && task.status !== 'PENDING') return {ok:false,error:'请新建程序测试任务以保留发现和验证证据'};
 
   if (task.status !== 'PENDING') return {ok:false,error:'请新建关联扫描重试，原结果保留'};
+
+  const parent=task.pipeline_id ? db.prepare('SELECT * FROM pipelines WHERE pipeline_id=? AND created_by=?').get(task.pipeline_id,task.created_by) : null;
+  const rejectScope = error => {
+    db.prepare("UPDATE scan_tasks SET status='FAILED',completed_at=?,error_message=? WHERE scan_task_id=? AND status='PENDING'")
+      .run(new Date().toISOString(),error,scanTaskId);
+    return {ok:false,status:'FAILED',scanTaskId,error};
+  };
+  if(task.pipeline_id && !parent) return rejectScope('扫描任务归属无效');
+  let parentConfig={}; try {parentConfig=JSON.parse(parent?.config || '{}');} catch {}
+  const scope=parentConfig.task_scope ? taskScope(parent) : null;
+  const scopedTarget=/^[^/]+:\d+$/.test(task.target) ? `tcp://${task.target}` : task.target;
+  const blocked=scope ? scopeBlockReason(scope,scopedTarget,task.scan_type) : null;
+  if(blocked) return rejectScope(blocked);
 
   runningScans.add(scanTaskId);
 
@@ -489,6 +503,8 @@ export async function executeScan(scanTaskId) {
         contextResults++;
       };
       if (!scope.cidr) storeLanResult('scan_warning', { phase: 'lan-discovery', message: scope.reason });
+      else if (parentConfig.task_scope && !isTargetInScope(taskScope(parent),scope.cidr))
+        storeLanResult('scan_warning',{phase:'lan-discovery',message:'局域网发现范围超出任务范围或命中排除项，未执行'});
       else {
         const args = ['-sn', '-n', '--reason', '-e', scope.device, '--max-retries', '1', scope.cidr];
         try {

@@ -194,6 +194,11 @@ void TaskOverviewPage::setTaskContext(const QJsonObject &pipeline)
   const auto plan = summary.value("plan").toObject();
   const auto execution = summary.value("execution").toObject();
   const auto authorization = config.value("authorization_confirmed");
+  const auto taskScope = config.value("task_scope").toObject();
+  QStringList allowedTargets, excludedTargets, missingConditions;
+  for (const auto &value : taskScope.value("includes").toArray()) allowedTargets << value.toString();
+  for (const auto &value : taskScope.value("excludes").toArray()) excludedTargets << value.toString();
+  for (const auto &value : pipeline.value("missing_conditions").toArray()) missingConditions << value.toString();
   const auto approval = config.value("require_approval");
   const auto autoExecute = config.value("auto_execute");
   const QString taskName = config.value("task_name").toString().trimmed();
@@ -208,9 +213,15 @@ void TaskOverviewPage::setTaskContext(const QJsonObject &pipeline)
       .arg(taskName.isEmpty() ? QStringLiteral("未提供") : taskName, pipeline.value("pipeline_id").toString(),
            target.isEmpty() ? QStringLiteral("未提供") : target,
            pipeline.value("created_by").toString().trimmed().isEmpty() ? QStringLiteral("未提供") : pipeline.value("created_by").toString(), timeText(pipeline.value("created_at").toString())));
-  m_authorization->setText(QStringLiteral("授权确认记录：%1\n授权范围记录：%2\n授权为用户记录，不代表后端已经核验目标范围。")
+  m_authorization->setText(QStringLiteral("授权确认记录：%1\n授权范围记录：%2\n后端目标范围：%3\n排除项：%4\n扫描位置：%5 · 靶场引用：%6 · 认证配置引用：%7\n缺失条件：%8\n授权记录仍需人工核验；后端按结构化目标范围限制任务调用。")
       .arg(!authorization.isBool() ? QStringLiteral("未提供") : authorization.toBool() ? QStringLiteral("已确认") : QStringLiteral("未确认"),
-           config.value("authorization_scope").toString().trimmed().isEmpty() ? QStringLiteral("未提供") : config.value("authorization_scope").toString()));
+           config.value("authorization_scope").toString().trimmed().isEmpty() ? QStringLiteral("未提供") : config.value("authorization_scope").toString(),
+           allowedTargets.isEmpty() ? target : allowedTargets.join(QStringLiteral("、")),
+           excludedTargets.isEmpty() ? QStringLiteral("无") : excludedTargets.join(QStringLiteral("、")),
+           taskScope.value("execution_location").toString(QStringLiteral("scanner")),
+           taskScope.value("environment_ref").toString(QStringLiteral("未设置")),
+           taskScope.value("auth_config_ref").toString(QStringLiteral("未设置")),
+           missingConditions.isEmpty() ? QStringLiteral("无") : missingConditions.join(QStringLiteral("；"))));
   m_policy->setText(QStringLiteral("测试类型：%1\n创建方式：%2\n执行前人工审批：%3\n执行策略：%4")
       .arg(config.value("test_type").toString().trimmed().isEmpty() ? QStringLiteral("未提供") : config.value("test_type").toString(),
            config.value("creation_mode").toString().trimmed().isEmpty() ? QStringLiteral("未提供") : config.value("creation_mode").toString(),

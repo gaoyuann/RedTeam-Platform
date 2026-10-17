@@ -431,7 +431,7 @@ void TaskPlanPage::render()
   showStep();
   const auto config = m_pipeline.value("config").isObject() ? m_pipeline.value("config").toObject()
       : QJsonDocument::fromJson(m_pipeline.value("config").toString().toUtf8()).object();
-  m_scope->setText(QStringLiteral("任务：%1 · 目标：%2\n授权范围记录：%3（用户自述，不代表后端已验证范围）")
+  m_scope->setText(QStringLiteral("任务：%1 · 目标：%2\n授权范围记录：%3（授权需人工核验；后端使用结构化范围限制调用）")
       .arg(config["task_name"].toString(m_pipeline.value("pipeline_id").toString()), m_pipeline.value("target").toString(), config["authorization_scope"].toString(QStringLiteral("未填写"))));
   if (!m_content.isEmpty()) {
     const QString sourceName = m_content["source_playbook"].toObject()["name"].toString(m_content["source_playbook_id"].toString());

@@ -69,6 +69,25 @@ test('task creation and config updates retain only server-observed topology orig
   }
 });
 
+test('task API preserves structured scope and blocks missing execution location', async () => {
+  const rejected=await request('POST','/api/pipelines','alice',{target:'https://fixture.invalid/app/',
+    config:{task_scope:{includes:['https://other.invalid/']}}});
+  assert.equal(rejected.response.status,400);
+  const created=await request('POST','/api/pipelines','alice',{target:'https://fixture.invalid/app/',
+    config:{task_scope:{includes:['https://fixture.invalid/app/'],excludes:['https://fixture.invalid/app/admin/'],
+      execution_location:'remote',environment_ref:'range-a',auth_config_ref:'credential-ref'}}});
+  assert.equal(created.response.status,201);
+  const id=created.data.data.pipeline_id;
+  try {
+    const detail=await request('GET',`/api/pipelines/${id}`,'alice');
+    assert.equal(detail.response.status,200);
+    assert.deepEqual(detail.data.data.config.task_scope.excludes,['https://fixture.invalid/app/admin/']);
+    assert.deepEqual(detail.data.data.missing_conditions,['远端扫描位置尚未配置和联调','认证配置引用尚未连接可用的凭据提供方']);
+    assert.equal((await request('POST',`/api/pipelines/${id}/start`,'alice',{})).response.status,409);
+    assert.equal((await request('GET',`/api/pipelines/${id}`,'bob')).response.status,403);
+  } finally { db.prepare('DELETE FROM pipelines WHERE pipeline_id=?').run(id); }
+});
+
 after(async () => {
   await new Promise(resolve => server.close(resolve));
   db.close();
