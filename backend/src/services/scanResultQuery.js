@@ -2,6 +2,8 @@ import { normalizeTopologyTarget } from './nmapTopology.js';
 import { hasScanIntegrity } from './scanResultStore.js';
 import { parseResultData, publicScanRecord, summarizeScanRecords, redactScanValue, resultCategory } from './scanResultCatalog.js';
 import { isProgramMode, programExecutionTarget, programNetworkTarget } from './programScan.js';
+import { isTargetInScope, taskScope } from './taskScope.js';
+import { scanCoverage } from './scanCoverage.js';
 
 export function pipelineScans(db,pipeline) {
   const linked=[...new Set(String(pipeline.scan_task_id || '').split(',').map(s=>s.trim()).filter(Boolean))];
@@ -15,6 +17,10 @@ export function pipelineScans(db,pipeline) {
   }
   return rows.filter(row=>{
     if(row.pipeline_id && row.pipeline_id!==pipeline.pipeline_id) return false;
+    if(row.pipeline_id===pipeline.pipeline_id && config.task_scope) {
+      const value=/^[^/]+:\d+$/.test(row.target) ? `tcp://${row.target}` : row.target;
+      return isTargetInScope(taskScope(pipeline),value);
+    }
     if(targets.has(row.target)) return true;
     if(row.scan_type==='topology_scan') { try {return row.target===normalizeTopologyTarget(pipeline.target);}catch{} }
     return false;
@@ -58,7 +64,7 @@ export function scanPage(db,pipeline,query={}) {
   const filtered=publicRows.filter(r=>(category==='all'||r.category===category) && (!query.scan_task_id||r.scan_task_id===query.scan_task_id));
   const selected=filtered.filter(r=>r.id>after).slice(0,limit);
   const records=selected.length?db.prepare(`SELECT * FROM scan_results WHERE id IN (${selected.map(()=>'?').join(',')}) ORDER BY id`).all(...selected.map(r=>r.id)).map(publicScanRecord):[];
-  return {scan_summary:collection.summary,scan_records:records,
+  return {scan_summary:collection.summary,scan_coverage:scanCoverage(db,pipeline.pipeline_id),scan_records:records,
     scan_sources:collection.scans.map(s=>({scan_task_id:s.scan_task_id,scan_type:s.scan_type,status:s.status,target:s.target,error_message:redactScanValue(s.error_message),retry_of_scan_task_id:s.retry_of_scan_task_id || null})),
     scan_runs:collection.runs.map(({evidence,...r})=>({...r,outcome:parseResultData(r.outcome),diagnostics:parseResultData(r.diagnostics)})),
     page:{total:filtered.length,returned:selected.length,after,through,limit,category,scan_task_id:query.scan_task_id || null,

@@ -1,5 +1,6 @@
 import { pipelineScans } from './scanResultQuery.js';
 import { hasScanIntegrity } from './scanResultStore.js';
+import { beginCoverage, completeCoverage, hasScanCoverage, markCheck, observePortScan, observeWebScan, pendingChecks } from './scanCoverage.js';
 import { requestScanAbort } from './scanExecutor.js';
 import {isProgramMode, isProgramScan, programExecutionTarget, programNetworkTarget} from './programScan.js';
 import { getDb } from '../db/connection.js';
@@ -158,21 +159,37 @@ async function runPipelineScan(db, pipeline) {
   // Determine scan types to run
   let config={}; try {config=JSON.parse(pipeline.config || '{}');} catch {}
   const sourceMode=isProgramMode(config.scan_mode) || target.startsWith('tcp://');
-  const scanTypes = sourceMode ? [config.scan_mode==='source_assisted' ? 'source_scan' : 'program_scan', 'port_scan'] : isWebLike ? ['port_scan', 'app_discovery', 'web_scan'] : ['port_scan'];
+  const useCoverage=Boolean(config.task_scope) && hasScanCoverage(db);
+  const initialTypes = sourceMode ? [config.scan_mode==='source_assisted' ? 'source_scan' : 'program_scan', 'port_scan']
+    : useCoverage ? ['port_scan'] : isWebLike ? ['port_scan', 'app_discovery', 'web_scan'] : ['port_scan'];
+  const initialScans=initialTypes.map(scan_type=>({scan_type,target:sourceMode && scan_type==='port_scan'
+    ? programNetworkTarget(programExecutionTarget(pipeline) || target) : target}));
+  const scanQueue=useCoverage ? beginCoverage(db,pipeline,initialScans).map(check=>({scan_type:check.scan_type,target:check.target,check_id:check.check_id})) : initialScans;
+  const queued=new Set(scanQueue.map(item=>item.check_id).filter(Boolean));
+  const appendPending=()=>{
+    if(!useCoverage) return;
+    for(const check of pendingChecks(db,pipelineId)) if(!queued.has(check.check_id)) {
+      scanQueue.push({scan_type:check.scan_type,target:check.target,check_id:check.check_id});queued.add(check.check_id);
+    }
+  };
+  const scanTypes=[];
 
   // Insert step record
   ensureStep(db, pipelineId, 0, STEP_SCAN);
-  updateStep(db, pipelineId, 0, 'running', { step_type: STEP_SCAN, input_data: { target, scan_types: scanTypes } });
+  updateStep(db, pipelineId, 0, 'running', { step_type: STEP_SCAN, input_data: { target, scan_types: initialTypes } });
 
   const scanTaskIds = [];
   const scanOutcomes = [];
 
   try {
-    for (const scanType of scanTypes) {
+    for (let index=0; index<scanQueue.length; index++) {
+      const planned=scanQueue[index],scanType=planned.scan_type,scanTarget=planned.target;
       if (isCancelled(pipelineId)) {
+        completeCoverage(db,pipelineId,'任务取消，未执行后续检查');
         updateStep(db, pipelineId, 0, 'cancelled', { step_type: STEP_SCAN });
         return { ok: false, cancelled: true };
       }
+      scanTypes.push(scanType);
 
       pipelineLog(pipelineId, `创建扫描任务: ${scanType}`);
 
@@ -180,12 +197,14 @@ async function runPipelineScan(db, pipeline) {
       const scanTaskId = `scan_${randomUUID().slice(0, 12)}`;
       const now = new Date().toISOString();
       db.transaction(() => {
+        if(planned.check_id) markCheck(db,planned.check_id,'running');
         db.prepare(
           `INSERT INTO scan_tasks (scan_task_id, target, scan_type, target_class, parameters, created_by, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)`
-        ).run(scanTaskId, sourceMode && scanType==='port_scan' ? programNetworkTarget(programExecutionTarget(pipeline) || target) : target, scanType, profile.target_class, JSON.stringify(isProgramScan(scanType) ? {connection_id:config.source_connection_id || null,source_url:config.source_url || null,ai_analysis:true,input_kind:config.input_kind || 'runtime',runtime_target:config.runtime_target || null} : scanType === 'port_scan' ? { discover_topology: true, pipeline_id:pipelineId } : {}), pipeline.created_by || 'pipeline', now);
+        ).run(scanTaskId, scanTarget, scanType, resolveTargetProfile(scanTarget).target_class, JSON.stringify(isProgramScan(scanType) ? {connection_id:config.source_connection_id || null,source_url:config.source_url || null,ai_analysis:true,input_kind:config.input_kind || 'runtime',runtime_target:config.runtime_target || null} : scanType === 'port_scan' ? { discover_topology: true, pipeline_id:pipelineId } : {}), pipeline.created_by || 'pipeline', now);
 
         if(hasScanIntegrity(db)) db.prepare('UPDATE scan_tasks SET pipeline_id=? WHERE scan_task_id=?').run(pipelineId,scanTaskId);
+        if(planned.check_id) markCheck(db,planned.check_id,'running',{scanTaskId});
         db.prepare('UPDATE pipelines SET scan_task_id=? WHERE pipeline_id=?').run([...scanTaskIds,scanTaskId].join(','),pipelineId);
 
       })();
@@ -196,8 +215,18 @@ async function runPipelineScan(db, pipeline) {
       const { executeScan } = await import('./scanExecutor.js');
       const scanResult = await executeScan(scanTaskId);
       scanOutcomes.push({ scan_type: scanType, status: scanResult.status || 'FAILED', error: scanResult.error || null });
+      if(planned.check_id) {
+        markCheck(db,planned.check_id,({COMPLETED:'completed',PARTIAL:'partial',FAILED:'failed',CANCELLED:'cancelled'})[scanResult.status] || 'failed',
+          {scanTaskId,reason:scanResult.error || null});
+        if(scanType==='port_scan') observePortScan(db,pipeline,scanTaskId);
+        if(['app_discovery','api_fuzz'].includes(scanType)) observeWebScan(db,pipeline,{...planned,scan_task_id:scanTaskId,
+          service_id:db.prepare('SELECT service_id FROM task_checks WHERE check_id=?').get(planned.check_id)?.service_id,
+          entry_id:db.prepare('SELECT entry_id FROM task_checks WHERE check_id=?').get(planned.check_id)?.entry_id});
+        appendPending();
+      }
 
       if (isCancelled(pipelineId)) {
+        completeCoverage(db,pipelineId,'任务取消，未执行后续检查');
         updateStep(db, pipelineId, 0, 'cancelled', { step_type: STEP_SCAN });
         return { ok: false, cancelled: true };
       }
@@ -211,6 +240,7 @@ async function runPipelineScan(db, pipeline) {
 
     // Store all scan task IDs in the pipeline record (comma-separated)
     updateStatus(db, pipelineId, 'running', { scan_task_id: scanTaskIds.join(',') });
+    completeCoverage(db,pipelineId);
     if (!scanOutcomes.some(outcome => ['COMPLETED', 'PARTIAL'].includes(outcome.status))) throw new Error('所有扫描任务均失败，请检查目标地址和扫描错误');
 
     // Count total results
@@ -237,6 +267,7 @@ async function runPipelineScan(db, pipeline) {
 
     return { ok: true, scanTaskIds, totalResults };
   } catch (err) {
+    completeCoverage(db,pipelineId,`扫描阶段异常：${err.message}`);
     updateStep(db, pipelineId, 0, 'failed', {
       step_type: STEP_SCAN,
       error_message: err.message,
