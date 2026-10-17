@@ -79,7 +79,7 @@ function serviceTarget(host,port,name,declared) {
   const explicit=normalizedUrl(declared);
   if(explicit) {
     const url=new URL(explicit);
-    if(url.hostname===host && Number(url.port || (url.protocol==='https:'?443:80))===port) return explicit;
+    if(url.hostname.replace(/^\[|\]$/g,'')===host && Number(url.port || (url.protocol==='https:'?443:80))===port) return explicit;
   }
   if(!/https?|ssl\/http/i.test(name)) return null;
   const scheme=/https|ssl\/http|tls/i.test(name)?'https':'http';
@@ -94,7 +94,7 @@ export function observePortScan(db,pipeline,scanTaskId) {
     const data=json(row.result_data),host=String(data.host || '').trim();
     if(!host) continue;
     const scopeHost=scope.includes.some(value=>{
-      try {return new URL(value).hostname===host;} catch {return false;}
+      try {return new URL(value).hostname.replace(/^\[|\]$/g,'')===host;} catch {return false;}
     });
     const allowed=isTargetInScope(scope,host) || scopeHost;
     const assetId=recordAsset(db,pipeline,host,allowed && (data.status==='up' || row.result_type==='open_port')?'reachable':allowed?'unknown':'out_of_scope',row.id);
@@ -105,7 +105,7 @@ export function observePortScan(db,pipeline,scanTaskId) {
     addCheck(db,pipeline,{serviceId,type:'service_fingerprint',state:'completed',reason:'Nmap 开放端口与服务识别',sourceId:row.id});
     const webTarget=protocol==='tcp' ? serviceTarget(host,port,String(data.service || ''),pipeline.target) : null;
     if(!webTarget) {
-      const entry=addEntry(db,pipeline,{serviceId,kind:'network_service',value:`${protocol}://${host}:${port}`,sourceId:row.id});
+      const entry=addEntry(db,pipeline,{serviceId,kind:'network_service',value:`${protocol}://${host.includes(':')?`[${host}]`:host}:${port}`,sourceId:row.id});
       addCheck(db,pipeline,{serviceId,entryId:entry.entry_id,type:'service_security',state:'unsupported',
         reason:'该服务尚无已接入的专项安全检查，端口识别不等于漏洞检查',sourceId:row.id});
       addCheck(db,pipeline,{serviceId,entryId:entry.entry_id,type:'web_application',state:'not_applicable',
@@ -120,7 +120,7 @@ export function observePortScan(db,pipeline,scanTaskId) {
   // port fingerprinting produced no usable service evidence.
   const declared=normalizedUrl(pipeline.target);
   if(declared) {
-    const url=new URL(declared),host=url.hostname,port=Number(url.port || (url.protocol==='https:'?443:80));
+    const url=new URL(declared),host=url.hostname.replace(/^\[|\]$/g,''),port=Number(url.port || (url.protocol==='https:'?443:80));
     const assetId=recordAsset(db,pipeline,host,'unknown',null);
     const serviceId=recordService(db,pipeline,assetId,port,'tcp','用户声明的 HTTP 入口',null,'unverified');
     const entry=addEntry(db,pipeline,{serviceId,kind:'web_url',value:declared,state:'declared'});
