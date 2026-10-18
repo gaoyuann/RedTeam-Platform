@@ -1,0 +1,142 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import Database from 'better-sqlite3';
+import coverageMigration from '../src/db/migrations/030_task_scan_coverage.js';
+import { beginCoverage, completeCoverage, markCheck, observePortScan, observeWebScan, pendingChecks, scanCoverage, scanCoveragePage } from '../src/services/scanCoverage.js';
+
+test('service evidence creates bounded per-service checks and explicit uncovered states', () => {
+  const db=new Database(':memory:');db.pragma('foreign_keys=ON');
+  db.exec(`CREATE TABLE pipelines(pipeline_id TEXT PRIMARY KEY,target TEXT,config TEXT,created_by TEXT);
+    CREATE TABLE scan_tasks(scan_task_id TEXT PRIMARY KEY);
+    CREATE TABLE scan_results(id INTEGER PRIMARY KEY,scan_task_id TEXT,result_type TEXT,result_data TEXT);`);
+  coverageMigration(db);
+  const config={task_scope:{includes:['192.0.2.0/28'],excludes:['192.0.2.3'],execution_location:'scanner',discovery_budget:1}};
+  db.prepare('INSERT INTO pipelines VALUES (?,?,?,?)').run('p','192.0.2.0/28',JSON.stringify(config),'alice');
+  db.prepare("INSERT INTO scan_tasks VALUES ('ports')").run();
+  const pipeline=db.prepare('SELECT * FROM pipelines').get();
+  const add=db.prepare('INSERT INTO scan_results(scan_task_id,result_type,result_data) VALUES (?,?,?)');
+  add.run('ports','host_discovery',JSON.stringify({host:'192.0.2.2',status:'up'}));
+  add.run('ports','open_port',JSON.stringify({host:'192.0.2.2',port:8080,protocol:'tcp',state:'open',service:'http Apache'}));
+  add.run('ports','open_port',JSON.stringify({host:'192.0.2.2',port:22,protocol:'tcp',state:'open',service:'ssh OpenSSH'}));
+  add.run('ports','open_port',JSON.stringify({host:'192.0.2.3',port:80,protocol:'tcp',state:'open',service:'http'}));
+  beginCoverage(db,pipeline,[{scan_type:'port_scan',target:pipeline.target}]);
+  observePortScan(db,pipeline,'ports');
+  const first=scanCoverage(db,'p');
+  assert.equal(first.counts.assets,2);
+  assert.equal(first.counts.services,3);
+  assert.equal(first.checks.filter(row=>row.state==='unsupported').length,1);
+  assert.equal(first.checks.filter(row=>row.state==='not_applicable').length,1);
+  assert.equal(first.checks.filter(row=>row.state==='out_of_scope').length,1);
+  const discovery=pendingChecks(db,'p').find(row=>row.scan_type==='app_discovery');
+  assert.ok(discovery);
+  db.prepare("INSERT INTO scan_tasks VALUES ('web')").run();
+  add.run('web','http_probe',JSON.stringify({url:discovery.target,status_code:200,
+    body:'<a href="/api/users">API</a><a href="/help">help</a><form action="/login"></form>'}));
+  add.run('web','api_endpoint',JSON.stringify({url:'http://192.0.2.2:8080/api/users?token=fixture-secret',status_code:200}));
+  add.run('web','api_parameter',JSON.stringify({parameter:'id'}));
+  markCheck(db,discovery.check_id,'completed',{scanTaskId:'web'});
+  observeWebScan(db,pipeline,{...discovery,scan_task_id:'web'});
+  const result=scanCoverage(db,'p');
+  assert.ok(result.checks.some(row=>row.check_type==='web_security' && row.state==='planned'));
+  assert.ok(result.checks.some(row=>row.check_type==='api_entry_discovery' && row.state==='planned'));
+  assert.ok(result.checks.some(row=>row.check_type==='authenticated_roles' && row.state==='missing_condition'));
+  assert.equal(result.checks.filter(row=>row.check_type==='new_entry_check' && row.state==='planned').length,1);
+  assert.ok(result.checks.some(row=>row.check_type==='new_entry_check' && row.state==='not_checked'));
+  assert.ok(result.entries.some(row=>row.kind==='form'));
+  assert.equal(result.checks.filter(row=>row.check_type==='new_entry_check' && row.target==='http://192.0.2.2:8080/api/users').length,1);
+  assert.doesNotMatch(JSON.stringify(result.entries),/fixture-secret/);
+  assert.ok(result.checks.some(row=>row.check_type==='form_input_validation' && row.state==='missing_condition'));
+  assert.ok(result.entries.some(row=>row.kind==='parameter'));
+  observePortScan(db,pipeline,'ports');
+  assert.equal(scanCoverage(db,'p').counts.services,3,'repeat evidence does not duplicate service identities');
+  let cursor='',seen=[];
+  do {
+    const batch=scanCoveragePage(db,'p',{kind:'checks',after:cursor,limit:2});
+    seen.push(...batch.rows.map(row=>row.check_id));
+    cursor=batch.page.has_more?batch.page.next_after:'';
+  } while(cursor);
+  assert.equal(seen.length,scanCoverage(db,'p').counts.checks);
+  assert.equal(new Set(seen).size,seen.length);
+  assert.throws(()=>scanCoveragePage(db,'p',{kind:'checks',limit:501}),/分页参数/);
+  completeCoverage(db,'p');
+  assert.equal(pendingChecks(db,'p').length,0);
+  assert.ok(scanCoverage(db,'p').states.not_checked>=1);
+  db.close();
+});
+
+test('declared HTTP entry receives reachability check after empty port evidence',()=>{
+  const db=new Database(':memory:');db.pragma('foreign_keys=ON');
+  db.exec(`CREATE TABLE pipelines(pipeline_id TEXT PRIMARY KEY,target TEXT,config TEXT,created_by TEXT);
+    CREATE TABLE scan_tasks(scan_task_id TEXT PRIMARY KEY);
+    CREATE TABLE scan_results(id INTEGER PRIMARY KEY,scan_task_id TEXT,result_type TEXT,result_data TEXT);`);
+  coverageMigration(db);coverageMigration(db);
+  const config={task_scope:{includes:['http://192.0.2.2/app/'],excludes:[],execution_location:'scanner',discovery_budget:0}};
+  db.prepare('INSERT INTO pipelines VALUES (?,?,?,?)').run('declared','http://192.0.2.2/app/',JSON.stringify(config),'alice');
+  db.prepare("INSERT INTO scan_tasks VALUES ('empty')").run();
+  const pipeline=db.prepare('SELECT * FROM pipelines').get();
+  beginCoverage(db,pipeline,[{scan_type:'port_scan',target:pipeline.target}]);
+  observePortScan(db,pipeline,'empty');
+  const check=pendingChecks(db,'declared').find(row=>row.scan_type==='app_discovery');
+  assert.equal(check.target,'http://192.0.2.2/app/');
+  assert.equal(scanCoverage(db,'declared').services[0].state,'unverified');
+  db.close();
+});
+
+test('initial source and network checks retain their declared execution order',()=>{
+  const db=new Database(':memory:');db.pragma('foreign_keys=ON');
+  db.exec(`CREATE TABLE pipelines(pipeline_id TEXT PRIMARY KEY,target TEXT,config TEXT,created_by TEXT);
+    CREATE TABLE scan_tasks(scan_task_id TEXT PRIMARY KEY);
+    CREATE TABLE scan_results(id INTEGER PRIMARY KEY,scan_task_id TEXT,result_type TEXT,result_data TEXT);`);
+  coverageMigration(db);
+  const target='http://fixture.invalid/source/';
+  const config={task_scope:{includes:[target],excludes:[],execution_location:'scanner',discovery_budget:0}};
+  db.prepare('INSERT INTO pipelines VALUES (?,?,?,?)').run('ordered',target,JSON.stringify(config),'alice');
+  const checks=beginCoverage(db,db.prepare('SELECT * FROM pipelines').get(),[
+    {scan_type:'source_scan',target},{scan_type:'port_scan',target},
+  ]);
+  assert.deepEqual(checks.map(row=>row.scan_type),['source_scan','port_scan']);
+  db.close();
+});
+
+test('authentication responses and partial probes never schedule follow-up checks as complete coverage',()=>{
+  const db=new Database(':memory:');db.pragma('foreign_keys=ON');
+  db.exec(`CREATE TABLE pipelines(pipeline_id TEXT PRIMARY KEY,target TEXT,config TEXT,created_by TEXT);
+    CREATE TABLE scan_tasks(scan_task_id TEXT PRIMARY KEY);
+    CREATE TABLE scan_results(id INTEGER PRIMARY KEY,scan_task_id TEXT,result_type TEXT,result_data TEXT);`);
+  coverageMigration(db);
+  const target='http://fixture.invalid/';
+  const config={task_scope:{includes:[target],excludes:[],execution_location:'scanner',discovery_budget:2}};
+  db.prepare('INSERT INTO pipelines VALUES (?,?,?,?)').run('auth',target,JSON.stringify(config),'alice');
+  const pipeline=db.prepare('SELECT * FROM pipelines').get();
+  const [check]=beginCoverage(db,pipeline,[{scan_type:'app_discovery',target}]);
+  db.prepare("INSERT INTO scan_tasks VALUES ('auth-scan')").run();
+  db.prepare('INSERT INTO scan_results(scan_task_id,result_type,result_data) VALUES (?,?,?)')
+    .run('auth-scan','http_probe',JSON.stringify({url:target,status_code:401,body:'<a href="/login">login</a>'}));
+  observeWebScan(db,pipeline,{...check,scan_task_id:'auth-scan',scan_status:'COMPLETED'});
+  let checks=scanCoverage(db,'auth').checks;
+  assert.equal(checks.find(row=>row.check_type==='web_security').state,'missing_condition');
+  assert.equal(checks.find(row=>row.check_type==='api_entry_discovery').state,'missing_condition');
+  assert.equal(checks.find(row=>row.check_type==='new_entry_check').state,'not_checked');
+  db.prepare('DELETE FROM scan_results').run();
+  db.prepare('DELETE FROM task_checks WHERE pipeline_id=? AND check_id<>?').run('auth',check.check_id);
+  db.prepare('DELETE FROM task_entries').run();
+  db.prepare('INSERT INTO scan_results(scan_task_id,result_type,result_data) VALUES (?,?,?)')
+    .run('auth-scan','http_probe',JSON.stringify({url:target,status_code:302,body:'<a href="/new">new</a>'}));
+  observeWebScan(db,pipeline,{...check,scan_task_id:'auth-scan',scan_status:'PARTIAL'});
+  checks=scanCoverage(db,'auth').checks;
+  assert.equal(checks.find(row=>row.check_type==='web_security').state,'not_checked');
+  assert.equal(checks.find(row=>row.check_type==='new_entry_check').state,'not_checked');
+  db.prepare('DELETE FROM scan_results').run();
+  db.prepare('DELETE FROM task_checks WHERE pipeline_id=? AND check_id<>?').run('auth',check.check_id);
+  db.prepare('DELETE FROM task_entries').run();
+  db.prepare('INSERT INTO scan_results(scan_task_id,result_type,result_data) VALUES (?,?,?)')
+    .run('auth-scan','http_probe',JSON.stringify({url:target,status_code:404}));
+  observeWebScan(db,pipeline,{...check,scan_task_id:'auth-scan',scan_status:'COMPLETED'});
+  assert.equal(scanCoverage(db,'auth').checks.find(row=>row.check_type==='web_security').state,'not_checked',
+    'HTTP 404 is an observed response, not a network reachability failure');
+  db.prepare('DELETE FROM scan_results').run();
+  db.prepare('DELETE FROM task_checks WHERE pipeline_id=? AND check_id<>?').run('auth',check.check_id);
+  observeWebScan(db,pipeline,{...check,scan_task_id:'auth-scan',scan_status:'COMPLETED'});
+  assert.equal(scanCoverage(db,'auth').checks.find(row=>row.check_type==='web_security').state,'unreachable');
+  db.close();
+});

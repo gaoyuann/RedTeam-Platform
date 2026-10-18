@@ -26,6 +26,7 @@
 #include <QTableWidgetItem>
 #include <QHeaderView>
 #include <QComboBox>
+#include <QSpinBox>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QLineEdit>
@@ -1026,6 +1027,7 @@ void FlowPage::createFlow(bool quickMode)
   QLineEdit *environmentRef = nullptr;
   QLineEdit *authConfigRef = nullptr;
   QComboBox *scanLocation = nullptr;
+  QSpinBox *discoveryBudget = nullptr;
   if (!quickMode) {
     scopeInput = new QLineEdit(&dlg);
     scopeInput->setPlaceholderText(QStringLiteral("仅填写已获得授权的目标或范围"));
@@ -1040,6 +1042,11 @@ void FlowPage::createFlow(bool quickMode)
     scanLocation->addItem(QStringLiteral("扫描端（已配置）"), QStringLiteral("scanner"));
     scanLocation->addItem(QStringLiteral("远端（需先完成连接配置）"), QStringLiteral("remote"));
     form->addRow(QStringLiteral("扫描位置"), scanLocation);
+    discoveryBudget = new QSpinBox(&dlg);
+    discoveryBudget->setRange(0, 100);
+    discoveryBudget->setValue(5);
+    discoveryBudget->setToolTip(QStringLiteral("范围内新发现入口最多补充检查的数量；0 表示仅记录"));
+    form->addRow(QStringLiteral("新入口检查预算"), discoveryBudget);
     environmentRef = new QLineEdit(&dlg);
     environmentRef->setPlaceholderText(QStringLiteral("可选；靶场配置编号，不填写凭据"));
     form->addRow(QStringLiteral("靶场引用"), environmentRef);
@@ -1105,14 +1112,15 @@ void FlowPage::createFlow(bool quickMode)
   QJsonArray includes; includes.append(target);
   if (testType->currentData().toString()=="program" && !runtimeInput->text().trimmed().isEmpty())
     includes.append(runtimeInput->text().trimmed());
-  if (additionalTargets) for (const auto &value : additionalTargets->text().split(',', Qt::SkipEmptyParts)) includes.append(value.trimmed());
+  if (additionalTargets) for (const auto &value : additionalTargets->text().split(',', QString::SkipEmptyParts)) includes.append(value.trimmed());
   QJsonArray excludes;
-  if (excludedTargets) for (const auto &value : excludedTargets->text().split(',', Qt::SkipEmptyParts)) excludes.append(value.trimmed());
+  if (excludedTargets) for (const auto &value : excludedTargets->text().split(',', QString::SkipEmptyParts)) excludes.append(value.trimmed());
   taskScope["includes"] = includes;
   taskScope["excludes"] = excludes;
   taskScope["execution_location"] = scanLocation ? scanLocation->currentData().toString() : QStringLiteral("scanner");
   taskScope["environment_ref"] = environmentRef ? environmentRef->text().trimmed() : QString();
   taskScope["auth_config_ref"] = authConfigRef ? authConfigRef->text().trimmed() : QString();
+  taskScope["discovery_budget"] = discoveryBudget ? discoveryBudget->value() : 3;
   config["task_scope"] = taskScope;
   config["creation_mode"] = quickMode ? QStringLiteral("quick") : QStringLiteral("full");
   config["created_by_label"] = m_username;

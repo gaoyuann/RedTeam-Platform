@@ -9,6 +9,7 @@
 #include <QPushButton>
 #include <QTimer>
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QTabWidget>
 
 class QCheckBox;
@@ -53,6 +54,7 @@ private slots:
 private:
   void setupUI();
   void loadPipelineResults(bool append = false);
+  void renderCoverage(const QJsonObject &coverage);
   QString m_pipelineId;
   QString m_pipelineScanState;
   QString m_retryRequestId;
@@ -132,6 +134,7 @@ private:
   // ── Right panel ──
   ScanResultOverview *m_resultOverview;
   QTreeWidget *m_resultTree;       // grouped results by result_type
+  QTreeWidget *m_coverageTree;     // task assets, services, entries and check states
   QTabWidget *m_detailTabs;
   QLabel *m_statusLabel;
   QLabel *m_resultHint;

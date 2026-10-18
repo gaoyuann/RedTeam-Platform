@@ -3,6 +3,7 @@ import { publicScanRecord, parseResultData, redactScanValue } from '../services/
 import { Router } from 'express';
 import { taskResultsSnapshot, createTaskReport, readTaskReport, taskReportHtml, recordTaskReportExport } from '../services/taskResults.js';
 import { requireActor } from '../middleware/recordAccess.js';
+import { scanCoveragePage } from '../services/scanCoverage.js';
 
 export default function (db) {
   const router = Router({ mergeParams: true });
@@ -16,6 +17,7 @@ export default function (db) {
     next();
   });
   router.get('/', (req, res) => res.json({ status: 'ok', data: req.query.view==='scans' ? scanPage(db,req.taskPipeline,req.query) : {...taskResultsSnapshot(db, req.taskPipeline),...scanPage(db,req.taskPipeline,req.query)} }));
+  router.get('/coverage', (req,res) => res.json({status:'ok',data:scanCoveragePage(db,req.taskPipeline.pipeline_id,req.query)}));
   router.get('/records/:recordId', (req,res) => {
     const collection=scanCollection(db,req.taskPipeline);
     const row=collection.rows.find(r=>String(r.id)===req.params.recordId);

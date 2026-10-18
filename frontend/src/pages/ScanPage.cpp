@@ -31,6 +31,7 @@
 #include <QPointer>
 #include <QUrl>
 #include <QUuid>
+#include <QHash>
 
 static bool isProgramScan(const QString &type) { return type == "program_scan" || type == "source_scan"; }
 static bool isProgramFinding(const QString &type) { return type == "program_finding" || type == "source_finding"; }
@@ -526,11 +527,72 @@ void ScanPage::loadPipelineResults(bool append)
     if (active || unresolvedCalls) m_pollTimer->start(2000); else m_pollTimer->stop();
     m_resultSource->setCurrentIndex(qMax(0, m_resultSource->findData(selected))); m_resultSource->blockSignals(false);
     for (const auto &value : summary["unexecuted_checks"].toArray()) states << formatScanType(value.toString()) + "：未执行";
+    const int unfinishedChecks = summary.value("unfinished_check_count").toInt();
+    if (unfinishedChecks > 0) states << QStringLiteral("检查覆盖仍有 %1 项未完成、未支持或缺条件").arg(unfinishedChecks);
+    const QString scanState = active ? QStringLiteral("进行中")
+        : summary["completeness"].toString() == "complete"
+          ? (unfinishedChecks > 0 ? QStringLiteral("结果已保存，检查覆盖待补") : QStringLiteral("已结束"))
+          : QStringLiteral("结果不完整 / 待核对");
     m_statusLabel->setText(QStringLiteral("本任务扫描：%1 · 共 %2 条记录（非去重漏洞数）\n%3")
-        .arg(active ? QStringLiteral("进行中") : summary["completeness"].toString() == "complete" ? QStringLiteral("已结束") : QStringLiteral("结果不完整 / 待核对"))
+        .arg(scanState)
         .arg(summary["record_count"].toInt()).arg(states.join("；")));
     m_statusLabel->setToolTip(QString::fromUtf8(QJsonDocument(data["scan_runs"].toArray()).toJson(QJsonDocument::Indented)));
+    renderCoverage(data["scan_coverage"].toObject());
   });
+}
+
+void ScanPage::renderCoverage(const QJsonObject &coverage)
+{
+  m_coverageTree->clear();
+  if (coverage.isEmpty()) { m_coverageTree->hide(); return; }
+  QHash<QString, QTreeWidgetItem *> assets, services, entries;
+  const auto statusText = [](const QString &state) {
+    const QHash<QString, QString> names{{"reachable", "可达"}, {"observed", "已发现"},
+      {"declared", "用户声明"}, {"unverified", "待探测"}, {"http_observed", "HTTP 已响应"},
+      {"planned", "待执行"}, {"running", "执行中"}, {"completed", "已完成"},
+      {"partial", "部分完成"}, {"failed", "失败"}, {"cancelled", "已取消"},
+      {"unreachable", "不可达"}, {"unsupported", "未支持"},
+      {"missing_condition", "缺条件"}, {"not_checked", "未检查"},
+      {"not_applicable", "不适用"}, {"out_of_scope", "范围外"}};
+    return names.value(state, state);
+  };
+  const auto add = [this, &statusText](QTreeWidgetItem *parent, const QString &name, const QJsonObject &row) {
+    auto *item = parent ? new QTreeWidgetItem(parent) : new QTreeWidgetItem(m_coverageTree);
+    item->setText(0, name);
+    item->setText(1, statusText(row.value("state").toString()));
+    item->setText(2, row.value("source_record_id").isNull() ? QString() : row.value("source_record_id").toVariant().toString());
+    item->setToolTip(0, row.value("reason").toString());
+    return item;
+  };
+  for (const auto &value : coverage.value("assets").toArray()) {
+    const auto row = value.toObject();
+    assets.insert(row.value("asset_id").toString(), add(nullptr, QStringLiteral("资产 %1").arg(row.value("host").toString()), row));
+  }
+  for (const auto &value : coverage.value("services").toArray()) {
+    const auto row = value.toObject();
+    const QString name = QStringLiteral("%1/%2 · %3").arg(row.value("port").toVariant().toString(),
+      row.value("protocol").toString(), row.value("name").toString());
+    services.insert(row.value("service_id").toString(), add(assets.value(row.value("asset_id").toString(), nullptr), name, row));
+  }
+  for (const auto &value : coverage.value("entries").toArray()) {
+    const auto row = value.toObject();
+    entries.insert(row.value("entry_id").toString(), add(services.value(row.value("service_id").toString(), nullptr),
+      QStringLiteral("入口 %1 · %2").arg(row.value("kind").toString(), row.value("value").toString()), row));
+  }
+  for (const auto &value : coverage.value("checks").toArray()) {
+    const auto row = value.toObject();
+    auto *parent = entries.value(row.value("entry_id").toString(), services.value(row.value("service_id").toString(), nullptr));
+    add(parent, QStringLiteral("检查 %1 · %2").arg(row.value("check_type").toString(), row.value("target").toString()), row);
+  }
+  const auto counts = coverage.value("counts").toObject();
+  auto *summary = new QTreeWidgetItem(m_coverageTree);
+  summary->setText(0, QStringLiteral("覆盖清单：资产 %1 · 服务 %2 · 入口 %3 · 检查 %4%5")
+    .arg(counts.value("assets").toInt()).arg(counts.value("services").toInt())
+    .arg(counts.value("entries").toInt()).arg(counts.value("checks").toInt())
+    .arg(coverage.value("truncated").toBool() ? QStringLiteral("（当前仅显示前 500 项）") : QString()));
+  m_coverageTree->insertTopLevelItem(0, m_coverageTree->takeTopLevelItem(m_coverageTree->indexOfTopLevelItem(summary)));
+  m_coverageTree->expandToDepth(1);
+  m_coverageTree->show();
 }
 
 void ScanPage::setTaskScope(const QStringList &taskIds)
@@ -1138,6 +1200,13 @@ void ScanPage::setupUI() {
   m_resultHint->setObjectName("scanPanelHint");
   m_resultHint->setWordWrap(true);
   right->addWidget(m_resultHint);
+  m_coverageTree = new QTreeWidget(resultsPage);
+  m_coverageTree->setObjectName(QStringLiteral("scanCoverageTree"));
+  m_coverageTree->setHeaderLabels({QStringLiteral("资产 / 服务 / 入口 / 检查"), QStringLiteral("状态"), QStringLiteral("来源记录")});
+  m_coverageTree->setMinimumHeight(150);
+  m_coverageTree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+  m_coverageTree->hide();
+  right->addWidget(m_coverageTree);
   m_sourceDemoBtn = new QPushButton("选择漏洞生成预案…");
   m_sourceDemoBtn->setObjectName("sourceDemonstrationButton");
   m_sourceDemoBtn->hide();
@@ -1419,6 +1488,8 @@ void ScanPage::updateStatusLabel(const QJsonObject &d) {
 void ScanPage::renderGroupedResults(const QJsonArray &results) {
   m_resultOverview->setResults(results);
   m_resultTree->clear();
+  m_coverageTree->clear();
+  m_coverageTree->hide();
 
   // Group by result_type
   QMap<QString, QJsonArray> groups;

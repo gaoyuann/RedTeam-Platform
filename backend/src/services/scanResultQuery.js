@@ -2,6 +2,8 @@ import { normalizeTopologyTarget } from './nmapTopology.js';
 import { hasScanIntegrity } from './scanResultStore.js';
 import { parseResultData, publicScanRecord, summarizeScanRecords, redactScanValue, resultCategory } from './scanResultCatalog.js';
 import { isProgramMode, programExecutionTarget, programNetworkTarget } from './programScan.js';
+import { isTargetInScope, taskScope } from './taskScope.js';
+import { scanCoverage } from './scanCoverage.js';
 
 export function pipelineScans(db,pipeline) {
   const linked=[...new Set(String(pipeline.scan_task_id || '').split(',').map(s=>s.trim()).filter(Boolean))];
@@ -15,6 +17,10 @@ export function pipelineScans(db,pipeline) {
   }
   return rows.filter(row=>{
     if(row.pipeline_id && row.pipeline_id!==pipeline.pipeline_id) return false;
+    if(row.pipeline_id===pipeline.pipeline_id && config.task_scope) {
+      const value=/^[^/]+:\d+$/.test(row.target) ? `tcp://${row.target}` : row.target;
+      return isTargetInScope(taskScope(pipeline),value);
+    }
     if(targets.has(row.target)) return true;
     if(row.scan_type==='topology_scan') { try {return row.target===normalizeTopologyTarget(pipeline.target);}catch{} }
     return false;
@@ -32,12 +38,16 @@ export function scanCollection(db,pipeline,{metadataOnly=false}={}) {
   const legacy=scans.some(s=>!runs.some(r=>r.scan_task_id===s.scan_task_id));
   const parserUnknown=runs.some(r=>parseResultData(r.outcome)?.parser_coverage_known===false);
   const activeCalls=runs.filter(r=>r.state==='running' || parseResultData(r.outcome)?.stopped===false).map(r=>r.tool_run_id);
+  const coverage=scanCoverage(db,pipeline.pipeline_id);
+  const unfinishedStates=['planned','running','partial','failed','cancelled','unreachable','unsupported','missing_condition','not_checked'];
   const summary={...summarizeScanRecords(rows),scan_count:scans.length,states,
     completeness: !scans.length?'unknown':scans.every(s=>s.status==='COMPLETED') && !missing.length && !activeCalls.length && runs.every(r=>!parseResultData(r.outcome)?.incomplete)?(legacy || parserUnknown?'unknown':'complete'):'incomplete',
     planned_checks:planned,unexecuted_checks:missing,
+    coverage_states:coverage?.states || null,
+    unfinished_check_count:coverage ? unfinishedStates.reduce((total,state)=>total+(coverage.states[state] || 0),0) : null,
     legacy_completeness_unknown:legacy,
     active_calls:activeCalls};
-  return {scans,rows,runs,summary};
+  return {scans,rows,runs,summary,coverage};
 }
 export function scanPage(db,pipeline,query={}) {
   const integer=(v,fallback,max)=>{
@@ -58,7 +68,7 @@ export function scanPage(db,pipeline,query={}) {
   const filtered=publicRows.filter(r=>(category==='all'||r.category===category) && (!query.scan_task_id||r.scan_task_id===query.scan_task_id));
   const selected=filtered.filter(r=>r.id>after).slice(0,limit);
   const records=selected.length?db.prepare(`SELECT * FROM scan_results WHERE id IN (${selected.map(()=>'?').join(',')}) ORDER BY id`).all(...selected.map(r=>r.id)).map(publicScanRecord):[];
-  return {scan_summary:collection.summary,scan_records:records,
+  return {scan_summary:collection.summary,scan_coverage:collection.coverage,scan_records:records,
     scan_sources:collection.scans.map(s=>({scan_task_id:s.scan_task_id,scan_type:s.scan_type,status:s.status,target:s.target,error_message:redactScanValue(s.error_message),retry_of_scan_task_id:s.retry_of_scan_task_id || null})),
     scan_runs:collection.runs.map(({evidence,...r})=>({...r,outcome:parseResultData(r.outcome),diagnostics:parseResultData(r.diagnostics)})),
     page:{total:filtered.length,returned:selected.length,after,through,limit,category,scan_task_id:query.scan_task_id || null,
