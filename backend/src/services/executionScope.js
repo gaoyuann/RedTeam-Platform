@@ -31,9 +31,36 @@ export function validateExecutionScope({ target, toolId, args, scope }) {
   }
   if (/^tcp:\/\//i.test(target || '')) return {allowed:false,reason:'TCP 程序目标须使用 target-request 进行有界交互'};
   if (!/^https?:\/\//i.test(target || '')) {
-    if(scope) {
-      const reason=scopeBlockReason(scope,target,toolId==='nmap'?'port_scan':'');
-      if(reason) return {allowed:false,reason};
+    if (!scope) return { allowed: true }; // legacy runs have no structured scope
+    if (!Array.isArray(args) || args.some(arg => typeof arg !== 'string'))
+      return {allowed:false,reason:'工具参数必须为字符串数组'};
+    const reason=scopeBlockReason(scope,target,toolId==='nmap'?'port_scan':'');
+    if(reason) return {allowed:false,reason};
+    const candidates=[];
+    const nmapValueFlags=new Set(['-p','--top-ports','-e','--script','--script-args','--exclude','-oN','-oX','-oA','--max-retries','--min-parallelism']);
+    for(let index=0;index<args.length;index++) {
+      const argument=args[index],flag=argument.split('=')[0];
+      if(INDIRECT_TARGET_FLAGS[toolId]?.some(value=>flag===value || argument.startsWith(value) && argument.length>value.length))
+        return {allowed:false,reason:'不允许使用目标文件或随机目标参数'};
+      if(toolId==='nmap' && nmapValueFlags.has(argument)) {index++;continue;}
+      if(URL_FLAGS[toolId]?.includes(flag)) {
+        const value=argument.includes('=')?argument.slice(argument.indexOf('=')+1):args[++index];
+        if(!value) return {allowed:false,reason:'工具目标参数缺少地址'};
+        candidates.push(value);
+        continue;
+      }
+      const explicit=argument.replace(/^--?[\w-]+=/,'');
+      if(/^(?:https?|tcp):\/\//i.test(explicit)) candidates.push(explicit);
+      else if(toolId==='nmap' && !argument.startsWith('-') && !argument.includes('=') && !/^\d+$/.test(argument))
+        candidates.push(argument);
+      else if(isIP(explicit) || /^\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}$/.test(explicit)) candidates.push(explicit);
+    }
+    if(Object.hasOwn(URL_FLAGS,toolId) && !candidates.length)
+      return {allowed:false,reason:'Web 工具必须提供可核对的目标地址'};
+    for(const candidate of candidates) {
+      const broad=['nuclei','nikto','gobuster','ffuf','sqlmap','web-brute'].includes(toolId);
+      const blocked=scopeBlockReason(scope,candidate,broad?'web_scan':toolId==='nmap'?'port_scan':'');
+      if(blocked) return {allowed:false,reason:blocked};
     }
     return { allowed: true };
   }
