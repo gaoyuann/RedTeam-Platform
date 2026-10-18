@@ -1,0 +1,50 @@
+name: PR checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'feature/**'
+      - 'fix/**'
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci --no-audit --no-fund
+      - name: Run tests
+        working-directory: backend
+        run: npm test
+
+  frontend:
+    name: Qt build and UI checks
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Qt dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qtbase5-dev libqt5websockets5-dev
+      - name: Configure
+        run: cmake -S . -B build-ci -DBUILD_UI_CHECKS=ON
+      - name: Build application and checks
+        run: cmake --build build-ci --target RedTeam-Platform RedTeam-Platform-Batch16Checks --parallel 2
+      - name: Run UI checks
+        run: ctest --test-dir build-ci -R '^ui-context-' --output-on-failure
