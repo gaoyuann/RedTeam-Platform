@@ -66,4 +66,6 @@ test('host task validation binds non-Web network tools to an allowed host',()=>{
   assert.equal(check('ssh-exec',['-i','outside.invalid','-u','user']),false);
   assert.equal(check('rpcclient',['-N','-U','','outside.invalid']),false);
   assert.equal(check('netexec',['smb','fixture.invalid','--shares']),true);
+  assert.equal(check('hydra',['-L','users.txt','-P','passwords.txt','smb://fixture.invalid']),true,
+    'service URI syntax remains usable for the allowed host');
 });
