@@ -20,6 +20,30 @@ const POSITIONAL_VALUE_FLAGS = {
   whatweb: ['-a', '--aggression', '-U', '--user-agent', '--cookie', '--log-json', '--log-xml'],
 };
 
+const HYDRA_SERVICES = new Set(['http-post-form','http-get-form','http-post','http-get',
+  'https-post-form','https-get-form','https-post','https-get','ftp','ssh','rdp','smb','mysql','postgres','redis','telnet']);
+
+function networkToolTarget(toolId,args) {
+  let value;
+  if(toolId==='hydra') {
+    const index=args.findIndex(arg=>HYDRA_SERVICES.has(arg.toLowerCase()));
+    value=index>0 ? args[index-1] : null;
+  } else if(toolId==='netexec') value=args[1];
+  else if(toolId==='rpcclient') value=args.at(-1);
+  else if(['ssh-exec','evil-winrm'].includes(toolId)) {
+    const index=args.findIndex(arg=>['-i','--host','--ip'].includes(arg.split('=')[0]));
+    value=index<0 ? null : args[index].includes('=') ? args[index].slice(args[index].indexOf('=')+1) : args[index+1];
+  } else return undefined;
+  if(!value || value.startsWith('-')) return null;
+  if(/^[a-z][\w+.-]*:\/\//i.test(value) && !/^(?:https?|tcp):\/\//i.test(value)) {
+    try {
+      const url=new URL(value);
+      return url.hostname && !url.username && !url.password ? url.hostname.replace(/^\[|\]$/g,'') : null;
+    } catch {return null;}
+  }
+  return value;
+}
+
 export function validateExecutionScope({ target, toolId, args, scope }) {
   if (toolId === 'target-request') {
     try {
@@ -55,6 +79,9 @@ export function validateExecutionScope({ target, toolId, args, scope }) {
         candidates.push(argument);
       else if(isIP(explicit) || /^\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}$/.test(explicit)) candidates.push(explicit);
     }
+    const networkTarget=networkToolTarget(toolId,args);
+    if(networkTarget===null) return {allowed:false,reason:'网络工具目标无法核对'};
+    if(networkTarget!==undefined) candidates.push(networkTarget);
     if(Object.hasOwn(URL_FLAGS,toolId) && !candidates.length)
       return {allowed:false,reason:'Web 工具必须提供可核对的目标地址'};
     for(const candidate of candidates) {

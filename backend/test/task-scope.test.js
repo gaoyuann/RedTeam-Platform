@@ -55,3 +55,15 @@ test('IP task validation rejects explicit tool destinations outside its scope',(
   assert.equal(validateExecutionScope({target:'192.0.2.2',toolId:'nmap',args:['-sV','192.0.2.2','198.51.100.5'],scope}).allowed,false);
   assert.equal(validateExecutionScope({target:'192.0.2.2',toolId:'nmap',args:['-sV','192.0.2.2'],scope}).allowed,true);
 });
+
+test('host task validation binds non-Web network tools to an allowed host',()=>{
+  const scope=normalizeTaskScope({task_scope:{includes:['fixture.invalid']}},'fixture.invalid');
+  const check=(toolId,args)=>validateExecutionScope({target:'fixture.invalid',toolId,args,scope}).allowed;
+  assert.equal(check('hydra',['-L','users.txt','-P','passwords.txt','outside.invalid','ssh']),false);
+  assert.equal(check('hydra',['-L','users.txt','-P','passwords.txt','smb://outside.invalid','smb']),false);
+  assert.equal(check('netexec',['smb','outside.invalid','--shares']),false);
+  assert.equal(check('evil-winrm',['-i','outside.invalid','-u','user']),false);
+  assert.equal(check('ssh-exec',['-i','outside.invalid','-u','user']),false);
+  assert.equal(check('rpcclient',['-N','-U','','outside.invalid']),false);
+  assert.equal(check('netexec',['smb','fixture.invalid','--shares']),true);
+});
