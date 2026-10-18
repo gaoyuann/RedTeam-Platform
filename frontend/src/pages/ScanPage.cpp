@@ -527,8 +527,14 @@ void ScanPage::loadPipelineResults(bool append)
     if (active || unresolvedCalls) m_pollTimer->start(2000); else m_pollTimer->stop();
     m_resultSource->setCurrentIndex(qMax(0, m_resultSource->findData(selected))); m_resultSource->blockSignals(false);
     for (const auto &value : summary["unexecuted_checks"].toArray()) states << formatScanType(value.toString()) + "：未执行";
+    const int unfinishedChecks = summary.value("unfinished_check_count").toInt();
+    if (unfinishedChecks > 0) states << QStringLiteral("检查覆盖仍有 %1 项未完成、未支持或缺条件").arg(unfinishedChecks);
+    const QString scanState = active ? QStringLiteral("进行中")
+        : summary["completeness"].toString() == "complete"
+          ? (unfinishedChecks > 0 ? QStringLiteral("结果已保存，检查覆盖待补") : QStringLiteral("已结束"))
+          : QStringLiteral("结果不完整 / 待核对");
     m_statusLabel->setText(QStringLiteral("本任务扫描：%1 · 共 %2 条记录（非去重漏洞数）\n%3")
-        .arg(active ? QStringLiteral("进行中") : summary["completeness"].toString() == "complete" ? QStringLiteral("已结束") : QStringLiteral("结果不完整 / 待核对"))
+        .arg(scanState)
         .arg(summary["record_count"].toInt()).arg(states.join("；")));
     m_statusLabel->setToolTip(QString::fromUtf8(QJsonDocument(data["scan_runs"].toArray()).toJson(QJsonDocument::Indented)));
     renderCoverage(data["scan_coverage"].toObject());

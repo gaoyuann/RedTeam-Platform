@@ -219,7 +219,7 @@ async function runPipelineScan(db, pipeline) {
         markCheck(db,planned.check_id,({COMPLETED:'completed',PARTIAL:'partial',FAILED:'failed',CANCELLED:'cancelled'})[scanResult.status] || 'failed',
           {scanTaskId,reason:scanResult.error || null});
         if(scanType==='port_scan') observePortScan(db,pipeline,scanTaskId);
-        if(['app_discovery','api_fuzz'].includes(scanType)) observeWebScan(db,pipeline,{...planned,scan_task_id:scanTaskId,
+        if(['app_discovery','api_fuzz'].includes(scanType)) observeWebScan(db,pipeline,{...planned,scan_task_id:scanTaskId,scan_status:scanResult.status,
           service_id:db.prepare('SELECT service_id FROM task_checks WHERE check_id=?').get(planned.check_id)?.service_id,
           entry_id:db.prepare('SELECT entry_id FROM task_checks WHERE check_id=?').get(planned.check_id)?.entry_id});
         appendPending();

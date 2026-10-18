@@ -130,7 +130,12 @@ export function observePortScan(db,pipeline,scanTaskId) {
 }
 
 function safeUrl(value,base) {
-  try {return normalizedUrl(new URL(value,base).href);} catch {return null;}
+  try {
+    const url=new URL(value,base);
+    // Query values may contain sessions or API keys; the entry identity is its path.
+    url.search='';url.hash='';
+    return normalizedUrl(url.href);
+  } catch {return null;}
 }
 
 export function observeWebScan(db,pipeline,check) {
@@ -138,18 +143,26 @@ export function observeWebScan(db,pipeline,check) {
   const scope=taskScope(pipeline),target=check.target;
   const records=db.prepare("SELECT id,result_type,result_data FROM scan_results WHERE scan_task_id=? AND result_type IN ('http_probe','technology_detection','api_endpoint','api_parameter') ORDER BY id")
     .all(check.scan_task_id);
-  const reachable=records.some(row=>{
-    if(row.result_type!=='http_probe') return false;
+  const complete=check.scan_status === undefined || check.scan_status === 'COMPLETED';
+  const inScopeResponse=row=>row.result_type==='http_probe' && normalizedUrl(json(row.result_data).url)
+    && isTargetInScope(scope,json(row.result_data).url);
+  const responded=records.some(inScopeResponse);
+  const reachable=complete && records.some(row=>{
+    if(!inScopeResponse(row)) return false;
     const data=json(row.result_data),status=Number(data.status_code);
-    return status>=200 && status<400 && normalizedUrl(data.url) && isTargetInScope(scope,data.url);
+    return status>=200 && status<400;
   });
+  const authRequired=complete && records.some(row=>inScopeResponse(row)
+    && [401,403].includes(Number(json(row.result_data).status_code)));
   if(check.scan_type==='app_discovery') {
-    if(reachable && check.service_id) {
+    if(responded && check.service_id) {
       db.prepare("UPDATE task_services SET state='http_observed' WHERE service_id=? AND state='unverified'").run(check.service_id);
       db.prepare("UPDATE task_assets SET state='reachable' WHERE asset_id=(SELECT asset_id FROM task_services WHERE service_id=?)").run(check.service_id);
     }
-    const state=reachable?'planned':'unreachable';
-    const reason=reachable?null:'未取得范围内成功的 HTTP 响应，后续 Web 检查未执行';
+    const state=reachable?'planned':authRequired?'missing_condition':!complete || responded?'not_checked':'unreachable';
+    const reason=reachable?null:authRequired?'HTTP 入口需要认证，未提供可用角色与凭据':!complete
+      ?'入口探测未完整完成，后续检查未执行':responded
+        ?'HTTP 服务已响应，但入口未返回成功状态，后续检查未执行':'未取得范围内 HTTP 响应，后续检查未执行';
     for(const [type,scanType] of [['web_security','web_scan'],['api_entry_discovery','api_fuzz']]) {
       const allowed=classifyCheck(scope,target,scanType);
       addCheck(db,pipeline,{serviceId:check.service_id,entryId:check.entry_id,type,scanType,target,
@@ -159,7 +172,10 @@ export function observeWebScan(db,pipeline,check) {
       reason:'认证角色和可用凭据提供方尚未配置；未进行认证检查',sourceId:records[0]?.id || check.source_record_id});
   }
   const budget=scope.discovery_budget;
-  const primary=new Set([target]);
+  const canSchedule=complete && (check.scan_type!=='app_discovery' || reachable);
+  const primary=new Set([safeUrl(target,target) || target]);
+  const seenUrls=new Set(db.prepare("SELECT target FROM task_checks WHERE pipeline_id=? AND check_type='new_entry_check'")
+    .all(pipeline.pipeline_id).map(row=>row.target));
   const discovered=[];
   for(const row of records) {
     const data=json(row.result_data);
@@ -186,13 +202,16 @@ export function observeWebScan(db,pipeline,check) {
   }
   let scheduled=db.prepare("SELECT COUNT(*) n FROM task_checks WHERE pipeline_id=? AND check_type='new_entry_check' AND state IN ('planned','running','completed','partial','failed')").get(pipeline.pipeline_id).n;
   for(const item of discovered) {
-    if(primary.has(item.url)) continue;
+    if(primary.has(item.url) || seenUrls.has(item.url)) continue;
+    seenUrls.add(item.url);
     const inScope=isTargetInScope(scope,item.url);
     const entry=addEntry(db,pipeline,{serviceId:check.service_id,kind:item.kind,value:item.url,state:inScope?'observed':'out_of_scope',sourceId:item.sourceId});
     if(item.kind==='form') addCheck(db,pipeline,{serviceId:check.service_id,entryId:entry.entry_id,type:'form_input_validation',
       state:'missing_condition',reason:'尚无表单方法、字段及角色条件，未执行逐字段验证',sourceId:item.sourceId});
     if(!inScope) {addCheck(db,pipeline,{serviceId:check.service_id,entryId:entry.entry_id,type:'new_entry_check',target:item.url,
       state:'out_of_scope',reason:'新入口不在任务范围内',sourceId:item.sourceId});continue;}
+    if(!canSchedule) {addCheck(db,pipeline,{serviceId:check.service_id,entryId:entry.entry_id,type:'new_entry_check',target:item.url,
+      state:'not_checked',reason:authRequired?'入口需要认证，未补充检查':'来源扫描未完整完成，未补充检查',sourceId:item.sourceId});continue;}
     if(scheduled>=budget) {addCheck(db,pipeline,{serviceId:check.service_id,entryId:entry.entry_id,type:'new_entry_check',target:item.url,
       state:'not_checked',reason:'新入口检查预算已用尽',sourceId:item.sourceId});continue;}
     const allowed=classifyCheck(scope,item.url,'web_scan');

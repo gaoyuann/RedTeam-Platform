@@ -56,6 +56,7 @@ test('parent run plans real HTTP service, records unsupported SSH and includes e
     assert.equal(page.scan_coverage.counts.services,2);
     assert.ok(page.scan_coverage.checks.some(row=>row.state==='unsupported' && row.check_type==='service_security'));
     assert.ok(page.scan_coverage.checks.some(row=>row.state==='missing_condition' && row.check_type==='authenticated_roles'));
+    assert.ok(page.scan_summary.unfinished_check_count>0,'saved results must still disclose unfinished coverage');
     db.prepare('INSERT OR IGNORE INTO users(username,password,role) VALUES (?,?,?)').run('coverage-other','fixture','user');
     const app=express();
     app.use((req,res,next)=>{req.user={sub:req.headers['x-user'] || 'coverage-fixture',role:'user'};next();});

@@ -32,6 +32,7 @@ test('service evidence creates bounded per-service checks and explicit uncovered
   db.prepare("INSERT INTO scan_tasks VALUES ('web')").run();
   add.run('web','http_probe',JSON.stringify({url:discovery.target,status_code:200,
     body:'<a href="/api/users">API</a><a href="/help">help</a><form action="/login"></form>'}));
+  add.run('web','api_endpoint',JSON.stringify({url:'http://192.0.2.2:8080/api/users?token=fixture-secret',status_code:200}));
   add.run('web','api_parameter',JSON.stringify({parameter:'id'}));
   markCheck(db,discovery.check_id,'completed',{scanTaskId:'web'});
   observeWebScan(db,pipeline,{...discovery,scan_task_id:'web'});
@@ -42,6 +43,8 @@ test('service evidence creates bounded per-service checks and explicit uncovered
   assert.equal(result.checks.filter(row=>row.check_type==='new_entry_check' && row.state==='planned').length,1);
   assert.ok(result.checks.some(row=>row.check_type==='new_entry_check' && row.state==='not_checked'));
   assert.ok(result.entries.some(row=>row.kind==='form'));
+  assert.equal(result.checks.filter(row=>row.check_type==='new_entry_check' && row.target==='http://192.0.2.2:8080/api/users').length,1);
+  assert.doesNotMatch(JSON.stringify(result.entries),/fixture-secret/);
   assert.ok(result.checks.some(row=>row.check_type==='form_input_validation' && row.state==='missing_condition'));
   assert.ok(result.entries.some(row=>row.kind==='parameter'));
   observePortScan(db,pipeline,'ports');
@@ -76,5 +79,48 @@ test('declared HTTP entry receives reachability check after empty port evidence'
   const check=pendingChecks(db,'declared').find(row=>row.scan_type==='app_discovery');
   assert.equal(check.target,'http://192.0.2.2/app/');
   assert.equal(scanCoverage(db,'declared').services[0].state,'unverified');
+  db.close();
+});
+
+test('authentication responses and partial probes never schedule follow-up checks as complete coverage',()=>{
+  const db=new Database(':memory:');db.pragma('foreign_keys=ON');
+  db.exec(`CREATE TABLE pipelines(pipeline_id TEXT PRIMARY KEY,target TEXT,config TEXT,created_by TEXT);
+    CREATE TABLE scan_tasks(scan_task_id TEXT PRIMARY KEY);
+    CREATE TABLE scan_results(id INTEGER PRIMARY KEY,scan_task_id TEXT,result_type TEXT,result_data TEXT);`);
+  coverageMigration(db);
+  const target='http://fixture.invalid/';
+  const config={task_scope:{includes:[target],excludes:[],execution_location:'scanner',discovery_budget:2}};
+  db.prepare('INSERT INTO pipelines VALUES (?,?,?,?)').run('auth',target,JSON.stringify(config),'alice');
+  const pipeline=db.prepare('SELECT * FROM pipelines').get();
+  const [check]=beginCoverage(db,pipeline,[{scan_type:'app_discovery',target}]);
+  db.prepare("INSERT INTO scan_tasks VALUES ('auth-scan')").run();
+  db.prepare('INSERT INTO scan_results(scan_task_id,result_type,result_data) VALUES (?,?,?)')
+    .run('auth-scan','http_probe',JSON.stringify({url:target,status_code:401,body:'<a href="/login">login</a>'}));
+  observeWebScan(db,pipeline,{...check,scan_task_id:'auth-scan',scan_status:'COMPLETED'});
+  let checks=scanCoverage(db,'auth').checks;
+  assert.equal(checks.find(row=>row.check_type==='web_security').state,'missing_condition');
+  assert.equal(checks.find(row=>row.check_type==='api_entry_discovery').state,'missing_condition');
+  assert.equal(checks.find(row=>row.check_type==='new_entry_check').state,'not_checked');
+  db.prepare('DELETE FROM scan_results').run();
+  db.prepare('DELETE FROM task_checks WHERE pipeline_id=? AND check_id<>?').run('auth',check.check_id);
+  db.prepare('DELETE FROM task_entries').run();
+  db.prepare('INSERT INTO scan_results(scan_task_id,result_type,result_data) VALUES (?,?,?)')
+    .run('auth-scan','http_probe',JSON.stringify({url:target,status_code:302,body:'<a href="/new">new</a>'}));
+  observeWebScan(db,pipeline,{...check,scan_task_id:'auth-scan',scan_status:'PARTIAL'});
+  checks=scanCoverage(db,'auth').checks;
+  assert.equal(checks.find(row=>row.check_type==='web_security').state,'not_checked');
+  assert.equal(checks.find(row=>row.check_type==='new_entry_check').state,'not_checked');
+  db.prepare('DELETE FROM scan_results').run();
+  db.prepare('DELETE FROM task_checks WHERE pipeline_id=? AND check_id<>?').run('auth',check.check_id);
+  db.prepare('DELETE FROM task_entries').run();
+  db.prepare('INSERT INTO scan_results(scan_task_id,result_type,result_data) VALUES (?,?,?)')
+    .run('auth-scan','http_probe',JSON.stringify({url:target,status_code:404}));
+  observeWebScan(db,pipeline,{...check,scan_task_id:'auth-scan',scan_status:'COMPLETED'});
+  assert.equal(scanCoverage(db,'auth').checks.find(row=>row.check_type==='web_security').state,'not_checked',
+    'HTTP 404 is an observed response, not a network reachability failure');
+  db.prepare('DELETE FROM scan_results').run();
+  db.prepare('DELETE FROM task_checks WHERE pipeline_id=? AND check_id<>?').run('auth',check.check_id);
+  observeWebScan(db,pipeline,{...check,scan_task_id:'auth-scan',scan_status:'COMPLETED'});
+  assert.equal(scanCoverage(db,'auth').checks.find(row=>row.check_type==='web_security').state,'unreachable');
   db.close();
 });
