@@ -48,3 +48,10 @@ test('controlled HTTP probe never follows a redirect outside the structured path
   }),error=>error.partialResults.length===1 && /scope/.test(error.message));
   assert.equal(requests,1);
 });
+
+test('IP task validation rejects explicit tool destinations outside its scope',()=>{
+  const scope=normalizeTaskScope({task_scope:{includes:['192.0.2.2']}},'192.0.2.2');
+  assert.equal(validateExecutionScope({target:'192.0.2.2',toolId:'nikto',args:['-h','http://198.51.100.5/'],scope}).allowed,false);
+  assert.equal(validateExecutionScope({target:'192.0.2.2',toolId:'nmap',args:['-sV','192.0.2.2','198.51.100.5'],scope}).allowed,false);
+  assert.equal(validateExecutionScope({target:'192.0.2.2',toolId:'nmap',args:['-sV','192.0.2.2'],scope}).allowed,true);
+});
