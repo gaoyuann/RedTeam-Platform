@@ -2,7 +2,7 @@
  * payloadLoader.js — 懒加载 Payloader 载荷数据，提供统一查询接口
  *
  * 数据来源：
- *   1. 静态载荷: data/knowledge/payloader_data.json (Payloader OSS, 305 items)
+ *   1. 静态载荷: data/knowledge/payloader_data.json (Payloader OSS, 305 samples + 114 tool commands)
  *   2. AI 生成载荷: generated_payloads 表 (import_status='accepted')
  *
  * 移植自 RedTeam-Edu: backend/src/runtime/playbookCompiler.js L44-64
@@ -157,6 +157,10 @@ export function getPayloadList({ category, type, keyword, db } = {}) {
       categoryEn: payload.category?.en || '',
       tags: payload.tags || [],
       type: payload._type,
+      version: payload.version || 1,
+      source: payload._source || (payload._type === 'ai_generated' ? 'ai' : 'static'),
+      consumption_type: payload.consumption?.type || 'reference_only',
+      validation_status: payload.validation?.status || 'reference',
       toolHint: payload._type === 'tool' ? id : '',
     });
   }
@@ -200,6 +204,10 @@ export function extractPayloadData(payload) {
 
   return {
     id: payload.id,
+    version: payload.version || 1,
+    source: payload._source || (payload._type === 'ai_generated' ? 'ai' : 'static'),
+    consumption: payload.consumption || { type: 'reference_only' },
+    validation: payload.validation || null,
     name: payload.name,
     category: payload.category,
     description: payload.description,

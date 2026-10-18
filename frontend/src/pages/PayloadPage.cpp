@@ -190,10 +190,6 @@ void PayloadPage::setupUI() {
   splitter->setStretchFactor(1, 2);
   mainLayout->addWidget(splitter);
 
-  // Hide AI generate for non-admin
-  if (m_role != "admin") {
-    m_aiGenBtn->hide();
-  }
 }
 
 void PayloadPage::onLoadCategories() {
@@ -376,9 +372,19 @@ void PayloadPage::showPayloadDetail(const QJsonObject &payload) {
     : catVal.toString();
   const QString typeDisp = kTypeNames.value(payload["_type"].toString(), payload["_type"].toString());
   m_categoryLabel->setText(
-    QStringLiteral("分类：%1 · 类型：%2 · 编号：%3").arg(catDisplay, typeDisp, payload["id"].toString())
+    QStringLiteral("分类：%1 · 类型：%2 · 编号：%3 · 版本：%4 · 状态：%5")
+      .arg(catDisplay, typeDisp, payload["id"].toString())
+      .arg(payload["version"].toInt(1))
+      .arg(payload["validation"].toObject()["status"].toString().isEmpty()
+        ? (payload["_type"].toString() == "ai_generated" ? QStringLiteral("历史生成样本")
+                                                         : QStringLiteral("静态样本"))
+        : QStringLiteral("结构已校验"))
   );
   m_categoryLabel->setVisible(true);
+
+  const auto history = payload["verification_history"].toArray();
+  m_categoryLabel->setToolTip(QStringLiteral("可见运行记录：%1 次。工具成功不等于漏洞验证成立。")
+    .arg(history.size()));
 
   m_descLabel->setText(extractI18n(payload, QStringLiteral("description")));
 
@@ -541,8 +547,7 @@ void PayloadPage::onAiGenerate() {
       }
 
       QMessageBox::information(this, QStringLiteral("生成成功"),
-        QStringLiteral("载荷已生成，当前处于候选状态，需教师审核后可用。\n\n"
-                       "请前往载荷列表查看。"));
+        QStringLiteral("载荷已完成结构校验并保存到载荷库，可在预案中引用。实际效果需运行验证。"));
       onLoadCategories();
       loadPayloadList();
     });

@@ -161,7 +161,9 @@ function recordEvidence(db, runId, stepIndex, toolId, result, target, expectedMi
       ...(diagnostics.length ? {source_diagnostics:{provenance:'untrusted_target_response',items:diagnostics,
         note:'响应中的诊断文本需核对目标日志、构建版本及源码关联，不能单独证明漏洞'}} : {}),
       planned_mitre: tryJsonArr(expectedMitre),
-      ...(payloadInfo ? { payload_id: payloadInfo.id, payload_name: payloadInfo.name } : {}),
+      ...(payloadInfo ? { payload_id: payloadInfo.id, payload_name: payloadInfo.name,
+        payload_version: payloadInfo.version, payload_source: payloadInfo.source,
+        payload_consumption: payloadInfo.consumption } : {}),
     }),
     (result.stdout || '').slice(0, toolId==='target-request' ? 524288 : MAX_OUTPUT_LENGTH),
     (result.stderr || '').slice(0, MAX_OUTPUT_LENGTH),
@@ -532,7 +534,9 @@ export async function executeRun(runId) {
 
       // Record evidence (with structured parsing + rules engine)
       const evidenceResult = recordEvidence(db, runId, step.step_index, step.tool_id, result, run.target, step.expected_mitre,
-        step.payload_data ? { id: step.payload_data.id, name: step.payload_data.name } : null, attemptId,
+        step.payload_data ? { id: step.payload_data.id, name: step.payload_data.name,
+          version: step.payload_data.version, source: step.payload_data.source,
+          consumption: step.payload_data.consumption?.type } : null, attemptId,
         sourceVerification ? {...JSON.parse(step.evidence_config || '{"finding_ids":[]}'),scan_task_id:sourceVerification.scan_task_id,
           source_versions:sourceVerification.reproducibility?.source_versions || [],deployment_version_verified:false} : null);
       db.prepare(`INSERT INTO audit_log (type, execution_id, run_id, tool_id, args, user_role, target, execution_mode, success, exit_code, duration_ms, output_size, reasons, timestamp)

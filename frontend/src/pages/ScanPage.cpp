@@ -1261,6 +1261,13 @@ void ScanPage::setupUI() {
       menu.addAction("查看 / 关联匹配载荷", [this, item]() { showPayloadMatches(item); });
     // 演示动线：漏洞结果一键发起攻击
     const QString resultType = item->data(0, Qt::UserRole).toString();
+    const QStringList payloadFindings = {"vulnerability", "web_vuln", "sql_injection", "misconfiguration",
+      "auth_finding", "source_vuln", "source_finding", "program_finding"};
+    const int findingId = item->data(0, Qt::UserRole+1).toInt();
+    if (findingId > 0 && (payloadFindings.contains(resultType)
+      || (m_allScanResults && item->data(0, Qt::UserRole+2).toString() == "vulnerability"))) {
+      menu.addAction("查找或生成此漏洞载荷", [this, findingId]() { showPayloadForFinding(findingId); });
+    }
     if (!m_allScanResults && (isProgramFinding(resultType) || resultType == "application_observation" || resultType == "source_coverage" || resultType == "program_coverage")) {
       menu.addAction("查看源码 / 请求证据", [this,item]() { showSourceEvidence(item); });
       if (isProgramFinding(resultType) && m_sourceDemoBtn->isEnabled()) {
@@ -1689,7 +1696,8 @@ void ScanPage::showPayloadMatches(QTreeWidgetItem *item) {
       table->setItem(row, 3, new QTableWidgetItem(
         (type == "web" ? QStringLiteral("Web") : type == "intranet" ? QStringLiteral("内网")
           : type == "tool" ? QStringLiteral("工具") : type)
-        + " / " + (consumption == "tool_command_reference" ? QStringLiteral("工具命令参考") : QStringLiteral("预案步骤引用"))));
+        + " / " + (consumption == "tool_args" ? QStringLiteral("结构化工具参数")
+          : consumption == "tool_command_reference" ? QStringLiteral("工具命令参考") : QStringLiteral("预案步骤引用"))));
       auto *versionItem = new QTableWidgetItem(match["version"].toString().left(20));
       versionItem->setToolTip(match["version"].toString());
       table->setItem(row, 4, versionItem);
@@ -2717,6 +2725,83 @@ QString ScanPage::chooseHttpSourceDirectory(ApiClient *api, const QString &targe
   connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
   load();
   return dialog.exec()==QDialog::Accepted ? choose->property("directoryUrl").toString() : QString();
+}
+
+void ScanPage::showPayloadForFinding(int findingId) {
+  auto *dialog = new QDialog(this);
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  dialog->setWindowTitle(QStringLiteral("漏洞载荷匹配与生成"));
+  dialog->resize(760, 480);
+  auto *layout = new QVBoxLayout(dialog);
+  auto *status = new QLabel(QStringLiteral("正在检索可复用载荷；没有适用载荷时将调用模型生成并校验…"), dialog);
+  status->setWordWrap(true);
+  layout->addWidget(status);
+  auto *preview = new QPlainTextEdit(dialog);
+  preview->setReadOnly(true);
+  layout->addWidget(preview);
+  auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
+  connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::close);
+  layout->addWidget(buttons);
+  dialog->show();
+
+  QPointer<QDialog> safeDialog(dialog);
+  QPointer<ScanPage> self(this);
+  m_api->post("/api/payloads/resolve", QJsonObject{{"finding_id", findingId}}, 130000,
+    [self, safeDialog, status, preview](const QJsonObject &response) {
+      if (!self || !safeDialog) return;
+      if (response["status"].toString() != "ok") {
+        status->setText(QStringLiteral("载荷处理失败"));
+        status->setStyleSheet("color:#b91c1c; font-weight:700;");
+        preview->setPlainText(response["error"].toObject()["message"].toString());
+        return;
+      }
+      const auto data = response["data"].toObject();
+      const auto payload = data["payload"].toObject();
+      const bool generated = data["state"].toString() == "generated";
+      status->setText(generated ? QStringLiteral("本次新生成 · 已保存到载荷库")
+                                : QStringLiteral("已有载荷 · 已从载荷库复用"));
+      status->setStyleSheet(generated ? "color:#b45309; font-weight:700;" : "color:#1d4ed8; font-weight:700;");
+      const auto name = payload["name"].isObject() ? payload["name"].toObject()["zh"].toString()
+                                                    : payload["name"].toString();
+      const auto consumption = payload["consumption"].toObject();
+      const auto validation = payload["validation"].toObject();
+      QStringList lines{
+        QStringLiteral("发现 ID：%1").arg(data["finding_id"].toInt()),
+        QStringLiteral("匹配依据：%1").arg(data["match_reason"].toString()),
+        QStringLiteral("载荷：%1 (%2)").arg(name, payload["id"].toString()),
+        QStringLiteral("内容版本：%1 · 来源：%2").arg(payload["version"].toInt(1)).arg(payload["_type"].toString()),
+        QStringLiteral("载荷库版本：%1").arg(data["catalog_version"].toString()),
+        QStringLiteral("消费方式：%1 · 工具：%2").arg(consumption["type"].toString(), consumption["tool_id"].toString()),
+        QStringLiteral("校验：%1；生成时未进行实际运行验证").arg(validation["status"].toString()),
+        QStringLiteral("变量：<target>（由执行任务的授权目标替换）"),
+        QStringLiteral("参数预览："),
+      };
+      for (const auto &arg : consumption["args_template"].toArray()) lines << QStringLiteral("  %1").arg(arg.toString());
+      const auto references = data["reference_payloads"].toArray();
+      if (!references.isEmpty()) {
+        lines << QStringLiteral("静态载荷库参考样本（仅供参考，未经结构化消费校验）：");
+        for (const auto &entry : references) {
+          const auto sample = entry.toObject();
+          lines << QStringLiteral("  %1 · %2 · %3").arg(sample["id"].toString(),
+            sample["name"].toString(), sample["match_basis"].toString());
+        }
+      }
+      const auto prerequisites = payload["prerequisites"].toArray();
+      if (!prerequisites.isEmpty()) {
+        lines << QStringLiteral("适用条件：");
+        for (const auto &entry : prerequisites) lines << QStringLiteral("  %1").arg(entry.isObject()
+          ? entry.toObject()["zh"].toString() : entry.toString());
+      }
+      const auto history = payload["verification_history"].toArray();
+      lines << QStringLiteral("运行记录：%1 次可见工具调用（工具成功不等于漏洞验证成立）").arg(history.size());
+      for (const auto &entry : history) {
+        const auto record = entry.toObject();
+        lines << QStringLiteral("  %1 · 运行 %2 · 工具%3").arg(record["recorded_at"].toString(),
+          record["run_id"].toString(), record["tool_success"].toInt() != 0 ? QStringLiteral("成功") : QStringLiteral("失败"));
+      }
+      preview->setPlainText(lines.join('\n'));
+      if (self->m_allScanResults && !self->m_pipelineId.isEmpty()) self->loadPipelineResults();
+    });
 }
 
 void ScanPage::showSourceEvidence(QTreeWidgetItem *item) {

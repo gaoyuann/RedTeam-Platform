@@ -71,14 +71,15 @@ export function compilePlaybook({ steps, target, db, context = {} }) {
         // 构建载荷上下文（用于 LLM 注入和前端展示）
         compiled.payload_context = buildPayloadContext(payload, compiled.payload_data);
 
-        // 用载荷的 primary command 增强 args_template
-        const primaryContent = compiled.payload_data.primary_content;
-        if (primaryContent && !step.args_template) {
-          // 如果步骤没有 args_template，用载荷的 primary command 作为模板
-          try {
-            compiled.resolved_args = JSON.parse(JSON.stringify(primaryContent.split('\n')[0].split(' ').filter(Boolean)));
-          } catch {
-            compiled.resolved_args = [];
+        // AI payloads are consumed as structured arguments. Static Payloader
+        // examples remain references; splitting a displayed command is unsafe.
+        if (payload.consumption?.type === 'tool_args') {
+          if (payload.consumption.tool_id !== step.tool_id || !Array.isArray(payload.consumption.args_template)) {
+            compiled.compile_status = 'BLOCKED_PAYLOAD_TOOL_MISMATCH';
+            compiled.compile_reason = `Payload '${step.payload_id}' cannot be consumed by tool '${step.tool_id}'`;
+            errors.push(compiled.compile_reason);
+          } else {
+            compiled.args_template = JSON.stringify(payload.consumption.args_template);
           }
         }
 
@@ -88,7 +89,7 @@ export function compilePlaybook({ steps, target, db, context = {} }) {
 
     // 3. Template variable check - look for unresolved {{var}} patterns
     if (!compiled.compile_status.startsWith('BLOCKED')) {
-      const argsStr = step.args_template || '';
+      const argsStr = compiled.args_template || '';
 
       // 3a. Check for literal REPLACE_ME / CHANGE_ME in args (not template vars)
       if (argsStr.includes('REPLACE_ME') || argsStr.includes('CHANGE_ME')) {
@@ -146,7 +147,7 @@ export function compilePlaybook({ steps, target, db, context = {} }) {
     if (!compiled.compile_status.startsWith('BLOCKED') && !(step.payload_id && compiled.resolved_args.length > 0)) {
       let args = [];
       try {
-        args = JSON.parse(step.args_template || '[]');
+        args = JSON.parse(compiled.args_template || '[]');
       } catch {
         args = [];
       }
@@ -158,7 +159,9 @@ export function compilePlaybook({ steps, target, db, context = {} }) {
 
       args = args.map(a => {
         if (typeof a !== 'string') return a;
-        let result = replaceTargetPlaceholder(a, target || '');
+        let result = step.tool_id === 'target-request' && compiled.payload_data?.consumption?.type === 'tool_args'
+          ? a.replaceAll('<target>', target || '')
+          : replaceTargetPlaceholder(a, target || '');
         // Replace payload_variables in template (escape key for regex safety)
         for (const [key, value] of Object.entries(payloadVars)) {
           if (isContextControlledVariable(key, context)) continue;

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { getPayloadIndex } from './payloadLoader.js';
 import { parseResultData, resultCategory } from './scanResultCatalog.js';
+import { findingSignature } from './findingPayload.js';
 
 const KINDS = [
   ['nosqli', /\bno.?sql\s*injection\b|NoSQL\s*注入/i],
@@ -88,44 +89,50 @@ export function payloadVersion(payload) {
 
 export function matchPayloads(db, row, index = getPayloadIndex(db)) {
   const signal = findingSignals(row);
-  if (!signal) return [];
+  const signature = findingSignature(db, row);
+  if (!signal && !signature) return [];
   const matches = [];
   for (const payload of Object.values(index)) {
     if (!payload?.id) continue;
     const descriptor = payloadDescriptor(payload);
-    const exactCve = [...signal.cves].find(cve => descriptor.cves.has(cve));
-    if (!exactCve && (!signal.kind || signal.kind !== descriptor.kind)) continue;
-    const productOverlap = descriptor.products.some(product => signal.products.includes(product));
-    const classPrefix = payload.id.toLowerCase().startsWith(`${signal.kind}-`)
-      || signal.kind === 'nosqli' && payload.id.toLowerCase().startsWith('sqli-');
-    const productPrefix = descriptor.products.some(product => signal.products.includes(product)
+    const signatureMatch = !!signature && payload.applicability?.signature === signature;
+    if (payload.applicability?.signature && !signatureMatch) continue;
+    const exactCve = signal && [...signal.cves].find(cve => descriptor.cves.has(cve));
+    if (!signal && !signatureMatch) continue;
+    if (!signatureMatch && !exactCve && (!signal.kind || signal.kind !== descriptor.kind)) continue;
+    const productOverlap = !!signal && descriptor.products.some(product => signal.products.includes(product));
+    const classPrefix = !!signal && (payload.id.toLowerCase().startsWith(`${signal.kind}-`)
+      || signal.kind === 'nosqli' && payload.id.toLowerCase().startsWith('sqli-'));
+    const productPrefix = !!signal && descriptor.products.some(product => signal.products.includes(product)
       && payload.id.toLowerCase().startsWith(`${product}-`));
     // Legacy tool commands and combined techniques are references, not a specific finding's payload.
-    if (!exactCve && (payload._type === 'tool' || payload._type !== 'ai_generated'
+    if (!signatureMatch && !exactCve && (payload._type === 'tool' || payload._type !== 'ai_generated'
       && !classPrefix && !productPrefix)) continue;
-    if (!exactCve && descriptor.variants.some(variant =>
+    if (!signatureMatch && !exactCve && descriptor.variants.some(variant =>
       !VARIANTS.find(([key]) => key === variant)?.[1].test(signal.text))) continue;
-    if (descriptor.products.length && signal.products.length && !productOverlap) continue;
+    if (!signatureMatch && descriptor.products.length && signal.products.length && !productOverlap) continue;
     const missing = [];
-    if (descriptor.products.length && !signal.products.length)
+    if (!signatureMatch && descriptor.products.length && !signal.products.length)
       missing.push(`确认目标产品属于 ${descriptor.products.join(' / ')}`);
-    if (exactCve && descriptor.variants.length && !descriptor.variants.every(variant =>
+    if (!signatureMatch && exactCve && descriptor.variants.length && !descriptor.variants.every(variant =>
       VARIANTS.find(([key]) => key === variant)?.[1].test(signal.text)))
       missing.push(`确认 ${descriptor.variants.join(' / ')} 变体适用`);
     const prerequisites = Array.isArray(payload.prerequisites) ? payload.prerequisites.map(nameOf).filter(Boolean) : [];
     if (prerequisites.length) missing.push('逐项核对载荷前置条件');
     const payloadType = payload._payload_type || payload._type || 'unknown';
-    const basis = exactCve ? `漏洞标识 ${exactCve} 与载荷元数据一致`
+    const basis = signatureMatch ? '漏洞上下文签名与生成时一致'
+      : exactCve ? `漏洞标识 ${exactCve} 与载荷元数据一致`
       : `发现类型 ${signal.kind} 与载荷分类/标签一致；尚需核对具体入口`;
     matches.push({
       payload_id: payload.id, name: nameOf(payload.name) || payload.id,
       version: payloadVersion(payload), payload_type: payloadType,
-      consumption: payloadType === 'tool' ? 'tool_command_reference' : 'playbook_step_reference',
-      availability: 'available', match_status: exactCve && !missing.length ? 'specific_candidate' : 'needs_review',
+      consumption: payload.consumption?.type === 'tool_args' ? 'tool_args'
+        : payloadType === 'tool' ? 'tool_command_reference' : 'playbook_step_reference',
+      availability: 'available', match_status: (signatureMatch || exactCve) && !missing.length ? 'specific_candidate' : 'needs_review',
       match_basis: basis, prerequisites, missing_conditions: missing,
       variables: payload.variables && typeof payload.variables === 'object' ? payload.variables : {},
       source: payload._source || 'static',
-      score: exactCve ? 100 : 20 + (productOverlap ? 6 : 0)
+      score: signatureMatch ? 110 : exactCve ? 100 : 20 + (productOverlap ? 6 : 0)
         + descriptor.variants.length * 3 + (/\b(?:basic|reflected)\b/i.test(payload.id) ? 2 : 0) - missing.length,
     });
   }
