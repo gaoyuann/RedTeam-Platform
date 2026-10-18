@@ -163,6 +163,7 @@ QJsonObject TopologyServiceRecord::toJsonObject() const {
         {QStringLiteral("version"), version},
         {QStringLiteral("state"), state},
         {QStringLiteral("note"), note},
+        {QStringLiteral("provenance"), provenance},
     };
 }
 
@@ -191,6 +192,7 @@ TopologyServiceRecord TopologyServiceRecord::fromJsonObject(const QJsonObject &o
         QStringLiteral("note"), QStringLiteral("notes"), QStringLiteral("description"),
         QStringLiteral("evidence"), QStringLiteral("summary"), QStringLiteral("details")
     });
+    record.provenance = object.value(QStringLiteral("provenance")).toObject();
     return record;
 }
 
@@ -214,6 +216,12 @@ QJsonObject TopologyNodeRecord::toJsonObject() const {
         {QStringLiteral("vendor"), vendor},
         {QStringLiteral("status"), status},
         {QStringLiteral("note"), note},
+        {QStringLiteral("assetId"), assetId},
+        {QStringLiteral("provenance"), provenance},
+        {QStringLiteral("scan"), scan},
+        {QStringLiteral("entries"), entries},
+        {QStringLiteral("checks"), checks},
+        {QStringLiteral("findings"), findings},
         {QStringLiteral("tags"), tagsArray},
         {QStringLiteral("x"), x},
         {QStringLiteral("y"), y},
@@ -259,6 +267,12 @@ TopologyNodeRecord TopologyNodeRecord::fromJsonObject(const QJsonObject &object)
         QStringLiteral("note"), QStringLiteral("notes"), QStringLiteral("description"), QStringLiteral("summary"),
         QStringLiteral("evidence"), QStringLiteral("details")
     });
+    record.assetId = object.value(QStringLiteral("assetId")).toString();
+    record.provenance = object.value(QStringLiteral("provenance")).toObject();
+    record.scan = object.value(QStringLiteral("scan")).toObject();
+    record.entries = object.value(QStringLiteral("entries")).toArray();
+    record.checks = object.value(QStringLiteral("checks")).toArray();
+    record.findings = object.value(QStringLiteral("findings")).toArray();
     record.x = firstDoubleValue(object, {QStringLiteral("x"), QStringLiteral("posX"), QStringLiteral("pos_x")});
     record.y = firstDoubleValue(object, {QStringLiteral("y"), QStringLiteral("posY"), QStringLiteral("pos_y")});
     const QStringList tags = stringListValue(object.value(QStringLiteral("tags")))
@@ -288,6 +302,7 @@ QJsonObject TopologyEdgeRecord::toJsonObject() const {
         {QStringLiteral("label"), label},
         {QStringLiteral("type"), type},
         {QStringLiteral("note"), note},
+        {QStringLiteral("provenance"), provenance},
     };
 }
 
@@ -314,6 +329,7 @@ TopologyEdgeRecord TopologyEdgeRecord::fromJsonObject(const QJsonObject &object)
         QStringLiteral("note"), QStringLiteral("notes"), QStringLiteral("description"), QStringLiteral("summary"),
         QStringLiteral("evidence"), QStringLiteral("details")
     });
+    record.provenance = object.value(QStringLiteral("provenance")).toObject();
     return record;
 }
 
@@ -332,6 +348,7 @@ QJsonObject TopologyDocument::toJsonObject() const {
         {QStringLiteral("generatedAt"), generatedAt},
         {QStringLiteral("summary"), summary},
         {QStringLiteral("metadata"), metadata},
+        {QStringLiteral("risks"), risks},
         {QStringLiteral("nodes"), nodesArray},
         {QStringLiteral("edges"), edgesArray},
     };
@@ -341,6 +358,7 @@ TopologyDocument TopologyDocument::fromJsonObject(const QJsonObject &object) {
     TopologyDocument document;
     const QJsonObject root = effectiveRootObject(object);
     document.metadata = root[QStringLiteral("metadata")].toObject();
+    document.risks = root[QStringLiteral("risks")].toArray();
     document.flowId = firstStringValue(root, {
         QStringLiteral("flowId"), QStringLiteral("flow_id"), QStringLiteral("sourceFlowId"), QStringLiteral("source_flow_id")
     });

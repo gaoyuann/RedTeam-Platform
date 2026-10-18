@@ -12,7 +12,7 @@ function address(value) {
       invalid('测试范围 URL 不允许凭据、片段或其他协议');
     if (/%(?:2f|5c|2e|00|0a|0d)/i.test(url.pathname) || url.pathname.includes('\\'))
       invalid('测试范围 URL 路径包含可能绕过边界的编码');
-    if (url.protocol === 'tcp:' && (!url.port || url.pathname !== '/' || url.search)) invalid('TCP 范围必须包含主机和端口');
+    if (url.protocol === 'tcp:' && (!url.port || !['', '/'].includes(url.pathname) || url.search)) invalid('TCP 范围必须包含主机和端口');
     return { kind: url.protocol === 'tcp:' ? 'tcp' : 'url', value: url.href,
       host: url.hostname.replace(/^\[|\]$/g,'').toLowerCase(), port: url.port || (url.protocol === 'https:' ? '443' : '80'),
       protocol: url.protocol, path: url.pathname };

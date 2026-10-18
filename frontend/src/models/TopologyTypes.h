@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QList>
 #include <QString>
@@ -13,6 +14,7 @@ struct TopologyServiceRecord {
     QString version;
     QString state;
     QString note;
+    QJsonObject provenance;
 
     QJsonObject toJsonObject() const;
     static TopologyServiceRecord fromJsonObject(const QJsonObject &object);
@@ -29,6 +31,12 @@ struct TopologyNodeRecord {
     QString vendor;
     QString status;
     QString note;
+    QString assetId;
+    QJsonObject provenance;
+    QJsonObject scan;
+    QJsonArray entries;
+    QJsonArray checks;
+    QJsonArray findings;
     QStringList tags;
     double x = 0.0;
     double y = 0.0;
@@ -45,6 +53,7 @@ struct TopologyEdgeRecord {
     QString label;
     QString type;
     QString note;
+    QJsonObject provenance;
 
     QJsonObject toJsonObject() const;
     static TopologyEdgeRecord fromJsonObject(const QJsonObject &object);
@@ -56,6 +65,7 @@ struct TopologyDocument {
     QString generatedAt;
     QString summary;
     QJsonObject metadata;
+    QJsonArray risks;
     QList<TopologyNodeRecord> nodes;
     QList<TopologyEdgeRecord> edges;
 

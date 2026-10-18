@@ -21,7 +21,6 @@ class QGraphicsView;
 class QGraphicsItem;
 class QGraphicsLineItem;
 class QTableWidget;
-class QProgressDialog;
 
 struct TopologyScanRecord {
     QString scanTaskId;
@@ -50,6 +49,8 @@ private slots:
     void onScanClicked(int row, int col);
     void onGenerateTopology();
     void onSaveTopology();
+    void onImportTopology();
+    void onExportTopology();
     void onSceneSelectionChanged();
     void onZoomIn();
     void onZoomOut();
@@ -60,11 +61,12 @@ private slots:
     void onRemoveSelectedEdge();
     void onApplyDetailEdits();
     void onRemoveSelectedRecord();
+    void onScanSelectedNode();
 
 private:
     void setupUI();
     bool restoreCurrentArchive();
-    void loadExistingScanTopology(bool replaceExisting = false);
+    void loadExistingScanTopology(bool replaceExisting = false, bool forceReplace = false);
     QString archiveDocumentPath() const;
     void archiveGeneratedDocument();
     struct Draft {
@@ -104,6 +106,7 @@ private:
     TopologyEdgeRecord *currentSelectedEdge();
     const TopologyEdgeRecord *currentSelectedEdge() const;
     QString topologyDataDir() const;
+    QString legacyTopologyDataDir() const;
     QString topologyDocumentPath(const QString &scanTaskId) const;
     QString defaultTopologyDocumentPath() const;
     QString recentRecordsPath() const;
@@ -131,6 +134,7 @@ private:
     bool m_syncingSelection = false;
     bool m_editorDirty = false;
     bool m_documentDirty = false;
+    quint64 m_editRevision = 0;
     QString m_selectedScanTaskId;
     int m_scanRefreshRevision = 0;
     QList<TopologyScanRecord> m_recentRecords;
@@ -187,12 +191,15 @@ private:
     QComboBox *m_nodeStatusCombo;
     QPlainTextEdit *m_nodeNoteEdit;
     QPlainTextEdit *m_servicesEdit;
+    QPlainTextEdit *m_nodeEvidenceView;
+    QComboBox *m_nodeScanTypeCombo;
+    QPushButton *m_nodeScanButton;
     QComboBox *m_edgeSourceCombo;
     QComboBox *m_edgeTargetCombo;
     QLineEdit *m_edgeLabelEdit;
     QComboBox *m_edgeTypeCombo;
     QPlainTextEdit *m_edgeNoteEdit;
+    QPlainTextEdit *m_edgeEvidenceView;
 
-    // Progress dialog (heap-allocated, managed by this page)
-    QProgressDialog *m_progressDialog = nullptr;
+    bool m_topologyRequestPending = false;
 };

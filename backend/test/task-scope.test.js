@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeTaskScope, isTargetInScope, scopeBlockReason, scopeConditions } from '../src/services/taskScope.js';
+
+test('TCP runtime scopes accept both URL forms when moving tasks between environments', () => {
+  for (const target of ['tcp://192.0.2.30:8091', 'tcp://192.0.2.30:8091/']) {
+    const scope = normalizeTaskScope({}, target);
+    assert.equal(isTargetInScope(scope, 'tcp://192.0.2.30:8091'), true);
+    assert.equal(isTargetInScope(scope, 'tcp://192.0.2.30:8092'), false);
+  }
+});
 import { validateExecutionScope } from '../src/services/executionScope.js';
 import { probeTarget } from '../src/services/targetDiscovery.js';
 

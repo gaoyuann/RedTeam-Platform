@@ -90,6 +90,8 @@ test('completed topology scan generates deterministic graph without AI', async t
   assert.equal(result.status,200);
   assert.equal(result.body.data.topology.nodes.length,1);
   assert.deepEqual(result.body.data.topology.edges,[]);
+  db.prepare("INSERT INTO scan_tasks(scan_task_id,target,scan_type,status) VALUES ('unowned','192.0.2.8','port_scan','COMPLETED')").run();
+  assert.equal((await request('/topology/generate-from-scan',{scan_task_id:'unowned'})).status,403);
 });
 
 test('pipeline records socket origin, preserves it on config edits and projects source plus server', async t => {
@@ -142,12 +144,126 @@ test('partial source audits project HTTP and TCP entry evidence without inventin
     assert.equal(graph.edges.filter(edge=>edge.type==='application-request').length,1);
     assert.equal(graph.edges.find(edge=>edge.type==='application-request').provenance.sources.length,1,
       'edge evidence excludes observations outside the runtime endpoint');
-    assert.equal(graph.risks[0].status,'candidate');assert.equal(graph.metadata.projectionVersion,3);
+    assert.equal(graph.risks[0].status,'candidate');assert.equal(graph.metadata.projectionVersion,4);
     assert.ok(!JSON.stringify(graph).includes('private source code'));
     assert.ok(!JSON.stringify(graph).includes('private response'));
     assert.equal((await request('/topology/generate-from-scan',{scan_task_id:sid},'bob')).status,403);
     assert.equal((await request('/topology/generate-from-scan',{scan_task_id:sid})).status,200);
   }
+});
+
+test('node scans use server-side assets, task scope and idempotent identities', async t => {
+  const {db,request}=await fixture(t);
+  const config={task_scope:{includes:['10.2.0.0/24'],excludes:['10.2.0.99'],execution_location:'scanner'}};
+  db.prepare("INSERT INTO pipelines(pipeline_id,target,config,created_by) VALUES ('nodes','10.2.0.10',?,'alice')")
+    .run(JSON.stringify(config));
+  db.prepare("INSERT INTO scan_tasks(scan_task_id,target,scan_type,status,created_by,pipeline_id,parameters) VALUES ('seed','10.2.0.10','topology_scan','COMPLETED','alice','nodes',?)")
+    .run(JSON.stringify({pipeline_id:'nodes'}));
+  const insert=db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data,source_tool) VALUES ('seed','host_discovery',?,'nmap')");
+  insert.run(JSON.stringify({host:'10.2.0.10',status:'up'}));
+  insert.run(JSON.stringify({host:'10.2.0.11',status:'up'}));
+  insert.run(JSON.stringify({host:'10.2.0.99',status:'up'}));
+  db.prepare("INSERT INTO task_assets(asset_id,pipeline_id,host,state) VALUES ('asset_a','nodes','10.2.0.10','reachable'),('asset_b','nodes','10.2.0.99','out_of_scope'),('asset_c','nodes','10.2.0.20','unknown')").run();
+  db.prepare("INSERT INTO task_services(service_id,pipeline_id,asset_id,port,protocol,name,state) VALUES ('service_c','nodes','asset_c',8080,'tcp','http','unverified')").run();
+  db.prepare("INSERT INTO task_entries(entry_id,pipeline_id,service_id,kind,value,state) VALUES ('entry_c','nodes','service_c','web_url','http://10.2.0.20:8080/','declared')").run();
+  db.prepare("INSERT INTO task_checks(check_id,pipeline_id,service_id,entry_id,check_type,state,reason,created_at,updated_at) VALUES ('check_c','nodes','service_c','entry_c','web_security','not_checked','缺少条件','1','1')").run();
+  const graph=(await request('/topology/from-pipeline/nodes')).body.data.topology;
+  const allowed=graph.nodes.find(node=>node.ip==='10.2.0.10');
+  const excluded=graph.nodes.find(node=>node.ip==='10.2.0.99');
+  assert.equal(allowed.assetId,'asset_a');assert.equal(allowed.scan.eligible,true);
+  assert.equal(excluded.scan.eligible,false);
+  const observed=graph.nodes.find(node=>node.ip==='10.2.0.11');
+  assert.equal(observed.assetId,null);
+  assert.equal(observed.scan.eligible,true);
+  const inventory=graph.nodes.find(node=>node.ip==='10.2.0.20');
+  assert.equal(inventory.assetId,'asset_c');
+  assert.equal(inventory.services[0].state,'unverified');
+  assert.equal(inventory.entries[0].entryId,'entry_c');
+  assert.equal(inventory.checks[0].state,'not_checked');
+  assert.equal(graph.edges.some(edge=>edge.sourceId===inventory.id || edge.targetId===inventory.id),false);
+  db.prepare("INSERT INTO scan_tasks(scan_task_id,target,scan_type,status,created_by,pipeline_id) VALUES ('primary','10.2.0.10','port_scan','PENDING','alice','nodes')").run();
+  const body={node_id:allowed.id,scan_type:'port_scan',request_id:'node_scan_0001'};
+  const created=await request('/topology/from-pipeline/nodes/node-scans',body);
+  assert.equal(created.status,201);
+  assert.equal(created.body.data.target,'10.2.0.10');
+  const scanId=created.body.data.scan_task_id;
+  assert.equal((await request('/topology/from-pipeline/nodes/node-scans',body)).body.data.scan_task_id,scanId);
+  assert.equal((await request('/topology/from-pipeline/nodes/node-scans',{...body,request_id:'node_scan_0002'})).body.data.scan_task_id,scanId);
+  assert.equal((await request('/topology/from-pipeline/nodes/node-scans',{...body,node_id:excluded.id,request_id:'node_scan_0003'})).status,403);
+  assert.equal((await request('/topology/from-pipeline/nodes/node-scans',{...body,request_id:'node_scan_0004'},'bob')).status,403);
+  assert.equal((await request('/topology/from-pipeline/nodes/node-scans',{...body,node_id:'manual-fake',request_id:'node_scan_0005'})).status,409);
+  db.prepare("UPDATE scan_tasks SET status='COMPLETED' WHERE scan_task_id=?").run(scanId);
+  db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data,source_tool) VALUES (?,'open_port',?,'nmap')")
+    .run(scanId,JSON.stringify({host:'10.2.0.10',port:443,protocol:'tcp',state:'open',service:'https'}));
+  const updated=(await request('/topology/from-pipeline/nodes')).body.data.topology;
+  assert.ok(updated.nodes.find(node=>node.ip==='10.2.0.10').services.some(service=>service.port==='443'));
+  assert.equal((await request('/topology/from-pipeline/nodes/node-scans',{...body,request_id:'node_scan_0006'})).status,201);
+  assert.equal((await request('/topology/generate-from-scan',{scan_task_id:scanId},'bob')).status,403);
+});
+
+test('logical LAN edges cite only their own observed scope', async t => {
+  const {db,request}=await fixture(t);
+  db.prepare("INSERT INTO pipelines(pipeline_id,target,config,created_by) VALUES ('multi','10.2.0.10',?,'alice')")
+    .run(JSON.stringify({task_scope:{includes:['10.2.0.0/24','10.3.0.0/24']}}));
+  const addScan=db.prepare("INSERT INTO scan_tasks(scan_task_id,target,scan_type,status,created_by,pipeline_id,parameters) VALUES (?,?,'topology_scan','COMPLETED','alice','multi',?)");
+  const addResult=db.prepare('INSERT INTO scan_results(scan_task_id,result_type,result_data,source_tool) VALUES (?,?,?,?)');
+  const scopeIds=new Map();
+  for (const [scanId,cidr,server,host,device] of [
+    ['scan-a','10.2.0.0/24','10.2.0.5','10.2.0.10','ethA'],
+    ['scan-b','10.3.0.0/24','10.3.0.5','10.3.0.10','ethB'],
+  ]) {
+    addScan.run(scanId,host,JSON.stringify({pipeline_id:'multi'}));
+    addResult.run(scanId,'network_context',JSON.stringify({interfaces:[{device,address:server,prefix:24}],
+      routes:[{destination:cidr,device,metric:0,gateway:''}]}),'nmap');
+    const scopeRow=addResult.run(scanId,'lan_scope',JSON.stringify({cidr,serverAddress:server,device,complete:true}),'nmap');
+    scopeIds.set(cidr,Number(scopeRow.lastInsertRowid));
+    addResult.run(scanId,'lan_host_discovery',JSON.stringify({host,status:'up',scope:cidr}),'nmap');
+  }
+  const response=await request('/topology/from-pipeline/multi');
+  assert.equal(response.status,200);
+  const graph=response.body.data.topology;
+  const segments=new Map(graph.nodes.filter(node=>node.deviceType==='network_segment')
+    .map(node=>[node.id,node.hostName]));
+  assert.equal(segments.size,2);
+  for(const node of graph.nodes.filter(item=>item.deviceType==='network_segment')) {
+    assert.equal(node.provenance.kind,'inferred');
+    assert.deepEqual(node.provenance.sources.map(source=>source.result_id),[scopeIds.get(node.hostName)]);
+  }
+  const membership=graph.edges.filter(edge=>edge.type==='virtual-link');
+  assert.ok(membership.length>=4);
+  for(const edge of membership) {
+    const cidr=segments.get(edge.sourceId);
+    assert.ok(cidr);
+    assert.deepEqual(edge.provenance.sources.map(source=>source.result_id),[scopeIds.get(cidr)]);
+    assert.equal(edge.provenance.kind,'inferred');
+  }
+});
+
+test('reachability edges retain the scanner that observed each response', async t => {
+  const {db,request}=await fixture(t);
+  db.prepare("INSERT INTO pipelines(pipeline_id,target,created_by) VALUES ('vantages','10.2.0.10','alice')").run();
+  const addScan=db.prepare("INSERT INTO scan_tasks(scan_task_id,target,scan_type,status,created_by,pipeline_id) VALUES (?,'10.2.0.10','port_scan','COMPLETED','alice','vantages')");
+  const addResult=db.prepare('INSERT INTO scan_results(scan_task_id,result_type,result_data,source_tool) VALUES (?,?,?,?)');
+  const responseIds=new Map();
+  for (const [scanId,address,device,gateway] of [
+    ['local','10.2.0.5','ethA',''],
+    ['routed','10.3.0.5','ethB','10.3.0.1'],
+  ]) {
+    addScan.run(scanId);
+    addResult.run(scanId,'network_context',JSON.stringify({interfaces:[{device,address,prefix:24}],
+      routes:[{destination:'10.2.0.0/24',device,metric:0,gateway}]}),'nmap');
+    const response=addResult.run(scanId,'open_port',JSON.stringify({host:'10.2.0.10',port:80,
+      protocol:'tcp',state:'open',evidence:`response from ${address}`}),'nmap');
+    responseIds.set(address,Number(response.lastInsertRowid));
+  }
+  const response=await request('/topology/from-pipeline/vantages');
+  assert.equal(response.status,200);
+  const graph=response.body.data.topology;
+  const hosts=new Map(graph.nodes.map(node=>[node.id,node.ip]));
+  const edges=graph.edges.filter(edge=>edge.type==='reachability');
+  assert.equal(edges.length,2);
+  for(const edge of edges)
+    assert.deepEqual(edge.provenance.sources.map(source=>source.result_id),[responseIds.get(hosts.get(edge.sourceId))]);
 });
 
 test('task topology excludes another owner discovery even when it references this task', async t => {
