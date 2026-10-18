@@ -82,6 +82,22 @@ test('declared HTTP entry receives reachability check after empty port evidence'
   db.close();
 });
 
+test('initial source and network checks retain their declared execution order',()=>{
+  const db=new Database(':memory:');db.pragma('foreign_keys=ON');
+  db.exec(`CREATE TABLE pipelines(pipeline_id TEXT PRIMARY KEY,target TEXT,config TEXT,created_by TEXT);
+    CREATE TABLE scan_tasks(scan_task_id TEXT PRIMARY KEY);
+    CREATE TABLE scan_results(id INTEGER PRIMARY KEY,scan_task_id TEXT,result_type TEXT,result_data TEXT);`);
+  coverageMigration(db);
+  const target='http://fixture.invalid/source/';
+  const config={task_scope:{includes:[target],excludes:[],execution_location:'scanner',discovery_budget:0}};
+  db.prepare('INSERT INTO pipelines VALUES (?,?,?,?)').run('ordered',target,JSON.stringify(config),'alice');
+  const checks=beginCoverage(db,db.prepare('SELECT * FROM pipelines').get(),[
+    {scan_type:'source_scan',target},{scan_type:'port_scan',target},
+  ]);
+  assert.deepEqual(checks.map(row=>row.scan_type),['source_scan','port_scan']);
+  db.close();
+});
+
 test('authentication responses and partial probes never schedule follow-up checks as complete coverage',()=>{
   const db=new Database(':memory:');db.pragma('foreign_keys=ON');
   db.exec(`CREATE TABLE pipelines(pipeline_id TEXT PRIMARY KEY,target TEXT,config TEXT,created_by TEXT);

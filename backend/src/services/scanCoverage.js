@@ -38,9 +38,13 @@ function classifyCheck(scope,target,scanType) {
 
 export function beginCoverage(db,pipeline,initialScans) {
   if(!hasScanCoverage(db)) return [];
-  for(const scan of initialScans) addCheck(db,pipeline,{type:scan.scan_type,scanType:scan.scan_type,target:scan.target,
-    ...classifyCheck(taskScope(pipeline),scan.target,scan.scan_type)});
-  return pendingChecks(db,pipeline.pipeline_id);
+  const planned=[];
+  for(const scan of initialScans) {
+    const check=addCheck(db,pipeline,{type:scan.scan_type,scanType:scan.scan_type,target:scan.target,
+      ...classifyCheck(taskScope(pipeline),scan.target,scan.scan_type)});
+    if(check.state==='planned') planned.push(check);
+  }
+  return planned;
 }
 
 export function pendingChecks(db,pipelineId) {
