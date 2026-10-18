@@ -1,9 +1,10 @@
-import { scanPage, scanCollection } from '../services/scanResultQuery.js';
+import { scanPage, scanCollection, pipelineScans } from '../services/scanResultQuery.js';
 import { publicScanRecord, parseResultData, redactScanValue } from '../services/scanResultCatalog.js';
 import { Router } from 'express';
 import { taskResultsSnapshot, createTaskReport, readTaskReport, taskReportHtml, recordTaskReportExport } from '../services/taskResults.js';
 import { requireActor } from '../middleware/recordAccess.js';
 import { scanCoveragePage } from '../services/scanCoverage.js';
+import { bindFindingPayload, findingPayloadMatches } from '../services/findingPayloads.js';
 
 export default function (db) {
   const router = Router({ mergeParams: true });
@@ -18,6 +19,23 @@ export default function (db) {
   });
   router.get('/', (req, res) => res.json({ status: 'ok', data: req.query.view==='scans' ? scanPage(db,req.taskPipeline,req.query) : {...taskResultsSnapshot(db, req.taskPipeline),...scanPage(db,req.taskPipeline,req.query)} }));
   router.get('/coverage', (req,res) => res.json({status:'ok',data:scanCoveragePage(db,req.taskPipeline.pipeline_id,req.query)}));
+  const taskFinding = (req) => {
+    if (!/^[1-9]\d*$/.test(req.params.recordId))
+      throw Object.assign(new Error('发现编号无效'), {status:400});
+    const row=db.prepare('SELECT * FROM scan_results WHERE id=?').get(req.params.recordId);
+    if(!row || !pipelineScans(db,req.taskPipeline).some(scan=>scan.scan_task_id===row.scan_task_id))
+      throw Object.assign(new Error('结果不存在或不属于此任务'), {status:404});
+    return row;
+  };
+  router.get('/records/:recordId/payload-matches', (req,res) => {
+    const row=taskFinding(req);
+    res.json({status:'ok',data:findingPayloadMatches(db,row)});
+  });
+  router.post('/records/:recordId/payload-links', (req,res) => {
+    const row=taskFinding(req);
+    const data=bindFindingPayload(db,row,req.body?.payload_id,req.body?.version,req.user.sub);
+    res.json({status:'ok',data});
+  });
   router.get('/records/:recordId', (req,res) => {
     const collection=scanCollection(db,req.taskPipeline);
     const row=collection.rows.find(r=>String(r.id)===req.params.recordId);

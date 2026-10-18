@@ -4,6 +4,8 @@ import { parseResultData, publicScanRecord, summarizeScanRecords, redactScanValu
 import { isProgramMode, programExecutionTarget, programNetworkTarget } from './programScan.js';
 import { isTargetInScope, taskScope } from './taskScope.js';
 import { scanCoverage } from './scanCoverage.js';
+import { getPayloadIndex } from './payloadLoader.js';
+import { findingPayloadSummary } from './findingPayloads.js';
 
 export function pipelineScans(db,pipeline) {
   const linked=[...new Set(String(pipeline.scan_task_id || '').split(',').map(s=>s.trim()).filter(Boolean))];
@@ -67,7 +69,9 @@ export function scanPage(db,pipeline,query={}) {
   const publicRows=collection.rows.map(row=>({...row,category:resultCategory(row)}));
   const filtered=publicRows.filter(r=>(category==='all'||r.category===category) && (!query.scan_task_id||r.scan_task_id===query.scan_task_id));
   const selected=filtered.filter(r=>r.id>after).slice(0,limit);
-  const records=selected.length?db.prepare(`SELECT * FROM scan_results WHERE id IN (${selected.map(()=>'?').join(',')}) ORDER BY id`).all(...selected.map(r=>r.id)).map(publicScanRecord):[];
+  const payloadIndex = selected.some(row=>row.category==='vulnerability') ? getPayloadIndex(db) : null;
+  const records=selected.length?db.prepare(`SELECT * FROM scan_results WHERE id IN (${selected.map(()=>'?').join(',')}) ORDER BY id`).all(...selected.map(r=>r.id))
+    .map(row=>({...publicScanRecord(row),payload_match:payloadIndex ? findingPayloadSummary(db,row,payloadIndex) : null})):[];
   return {scan_summary:collection.summary,scan_coverage:collection.coverage,scan_records:records,
     scan_sources:collection.scans.map(s=>({scan_task_id:s.scan_task_id,scan_type:s.scan_type,status:s.status,target:s.target,error_message:redactScanValue(s.error_message),retry_of_scan_task_id:s.retry_of_scan_task_id || null})),
     scan_runs:collection.runs.map(({evidence,...r})=>({...r,outcome:parseResultData(r.outcome),diagnostics:parseResultData(r.diagnostics)})),

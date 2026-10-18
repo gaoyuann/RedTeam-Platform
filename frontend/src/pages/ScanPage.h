@@ -77,6 +77,7 @@ private:
   void updateStatusLabel(const QJsonObject &d);
   void startPollingIfNeeded();
   void renderGroupedResults(const QJsonArray &results);
+  void showPayloadMatches(QTreeWidgetItem *item);
   void enableCurrentTabDelBtn(bool enabled);
   void loadSourceConnections();
   void browseSourceDirectory();

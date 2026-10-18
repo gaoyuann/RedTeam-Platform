@@ -36,6 +36,17 @@
 static bool isProgramScan(const QString &type) { return type == "program_scan" || type == "source_scan"; }
 static bool isProgramFinding(const QString &type) { return type == "program_finding" || type == "source_finding"; }
 
+static void showPayloadSummary(QTreeWidgetItem *item, const QJsonObject &record, bool aggregate) {
+  item->setData(0, Qt::UserRole+2, record["category"].toString());
+  if (!aggregate || record["category"].toString() != "vulnerability") return;
+  const auto match = record["payload_match"].toObject();
+  const QString state = match["status"].toString();
+  item->setText(3, state == "linked" ? QStringLiteral("已关联：") + match["name"].toString()
+    : state == "stale" ? QStringLiteral("需重新确认：") + match["name"].toString()
+    : state == "candidate" ? QStringLiteral("候选：") + match["name"].toString() : QStringLiteral("暂无匹配"));
+  item->setToolTip(3, match["match_basis"].toString());
+}
+
 // ── Translate nikto finding text to Chinese ───────────────────────────
 static QString translateNiktoFinding(const QString &finding) {
   if (finding.contains("X-Frame-Options header is not present"))
@@ -1218,6 +1229,10 @@ void ScanPage::setupUI() {
   m_resultTree->setObjectName("scanResultTree");
   connect(m_resultTree, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem *item, int) {
     if (!m_allScanResults || !item->parent()) return;
+    if (item->data(0, Qt::UserRole+2).toString() == "vulnerability") {
+      showPayloadMatches(item);
+      return;
+    }
     auto *dialog = new QDialog(this); dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setWindowTitle(QStringLiteral("扫描记录与来源")); dialog->resize(850, 600);
     auto *layout = new QVBoxLayout(dialog); auto *text = new QPlainTextEdit;
@@ -1225,13 +1240,14 @@ void ScanPage::setupUI() {
     layout->addWidget(text); dialog->show();
   });
   UiUtil::EmptyHint::attach(m_resultTree, QStringLiteral("扫描完成后在此展示结果"));
-  m_resultTree->setHeaderLabels({"严重度", "数据", "工具"});
+  m_resultTree->setHeaderLabels({"严重度", "数据", "工具", "匹配载荷"});
   m_resultTree->setAlternatingRowColors(true);
   m_resultTree->setContextMenuPolicy(Qt::CustomContextMenu);
   m_resultTree->header()->setStretchLastSection(false);
   m_resultTree->header()->setSectionResizeMode(1, QHeaderView::Stretch);
   m_resultTree->setColumnWidth(0, 70);
   m_resultTree->setColumnWidth(2, 85);
+  m_resultTree->setColumnWidth(3, 180);
   m_resultTree->setIndentation(20);
   right->addWidget(m_resultTree, 1);
   connect(m_resultTree, &QTreeWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
@@ -1241,6 +1257,8 @@ void ScanPage::setupUI() {
     // Copy the most useful column (data column = 1 for child items, 0 for group items)
     QString text = item->text(1).isEmpty() ? item->text(0) : item->text(1);
     menu.addAction("复制内容", [text]() { QApplication::clipboard()->setText(text); });
+    if (m_allScanResults && item->parent() && item->data(0, Qt::UserRole+2).toString() == "vulnerability")
+      menu.addAction("查看 / 关联匹配载荷", [this, item]() { showPayloadMatches(item); });
     // 演示动线：漏洞结果一键发起攻击
     const QString resultType = item->data(0, Qt::UserRole).toString();
     if (!m_allScanResults && (isProgramFinding(resultType) || resultType == "application_observation" || resultType == "source_coverage" || resultType == "program_coverage")) {
@@ -1488,6 +1506,7 @@ void ScanPage::updateStatusLabel(const QJsonObject &d) {
 void ScanPage::renderGroupedResults(const QJsonArray &results) {
   m_resultOverview->setResults(results);
   m_resultTree->clear();
+  m_resultTree->setColumnHidden(3, !m_allScanResults);
   m_coverageTree->clear();
   m_coverageTree->hide();
 
@@ -1511,13 +1530,13 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
     auto &arr = groups[type];
     QString groupName = formatResultType(type) + QString(" (%1)").arg(arr.size());
 
-    auto *groupItem = new QTreeWidgetItem(m_resultTree, {groupName, "", ""});
+    auto *groupItem = new QTreeWidgetItem(m_resultTree, {groupName, "", "", ""});
     QFont groupFont = groupItem->font(0);
     groupFont.setBold(true);
     groupItem->setFont(0, groupFont);
     groupItem->setFirstColumnSpanned(true);
     // Group header separates result types without competing with severity colors
-    for (int col = 0; col < 3; col++) {
+    for (int col = 0; col < 4; col++) {
       groupItem->setBackground(col, QColor("#eaf1fa"));
       groupItem->setForeground(col, QColor("#334155"));
     }
@@ -1532,11 +1551,12 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
       auto *child = new QTreeWidgetItem(groupItem);
       child->setText(0, formatSeverity(sev));
       child->setForeground(0, severityColor(sev));
-      child->setData(0, Qt::UserRole+1, obj["id"].toInt());
+      child->setData(0, Qt::UserRole+1, obj["id"].toVariant().toLongLong());
       child->setData(0, Qt::UserRole, resultType);  // 供右键"发起攻击"判断类型
       child->setText(1, formatResultData(rawData, resultType));
       child->setToolTip(1, rawData);
       child->setText(2, tool + (m_allScanResults ? " · " + obj["scan_task_id"].toString() + " #" + QString::number(obj["id"].toVariant().toLongLong()) : QString()));
+      showPayloadSummary(child, obj, m_allScanResults);
 
       // Dim raw_output items
       if (resultType == "raw_output") {
@@ -1559,12 +1579,12 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
     auto &arr = it.value();
     QString groupName = formatResultType(it.key()) + QString(" (%1)").arg(arr.size());
 
-    auto *groupItem = new QTreeWidgetItem(m_resultTree, {groupName, "", ""});
+    auto *groupItem = new QTreeWidgetItem(m_resultTree, {groupName, "", "", ""});
     QFont groupFont = groupItem->font(0);
     groupFont.setBold(true);
     groupItem->setFont(0, groupFont);
     groupItem->setFirstColumnSpanned(true);
-    for (int col = 0; col < 3; col++) {
+    for (int col = 0; col < 4; col++) {
       groupItem->setBackground(col, QColor("#eaf1fa"));
       groupItem->setForeground(col, QColor("#334155"));
     }
@@ -1579,17 +1599,135 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
       auto *child = new QTreeWidgetItem(groupItem);
       child->setText(0, formatSeverity(sev));
       child->setForeground(0, severityColor(sev));
-      child->setData(0, Qt::UserRole+1, obj["id"].toInt());
+      child->setData(0, Qt::UserRole+1, obj["id"].toVariant().toLongLong());
       child->setData(0, Qt::UserRole, resultType);  // 供右键"发起攻击"判断类型
       child->setText(1, formatResultData(rawData, resultType));
       child->setToolTip(1, rawData);
       child->setText(2, tool + (m_allScanResults ? " · " + obj["scan_task_id"].toString() + " #" + QString::number(obj["id"].toVariant().toLongLong()) : QString()));
+      showPayloadSummary(child, obj, m_allScanResults);
     }
     groupItem->setExpanded(true);
   }
 
   m_resultTree->setColumnWidth(0, m_allScanResults ? 110 : 90);
   m_resultTree->setColumnWidth(2, m_allScanResults ? 260 : 80);
+  m_resultTree->setColumnWidth(3, m_allScanResults ? 180 : 90);
+}
+
+void ScanPage::showPayloadMatches(QTreeWidgetItem *item) {
+  if (!m_allScanResults || m_pipelineId.isEmpty() || !item) return;
+  const qint64 findingId = item->data(0, Qt::UserRole+1).toLongLong();
+  if (findingId <= 0) return;
+  const QString pipeline = m_pipelineId;
+  const QString base = "/api/pipelines/" + QString::fromLatin1(QUrl::toPercentEncoding(pipeline))
+    + "/results/records/" + QString::number(findingId);
+  auto *dialog = new QDialog(this);
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  dialog->setWindowTitle(QStringLiteral("漏洞 #%1 · 匹配载荷").arg(findingId));
+  dialog->resize(940, 540);
+  auto *layout = new QVBoxLayout(dialog);
+  auto *status = new QLabel(QStringLiteral("正在读取匹配载荷…"), dialog);
+  status->setWordWrap(true);
+  layout->addWidget(status);
+  auto *table = new QTableWidget(0, 6, dialog);
+  table->setHorizontalHeaderLabels({"载荷", "匹配依据", "适用条件 / 待核对", "类型 / 消费方式", "版本", "状态"});
+  table->setSelectionBehavior(QAbstractItemView::SelectRows);
+  table->setSelectionMode(QAbstractItemView::SingleSelection);
+  table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+  table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+  layout->addWidget(table);
+  auto *history = new QLabel(dialog);
+  history->setWordWrap(true);
+  layout->addWidget(history);
+  auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
+  auto *bind = buttons->addButton(QStringLiteral("关联所选载荷"), QDialogButtonBox::ActionRole);
+  bind->setEnabled(false);
+  connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+  connect(table, &QTableWidget::itemSelectionChanged, dialog, [table, bind]() {
+    bind->setEnabled(table->currentRow() >= 0);
+  });
+  QPointer<ScanPage> self(this);
+  QPointer<QDialog> guard(dialog);
+  m_api->get(base + "/payload-matches", 10000, [self, guard, table, status, history](const QJsonObject &response) {
+    if (!self || !guard) return;
+    if (response["status"].toString() != "ok") {
+      status->setText(QStringLiteral("读取匹配失败：") + response["error"].toObject()["message"].toString());
+      return;
+    }
+    const auto data = response["data"].toObject();
+    const auto matches = data["matches"].toArray();
+    const auto links = data["links"].toArray();
+    status->setText(matches.isEmpty() ? QStringLiteral("暂无可解释的匹配载荷；漏洞仍保留，可后续补充。")
+      : QStringLiteral("匹配结果仅供选择，执行前须核对条件并由验证预案实际消费。历史关联 %1 条。").arg(links.size()));
+    QStringList historyLines;
+    for (const auto &value : links) {
+      const auto link = value.toObject();
+      historyLines << QStringLiteral("%1 @ %2 · %3%4").arg(link["payload_id"].toString(),
+        link["version"].toString().left(20),
+        link["availability"].toString() == "available" ? QStringLiteral("版本可用") : QStringLiteral("版本已变化或不可用"),
+        link["active"].toBool() ? QStringLiteral(" · 当前关联") : QStringLiteral(" · 历史版本"));
+    }
+    history->setText(historyLines.isEmpty() ? QString() : QStringLiteral("已保存关联：\n") + historyLines.join("\n"));
+    table->setRowCount(matches.size());
+    for (int row = 0; row < matches.size(); ++row) {
+      const auto match = matches[row].toObject();
+      auto *name = new QTableWidgetItem(match["name"].toString());
+      name->setData(Qt::UserRole, match["payload_id"].toString());
+      name->setData(Qt::UserRole+1, match["version"].toString());
+      name->setToolTip(match["version"].toString());
+      table->setItem(row, 0, name);
+      table->setItem(row, 1, new QTableWidgetItem(match["match_basis"].toString()));
+      QStringList conditions;
+      for (const auto &value : match["prerequisites"].toArray()) conditions << value.toString();
+      for (const auto &value : match["missing_conditions"].toArray()) conditions << value.toString();
+      const QStringList variables = match["variables"].toObject().keys();
+      if (!variables.isEmpty()) conditions << QStringLiteral("步骤变量：") + variables.join(", ");
+      table->setItem(row, 2, new QTableWidgetItem(conditions.join("；")));
+      const QString type = match["payload_type"].toString();
+      const QString consumption = match["consumption"].toString();
+      table->setItem(row, 3, new QTableWidgetItem(
+        (type == "web" ? QStringLiteral("Web") : type == "intranet" ? QStringLiteral("内网")
+          : type == "tool" ? QStringLiteral("工具") : type)
+        + " / " + (consumption == "tool_command_reference" ? QStringLiteral("工具命令参考") : QStringLiteral("预案步骤引用"))));
+      auto *versionItem = new QTableWidgetItem(match["version"].toString().left(20));
+      versionItem->setToolTip(match["version"].toString());
+      table->setItem(row, 4, versionItem);
+      table->setItem(row, 5, new QTableWidgetItem(match["linked"].toBool() ? QStringLiteral("已关联")
+        : match["match_status"].toString() == "specific_candidate" ? QStringLiteral("具体候选") : QStringLiteral("待核对")));
+    }
+  });
+  connect(bind, &QPushButton::clicked, dialog, [self, guard, table, status, bind, base, pipeline, findingId]() {
+    if (!self || !guard || pipeline != self->m_pipelineId) return;
+    auto *selected = table->item(table->currentRow(), 0);
+    if (!selected) return;
+    bind->setEnabled(false);
+    status->setText(QStringLiteral("正在保存关联…"));
+    const QString payloadId = selected->data(Qt::UserRole).toString();
+    const QString version = selected->data(Qt::UserRole+1).toString();
+    const QString name = selected->text();
+    const QString basis = table->item(table->currentRow(), 1)->text();
+    self->m_api->post(base + "/payload-links", QJsonObject{{"payload_id", payloadId}, {"version", version}}, 10000,
+      [self, guard, table, status, bind, pipeline, findingId, payloadId, version, name, basis](const QJsonObject &response) {
+        if (!self || !guard || pipeline != self->m_pipelineId) return;
+        if (response["status"].toString() != "ok") {
+          status->setText(QStringLiteral("关联失败：") + response["error"].toObject()["message"].toString());
+          bind->setEnabled(table->currentRow() >= 0);
+          return;
+        }
+        for (int index = 0; index < self->m_aggregateRecords.size(); ++index) {
+          auto record = self->m_aggregateRecords[index].toObject();
+          if (record["id"].toVariant().toLongLong() != findingId) continue;
+          record["payload_match"] = QJsonObject{{"status", "linked"}, {"payload_id", payloadId},
+            {"version", version}, {"name", name}, {"match_basis", basis}};
+          self->m_aggregateRecords[index] = record;
+          break;
+        }
+        guard->accept();
+        self->renderGroupedResults(self->m_aggregateRecords);
+      });
+  });
+  dialog->show();
 }
 
 // ── Create scan (auto-execute) ───────────────────────────────────────
