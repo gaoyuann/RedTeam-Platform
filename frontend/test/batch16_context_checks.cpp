@@ -472,13 +472,16 @@ int main(int argc, char **argv)
   {
     TopologyPage programTopology(&api, "user", "fixture-user");
     programTopology.setPipelineContext("source-topology", "http://127.0.0.1:8089/", {"scan-source"}, false);
+    // A developer's legacy archive may be present beside the build tree.
+    // This fixture models an unedited auto-generated topology.
+    programTopology.m_topologyDocument.metadata["manuallyEdited"] = false;
     QJsonObject event{{"scanTaskId", "foreign-scan"}, {"scanType", "program_scan"}, {"status", "PARTIAL"}};
     programTopology.onScanCompleted(event);
     verify(!programTopology.m_autoTopologyGenerationIds.contains("foreign-scan"), "program topology ignores another task's event");
     event["scanTaskId"] = "scan-source";
     event["target"] = "http://127.0.0.1:8089/";
     programTopology.onScanCompleted(event);
-    verify(awaitCondition([&]() { return !programTopology.m_progressDialog
+    verify(awaitCondition([&]() { return !programTopology.m_topologyRequestPending
         && programTopology.m_topologyDocument.flowId == "source-topology"
         && programTopology.m_autoTopologyGenerationIds.contains("scan-source")
         && !programTopology.m_topologyDocument.nodes.isEmpty(); }),
@@ -488,7 +491,7 @@ int main(int argc, char **argv)
     event["scanType"] = "source_scan";
     event["status"] = "COMPLETED";
     programTopology.onScanCompleted(event);
-    verify(programTopology.m_documentDirty && !programTopology.m_progressDialog,
+    verify(programTopology.m_documentDirty && !programTopology.m_topologyRequestPending,
            "source scan completion preserves unsaved topology edits");
   }
   server.handler = existingHandler;
