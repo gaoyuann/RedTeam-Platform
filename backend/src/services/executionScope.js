@@ -27,7 +27,7 @@ function networkToolTarget(toolId,args) {
   let value;
   if(toolId==='hydra') {
     const index=args.findIndex(arg=>HYDRA_SERVICES.has(arg.toLowerCase()));
-    value=index>0 ? args[index-1] : null;
+    value=index>0 ? args[index-1] : args.find(arg=>/^(?:https?|ftp|ssh|rdp|smb|mysql|postgres|redis|telnet):\/\//i.test(arg));
   } else if(toolId==='netexec') value=args[1];
   else if(toolId==='rpcclient') value=args.at(-1);
   else if(['ssh-exec','evil-winrm'].includes(toolId)) {
