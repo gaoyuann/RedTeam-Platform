@@ -40,8 +40,7 @@ export const TOOL_TO_CONCEPT_PAYLOADS = {
 };
 
 // ── 懒加载索引 ──────────────────────────────────────────────────────────
-let _payloadIndex = null;  // payload_id → payload object
-let _categoryStats = null; // 分类统计缓存
+let _payloadIndex = null;  // 仅缓存静态目录，避免跨数据库泄漏已审核载荷
 
 /**
  * 懒加载 Payloader 数据索引（静态载荷 + AI 生成载荷）
@@ -49,44 +48,42 @@ let _categoryStats = null; // 分类统计缓存
  * @returns {object} payload_id → payload object map
  */
 export function getPayloadIndex(db) {
-  if (_payloadIndex) return _payloadIndex;
-
-  _payloadIndex = {};
-
-  // 1. 加载静态载荷
-  try {
-    if (!fs.existsSync(PAYLOADER_DATA_PATH)) {
-      console.warn('[PAYLOADER] payloader_data.json not found, static payloads disabled');
-    } else {
-      const raw = JSON.parse(fs.readFileSync(PAYLOADER_DATA_PATH, 'utf-8'));
-      const items = [
-        ...(raw.webPayloads || []).map(p => ({ ...p, _type: 'web' })),
-        ...(raw.intranetPayloads || []).map(p => ({ ...p, _type: 'intranet' })),
-        ...(raw.toolCommands || []).map(p => ({ ...p, _type: 'tool' })),
-      ];
-      for (const p of items) {
-        _payloadIndex[p.id] = p;
+  if (!_payloadIndex) {
+    _payloadIndex = {};
+    // 1. 加载静态载荷
+    try {
+      if (!fs.existsSync(PAYLOADER_DATA_PATH)) {
+        console.warn('[PAYLOADER] payloader_data.json not found, static payloads disabled');
+      } else {
+        const raw = JSON.parse(fs.readFileSync(PAYLOADER_DATA_PATH, 'utf-8'));
+        const items = [
+          ...(raw.webPayloads || []).map(p => ({ ...p, _type: 'web' })),
+          ...(raw.intranetPayloads || []).map(p => ({ ...p, _type: 'intranet' })),
+          ...(raw.toolCommands || []).map(p => ({ ...p, _type: 'tool' })),
+        ];
+        for (const p of items) {
+          _payloadIndex[p.id] = p;
+        }
+        console.log(`[PAYLOADER] Static index loaded: ${items.length} payloads`);
       }
-      console.log(`[PAYLOADER] Static index loaded: ${items.length} payloads`);
+    } catch (err) {
+      console.warn('[PAYLOADER] Static index load failed:', err.message);
     }
-  } catch (err) {
-    console.warn('[PAYLOADER] Static index load failed:', err.message);
   }
 
-  // 2. 加载 AI 生成载荷（已审核通过的）
+  // 2. 每次从当前数据库加载已审核载荷，审核状态和测试数据库不能共享缓存。
+  const index = { ..._payloadIndex };
   if (db) {
     try {
       const rows = db.prepare(
-        "SELECT payload_id, payload_data FROM generated_payloads WHERE import_status = 'accepted'"
+        "SELECT payload_id, payload_type, payload_data FROM generated_payloads WHERE import_status = 'accepted'"
       ).all();
       for (const row of rows) {
         try {
           const payload = JSON.parse(row.payload_data);
-          _payloadIndex[row.payload_id] = { ...payload, _type: 'ai_generated', _source: 'ai' };
+          index[row.payload_id] = { ...payload, id: row.payload_id, _type: 'ai_generated',
+            _payload_type: row.payload_type, _source: 'ai' };
         } catch { /* skip malformed */ }
-      }
-      if (rows.length > 0) {
-        console.log(`[PAYLOADER] AI-generated index loaded: ${rows.length} payloads`);
       }
     } catch (err) {
       // Table may not exist yet (before migration 002)
@@ -96,7 +93,7 @@ export function getPayloadIndex(db) {
     }
   }
 
-  return _payloadIndex;
+  return index;
 }
 
 /**
@@ -104,7 +101,6 @@ export function getPayloadIndex(db) {
  */
 export function refreshPayloadIndex() {
   _payloadIndex = null;
-  _categoryStats = null;
 }
 
 /**
@@ -174,8 +170,6 @@ export function getPayloadList({ category, type, keyword, db } = {}) {
  * @returns {{web: Array<{category, count}>, intranet: Array<{category, count}>, tool: Array<{category, count}>}}
  */
 export function getPayloadCategories(db) {
-  if (_categoryStats) return _categoryStats;
-
   const index = getPayloadIndex(db);
   const stats = { web: {}, intranet: {}, tool: {}, ai_generated: {} };
 
@@ -186,14 +180,13 @@ export function getPayloadCategories(db) {
     stats[type][cat] = (stats[type][cat] || 0) + 1;
   }
 
-  _categoryStats = {
+  return {
     web: Object.entries(stats.web || {}).map(([category, count]) => ({ category, count })).sort((a, b) => b.count - a.count),
     intranet: Object.entries(stats.intranet || {}).map(([category, count]) => ({ category, count })).sort((a, b) => b.count - a.count),
     tool: Object.entries(stats.tool || {}).map(([category, count]) => ({ category, count })).sort((a, b) => b.count - a.count),
     ai_generated: Object.entries(stats.ai_generated || {}).map(([category, count]) => ({ category, count })).sort((a, b) => b.count - a.count),
   };
 
-  return _categoryStats;
 }
 
 /**
