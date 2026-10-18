@@ -4,6 +4,11 @@ import { pipelineTopology, sourceNetworkTopology } from '../services/topologyPro
 import {isProgramScan, programExecutionTarget} from '../services/programScan.js';
 
 import { extractTopologyFromResults, mergeTopologyEnhancement } from '../services/topologyBuilder.js';
+import { randomUUID } from 'node:crypto';
+import { normalizeTopologyTarget } from '../services/nmapTopology.js';
+import { scopeBlockReason, scopeBlockingConditions, taskScope } from '../services/taskScope.js';
+import { resolveTargetProfile } from '../services/targetProfileResolver.js';
+import { requireActor } from '../middleware/recordAccess.js';
 
 const SYSTEM_PROMPT =
   '你是一个网络拓扑结构化分析助手。请严格输出 JSON，不要输出 markdown，不要输出解释。' +
@@ -46,6 +51,7 @@ function buildUserPrompt(target, results) {
 
 export default function (db) {
   const router = Router();
+  router.use(requireActor(db));
 
   // Read-only projection of this pipeline's existing results. No scan or LLM call.
   router.get('/from-pipeline/:id', (req, res) => {
@@ -59,6 +65,70 @@ export default function (db) {
     topology.target = pipeline.target;
     topology.generatedAt = new Date().toISOString();
     res.json({ status: 'ok', data: { topology } });
+  });
+
+  // Resolve the node on the server: a client-side hand-drawn host or changed IP
+  // cannot silently expand the pipeline's authorized scan scope.
+  router.post('/from-pipeline/:id/node-scans', (req, res) => {
+    try {
+      const pipeline = db.prepare('SELECT * FROM pipelines WHERE pipeline_id=?').get(req.params.id);
+      if (!pipeline) return res.status(404).json({status:'error',error:{message:'任务不存在'}});
+      if (req.user.role !== 'admin' && req.user.sub !== pipeline.created_by)
+        return res.status(403).json({status:'error',error:{message:'没有权限扫描此任务节点'}});
+      const { node_id: nodeId, scan_type: scanType, request_id: requestId } = req.body || {};
+      if (typeof nodeId !== 'string' || !nodeId || !['topology_scan','port_scan'].includes(scanType)
+        || typeof requestId !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(requestId))
+        return res.status(400).json({status:'error',error:{message:'需要有效节点、扫描类型和 request_id'}});
+      const existing = db.prepare('SELECT * FROM scan_tasks WHERE pipeline_id=? AND topology_request_id=?')
+        .get(pipeline.pipeline_id, requestId);
+      if (existing) {
+        let parameters={}; try { parameters=JSON.parse(existing.parameters || '{}'); } catch {}
+        if (parameters.node_id !== nodeId || existing.scan_type !== scanType)
+          return res.status(409).json({status:'error',error:{message:'request_id 已用于其他节点扫描'}});
+        return res.json({status:'ok',data:{scan_task_id:existing.scan_task_id,target:existing.target,
+          scan_type:existing.scan_type,node_id:nodeId,status:existing.status,reused:true}});
+      }
+      const node = pipelineTopology(db,pipeline).nodes.find(item => item.id === nodeId);
+      if (!node)
+        return res.status(409).json({status:'error',error:{message:'该节点不是本任务可扫描的资产'}});
+      const target = normalizeTopologyTarget(node.ip || node.hostName);
+      if (target.includes('/')) return res.status(400).json({status:'error',error:{message:'节点扫描只接受单台主机'}});
+      const scope = taskScope(pipeline);
+      const blocked = scopeBlockReason(scope,target,scanType) || scopeBlockingConditions(scope)[0];
+      if (blocked) return res.status(403).json({status:'error',error:{message:blocked}});
+      if (!node.scan?.eligible)
+        return res.status(409).json({status:'error',error:{message:'该节点不是本任务可扫描的资产'}});
+      const active = db.prepare(`SELECT * FROM scan_tasks WHERE pipeline_id=? AND scan_type=?
+        AND target=? AND topology_request_id IS NOT NULL AND json_valid(parameters)
+        AND json_extract(parameters,'$.node_id')=? AND status IN ('PENDING','RUNNING')
+        ORDER BY id DESC LIMIT 1`)
+        .get(pipeline.pipeline_id,scanType,target,nodeId);
+      if (active) return res.json({status:'ok',data:{scan_task_id:active.scan_task_id,target,
+        scan_type:scanType,node_id:nodeId,status:active.status,reused:true}});
+      const now = new Date().toISOString();
+      const scanId = `scan_${randomUUID().slice(0,12)}`;
+      const parameters = {pipeline_id:pipeline.pipeline_id,node_id:nodeId,asset_id:node.assetId,
+        ...(scanType === 'port_scan' ? {discover_topology:true} : {}),timeout:300};
+      db.prepare(`INSERT INTO scan_tasks
+        (scan_task_id,target,scan_type,target_class,parameters,created_by,created_at,pipeline_id,topology_request_id)
+        VALUES (?,?,?,?,?,?,?,?,?)`).run(scanId,target,scanType,resolveTargetProfile(target).target_class,
+        JSON.stringify(parameters),pipeline.created_by,now,pipeline.pipeline_id,requestId);
+      return res.status(201).json({status:'ok',data:{scan_task_id:scanId,target,scan_type:scanType,
+        node_id:nodeId,asset_id:node.assetId,status:'PENDING',reused:false}});
+    } catch (error) {
+      if (String(error.code || '').startsWith('SQLITE_CONSTRAINT')) {
+        const row = db.prepare('SELECT * FROM scan_tasks WHERE pipeline_id=? AND topology_request_id=?')
+          .get(req.params.id,req.body?.request_id);
+        if (row) {
+          let parameters={}; try {parameters=JSON.parse(row.parameters || '{}');} catch {}
+          if (parameters.node_id === req.body?.node_id && row.scan_type === req.body?.scan_type)
+            return res.json({status:'ok',data:{scan_task_id:row.scan_task_id,target:row.target,
+              scan_type:row.scan_type,node_id:parameters.node_id,status:row.status,reused:true}});
+        }
+        return res.status(409).json({status:'error',error:{message:'节点扫描请求已存在'}});
+      }
+      return res.status(400).json({status:'error',error:{message:error.message}});
+    }
   });
 
   router.post('/generate-from-scan', async (req, res) => {
@@ -84,8 +154,7 @@ export default function (db) {
         });
       }
 
-      if (['topology_scan','source_scan','program_scan'].includes(task.scan_type) && task.created_by
-          && req.user.role !== 'admin' && req.user.sub !== task.created_by) {
+      if (req.user.role !== 'admin' && req.user.sub !== task.created_by) {
         return res.status(403).json({ status: 'error', error: { message: '没有权限查看此拓扑探测' } });
       }
 

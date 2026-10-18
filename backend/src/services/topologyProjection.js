@@ -5,6 +5,9 @@ import { readTopologyOrigin } from './topologyOrigin.js';
 import { normalizeTopologyTarget } from './nmapTopology.js';
 import { sanitizeTaskLog } from './taskActivity.js';
 import {isProgramMode, isProgramScan, programExecutionTarget} from './programScan.js';
+import { pipelineScans } from './scanResultQuery.js';
+import { hasScanCoverage } from './scanCoverage.js';
+import { scopeBlockReason, scopeBlockingConditions, taskScope } from './taskScope.js';
 
 function text(value, length = 200) {
   return typeof value === 'string' || typeof value === 'number' ? sanitizeTaskLog(value).slice(0, length) : '';
@@ -85,7 +88,7 @@ export function projectTopology(target, scans, results, flowId, owner, origin = 
     const node = nodeFor(host, provenance(row));
     if (!node) continue;
     if (riskTypes.has(row.result_type)) {
-      risks.push({ nodeId: node.id, name: row.result_type === 'credential' ? '凭证相关候选（不展示凭证内容）'
+      risks.push({ findingId: row.id, nodeId: node.id, name: row.result_type === 'credential' ? '凭证相关候选（不展示凭证内容）'
         : text(data.title || data.name || data.finding || data.template || row.result_type), severity: text(row.severity || data.severity),
       status: 'candidate', provenance: provenance(row) });
       continue;
@@ -172,6 +175,161 @@ export function projectTopology(target, scans, results, flowId, owner, origin = 
   return { ...projection, nodes: graph.nodes, edges: graph.edges, summary: graph.summary };
 }
 
+function annotateTaskGraph(db, pipeline, graph, results) {
+  let scope = null;
+  try { scope = taskScope(pipeline); } catch { /* Legacy task targets remain readable. */ }
+  const covered = hasScanCoverage(db);
+  const assets = covered
+    ? db.prepare('SELECT * FROM task_assets WHERE pipeline_id=?').all(pipeline.pipeline_id) : [];
+  const services = covered
+    ? db.prepare('SELECT * FROM task_services WHERE pipeline_id=?').all(pipeline.pipeline_id) : [];
+  const entries = covered
+    ? db.prepare(`SELECT e.*,s.asset_id FROM task_entries e LEFT JOIN task_services s ON s.service_id=e.service_id
+      WHERE e.pipeline_id=?`).all(pipeline.pipeline_id) : [];
+  const checks = covered
+    ? db.prepare(`SELECT c.*,s.asset_id FROM task_checks c LEFT JOIN task_services s ON s.service_id=c.service_id
+      WHERE c.pipeline_id=?`).all(pipeline.pipeline_id) : [];
+  const groupBy = (rows, key) => {
+    const groups = new Map();
+    for (const row of rows) {
+      const id = row[key];
+      if (!id) continue;
+      const group = groups.get(id) || [];
+      group.push(row);
+      groups.set(id, group);
+    }
+    return groups;
+  };
+  const servicesByAsset = groupBy(services, 'asset_id');
+  const entriesByAsset = groupBy(entries, 'asset_id');
+  const checksByAsset = groupBy(checks, 'asset_id');
+  const findingsByNode = groupBy(graph.risks, 'nodeId');
+  const assetByHost = new Map(assets.map(asset => [asset.host.toLowerCase(), asset]));
+  const graphHosts = new Set(graph.nodes.flatMap(node => [node.ip, node.hostName].filter(Boolean).map(value => value.toLowerCase())));
+  for (const asset of assets) {
+    const host = asset.host.toLowerCase();
+    if (graphHosts.has(host)) continue;
+    graph.nodes.push({ id: 'host-' + host, displayName: host, ip: isIP(host) ? host : '',
+      hostName: isIP(host) ? '' : host, osName: '', osVersion: '', deviceType: 'host', vendor: '',
+      status: asset.state === 'reachable' ? 'up' : 'unknown', note: '来自当前任务的资产清单',
+      tags: ['asset-inventory'], x: graph.nodes.length * 260, y: 320, services: [],
+      provenance: {kind:'asset',sources:[]}});
+    graphHosts.add(host);
+  }
+  const rowSources = new Map();
+  const lanScopeSources = new Map(), routeSources = new Map(), responseSources = new Map();
+  const firstHopsByHost = new Map(), executorScans = new Map();
+  const sourceByResultId = new Map();
+  const appendSource = (map, key, source) => {
+    if (!key) return;
+    const sources = map.get(key) || [];
+    if (!sources.some(item => item.result_id === source.result_id)) sources.push(source);
+    map.set(key, sources);
+  };
+  for (const row of results) {
+    let data;
+    try { data = typeof row.result_data === 'string' ? JSON.parse(row.result_data) : row.result_data; } catch { continue; }
+    if (!data || typeof data !== 'object') continue;
+    const source = provenance(row).sources[0];
+    sourceByResultId.set(row.id, source);
+    for (const value of [data.host, data.ip, data.source, data.target, data.serverAddress, data.url]) {
+      const host = address(value);
+      appendSource(rowSources, host, source);
+    }
+    if (row.result_type === 'lan_scope') appendSource(lanScopeSources, data.cidr, source);
+    if (row.result_type === 'network_link' && data.source && data.target)
+      appendSource(routeSources, `${data.source}\0${data.target}`, source);
+    if (row.result_type === 'host_discovery' && data.traceTarget && data.ttl === 1
+        && data.host && data.evidence) {
+      const hops = firstHopsByHost.get(data.host) || [];
+      hops.push({ scanTaskId: row.scan_task_id, evidence: data.evidence, source });
+      firstHopsByHost.set(data.host, hops);
+    }
+    if (data.host && !data.traceTarget && (
+      row.result_type === 'host_discovery' && data.status === 'up'
+      || row.result_type === 'open_port' && ['open','closed'].includes(data.state)))
+      appendSource(responseSources, `${row.scan_task_id}\0${data.host}`, source);
+    if (row.result_type === 'network_context' && Array.isArray(data.interfaces)) {
+      for (const iface of data.interfaces) {
+        if (!iface?.address) continue;
+        appendSource(rowSources, iface.address, source);
+        const ids = executorScans.get(iface.address) || new Set();
+        ids.add(row.scan_task_id);
+        executorScans.set(iface.address, ids);
+      }
+    }
+  }
+  for (const node of graph.nodes) {
+    const host = (node.ip || node.hostName || '').toLowerCase();
+    const asset = assetByHost.get(host) || assetByHost.get((node.hostName || '').toLowerCase());
+    node.assetId = asset?.asset_id || null;
+    if (asset) for (const service of servicesByAsset.get(asset.asset_id) || []) {
+      if (node.services.some(item => item.port === String(service.port) && item.protocol === service.protocol)) continue;
+      const serviceSource = sourceByResultId.get(service.source_record_id);
+      node.services.push({port:String(service.port),protocol:service.protocol,service:text(service.name),
+        product:'',version:'',state:service.state,note:'来自当前任务的服务清单',
+        provenance:{kind:'asset',sources:serviceSource ? [serviceSource] : []}});
+    }
+    node.entries = asset ? (entriesByAsset.get(asset.asset_id) || [])
+      .map(entry => ({ entryId: entry.entry_id, kind: entry.kind, value: text(entry.value, 500), state: entry.state,
+        sourceRecordId: entry.source_record_id })) : [];
+    node.checks = asset ? (checksByAsset.get(asset.asset_id) || [])
+      .map(check => ({ checkId: check.check_id, type: check.check_type, scanType: check.scan_type,
+        state: check.state, reason: text(check.reason), scanTaskId: check.scan_task_id,
+        sourceRecordId: check.source_record_id })) : [];
+    node.findings = (findingsByNode.get(node.id) || [])
+      .map(risk => ({ findingId: risk.findingId, name: risk.name, severity: risk.severity,
+        status: risk.status, verification: risk.verification || null,
+        previousVerification: risk.previousVerification || null }));
+    const candidate = node.ip || node.hostName;
+    const sources = rowSources.get(host) || rowSources.get((node.hostName || '').toLowerCase()) || [];
+    const observedHost = sources.some(source => ['host_discovery','lan_host_discovery'].includes(source.result_type));
+    const eligible = Boolean(candidate && node.deviceType !== 'network_segment'
+      && (asset || node.tags?.includes('target') || observedHost));
+    const reason = !scope ? '旧任务缺少可校验的结构化测试范围'
+      : eligible ? scopeBlockReason(scope, candidate, 'topology_scan') || scopeBlockingConditions(scope)[0] || null
+        : '仅任务范围内的资产或实测主机可发起节点探测';
+    node.scan = { eligible: eligible && !reason, reason };
+    if (sources.length && (!node.provenance?.sources?.length || node.provenance.kind === 'inferred'))
+      node.provenance = { kind: 'scan', sources };
+    if (node.deviceType === 'network_segment')
+      node.provenance = { kind: 'inferred', sources: lanScopeSources.get(node.hostName) || [] };
+    const assetSource = asset && sourceByResultId.get(asset.source_record_id);
+    if (assetSource && !node.provenance?.sources?.length)
+      node.provenance = { kind: 'asset', sources: [assetSource] };
+  }
+  const byId = new Map(graph.nodes.map(node => [node.id, node]));
+  for (const edge of graph.edges) {
+    const source = byId.get(edge.sourceId), target = byId.get(edge.targetId);
+    const sourceScanIds = executorScans.get(source?.ip) || new Set();
+    if (edge.type === 'task-request') {
+      edge.provenance = { kind: 'task', sources: [], description: edge.note };
+      continue;
+    }
+    if (edge.provenance?.sources?.length) continue;
+    const targetAddress = target?.ip || target?.hostName;
+    let sources = [];
+    if (edge.type === 'virtual-link') sources = lanScopeSources.get(source?.hostName) || [];
+    if (edge.type === 'route') {
+      sources = [...(routeSources.get(`${source?.ip || source?.hostName}\0${targetAddress}`) || [])];
+      for (const hop of firstHopsByHost.get(targetAddress) || [])
+        if (sourceScanIds.has(hop.scanTaskId) && edge.note.includes(hop.evidence)) sources.push(hop.source);
+    }
+    if (edge.type === 'reachability')
+      for (const scanId of sourceScanIds)
+        sources.push(...(responseSources.get(`${scanId}\0${targetAddress}`) || []));
+    edge.provenance = { kind: edge.type === 'virtual-link' || !sources.length ? 'inferred' : 'scan',
+      sources, description: edge.note };
+  }
+  graph.metadata.projectionVersion = 4;
+  if (assets.length) graph.summary += ` · 任务资产清单 ${assets.length} 项`;
+  graph.metadata.sourceFingerprint = createHash('sha256').update(JSON.stringify({
+    base: graph.metadata.sourceFingerprint, assets, services, entries, checks,
+    reviews: graph.risks.map(risk => [risk.verification || null, risk.previousVerification || null]),
+  })).digest('hex');
+  return graph;
+}
+
 export function pipelineTopology(db, pipeline) {
   let config={};
   try {config=typeof pipeline.config==='string' ? JSON.parse(pipeline.config) : pipeline.config || {};} catch {}
@@ -180,23 +338,50 @@ export function pipelineTopology(db, pipeline) {
   const discoveries = db.prepare("SELECT scan_task_id FROM scan_tasks WHERE scan_type IN ('topology_scan','port_scan') AND json_valid(parameters) AND json_extract(parameters, '$.pipeline_id') = ? AND created_by = ?")
     .all(pipeline.pipeline_id, pipeline.created_by);
   for (const row of discoveries) if (!ids.includes(row.scan_task_id)) ids.push(row.scan_task_id);
-  const scans = (ids.length ? db.prepare(`SELECT * FROM scan_tasks
-    WHERE scan_task_id IN (${ids.map(() => '?').join(',')}) AND created_by = ? ORDER BY scan_task_id`)
-    .all(...ids, pipeline.created_by) : []).filter(scan => {
-      if (scan.target === pipeline.target) return true;
-      if (!['topology_scan','port_scan'].includes(scan.scan_type)) return false;
-      try { return normalizeTopologyTarget(scan.target) === normalizeTopologyTarget(pipeline.target)
-        || normalizeTopologyTarget(scan.target) === normalizeTopologyTarget(runtime); }
-      catch { return false; }
-    });
+  const linked = pipelineScans(db, pipeline);
+  const known = new Set(linked.map(scan => scan.scan_task_id));
+  const matchesLegacyTarget = scan => {
+    if (config.task_scope) return !scopeBlockReason(taskScope(pipeline), scan.target, scan.scan_type);
+    if (scan.target === pipeline.target) return true;
+    if (!['topology_scan', 'port_scan'].includes(scan.scan_type)) return false;
+    try { return normalizeTopologyTarget(scan.target) === normalizeTopologyTarget(pipeline.target)
+      || normalizeTopologyTarget(scan.target) === normalizeTopologyTarget(runtime); }
+    catch { return false; }
+  };
+  const legacy = (ids.length ? db.prepare(`SELECT * FROM scan_tasks WHERE scan_task_id IN (${ids.map(() => '?').join(',')})
+    AND created_by=? ORDER BY id`).all(...ids, pipeline.created_by) : [])
+    .filter(scan => !known.has(scan.scan_task_id) && matchesLegacyTarget(scan));
+  const extra = discoveries.map(row => row.scan_task_id).filter(id => !known.has(id))
+    .map(id => db.prepare('SELECT * FROM scan_tasks WHERE scan_task_id=? AND created_by=?').get(id,pipeline.created_by))
+    .filter(Boolean).filter(matchesLegacyTarget);
+  const scans = [...linked, ...legacy, ...extra.filter(scan => !legacy.some(item => item.scan_task_id === scan.scan_task_id))];
   const results = scans.length ? db.prepare(`SELECT r.id, r.scan_task_id, r.result_type, r.result_data, r.severity, r.source_tool, r.captured_at,
       t.target AS scan_target FROM scan_results r JOIN scan_tasks t ON t.scan_task_id = r.scan_task_id
     WHERE r.scan_task_id IN (${scans.map(() => '?').join(',')})
       AND r.result_type != 'scan_error' ORDER BY r.id`).all(...scans.map(scan => scan.scan_task_id)) : [];
-  if(!runtime) {
-    return sourceNetworkTopology(pipeline.target,scans,results,pipeline.pipeline_id,pipeline.created_by,readTopologyOrigin(pipeline.config));
+  const mapped = results.map(row=>({...row,scan_target:
+    isProgramScan(scans.find(scan=>scan.scan_task_id===row.scan_task_id)?.scan_type) ? runtime : row.scan_target}));
+  const graph = !runtime
+    ? sourceNetworkTopology(pipeline.target, scans, results, pipeline.pipeline_id, pipeline.created_by, readTopologyOrigin(pipeline.config))
+    : projectTopology(runtime, scans, mapped, pipeline.pipeline_id, pipeline.created_by, readTopologyOrigin(pipeline.config));
+  if (graph.risks.length) {
+    const ids = graph.risks.map(risk => risk.findingId).filter(Number.isInteger);
+    if (ids.length) {
+      const reviews = db.prepare(`SELECT v.* FROM source_verifications v WHERE v.finding_id IN (${ids.map(() => '?').join(',')})
+        ORDER BY v.id`).all(...ids);
+      const latest = new Map(reviews.map(review => [review.finding_id, review]));
+      for (const risk of graph.risks) {
+        const review = latest.get(risk.findingId);
+        if (review) {
+          let evidenceIds=[];
+          try { evidenceIds=JSON.parse(review.evidence_ids || '[]'); } catch {}
+          const summary = { status: review.status, runId: review.run_id,
+            evidenceIds: Array.isArray(evidenceIds) ? evidenceIds : [], reviewedAt: review.created_at };
+          if (pipeline.run_id && review.run_id === pipeline.run_id) risk.verification = summary;
+          else risk.previousVerification = summary;
+        }
+      }
+    }
   }
-  return projectTopology(runtime, scans, results.map(row=>({...row,scan_target:
-    isProgramScan(scans.find(scan=>scan.scan_task_id===row.scan_task_id)?.scan_type) ? runtime : row.scan_target})),
-    pipeline.pipeline_id, pipeline.created_by, readTopologyOrigin(pipeline.config));
+  return annotateTaskGraph(db, pipeline, graph, results);
 }
