@@ -3,9 +3,10 @@ import { getPayloadIndex } from './payloadLoader.js';
 import { parseResultData, resultCategory } from './scanResultCatalog.js';
 
 const KINDS = [
+  ['nosqli', /\bno.?sql\s*injection\b|NoSQL\s*注入/i],
   ['sqli', /\b(?:sql\s*injection|sqli|sqlmap)\b|SQL\s*注入/i],
   ['xss', /\b(?:xss|cross.site scripting)\b|跨站脚本/i],
-  ['ssrf', /\bssrf\b|服务端请求伪造/i],
+  ['ssrf', /\b(?:ssrf|server.side request forgery)\b|服务端请求伪造/i],
   ['csrf', /\bcsrf\b|跨站请求伪造/i],
   ['rce', /\b(?:remote code execution|command injection|rce)\b|远程代码执行|命令注入/i],
   ['lfi', /\b(?:lfi|local file inclusion)\b|本地文件包含/i],
@@ -31,6 +32,19 @@ const VARIANTS = [
   ['polyglot', /\bpolyglot\b/i], ['beef', /\bbeef\b/i],
   ['mxss', /\bmxss\b|变异型\s*XSS/i], ['unicode', /\bunicode\b/i],
   ['cookie-theft', /\bcookie.theft\b|窃取\s*Cookie/i], ['keylogger', /\bkeylogger\b/i],
+  ['command-injection', /\bcommand.injection\b|命令注入/i],
+  ['deserialize', /\b(?:deserializ(?:e|ation)|unserializ(?:e|ation))\b|反序列化/i],
+  ['file-upload', /\bfile.upload\b|文件上传/i],
+  ['include', /\b(?:file.inclusion|include)\b|文件包含/i],
+  ['log-poison', /\blog.poison(?:ing)?\b|日志投毒/i],
+  ['htaccess', /\bhtaccess\b/i], ['image', /\bimage\b|图片/i],
+  ['php-filter', /\bphp.filter\b/i], ['php', /\bphp\b/i], ['java', /\bjava\b/i],
+  ['cloud', /\b(?:cloud|metadata|imds)\b|云环境|元数据/i],
+  ['aws', /\baws\b/i], ['gcp', /\bgcp\b/i], ['azure', /\bazure\b/i],
+  ['protocol', /\bprotocol\b|协议/i], ['gopher', /\bgopher\b/i],
+  ['dict', /\bdict\b/i], ['file', /\bfile\b|文件读取/i],
+  ['dns-rebinding', /\bdns.rebinding\b|DNS\s*重绑定/i],
+  ['redis', /\bredis\b/i], ['mysql', /\bmysql\b/i], ['mongodb', /\bmongodb\b/i],
 ];
 const negated = /\b(?:not vulnerable|no vulnerability|false positive|not affected)\b|未发现漏洞|不存在漏洞|误报/i;
 const safeText = value => typeof value === 'string' ? value : '';
@@ -56,8 +70,11 @@ function findingSignals(row) {
 
 function payloadDescriptor(payload) {
   const tags = Array.isArray(payload.tags) ? payload.tags.map(safeText) : [];
-  const searchable = [payload.id, ...tags, nameOf(payload.name), nameOf(payload.category)].join(' ');
-  const kind = KINDS.find(([, pattern]) => pattern.test(searchable))?.[0];
+  const primary = [payload.id, ...tags, nameOf(payload.name)].join(' ');
+  const searchable = [primary, nameOf(payload.category)].join(' ');
+  const kind = tags.some(tag => /^nosql$/i.test(tag)) ? 'nosqli'
+    : KINDS.find(([, pattern]) => pattern.test(primary))?.[0]
+      || KINDS.find(([, pattern]) => pattern.test(nameOf(payload.category)))?.[0];
   const products = PRODUCT_GROUPS.filter(([, pattern]) => pattern.test(searchable)).map(([key]) => key);
   const variants = VARIANTS.filter(([, pattern]) => pattern.test(payload.id || '')).map(([key]) => key);
   const references = Array.isArray(payload.references) ? payload.references.map(ref => typeof ref === 'string' ? ref : ref?.url || '').join(' ') : '';
@@ -79,9 +96,13 @@ export function matchPayloads(db, row, index = getPayloadIndex(db)) {
     const exactCve = [...signal.cves].find(cve => descriptor.cves.has(cve));
     if (!exactCve && (!signal.kind || signal.kind !== descriptor.kind)) continue;
     const productOverlap = descriptor.products.some(product => signal.products.includes(product));
+    const classPrefix = payload.id.toLowerCase().startsWith(`${signal.kind}-`)
+      || signal.kind === 'nosqli' && payload.id.toLowerCase().startsWith('sqli-');
+    const productPrefix = descriptor.products.some(product => signal.products.includes(product)
+      && payload.id.toLowerCase().startsWith(`${product}-`));
     // Legacy tool commands and combined techniques are references, not a specific finding's payload.
     if (!exactCve && (payload._type === 'tool' || payload._type !== 'ai_generated'
-      && !payload.id.toLowerCase().startsWith(`${signal.kind}-`) && !productOverlap)) continue;
+      && !classPrefix && !productPrefix)) continue;
     if (!exactCve && descriptor.variants.some(variant =>
       !VARIANTS.find(([key]) => key === variant)?.[1].test(signal.text))) continue;
     if (descriptor.products.length && signal.products.length && !productOverlap) continue;

@@ -59,6 +59,18 @@ test('specific vulnerability matching preserves unmatched and information record
       result_data:JSON.stringify({finding:'Reflected XSS in query parameter'}) };
     assert.equal(matchPayloads(db,reflected)[0].payload_id,'xss-reflected');
     assert.ok(matchPayloads(db,reflected).every(match => !['xss-beef','xss-cookie-theft','xss-keylogger'].includes(match.payload_id)));
+    const ssrf = { result_type:'web_vuln',severity:'high',
+      result_data:JSON.stringify({finding:'Server-side request forgery in url parameter'}) };
+    assert.deepEqual(matchPayloads(db,ssrf).map(match => match.payload_id),['ssrf-basic']);
+    const command = { result_type:'web_vuln',severity:'high',
+      result_data:JSON.stringify({finding:'Command injection in ping endpoint'}) };
+    assert.deepEqual(matchPayloads(db,command).map(match => match.payload_id),['rce-command-injection']);
+    const nosql = { result_type:'web_vuln',severity:'high',
+      result_data:JSON.stringify({finding:'NoSQL injection in MongoDB query'}) };
+    assert.deepEqual(matchPayloads(db,nosql).map(match => match.payload_id),['sqli-mongodb-basic']);
+    const deserialize = { result_type:'web_vuln',severity:'high',
+      result_data:JSON.stringify({finding:'PHP unserialize remote code execution'}) };
+    assert.equal(matchPayloads(db,deserialize)[0].payload_id,'rce-deserialize-php');
     assert.equal(scanPage(db, db.prepare("SELECT * FROM pipelines WHERE pipeline_id='p'").get()).scan_records.length, 4);
   } finally { db.close(); }
 });
