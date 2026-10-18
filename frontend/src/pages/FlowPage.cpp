@@ -1112,9 +1112,9 @@ void FlowPage::createFlow(bool quickMode)
   QJsonArray includes; includes.append(target);
   if (testType->currentData().toString()=="program" && !runtimeInput->text().trimmed().isEmpty())
     includes.append(runtimeInput->text().trimmed());
-  if (additionalTargets) for (const auto &value : additionalTargets->text().split(',', Qt::SkipEmptyParts)) includes.append(value.trimmed());
+  if (additionalTargets) for (const auto &value : additionalTargets->text().split(',', QString::SkipEmptyParts)) includes.append(value.trimmed());
   QJsonArray excludes;
-  if (excludedTargets) for (const auto &value : excludedTargets->text().split(',', Qt::SkipEmptyParts)) excludes.append(value.trimmed());
+  if (excludedTargets) for (const auto &value : excludedTargets->text().split(',', QString::SkipEmptyParts)) excludes.append(value.trimmed());
   taskScope["includes"] = includes;
   taskScope["excludes"] = excludes;
   taskScope["execution_location"] = scanLocation ? scanLocation->currentData().toString() : QStringLiteral("scanner");
