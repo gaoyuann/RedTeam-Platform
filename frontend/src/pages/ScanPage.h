@@ -82,6 +82,7 @@ private:
   void loadSourceConnections();
   void browseSourceDirectory();
   void showSourceEvidence(QTreeWidgetItem *item);
+  void showPayloadForFinding(int findingId);
   void reviewSourceFinding(int findingId);
   void selectSourceDemonstration();
   void generatePlaybook(const QJsonArray &findingIds = QJsonArray());

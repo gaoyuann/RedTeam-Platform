@@ -45,7 +45,7 @@ Qt 前端 → 本项目任务／预案接口 → executionEngine
 - [rulesEngine](../backend/src/services/rulesEngine.js)、[parsers](../backend/src/services/parsers.js)、[specLoader](../backend/src/services/specLoader.js)、[reactRuntimeGuard](../backend/src/services/reactRuntimeGuard.js)、[playbookAiChat](../backend/src/services/playbookAiChat.js)：保留旧项目移植说明。
 - [预案导入迁移](../backend/src/db/migrations/003_import_playbooks.js)：优先使用本仓库预案，保留旧项目路径回退；属于历史兼容，不是运行时调用 HexStrike 服务。
 
-当前载荷加载路径是本地 `payloader_data.json` 和审核通过的 AI 生成记录；[payloadGenerator](../backend/src/services/payloadGenerator.js) 直接调用本项目模型客户端。因此不能把所有载荷统称为“HexStrike 生成”，也不能把生成结构化命令等同于已验证利用成功。静态载荷与知识数据的完整来源需单独追溯，项目来源不能替代数据来源证明。
+当前载荷加载路径是本地 `payloader_data.json` 和已入库的 AI 生成记录；[payloadGenerator](../backend/src/services/payloadGenerator.js) 直接调用本项目模型客户端。新生成记录通过结构校验后自动入库，旧候选记录仍可由管理员处理。因此不能把所有载荷统称为“HexStrike 生成”，也不能把生成结构化参数等同于已验证利用成功。静态载荷与知识数据的完整来源需单独追溯，项目来源不能替代数据来源证明。
 
 ## 汇报与后续接入的表述
 
