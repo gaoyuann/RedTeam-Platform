@@ -12,6 +12,7 @@ import { taskAnalysisIndex } from '../services/taskAnalysisIndex.js';
 import { recommendForScans } from '../services/playbookRecommendations.js';
 import { captureTopologyOrigin, readTopologyOrigin } from '../services/topologyOrigin.js';
 import { sourceTarget, httpSourceConnection, resolveSourceConnection } from '../services/sourceScanConnections.js';
+import { normalizeTaskScope, scopeBlockingConditions, scopeConditions, taskScope } from '../services/taskScope.js';
 
 // ── Validation helpers ────────────────────────────────────────────────────
 const asyncRoute = handler => (req,res,next) => Promise.resolve().then(()=>handler(req,res,next)).catch(next);
@@ -151,6 +152,7 @@ export default function (db) {
     }
 
     pipeline.summary = taskSummary(db, pipeline);
+    pipeline.missing_conditions = scopeConditions(taskScope(pipeline));
 
     res.json({ status: 'ok', data: pipeline });
   });
@@ -245,7 +247,7 @@ export default function (db) {
         const parsed = typeof config === 'string' ? JSON.parse(config) : config;
         // Only allow known config keys
         const sanitized = {};
-        const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id', 'input_kind', 'runtime_target'];
+        const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id', 'input_kind', 'runtime_target', 'task_scope'];
         for (const key of allowedKeys) {
           if (parsed[key] !== undefined) sanitized[key] = parsed[key];
         }
@@ -258,7 +260,7 @@ export default function (db) {
     try {
       const program=await normalizeProgramConfig(JSON.parse(configJson),target);
       target=program.target;
-      configJson=JSON.stringify({...program.config,topology_origin:captureTopologyOrigin(req)});
+      configJson=JSON.stringify({...program.config,task_scope:normalizeTaskScope(program.config,target),topology_origin:captureTopologyOrigin(req)});
     } catch(error) {return res.status(400).json({status:'error',error:{message:error.message}});}
     try {
       db.prepare(`INSERT INTO pipelines (pipeline_id, target, status, config, created_by, created_at, updated_at)
@@ -310,7 +312,7 @@ export default function (db) {
         if (typeof parsed === 'object' && parsed !== null) {
           // Only allow known config keys (same whitelist as create)
           const sanitized = {};
-          const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id', 'input_kind', 'runtime_target'];
+          const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id', 'input_kind', 'runtime_target', 'task_scope'];
           for (const key of allowedKeys) {
             if (parsed[key] !== undefined) sanitized[key] = parsed[key];
           }
@@ -318,8 +320,13 @@ export default function (db) {
         }
       } catch {}
       try {
-        const normalized=await normalizeProgramConfig(JSON.parse(configStr),pipeline.target);
         const previous=JSON.parse(pipeline.config || '{}');
+        const requested=JSON.parse(configStr);
+        if(requested.task_scope === undefined) requested.task_scope=previous.task_scope;
+        const normalized=await normalizeProgramConfig(requested,pipeline.target);
+        normalized.config.task_scope=normalizeTaskScope(normalized.config,normalized.target);
+        if(pipeline.status!=='created' && JSON.stringify(previous.task_scope || normalizeTaskScope(previous,pipeline.target))!==JSON.stringify(normalized.config.task_scope))
+          return res.status(409).json({status:'error',error:{message:'扫描已启动，不能改变测试范围；请新建任务'}});
         if(pipeline.status!=='created' && ['scan_mode','source_url','source_connection_id','input_kind','runtime_target'].some(key=>(previous[key] ?? null)!==(normalized.config[key] ?? null))) {
           return res.status(409).json({status:'error',error:{message:'扫描已启动，不能改变程序测试模式或源码来源；请新建任务'}});
         }
@@ -378,6 +385,8 @@ export default function (db) {
     if (!pipeline.target) {
       return res.status(400).json({ status: 'error', error: { message: '流水线未设置目标地址，无法启动' } });
     }
+    const missing=scopeBlockingConditions(taskScope(pipeline));
+    if(missing.length) return res.status(409).json({status:'error',error:{message:`启动条件缺失：${missing.join('；')}`}});
 
     const globalRunning = db.prepare("SELECT COUNT(*) AS n FROM pipelines WHERE status = 'running'").get().n;
     if (globalRunning >= 5) {

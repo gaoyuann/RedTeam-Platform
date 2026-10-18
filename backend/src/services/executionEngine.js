@@ -14,6 +14,7 @@ import { renderCommand, replaceTargetPlaceholder } from './commandTemplateRender
 import { getWsManager } from './wsManager.js';
 import { createStepIndexAllocator, buildExecutionSummary } from './executionState.js';
 import { validateExecutionScope } from './executionScope.js';
+import { taskScope } from './taskScope.js';
 import { normalizeToolArgs, redactToolArgs } from '../tools/toolContracts.js';
 import { getEngine } from '../tools/containerEngine.js';
 import { establishDvwaSession } from './dvwaSession.js';
@@ -191,6 +192,8 @@ export async function executeRun(runId) {
   ).get(runId);
   if (!run) return { ok: false, error: 'Run not found' };
   if (run.status !== 'PENDING') return { ok: false, error: `Run status is ${run.status}, expected PENDING` };
+  const pipeline=db.prepare('SELECT * FROM pipelines WHERE run_id=? AND target=? AND created_by=?').get(runId,run.target,run.user_sub);
+  const scope=pipeline ? taskScope(pipeline) : null;
 
   let sourceVerification;
   try {sourceVerification=JSON.parse(db.prepare('SELECT metadata FROM playbooks WHERE playbook_id=?').get(run.playbook_id)?.metadata || '{}').source_verification;} catch {}
@@ -437,8 +440,8 @@ export async function executeRun(runId) {
       }
       try {
         args = normalizeToolArgs(step.tool_id, args, { projectRoot: PROJECT_ROOT, engine: executionEnvironment, scheme: targetContext?.scheme, target: run.target });
-        const scope = validateExecutionScope({ target: run.target, toolId: step.tool_id, args });
-        if (!scope.allowed) preparationError = scope.reason;
+        const scopeCheck = validateExecutionScope({ target: run.target, toolId: step.tool_id, args, scope });
+        if (!scopeCheck.allowed) preparationError = scopeCheck.reason;
         if (targetProfile?.target_class === 'dvwa' && step.tool_id === 'sqlmap') {
           const cookieIndex = args.indexOf('--cookie');
           if (!targetContext.dvwa_session_verified || !targetContext.dvwa_cookie) {
@@ -755,9 +758,9 @@ export async function executeRun(runId) {
             if (rendered.unresolvedTokens.length) throw new Error('工具目标或参数仍含未解析变量');
             const normalized = normalizeToolArgs(toolId, rendered.rendered,
               { projectRoot: PROJECT_ROOT, engine: executionEnvironment, scheme: targetContext?.scheme });
-            const scope = validateExecutionScope({ target: run.target, toolId, args: normalized });
-            if (scope.allowed) return true;
-            throw new Error(scope.reason);
+            const scopeCheck = validateExecutionScope({ target: run.target, toolId, args: normalized, scope });
+            if (scopeCheck.allowed) return true;
+            throw new Error(scopeCheck.reason);
           } catch (error) {
             thoughtRecord.guardBlocks.push({ allowed: false, category: 'target_scope', toolId, reason: error.message });
             console.warn(`[ReAct Guard] ${error.message}`);
