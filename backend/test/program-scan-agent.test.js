@@ -18,39 +18,33 @@ async function listen(t,server) {
 }
 const answer=value=>({ok:true,content:JSON.stringify(value)});
 
-test('explicit source input is actually reviewed before an immediate finish decision',async t=>{
+test('explicit source input delegates exclusively to CScan without the former scan model or local tools',async t=>{
   const db=database(t),parameters={input_kind:'source',source_url:'http://127.0.0.1:18090/code/'};
-  const task={scan_task_id:'source',target:parameters.source_url,parameters:JSON.stringify(parameters)};
-  const calls=[];let reviews=0,decisions=0;
-  const result=await scanProgramAgent(task,{db,parameters,parseResults:()=>[],
+  const task={scan_task_id:'source',target:parameters.source_url,parameters:JSON.stringify(parameters)};let calls=0;
+  const result=await scanProgramAgent(task,{db,parameters,
     snapshot:async()=>({snapshot_id:'fixture',connection_id:'task-http-source',files:[{path:'main.c'}],skipped:[],
       documents:[{path:'main.c',content:'int main(){return 0;}',start_line:1,end_line:1,sha256:'fixture'}],sourceDir:'/fixture'}),
-    runTool:async tool=>{calls.push(tool);return {success:true,stdout:''};}},
-    {llm:async messages=>{
-      if(messages[0].content.includes('C/C++ 源码审计员')) {reviews++;return answer({findings:[]});}
-      decisions++;assert.deepEqual(JSON.parse(messages[1].content).completed,['source']);
-      return answer({action:'finish',reason:'源码已审阅；尚无运行入口',summary:'静态检查完成，不能运行验证'});
-    }});
-  assert.deepEqual(calls,['cppcheck','flawfinder']);assert.equal(reviews,1);assert.equal(decisions,1);
-  assert.equal(result.outcomes.every(outcome=>outcome.success),true);
+    cscan:async source=>{calls++;return {snapshot_id:source.snapshot_id,flow_id:'1',findings:[],
+      coverage:{reviewed_files:['main.c'],omitted_files:[],complete:true}};},
+    runTool:()=>assert.fail('must not use local scan tools')},
+    {llm:()=>assert.fail('must not use local scan model')});
+  assert.equal(calls,1);assert.equal(result.outcomes.every(outcome=>outcome.success),true);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='source_coverage'").get().n,1);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='application_observation'").get().n,0);
 });
 
-test('legacy source input inspects its separately declared CGI root even when source has no main function',async t=>{
+test('CScan source input retains its separately declared CGI runtime observation',async t=>{
   const db=database(t),visits=[];
   const port=await listen(t,http.createServer((req,res)=>{visits.push(req.url);res.end('Fixture CGI response');}));
   const target='http://127.0.0.1:'+port+'/',parameters={input_kind:'source',source_url:target+'source/'};
   const result=await scanProgramAgent({scan_task_id:'cgi',target,parameters:JSON.stringify(parameters)},
-    {db,parameters,parseResults:()=>[],
+    {db,parameters,
       snapshot:async()=>({snapshot_id:'fixture',connection_id:'task-http-source',files:[{path:'handler.c'}],skipped:[],
         documents:[{path:'handler.c',content:'void handler(void) {}',start_line:1,end_line:1,sha256:'fixture'}],sourceDir:'/fixture'}),
-      runTool:async(tool,args,options)=>tool==='target-request' ? runTargetRequest(args,options) : {success:true,stdout:''}},
-    {llm:async messages=>{
-      if(messages[0].content.includes('C/C++ 源码审计员')) return answer({findings:[]});
-      assert.equal(JSON.parse(messages[1].content).runtime_target,target);
-      return answer({action:'finish',reason:'保留实际入口与源码证据',summary:'Fixture inspection'});
-    }});
+      cscan:async source=>({snapshot_id:source.snapshot_id,flow_id:'2',findings:[],
+        coverage:{reviewed_files:['handler.c'],omitted_files:[],complete:true}}),
+      runTool:async(tool,args,options)=>{assert.equal(tool,'target-request');return runTargetRequest(args,options);}},
+    {llm:()=>assert.fail('CScan source scanning must not call the platform scan model')});
   assert.deepEqual(visits,['/']);assert.equal(result.outcomes.every(outcome=>outcome.success),true);
   const observation=JSON.parse(db.prepare("SELECT result_data FROM scan_results WHERE result_type='application_observation'").get().result_data);
   assert.equal(observation.url,target);assert.equal(observation.connected,true);

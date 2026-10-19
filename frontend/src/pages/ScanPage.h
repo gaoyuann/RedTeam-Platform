@@ -123,9 +123,7 @@ private:
   QComboBox *m_programInputKind;
   QLineEdit *m_programRuntimeInput;
   QComboBox *m_sourceConnectionCombo;
-  QCheckBox *m_sourceAiCheck;
   QCheckBox *m_sourceAdaptiveCheck;
-  QSpinBox *m_sourceAiBatches;
   QLineEdit *m_portsInput;         // port_scan specific
   QLineEdit *m_cookieInput;        // web_scan specific
   QComboBox *m_serviceCombo;       // brute_force service selector

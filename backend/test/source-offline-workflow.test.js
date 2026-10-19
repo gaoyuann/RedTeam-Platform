@@ -1,3 +1,4 @@
+import {cscanFixture} from './helpers/cscanFixture.js';
 import test,{mock} from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
@@ -9,14 +10,19 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {getDb,closeDb} from '../src/db/connection.js';
 
-// Only the model is simulated. Collection, Python reader, SAST containers,
-// pipeline API, review, execution and HTTP/TCP evidence are real and isolated.
+// CScan and the plan model use protocol fixtures. Collection, task APIs,
+// approval and HTTP/TCP execution are real. Unrelated port discovery is stubbed.
 const sourceModule=await import('../src/services/sourceSnapshot.js');
 let snapshotRoot;
 await mock.module('../src/services/sourceSnapshot.js',{namedExports:{...sourceModule,
   createSourceSnapshot:(connection,options)=>sourceModule.createSourceSnapshot(connection,{...options,snapshotRoot})}});
+const toolModule=await import('../src/tools/toolRunner.js');
+await mock.module('../src/tools/toolRunner.js',{namedExports:{...toolModule,
+  runTool:async(tool,args,options)=>tool==='nmap' ? {success:true,exitCode:0,stdout:'<nmaprun></nmaprun>',stderr:'',executionMode:'fixture'}
+    : tool==='target-request' ? toolModule.runTool(tool,args,options) : assert.fail('Source scanning must use CScan, not '+tool)}});
 const {default:pipelineRoutes}=await import('../src/routes/pipelines.js');
 const {default:scanRoutes}=await import('../src/routes/scans.js');
+const {ensureVerification,verificationDetail}=await import('../src/services/findingVerification.js');
 
 async function listen(t,server) {
   server.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
@@ -35,8 +41,10 @@ async function until(db,id,status) {
 }
 
 for(const [mode,protocol] of [['source_assisted','http'],['program_dynamic','tcp']]) {
-  test(`offline ${mode} ${protocol}: real source scan -> generated draft -> approval -> actual request evidence`,
-    {skip:process.env.SOURCE_TEST_SAST!=='1'},async t=>{
+  test(`offline ${mode} ${protocol}: CScan protocol -> generated draft -> approval -> actual request evidence`,
+    async t=>{
+    const cscan=await cscanFixture(t,[{file:'input.c',start_line:3,title:'Fixture input bounds',
+      reason:'Test-owned fixed buffer copy candidate',preconditions:'Runtime route linkage remains to be reviewed',cwe:'CWE-120',severity:'high'}]);
     const root=await mkdtemp(join(tmpdir(),'rt-workflow-'));t.after(()=>rm(root,{recursive:true,force:true}));
     snapshotRoot=join(root,'snapshots');const sourceDir=join(root,'source');await mkdir(sourceDir);
     await writeFile(join(sourceDir,'input.c'),'#include <string.h>\nvoid copy_input(char *input) {\n char buffer[8]; strcpy(buffer,input);\n}\n');
@@ -59,13 +67,7 @@ for(const [mode,protocol] of [['source_assisted','http'],['program_dynamic','tcp
       let raw='';for await(const chunk of req) raw+=chunk;
       const messages=JSON.parse(raw).messages,system=messages[0].content;
       let output;
-      if(system.includes('C/C++ 源码审计员')) output={findings:[{file:'input.c',start_line:3,end_line:3,title:'Fixture input bounds',
-        reason:'Caller input reaches a copy into a fixed buffer',preconditions:'Runtime route linkage remains to be reviewed',cwe:'CWE-120',severity:'high'}]};
-      else if(system.includes('独立的源码反证复核员')) output={reviews:JSON.parse(messages[1].content).candidates.map(item=>({finding_id:item.finding_id,
-        assessment:{verdict:'needs_information',input_control:'unknown',reachability:'unknown',guard:'unknown',
-          reason:'Fixture source does not prove a runtime call path',missing_conditions:['Need runtime call path'],citations:[],counter_evidence:[]}}))};
-      else if(system.includes('程序漏洞扫描智能体')) output={action:'finish',reason:'已读取源码并完成静态审阅',summary:'保留静态疑点，后续执行仍需实际证据'};
-      else if(system.includes('靶场验证预案设计者')) {
+      if(system.includes('靶场验证预案设计者')) {
         generatedCalls++;
         const context=JSON.parse(messages[1].content),id=context.findings[0].id;
         output={name:'Offline input comparison',steps:['baseline','verification'].map((phase,index)=>({
@@ -101,10 +103,16 @@ for(const [mode,protocol] of [['source_assisted','http'],['program_dynamic','tcp
     assert.equal(task.status,'COMPLETED',task.error_message);
     const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
     assert.equal(coverage.files,1);assert.equal(coverage.ai_complete,true);
-    assert.ok(coverage.ai_counter_review.reviewed>0);
-    assert.deepEqual(coverage.static_tools.map(tool=>[tool.tool_id,tool.success]),[['cppcheck',true],['flawfinder',true]]);
+    assert.equal(coverage.engine,'cscan');assert.equal(coverage.cscan_complete,true);assert.equal(cscan.counts.created,1);
     const findings=db.prepare("SELECT id,result_data FROM scan_results WHERE result_type='source_finding'").all();assert.ok(findings.length);
     const finding=findings.find(row=>JSON.parse(row.result_data).title==='Fixture input bounds');assert.ok(finding);
+    const taskPipeline=db.prepare('SELECT * FROM pipelines WHERE pipeline_id=?').get(id);
+    const verification=ensureVerification(db,taskPipeline,finding.id);
+    const detail=verificationDetail(db,taskPipeline,verification.id);
+    assert.equal(detail.eligible,true,'CScan source finding is eligible for the F08 verification workflow');
+    assert.equal(detail.finding.id,finding.id);assert.equal(detail.default_target,target);
+    assert.deepEqual(JSON.parse(detail.finding.result_data).tools,['cscan']);
+    assert.equal(detail.summary.conclusion,'pending','importing a finding never confirms a runtime vulnerability');
     assert.equal(effects.length,0,'no verification request before plan approval');
     const generated=await request('/scans/'+task.scan_task_id+'/generate-playbook',{finding_ids:[finding.id],demonstration:true,adaptive:false});
     const sources=await request('/pipelines/'+id+'/plan/sources',undefined,'alice','GET');

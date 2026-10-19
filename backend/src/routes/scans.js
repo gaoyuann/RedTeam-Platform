@@ -106,10 +106,8 @@ export default function (db) {
         const matched = suppliedSource ? null : parameters?.connection_id
           ? await resolveSourceConnection(parameters.connection_id,target)
           : await resolveSourceConnectionForTarget(target);
-        const batches=parameters?.ai_batches ?? 12;
-        if(!Number.isInteger(batches) || batches<1 || batches>24) throw new Error('AI 分析批次数必须是 1 至 24 的整数');
         parameters={connection_id:matched?.id || null,source_url:suppliedSource?.source_url || null,
-          ai_analysis:parameters?.ai_analysis!==false,ai_batches:batches,input_kind:inputKind,runtime_target:runtimeTarget};
+          input_kind:inputKind,runtime_target:runtimeTarget};
         if(inputKind==='source' && runtimeTarget) target=runtimeTarget;
       } catch(error) {return res.status(400).json({status:'error',error:{message:error.message}});}
     }
