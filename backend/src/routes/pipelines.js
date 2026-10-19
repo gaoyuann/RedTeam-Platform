@@ -1,3 +1,4 @@
+import findingVerificationRoutes from './findingVerifications.js';
 import {isProgramMode} from '../services/programScan.js';
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
@@ -100,6 +101,7 @@ export default function (db) {
   const router = Router();
   const assistantRequests = new Set();
   router.use('/:id/results', taskResultsRoutes(db));
+  router.use('/:id/verifications', findingVerificationRoutes(db));
 
   router.get('/analysis-index', requireActor(db), (req, res, next) => {
     try {

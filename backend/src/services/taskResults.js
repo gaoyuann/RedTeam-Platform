@@ -1,3 +1,4 @@
+import { verificationSummary } from './findingVerificationSummary.js';
 import { scanCollection } from './scanResultQuery.js';
 import { publicScanRecord, redactScanValue, resultCategory } from './scanResultCatalog.js';
 import { createHash, randomUUID } from 'crypto';
@@ -96,7 +97,7 @@ export function taskResultsSnapshot(db, pipeline) {
     });
     const findings = scanCandidates.slice(0, 150).map((row, index) => {
       const data = json(row.result_data);
-      return { id: `scan:${row.id}`, category: 'scan_candidate',
+      return { id: `scan:${row.id}`, category: 'scan_candidate', verification:verificationSummary(db,row.id,pipeline.pipeline_id),
         name: row.result_type === 'credential' ? '凭证相关候选（不展示凭证内容）'
           : taskDisplayText(data.name || data.finding || data.template || row.result_type),
         severity: taskDisplayText(row.severity || data.severity), state: 'unreviewed', source: 'structured_scan',
@@ -112,7 +113,7 @@ export function taskResultsSnapshot(db, pipeline) {
     const cachedScore = score && score.ok === true && score.runId === run?.run_id && Number.isFinite(score.percent) && score.percent >= 0 && score.percent <= 100
       ? { percent: score.percent, earned: Number.isFinite(score.earned) ? score.earned : null,
         total: Number.isFinite(score.total) ? score.total : null, source: 'stored_teaching_score' } : null;
-    const fingerprint = createHash('sha256').update(JSON.stringify({ pipeline, scans, scanResults, scanToolRuns:collection.runs, run,
+    const fingerprint = createHash('sha256').update(JSON.stringify({ pipeline, scans, scanResults, verifications:scanResults.map(row=>verificationSummary(db,row.id,pipeline.pipeline_id)), scanToolRuns:collection.runs, run,
       steps: records('execution_steps'), attempts: records('execution_attempts'), evidence: records('evidence_records'), plan,
       playbook: run ? db.prepare('SELECT * FROM playbooks WHERE playbook_id = ?').get(run.playbook_id) : null,
       definitions: run ? db.prepare('SELECT * FROM playbook_steps WHERE playbook_id = ? ORDER BY step_index').all(run.playbook_id) : [] })).digest('hex');
@@ -122,7 +123,7 @@ export function taskResultsSnapshot(db, pipeline) {
       finding_count: findings.length,
       candidate_total:scanCandidates.length+candidates.length,
       scan_summary:collection.summary,
-      scan_records:scanResults.map(publicScanRecord),
+      scan_records:scanResults.map(row=>({...publicScanRecord(row),verification:verificationSummary(db,row.id,pipeline.pipeline_id)})),
       scan_runs:collection.runs.map(({evidence,...run})=>({...run,outcome:json(run.outcome),diagnostics:json(run.diagnostics)})),
       assessment: { risk_level: '未评级（需人工复核证据）', teaching_score: cachedScore,
         notice: '扫描和 AI 发现均为候选；工具成功、规则命中、教学得分及 MITRE 标签不等于漏洞成立。失败、未记录和未执行项不代表安全。' },

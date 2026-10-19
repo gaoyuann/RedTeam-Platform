@@ -53,6 +53,12 @@ export default function (db) {
     res.json({ status: 'ok', data: rows, meta: { total: rows.length } });
   });
 
+  router.use('/:runId', (req,res,next)=>{
+    const record=db.prepare('SELECT plan_data FROM execution_runs WHERE run_id=?').get(req.params.runId);
+    let managed; try {managed=JSON.parse(record?.plan_data || '{}').finding_verification;} catch {}
+    if(managed && req.method!=='GET') return res.status(409).json({status:'error',error:{message:'请通过任务漏洞验证入口操作，验证记录不可改写或删除'}});
+    next();
+  });
   router.use('/:runId',(req,res,next)=>{
     const run=db.prepare('SELECT playbook_id,scan_task_id FROM execution_runs WHERE run_id=?').get(req.params.runId);
     if(run && !canAccessProgramRun(db,req.user,run)) return res.status(403).json({status:'error',error:{message:'没有权限访问此程序验证执行'}});

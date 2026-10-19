@@ -46,3 +46,9 @@ jobs:
         run: cmake --build build-ci --target RedTeam-Platform RedTeam-Platform-Batch16Checks --parallel 2
       - name: Run UI checks
         run: ctest --test-dir build-ci -R '^ui-context-' --output-on-failure
+      - name: Configure finding verification checks
+        run: cmake -S frontend/tests/finding-verification -B build-ci/finding-verification
+      - name: Build finding verification checks
+        run: cmake --build build-ci/finding-verification --parallel 2
+      - name: Run finding verification checks
+        run: ctest --test-dir build-ci/finding-verification --output-on-failure

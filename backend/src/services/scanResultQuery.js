@@ -1,3 +1,4 @@
+import { verificationSummary } from './findingVerificationSummary.js';
 import { normalizeTopologyTarget } from './nmapTopology.js';
 import { hasScanIntegrity } from './scanResultStore.js';
 import { parseResultData, publicScanRecord, summarizeScanRecords, redactScanValue, resultCategory } from './scanResultCatalog.js';
@@ -30,7 +31,7 @@ export function pipelineScans(db,pipeline) {
 }
 export function scanCollection(db,pipeline,{metadataOnly=false}={}) {
   const scans=pipelineScans(db,pipeline), ids=scans.map(s=>s.scan_task_id);
-  const rows=ids.length?db.prepare(`SELECT ${metadataOnly?'id,scan_task_id,result_type,severity,source_tool,captured_at':'*'} FROM scan_results WHERE scan_task_id IN (${ids.map(()=>'?').join(',')}) ORDER BY id`).all(...ids):[];
+  const rows=ids.length?db.prepare(`SELECT ${metadataOnly?"id,scan_task_id,result_type,severity,source_tool,captured_at,CASE WHEN source_tool='nikto' AND result_type IN ('web_vuln','information') THEN result_data ELSE NULL END AS result_data":'*' } FROM scan_results WHERE scan_task_id IN (${ids.map(()=>'?').join(',')}) ORDER BY id`).all(...ids):[];
   const runs=ids.length && hasScanIntegrity(db)?db.prepare(`SELECT ${metadataOnly?'tool_run_id,scan_task_id,tool_id,scan_type,state,started_at,completed_at,outcome,diagnostics':'*'} FROM scan_tool_runs WHERE scan_task_id IN (${ids.map(()=>'?').join(',')}) ORDER BY started_at,tool_run_id`).all(...ids):[];
   const states={}; for(const s of scans) states[s.status]=(states[s.status] || 0)+1;
   const step=db.prepare("SELECT input_data,output_data FROM pipeline_steps WHERE pipeline_id=? AND step_type='scan' ORDER BY step_order LIMIT 1").get(pipeline.pipeline_id);
@@ -71,7 +72,7 @@ export function scanPage(db,pipeline,query={}) {
   const selected=filtered.filter(r=>r.id>after).slice(0,limit);
   const payloadIndex = selected.some(row=>row.category==='vulnerability') ? getPayloadIndex(db) : null;
   const records=selected.length?db.prepare(`SELECT * FROM scan_results WHERE id IN (${selected.map(()=>'?').join(',')}) ORDER BY id`).all(...selected.map(r=>r.id))
-    .map(row=>({...publicScanRecord(row),payload_match:payloadIndex ? findingPayloadSummary(db,row,payloadIndex) : null})):[];
+    .map(row=>({...publicScanRecord(row),verification:verificationSummary(db,row.id,pipeline.pipeline_id),payload_match:payloadIndex ? findingPayloadSummary(db,row,payloadIndex) : null})):[];
   return {scan_summary:collection.summary,scan_coverage:collection.coverage,scan_records:records,
     scan_sources:collection.scans.map(s=>({scan_task_id:s.scan_task_id,scan_type:s.scan_type,status:s.status,target:s.target,error_message:redactScanValue(s.error_message),retry_of_scan_task_id:s.retry_of_scan_task_id || null})),
     scan_runs:collection.runs.map(({evidence,...r})=>({...r,outcome:parseResultData(r.outcome),diagnostics:parseResultData(r.diagnostics)})),

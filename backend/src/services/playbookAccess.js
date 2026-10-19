@@ -8,6 +8,10 @@ export function playbookScope(db, playbook, visited = new Set()) {
   if (approved) return { private: true, owner: approved.created_by || null, snapshot: true };
   let metadata;
   try { metadata = JSON.parse(playbook.metadata || '{}'); } catch {}
+  if (metadata?.finding_verification) {
+    const owner = db.prepare('SELECT created_by FROM pipelines WHERE pipeline_id=?').get(metadata.finding_verification.pipeline_id);
+    return {private:true, owner:owner?.created_by || null, snapshot:true};
+  }
   if (metadata && Object.hasOwn(metadata, 'task_plan')) {
     const pipelineId = metadata.task_plan?.pipeline_id;
     const pipeline = typeof pipelineId === 'string'

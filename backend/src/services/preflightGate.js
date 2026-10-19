@@ -1,3 +1,6 @@
+import { compilePlaybook } from './playbookCompiler.js';
+import { validateExecutionScope } from './executionScope.js';
+import { taskScope } from './taskScope.js';
 /**
  * PreflightGate - Pre-execution validation checks
  * Ported from RedTeam-Edu: backend/src/runtime/preflightGate.js
@@ -57,6 +60,22 @@ export async function runPreflightChecks({ playbookId, target, db, scanTaskIds =
   if(playbookId==='source_code_poc_verify') return {passed:false,checks:[{name:'retired_source_template',passed:false,message:'旧模板仅执行静态工具，已停用；请从程序测试任务按真实证据生成验证预案'}]};
   let source;
   try {source=JSON.parse(db.prepare('SELECT metadata FROM playbooks WHERE playbook_id=?').get(playbookId)?.metadata || '{}').source_verification;} catch {}
+  let finding;
+  try {finding=JSON.parse(db.prepare('SELECT metadata FROM playbooks WHERE playbook_id=?').get(playbookId)?.metadata || '{}').finding_verification;} catch {}
+  if(finding) {
+    const steps=db.prepare('SELECT * FROM playbook_steps WHERE playbook_id=? ORDER BY step_index').all(playbookId);
+    if(steps.length && steps.every(s=>s.tool_id==='target-request')) {
+      const pipeline=db.prepare('SELECT * FROM pipelines WHERE pipeline_id=? AND created_by=?').get(finding.pipeline_id,owner);
+      const compiled=compilePlaybook({steps,target,db});
+      let reason=!pipeline ? '验证任务归属失效' : !compiled.ok ? compiled.errors.join('; ') : null;
+      if(!reason) for(const step of compiled.compiledSteps) {
+        const checked=validateExecutionScope({target,toolId:step.tool_id,args:step.resolved_args,scope:taskScope(pipeline)});
+        if(!checked.allowed) {reason=checked.reason;break;}
+      }
+      return {passed:!reason,checks:[{name:'finding_verification_scope',passed:!reason,message:reason || '验证步骤范围与冻结载荷版本检查通过'},
+        {name:'target_class_compatibility',passed:true,target_profile:resolveTargetProfile(target),message:'使用指定入口与内置有界请求工具'}]};
+    }
+  }
   if(source) {
     // These plans need only the built-in transport; HTTP discovery can change ports
     // through redirects and unrelated wordlists/images are not prerequisites.

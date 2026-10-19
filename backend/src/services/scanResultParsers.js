@@ -1,3 +1,4 @@
+import { ordinaryHttpMethods } from './scanResultCatalog.js';
 import { parseCppcheck, parseFlawfinder } from './sourceToolParsers.js';
 import { parseNmapResults } from './nmapTopology.js';
 const SCAN_TOOL_MAP = {port_scan:'nmap',topology_scan:'nmap',vuln_scan:'nuclei',auth_audit:'nuclei',web_scan_nikto:'nikto',web_scan_sqlmap:'sqlmap',api_fuzz_ffuf:'ffuf',api_fuzz_arjun:'arjun'};
@@ -107,10 +108,11 @@ function legacyParseResults(scanType, stdout) {
         if (fl.includes('sql') || fl.includes('inject') || fl.includes('exec') || fl.includes('vulnerable')) sev = 'high';
         if (fl.includes('leak') || fl.includes('expos')) sev = 'medium';
 
+        const informational=ordinaryHttpMethods({result_type:'web_vuln',source_tool:'nikto',result_data:{finding}});
         results.push({
-          result_type: 'web_vuln',
+          result_type: informational ? 'information' : 'web_vuln',
           result_data: { finding, ...(path && { path }), ...(osvdbId && { osvdb_id: osvdbId }) },
-          severity: sev,
+          severity: informational ? 'info' : sev,
           source_tool: 'nikto',
         });
       }
