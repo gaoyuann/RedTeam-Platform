@@ -1,3 +1,4 @@
+#include "FindingVerificationDialog.h"
 #include "../widgets/WorkbenchTabs.h"
 #include "ScanPage.h"
 #include "../ApiClient.h"
@@ -32,13 +33,22 @@
 #include <QUrl>
 #include <QUuid>
 #include <QHash>
+#include <QSignalBlocker>
+#include <QTreeWidgetItemIterator>
 
 static bool isProgramScan(const QString &type) { return type == "program_scan" || type == "source_scan"; }
 static bool isProgramFinding(const QString &type) { return type == "program_finding" || type == "source_finding"; }
 
+static bool isVerificationRecord(const QJsonObject &row) {
+  if(row.contains("category"))return row["category"].toString()=="vulnerability";
+  const QStringList types{"vulnerability","web_vuln","sql_injection","misconfiguration","auth_finding","source_vuln","source_finding","program_finding"};
+  return types.contains(row["result_type"].toString()) && !QStringList{"info","inf"}.contains(row["severity"].toString().toLower());
+}
 static void showPayloadSummary(QTreeWidgetItem *item, const QJsonObject &record, bool aggregate) {
-  item->setData(0, Qt::UserRole+2, record["category"].toString());
+  item->setData(0, Qt::UserRole+2, isVerificationRecord(record)?QString("vulnerability"):record["category"].toString());
   if (!aggregate || record["category"].toString() != "vulnerability") return;
+  const auto verification = record["verification"].toObject();
+  if (!verification.isEmpty()) item->setToolTip(0, "验证状态："+verification["state"].toString()+"\n结论："+verification["conclusion"].toString());
   const auto match = record["payload_match"].toObject();
   const QString state = match["status"].toString();
   item->setText(3, state == "linked" ? QStringLiteral("已关联：") + match["name"].toString()
@@ -353,7 +363,7 @@ QString ScanPage::buildResultSummary(const QJsonArray &results, const QString &s
   else if (scanType == "web_scan") {
     int sqli = 0, webVulns = 0;
     for (const auto &r : results) {
-      QString type = r.toObject()["result_type"].toString();
+      QString type = r.toObject()["category"].toString()=="information" ? "information" : r.toObject()["result_type"].toString();
       if (type == "sql_injection") sqli++;
       if (type == "web_vuln") webVulns++;
     }
@@ -400,7 +410,7 @@ static QColor statusColor(const QString &status, bool hasStructured = true) {
 
 bool ScanPage::hasStructuredResults(const QJsonArray &results) {
   for (const auto &r : results) {
-    QString type = r.toObject()["result_type"].toString();
+    QString type = r.toObject()["category"].toString()=="information" ? "information" : r.toObject()["result_type"].toString();
     if (type != "raw_output" && type != "scan_error") return true;
   }
   return false;
@@ -476,6 +486,7 @@ void ScanPage::setTarget(const QString &target)
 
 void ScanPage::setPipelineScope(const QString &pipelineId, const QStringList &taskIds, const QString &state)
 {
+  if(m_pipelineId!=pipelineId)m_checkedFindings.clear();
   if (m_pipelineId == pipelineId && m_scopeTaskIds == taskIds) {
     if (m_pipelineScanState != state && m_allScanResults) { m_pipelineScanState = state; loadPipelineResults(); }
     return;
@@ -1228,9 +1239,10 @@ void ScanPage::setupUI() {
   m_resultTree->setMinimumHeight(180);
   m_resultTree->setObjectName("scanResultTree");
   connect(m_resultTree, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem *item, int) {
-    if (!m_allScanResults || !item->parent()) return;
+    if (!item || !item->parent()) return;
+    if(!m_allScanResults && m_pipelineId.isEmpty())return;
     if (item->data(0, Qt::UserRole+2).toString() == "vulnerability") {
-      showPayloadMatches(item);
+      openFindingVerification({item->data(0,Qt::UserRole+1).toLongLong()});
       return;
     }
     auto *dialog = new QDialog(this); dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -1242,6 +1254,25 @@ void ScanPage::setupUI() {
   UiUtil::EmptyHint::attach(m_resultTree, QStringLiteral("扫描完成后在此展示结果"));
   m_resultTree->setHeaderLabels({"严重度", "数据", "工具", "匹配载荷"});
   m_resultTree->setAlternatingRowColors(true);
+  m_resultTree->setSelectionMode(QAbstractItemView::ExtendedSelection);
+  auto *verifySelected = new QPushButton("打开勾选的漏洞");
+  verifySelected->setObjectName("openCheckedFindings");
+  verifySelected->setToolTip("勾选多条漏洞后统一打开；双击某条漏洞可直接查看。打开窗口不会启动验证。");
+  right->addWidget(verifySelected);
+  connect(verifySelected, &QPushButton::clicked, this, [this]() {
+    if (m_pipelineId.isEmpty()) { QMessageBox::information(this,"需要任务归属","请从任务工作台的扫描结果进入逐漏洞验证。"); return; }
+    QList<qint64> ids;
+    for(QTreeWidgetItemIterator it(m_resultTree);*it;++it)
+      if((*it)->checkState(0)==Qt::Checked && (*it)->data(0,Qt::UserRole+1).toLongLong()>0)
+        ids.append((*it)->data(0,Qt::UserRole+1).toLongLong());
+    if(ids.isEmpty()) {QMessageBox::information(this,"请勾选漏洞","勾选需要验证的漏洞，或双击一条漏洞直接打开。");return;}
+    openFindingVerification(ids);
+  });
+  connect(m_resultTree,&QTreeWidget::itemChanged,this,[this](QTreeWidgetItem *item,int column){
+    const auto id=item->data(0,Qt::UserRole+1).toLongLong();
+    if(column!=0 || id<=0)return;
+    if(item->checkState(0)==Qt::Checked)m_checkedFindings.insert(id);else m_checkedFindings.remove(id);
+  });
   m_resultTree->setContextMenuPolicy(Qt::CustomContextMenu);
   m_resultTree->header()->setStretchLastSection(false);
   m_resultTree->header()->setSectionResizeMode(1, QHeaderView::Stretch);
@@ -1259,12 +1290,18 @@ void ScanPage::setupUI() {
     menu.addAction("复制内容", [text]() { QApplication::clipboard()->setText(text); });
     if (m_allScanResults && item->parent() && item->data(0, Qt::UserRole+2).toString() == "vulnerability")
       menu.addAction("查看 / 关联匹配载荷", [this, item]() { showPayloadMatches(item); });
+    if (!m_pipelineId.isEmpty() && item->data(0,Qt::UserRole+1).toLongLong()>0
+        && item->data(0,Qt::UserRole+2).toString()=="vulnerability")
+      menu.addAction("准备此漏洞验证 / 查看历史", [this,item]() {
+        auto *dialog=new FindingVerificationDialog(m_api,m_pipelineId,{item->data(0,Qt::UserRole+1).toLongLong()},this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);dialog->show();
+      });
     // 演示动线：漏洞结果一键发起攻击
     const QString resultType = item->data(0, Qt::UserRole).toString();
     const QStringList payloadFindings = {"vulnerability", "web_vuln", "sql_injection", "misconfiguration",
       "auth_finding", "source_vuln", "source_finding", "program_finding"};
     const int findingId = item->data(0, Qt::UserRole+1).toInt();
-    if (findingId > 0 && (payloadFindings.contains(resultType)
+    if (findingId > 0 && item->data(0,Qt::UserRole+2).toString()!="information" && (payloadFindings.contains(resultType)
       || (m_allScanResults && item->data(0, Qt::UserRole+2).toString() == "vulnerability"))) {
       menu.addAction("查找或生成此漏洞载荷", [this, findingId]() { showPayloadForFinding(findingId); });
     }
@@ -1277,7 +1314,7 @@ void ScanPage::setupUI() {
       }
     }
     const QStringList attackable = {"vulnerability", "web_vuln", "sql_injection", "credential"};
-    if (!m_allScanResults && !m_currentTaskTarget.isEmpty() && attackable.contains(resultType)) {
+    if (m_pipelineId.isEmpty() && !m_allScanResults && !m_currentTaskTarget.isEmpty() && attackable.contains(resultType)) {
       menu.addSeparator();
       menu.addAction("⚔ 对此漏洞发起攻击", [this, item, resultType]() {
         const QString raw = item->toolTip(1);  // 优先原始 JSON（关键词更全），展示文本兜底
@@ -1288,7 +1325,7 @@ void ScanPage::setupUI() {
   });
   connect(m_resultTree, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem *item, int) {
     // 双击漏洞行 = 直接发起攻击（分组头/不可攻击类型忽略）
-    if (m_allScanResults) return;
+    if (m_allScanResults || !m_pipelineId.isEmpty()) return;
     if (!item || item->parent() == nullptr) return;
     const QString resultType = item->data(0, Qt::UserRole).toString();
     if (isProgramFinding(resultType) || resultType == "application_observation" || resultType == "source_coverage" || resultType == "program_coverage") {showSourceEvidence(item); return;}
@@ -1511,6 +1548,7 @@ void ScanPage::updateStatusLabel(const QJsonObject &d) {
 
 // ── Render grouped results in QTreeWidget ─────────────────────────────
 void ScanPage::renderGroupedResults(const QJsonArray &results) {
+  const QSignalBlocker blocker(m_resultTree);
   m_resultOverview->setResults(results);
   m_resultTree->clear();
   m_resultTree->setColumnHidden(3, !m_allScanResults);
@@ -1524,7 +1562,7 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
                        "credential", "service_info", "http_probe", "technology_detection", "scan_error", "raw_output"};
 
   for (const auto &r : results) {
-    QString type = r.toObject()["result_type"].toString();
+    QString type = r.toObject()["category"].toString()=="information" ? "information" : r.toObject()["result_type"].toString();
     groups[type].append(r);
   }
 
@@ -1564,6 +1602,10 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
       child->setToolTip(1, rawData);
       child->setText(2, tool + (m_allScanResults ? " · " + obj["scan_task_id"].toString() + " #" + QString::number(obj["id"].toVariant().toLongLong()) : QString()));
       showPayloadSummary(child, obj, m_allScanResults);
+      if(!m_pipelineId.isEmpty() && isVerificationRecord(obj)) {
+        child->setFlags(child->flags()|Qt::ItemIsUserCheckable);
+        child->setCheckState(0,m_checkedFindings.contains(obj["id"].toVariant().toLongLong())?Qt::Checked:Qt::Unchecked);
+      }
 
       // Dim raw_output items
       if (resultType == "raw_output") {
@@ -1612,6 +1654,10 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
       child->setToolTip(1, rawData);
       child->setText(2, tool + (m_allScanResults ? " · " + obj["scan_task_id"].toString() + " #" + QString::number(obj["id"].toVariant().toLongLong()) : QString()));
       showPayloadSummary(child, obj, m_allScanResults);
+      if(!m_pipelineId.isEmpty() && isVerificationRecord(obj)) {
+        child->setFlags(child->flags()|Qt::ItemIsUserCheckable);
+        child->setCheckState(0,m_checkedFindings.contains(obj["id"].toVariant().toLongLong())?Qt::Checked:Qt::Unchecked);
+      }
     }
     groupItem->setExpanded(true);
   }
@@ -2929,4 +2975,10 @@ void ScanPage::reviewSourceFinding(int findingId) {
     });
     layout->addWidget(buttons);dialog.exec();
   });
+}
+
+void ScanPage::openFindingVerification(const QList<qint64> &ids) {
+  if(m_pipelineId.isEmpty() || ids.isEmpty())return;
+  auto *dialog=new FindingVerificationDialog(m_api,m_pipelineId,ids,this);
+  dialog->setAttribute(Qt::WA_DeleteOnClose);dialog->show();
 }

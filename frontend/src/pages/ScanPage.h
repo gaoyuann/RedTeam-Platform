@@ -1,5 +1,6 @@
 #pragma once
 #include <QWidget>
+#include <QSet>
 #include <QSpinBox>
 #include <QTableWidget>
 #include <QTreeWidget>
@@ -53,6 +54,8 @@ private slots:
 
 private:
   void setupUI();
+  void openFindingVerification(const QList<qint64> &ids);
+  QSet<qint64> m_checkedFindings;
   void loadPipelineResults(bool append = false);
   void renderCoverage(const QJsonObject &coverage);
   QString m_pipelineId;

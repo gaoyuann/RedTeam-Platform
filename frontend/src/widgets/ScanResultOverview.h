@@ -50,7 +50,8 @@ public:
         if (data.value("state").toString("open") == "open") ++ports; else ++other;
       }
       else if ((type == "vulnerability" || type == "web_vuln" || type == "sql_injection" || type == "source_vuln" || type == "source_finding" || type == "program_finding" || type == "auth_finding" || type == "misconfiguration")
-          && severity != "info" && severity != "inf") ++findings;
+          && severity != "info" && severity != "inf"
+          && (!value.toObject().contains("category") || value.toObject()["category"].toString()=="vulnerability")) ++findings;
       else if (type == "credential") ++credentials;
       else if (type == "raw_output") ++raw;
       else ++other;

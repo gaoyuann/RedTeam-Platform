@@ -1,3 +1,4 @@
+import { payloadVersion } from './findingPayloads.js';
 /**
  * PlaybookCompiler - Compiles raw playbook steps into executable plans
  * Ported from RedTeam-Edu: backend/src/runtime/playbookCompiler.js
@@ -58,7 +59,21 @@ export function compilePlaybook({ steps, target, db, context = {} }) {
 
     // 2. Payloader 载荷解析 (在模板渲染之前)
     if (step.payload_id && !compiled.compile_status.startsWith('BLOCKED')) {
-      const payload = getPayloadById(step.payload_id, db);
+      let payload = getPayloadById(step.payload_id, db);
+      let frozen;
+      try { frozen = typeof step.evidence_config === 'string' ? JSON.parse(step.evidence_config) : step.evidence_config; } catch {}
+      const snapshot = step.payload_snapshot || frozen?.payload_snapshot;
+      const version = step.payload_version || frozen?.payload_version;
+      if (snapshot) {
+        if (!payload || payloadVersion(payload) !== version || payloadVersion(snapshot) !== version) {
+          compiled.compile_status = 'BLOCKED_PAYLOAD_VERSION';
+          compiled.compile_reason = '载荷已变更或撤销，请重新准备验证计划';
+          errors.push(compiled.compile_reason);
+          compiledSteps.push(compiled);
+          continue;
+        }
+        payload = snapshot;
+      }
 
       if (!payload) {
         compiled.compile_status = 'BLOCKED_PAYLOAD_NOT_FOUND';
