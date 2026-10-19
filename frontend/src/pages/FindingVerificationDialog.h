@@ -3,6 +3,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QList>
+#include <QMap>
 #include <memory>
 class ApiClient;
 class QTableWidget;
@@ -14,6 +15,7 @@ class QLabel;
 class QTimer;
 class QPushButton;
 class QTabWidget;
+class QGroupBox;
 class FindingVerificationDialog : public QDialog {
   Q_OBJECT
 public:
@@ -24,6 +26,12 @@ private:
   bool allowDiscardDraft();
   void addFinding(qint64 finding);
   void load(bool editor=false);
+  void loadSources();
+  void showSourcePreview();
+  void showPayloadPreview();
+  void updateQueue();
+  void startChecked();
+  QString confirmationText(const QJsonObject &detail) const;
   void renderAttempt(int index);
   void displayPlan(const QJsonObject &plan);
   QJsonObject planInput() const;
@@ -49,8 +57,19 @@ private:
   QTimer *m_timer;
   QPushButton *m_save, *m_start, *m_confirmButton, *m_generate;
   QJsonObject m_detail;
-  QJsonArray m_matches, m_planSteps;
-  QString m_evidenceAttempt;
+  QJsonArray m_matches, m_planSteps, m_sourceItems;
+  QPlainTextEdit *m_sourcePreview, *m_payloadPreview;
+  QGroupBox *m_sourceChooser;
+  QComboBox *m_bindStep;
+  QPushButton *m_useSource, *m_adjustAI, *m_bindPayload, *m_unbindPayload, *m_resolvePayload, *m_queueButton, *m_sourcesNext, *m_sourcesPrevious;
+  QLineEdit *m_sourceSearch;
+  QLabel *m_queueLabel;
+  QMap<QString,QJsonObject> m_details;
+  QMap<QString,QJsonObject> m_queuePlans;
+  bool m_browseSources=false;
+  int m_sourceOffset=0;
+  quint64 m_sourceRequest=0;
+  QString m_evidenceAttempt, m_pendingPayload;
   QStringList m_queue;
   QString m_activeQueue, m_queueRunId;
   quint64 m_queueGeneration=0, m_contextGeneration=0, m_editGeneration=0, m_templateGeneration=0;

@@ -63,6 +63,13 @@ test('F08 tool success leaves conclusion pending; reviews require evidence of th
     let detail=verificationDetail(f.db,f.pipeline,f.item.id);assert.equal(detail.summary.conclusion,'pending');assert.equal(detail.attempts[0].state,'completed');
     const evidence=detail.attempts[0].evidence[0].id;
     assert.throws(()=>reviewVerification(f.db,f.pipeline,actor,f.item.id,{attempt_id:a.id,conclusion:'confirmed',evidence_ids:[99999],note:'Observed'}),/证据不属于/);
+    const original=f.db.prepare('SELECT evidence_data FROM evidence_records WHERE id=?').get(evidence).evidence_data;
+    for(const key of ['fingerprint','verification_id','pipeline_id']) {
+      const changed=JSON.parse(original);changed.finding_verification[key]='wrong';
+      f.db.prepare('UPDATE evidence_records SET evidence_data=? WHERE id=?').run(JSON.stringify(changed),evidence);
+      assert.throws(()=>reviewVerification(f.db,f.pipeline,actor,f.item.id,{attempt_id:a.id,conclusion:'confirmed',evidence_ids:[evidence],note:'Mismatched origin'}),/证据不属于/);
+    }
+    f.db.prepare('UPDATE evidence_records SET evidence_data=? WHERE id=?').run(original,evidence);
     reviewVerification(f.db,f.pipeline,actor,f.item.id,{attempt_id:a.id,conclusion:'not_verified',evidence_ids:[evidence],note:'Expected evidence absent'});
     assert.equal(verificationDetail(f.db,f.pipeline,f.item.id).summary.conclusion,'not_verified');
     const b=createVerificationAttempt(f.db,f.pipeline,actor,f.item.id,{...request,request_id:'retry-2'});await launchVerification(f.db,b,actor,{engine});
@@ -138,7 +145,10 @@ test('F08 generated payload is frozen, consumed by the real engine and linked to
     assert.equal(evidence.payload_id,payload.id);
     assert.equal(evidence.finding_verification.payload_version,version);
     assert.equal(evidence.finding_verification.finding_id,f.finding);
-    assert.match(detail.attempts[0].evidence[0].raw_stdout,/isolated baseline response/);
+    assert.match(f.db.prepare('SELECT raw_stdout FROM evidence_records WHERE run_id=?').get(a.run_id).raw_stdout,/isolated baseline response/);
+    assert.equal(detail.attempts[0].evidence[0].observation.status_code,200);
+    assert.equal(detail.attempts[0].evidence[0].observation.complete,true);
+    assert.equal(detail.attempts[0].evidence[0].raw_stdout.includes('isolated baseline response'),false);
     f.db.prepare('UPDATE generated_payloads SET payload_data=? WHERE payload_id=?').run(JSON.stringify({...payload,version:2}),payload.id);
     assert.throws(()=>createVerificationAttempt(f.db,f.pipeline,actor,f.item.id,{...request,request_id:'changed'}),/版本/);
     assert.equal(JSON.parse(f.db.prepare('SELECT content FROM finding_verification_plans WHERE verification_id=?').get(f.item.id).content).steps[0].payload_snapshot.version,1);

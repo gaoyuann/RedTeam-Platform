@@ -1,3 +1,4 @@
+import { assessVerificationAttempt } from './findingVerificationAssessment.js';
 import { taskDisplayValue } from './taskExecution.js';
 import { checkVerificationPlan, json } from './findingVerification.js';
 import { currentActor } from '../middleware/recordAccess.js';
@@ -54,6 +55,7 @@ export function launchVerification(db, attempt, actor, dependencies = {}) {
           .run(state,stopped?1:0,reason,attempt.id);
         db.prepare('UPDATE finding_verifications SET state=?,reason=? WHERE id=?').run(state,reason,attempt.verification_id);
       })();
+      assessVerificationAttempt(db,attempt.id);
       workers.delete(attempt.id);
       getWsManager()?.broadcast('pipeline:verification',{pipeline_id:attempt.pipeline_id,verification_id:attempt.verification_id,state});
     }

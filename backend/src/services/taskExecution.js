@@ -20,7 +20,8 @@ function safeValue(value, depth = 0, arrayLimit = 50) {
       ? '[已隐藏]' : safeValue(entry, depth + 1, arrayLimit))
     .concat(value.length > arrayLimit ? ['[更多项已省略]'] : []);
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).slice(0, 100).map(([key, entry]) =>
-    [text(key), /password|passwd|secret|token|cookie|authorization|api.?key|credential|private.?key|username|login/i.test(key)
+    [text(key), ['cookie_attributes_complete','login_form_present'].includes(key) && typeof entry==='boolean' ? entry : key==='cookie_attributes' && Array.isArray(entry) ? entry.slice(0,20).map(c=>({name:text(c?.name),httponly:c?.httponly===true,secure:c?.secure===true}))
+      : key==='cookie_name' && typeof entry==='string' && /^[!#$%&'*+.^_`|~\w-]{1,128}$/.test(entry) ? entry : /password|passwd|secret|token|cookie|authorization|api.?key|credential|private.?key|username|login/i.test(key)
       ? '[已隐藏]' : safeValue(entry, depth + 1, arrayLimit)]));
   return value;
 }

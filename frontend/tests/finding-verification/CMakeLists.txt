@@ -21,3 +21,11 @@ foreach(scenario revision dirty-revision reload-in-flight cancel-details close-d
   add_test(NAME finding-verification-${scenario} COMMAND finding-verification-races ${scenario})
   set_tests_properties(finding-verification-${scenario} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endforeach()
+
+add_executable(finding-workflow FindingWorkflow.cpp
+  ../../src/pages/FindingVerificationDialog.cpp ../../src/pages/FindingVerificationDialog.h
+  ../../src/ApiClient.cpp ../../src/ApiClient.h)
+target_include_directories(finding-workflow PRIVATE ../../src)
+target_link_libraries(finding-workflow Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Network Qt5::Test)
+add_test(NAME finding-workflow COMMAND finding-workflow)
+set_tests_properties(finding-workflow PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 20)

@@ -100,6 +100,7 @@ export async function generatePayload({ category, target_type, technique_id, con
   // 5. 验证并标准化载荷结构
   if (generatedPayload?.error) return { ok: false, status: 422, error: `模型无法生成可用载荷：${String(generatedPayload.error).slice(0, 300)}` };
   const validation = validateGeneratedPayload(generatedPayload, target_type, findingContext?.target);
+  if(constraints?.required_tool_id && generatedPayload.tool_id!==constraints.required_tool_id)validation.push('生成工具与所选步骤不兼容');
   if (validation.length) return { ok: false, status: 422, error: `生成结果校验失败：${validation.join('；')}` };
 
   const payloadId = `ai_${category.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase().slice(0, 40)}_${randomUUID().slice(0, 8)}`;
