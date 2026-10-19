@@ -6,7 +6,6 @@
 
 #include "ApiClient.h"
 #include "UiUtil.h"
-#include "GlobalSearchDialog.h"
 #include "WsClient.h"
 #include "AppStyle.h"
 #include "widgets/ScanResultOverview.h"
@@ -541,51 +540,35 @@ int main(int argc, char **argv)
   window.m_dongleTimer->stop(); // Exercise lock transitions explicitly; never access hardware.
   window.m_ws->disconnectFromServer();
   window.show();
-  auto *search = window.findChild<QLineEdit*>("globalSearch");
-  verify(search && search->isEnabled(), "shell search is enabled");
-  auto openSearch = [&]() {
-    search->setText("fixture");
-    search->setFocus();
-    QTest::keyClick(search, Qt::Key_Return);
-    auto *dialog = window.findChild<GlobalSearchDialog*>();
-    verify(dialog && dialog->isVisible(), "Enter opens the search dialog");
-    return dialog;
-  };
-  auto activateResult = [&](int page) {
-    auto *dialog = openSearch();
-    auto *results = dialog->findChild<QListWidget*>("searchResults");
-    verify(awaitCondition([&]() { return results->count() == 2; }), "shell search loads both indexes");
-    int row = -1;
-    for (int i = 0; i < results->count(); ++i)
-      if (results->item(i)->data(Qt::UserRole).toJsonObject()["page"].toInt() == page) row = i;
-    verify(row >= 0, "requested result type exists");
-    results->setCurrentRow(row);
-    results->setFocus();
-    QTest::keyClick(results, Qt::Key_Return);
-    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-  };
-  activateResult(1);
-  verify(awaitCondition([&]() { return window.m_flowPage->m_selectedPipelineId == "B" && window.m_flowPage->m_overviewTab->m_identity->text().contains("B.invalid"); }), "search task opens exact task overview");
-  verify(window.m_stackWidget->currentIndex() == 1 && window.m_flowPage->m_stageTabs->currentIndex() == 0,
-    "task result selects overview in task module");
-  activateResult(5);
-  verify(awaitCondition([&]() { return window.m_flowPage->m_evalTab->m_taskResults->m_selectedReportId == "trace-B"; }),
-    "search report opens exact task report");
-  verify(window.m_flowPage->m_stageTabs->currentWidget() == window.m_flowPage->m_evalTab,
-    "report result selects results stage");
-  auto *lockedDialog = openSearch();
-  QPointer<GlobalSearchDialog> lockedGuard(lockedDialog);
+  verify(!window.findChild<QLineEdit*>("globalSearch") && !window.findChild<QPushButton*>("shellSettings"),
+    "header removes search and settings shortcuts");
+  auto *toggle = window.findChild<QPushButton*>("navigationToggle");
+  verify(toggle && window.m_navList->flow() == QListView::LeftToRight, "header has horizontal collapsible navigation");
+  window.resize(1024, 600);
+  QTest::qWait(100);
+  verify(window.m_navList->visualItemRect(window.m_navList->item(6)).right() < window.m_navList->viewport()->width(),
+    "all seven modules fit the narrow header");
+  for (int row = 0; row < 7; ++row) {
+    QTest::mouseClick(window.m_navList->viewport(), Qt::LeftButton, Qt::NoModifier,
+      window.m_navList->visualItemRect(window.m_navList->item(row)).center());
+    verify(window.m_stackWidget->currentIndex() == row, "horizontal module click selects matching page");
+  }
+  const int expandedHeight = window.m_stackWidget->height();
+  toggle->click();
+  QTest::qWait(50);
+  verify(!window.m_navList->isVisible() && window.m_stackWidget->height() > expandedHeight,
+    "collapse gives header space back to business page");
+  window.switchToPage(1);
+  verify(toggle->text().contains(QStringLiteral("测试任务")), "collapsed header follows programmatic navigation");
+  toggle->click();
+  verify(window.m_navList->isVisible() && window.m_navList->currentRow() == 1, "expand preserves selected module");
   window.setDongleLocked(true, "fixture lock");
-  verify(!search->isEnabled() && !lockedDialog->isVisible(), "lock disables entry and dismisses search");
-  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-  verify(lockedGuard.isNull(), "lock destroys search dialog safely");
+  verify(!window.m_navList->isEnabled(), "lock disables header navigation");
+  window.switchToPage(5);
+  verify(window.m_stackWidget->currentIndex() == 7, "locked navigation cannot leave lock page");
   window.setDongleLocked(false);
-  verify(search->isEnabled() && window.m_stackWidget->currentIndex() == 1, "unlock restores entry and module");
-  auto *escapeDialog = openSearch();
-  QPointer<GlobalSearchDialog> escapeGuard(escapeDialog);
-  QTest::keyClick(escapeDialog, Qt::Key_Escape);
-  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-  verify(escapeGuard.isNull(), "Escape destroys search with requests in flight");
+  verify(window.m_navList->isEnabled() && window.m_stackWidget->currentIndex() == 1,
+    "unlock restores selected module");
   QTest::qWait(100);
   bool readOnly = true;
   for (auto iterator = server.requests.cbegin(); iterator != server.requests.cend(); ++iterator)

@@ -1,6 +1,4 @@
 #include "MainWindow.h"
-#include "GlobalSearchDialog.h"
-#include <QShortcut>
 #include "ApiClient.h"
 #include "LoginDialog.h"
 #include "Theme.h"
@@ -29,7 +27,6 @@
 #include <QResizeEvent>
 #include <QTimer>
 #include <QPixmap>
-#include <QLineEdit>
 #include <QIcon>
 
 namespace {
@@ -71,9 +68,12 @@ void MainWindow::setupUI()
 
     auto *topBar = new QFrame(centralWidget);
     topBar->setObjectName("appTopBar");
-    topBar->setFixedHeight(Theme::TopBarHeight);
-    auto *topLayout = new QHBoxLayout(topBar);
-    topLayout->setContentsMargins(24, 0, 24, 0);
+    auto *headerLayout = new QVBoxLayout(topBar);
+    headerLayout->setContentsMargins(20, 10, 20, 8);
+    headerLayout->setSpacing(6);
+    auto *topLayout = new QHBoxLayout;
+    headerLayout->addLayout(topLayout);
+    topLayout->setContentsMargins(0, 0, 0, 0);
     topLayout->setSpacing(14);
     auto *brandIcon = new QLabel(topBar);
     brandIcon->setPixmap(QPixmap(":/images/app-icon.png").scaled(38, 38, Qt::KeepAspectRatio, Qt::SmoothTransformation));
@@ -89,58 +89,6 @@ void MainWindow::setupUI()
     brandText->addWidget(subtitle);
     topLayout->addLayout(brandText);
     topLayout->addStretch();
-    auto *globalSearch = new QLineEdit(topBar);
-    globalSearch->setObjectName("globalSearch");
-    globalSearch->setPlaceholderText(QStringLiteral("全局搜索 · 回车搜索"));
-    globalSearch->setMaxLength(120);
-    globalSearch->setClearButtonEnabled(true);
-    globalSearch->addAction(QIcon(":/icons/shell/search.svg"), QLineEdit::LeadingPosition);
-    globalSearch->setToolTip(QStringLiteral("搜索模块、任务和报告（Ctrl+K）"));
-    auto *searchShortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+K")), this);
-    connect(searchShortcut, &QShortcut::activated, globalSearch, [globalSearch]() {
-        if (globalSearch->isEnabled()) { globalSearch->setFocus(); globalSearch->selectAll(); }
-    });
-    connect(globalSearch, &QLineEdit::returnPressed, this, [this, globalSearch]() {
-        if (m_dongleLocked) return;
-        auto *dialog = new GlobalSearchDialog(m_api, m_modules, m_role, m_username, this);
-        dialog->setAttribute(Qt::WA_DeleteOnClose);
-        dialog->setWindowModality(Qt::WindowModal);
-        connect(dialog, &GlobalSearchDialog::resultActivated, this,
-            [this](int page, const QString &pipelineId, const QString &reportId) {
-                if (m_dongleLocked) return;
-                if (pipelineId.isEmpty()) { switchToPage(page); return; }
-                switchToPage(1);
-                if (reportId.isEmpty()) {
-                    m_flowPage->openTaskAnalysis(pipelineId);
-                    m_flowPage->switchToStageTab(0);
-                } else m_flowPage->openTaskReport(pipelineId, reportId);
-                m_flowPage->setReturnPage(page == 5 ? 5 : 0, page == 5 ? QStringLiteral("结果与报告") : QStringLiteral("工作台"));
-            });
-        dialog->show();
-        dialog->search(globalSearch->text());
-    });
-    globalSearch->setMinimumWidth(180);
-    globalSearch->setMaximumWidth(430);
-    topLayout->addWidget(globalSearch, 1);
-    topLayout->addStretch();
-    auto *notification = new QPushButton(topBar);
-    notification->setIcon(QIcon(":/icons/shell/bell.svg"));
-    notification->setFixedSize(36, 36);
-    notification->setProperty("quiet", true);
-    notification->setEnabled(false);
-    notification->setAccessibleName(QStringLiteral("通知暂未开放"));
-    notification->setStyleSheet(QStringLiteral("color:#64748b; font-size:12px;"));
-    notification->setToolTip(QStringLiteral("当前没有通知中心；页面状态提示与任务日志沿用已有接口。"));
-    topLayout->addWidget(notification);
-    auto *settings = new QPushButton(topBar);
-    settings->setObjectName("shellSettings");
-    settings->setProperty("quiet", true);
-    settings->setFixedSize(36, 36);
-    settings->setIcon(QIcon(":/icons/shell/settings.svg"));
-    settings->setToolTip(QStringLiteral("系统管理"));
-    settings->setAccessibleName(settings->toolTip());
-    connect(settings, &QPushButton::clicked, this, [this]() { switchToPage(6); });
-    topLayout->addWidget(settings);
     auto *userIcon = new QLabel(topBar);
     userIcon->setPixmap(QIcon(":/icons/shell/user.svg").pixmap(24, 24));
     topLayout->addWidget(userIcon);
@@ -153,15 +101,15 @@ void MainWindow::setupUI()
     topUser->setToolTip(topUser->text().toHtmlEscaped());
     topUser->setStyleSheet(QStringLiteral("color:#1e3a63; font-size:13px; font-weight:600;"));
     topLayout->addWidget(topUser);
+    auto *collapse = new QPushButton(QStringLiteral("收起导航"), topBar);
+    collapse->setObjectName("navigationToggle");
+    collapse->setProperty("quiet", true);
+    collapse->setCheckable(true);
+    collapse->setMinimumHeight(34);
+    topLayout->addWidget(collapse);
     rootLayout->addWidget(topBar);
 
-    auto *body = new QWidget(centralWidget);
-    auto *mainLayout = new QHBoxLayout(body);
-    mainLayout->setContentsMargins(0, 0, 0, 0);
-    mainLayout->setSpacing(0);
-
-    // Left: unified seven-module navigation. Task-internal pages stay under
-    // the 测试任务 parent and are not duplicated as top-level modules.
+    // Unified horizontal module navigation within the application header.
     m_modules = QStringList({
         QStringLiteral("工作台"),
         QStringLiteral("测试任务"),
@@ -172,18 +120,19 @@ void MainWindow::setupUI()
         QStringLiteral("系统管理")
     });
 
-    auto *sidebar = new QFrame(centralWidget);
-    sidebar->setObjectName("sidebar");
-    sidebar->setFixedWidth(Theme::NavigationWidth);
-    auto *sidebarLayout = new QVBoxLayout(sidebar);
-    sidebarLayout->setContentsMargins(8, 18, 8, 12);
-    sidebarLayout->setSpacing(10);
-
-    m_navList = new QListWidget(sidebar);
+    m_navList = new QListWidget(topBar);
     m_navList->setObjectName("navList");
     m_navList->setMinimumWidth(0);
+    m_navList->setFlow(QListView::LeftToRight);
+    m_navList->setWrapping(false);
+    m_navList->setResizeMode(QListView::Adjust);
+    m_navList->setMovement(QListView::Static);
+    m_navList->setSpacing(3);
+    m_navList->setFixedHeight(58);
     m_navList->setIconSize(QSize(Theme::IconSize, Theme::IconSize));
-    m_navList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_navList->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_navList->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_navList->setAccessibleName(QStringLiteral("主导航"));
     const QStringList navIcons = {"dashboard", "tasks", "topology", "analysis", "library", "reports", "settings"};
     for (int index = 0; index < m_modules.size(); ++index) {
         auto *item = new QListWidgetItem(m_modules.at(index), m_navList);
@@ -192,7 +141,7 @@ void MainWindow::setupUI()
         QIcon icon(":/icons/shell/" + navIcons.at(index) + ".svg");
         icon.addFile(":/icons/shell/" + navIcons.at(index) + "-selected.svg", QSize(), QIcon::Selected);
         item->setIcon(icon);
-        item->setSizeHint(QSize(0, 48));
+        item->setSizeHint(QSize(m_navList->fontMetrics().horizontalAdvance(m_modules.at(index)) + 56, 42));
     }
     m_navList->setCurrentRow(0);
     if (m_role != QStringLiteral("admin")) {
@@ -269,27 +218,23 @@ void MainWindow::setupUI()
     m_dongleLockPage = new DongleLockPage(this);
     m_stackWidget->addWidget(m_dongleLockPage);
 
-    sidebarLayout->addWidget(m_navList, 1);
-    auto *collapse = new QPushButton(sidebar);
-    collapse->setObjectName("navigationToggle");
-    collapse->setProperty("quiet", true);
-    collapse->setIcon(QIcon(":/icons/shell/collapse.svg"));
-    collapse->setToolTip(QStringLiteral("收起导航"));
-    collapse->setAccessibleName(QStringLiteral("收起导航"));
-    sidebarLayout->addWidget(collapse);
-    connect(collapse, &QPushButton::clicked, this, [this, sidebar, collapse]() {
-        const bool compact = sidebar->width() != Theme::NavigationCompactWidth;
-        sidebar->setFixedWidth(compact ? Theme::NavigationCompactWidth : Theme::NavigationWidth);
-        for (int i = 0; i < m_navList->count(); ++i)
-            m_navList->item(i)->setText(compact ? QString() : m_modules.at(i));
-        collapse->setIcon(QIcon(compact ? ":/icons/shell/expand.svg" : ":/icons/shell/collapse.svg"));
-        collapse->setToolTip(compact ? QStringLiteral("展开导航") : QStringLiteral("收起导航"));
-        collapse->setAccessibleName(collapse->toolTip());
+    headerLayout->addWidget(m_navList);
+    const auto updateNavigationToggle = [this, collapse]() {
+        const bool collapsed = collapse->isChecked();
+        collapse->setText(collapsed
+            ? QStringLiteral("展开导航 · %1").arg(m_modules.value(m_navList->currentRow()))
+            : QStringLiteral("收起导航"));
+        collapse->setToolTip(collapsed ? QStringLiteral("展开主导航") : QStringLiteral("收起主导航"));
+        collapse->setAccessibleName(collapse->text());
+    };
+    connect(collapse, &QPushButton::toggled, this, [this, updateNavigationToggle](bool collapsed) {
+        m_navList->setVisible(!collapsed);
+        updateNavigationToggle();
     });
+    connect(m_navList, &QListWidget::currentRowChanged, this, updateNavigationToggle);
+    updateNavigationToggle();
 
-    mainLayout->addWidget(sidebar);
-    mainLayout->addWidget(m_stackWidget, 1);
-    rootLayout->addWidget(body, 1);
+    rootLayout->addWidget(m_stackWidget, 1);
     setCentralWidget(centralWidget);
 
     // Toast overlay (positioned in top-right corner)
@@ -492,8 +437,6 @@ void MainWindow::setDongleLocked(bool locked, const QString &errorMessage) {
             m_pageBeforeDongleLock = current;
         }
         m_dongleLocked = true;
-        for (auto *dialog : findChildren<GlobalSearchDialog*>()) dialog->reject();
-        if (auto *search = findChild<QLineEdit*>("globalSearch")) search->setEnabled(false);
         if (m_dongleLockPage && m_stackWidget) {
             m_dongleLockPage->setErrorMessage(errorMessage);
             m_stackWidget->setCurrentWidget(m_dongleLockPage);
@@ -505,7 +448,6 @@ void MainWindow::setDongleLocked(bool locked, const QString &errorMessage) {
     }
 
     m_dongleLocked = false;
-    if (auto *search = findChild<QLineEdit*>("globalSearch")) search->setEnabled(true);
     if (m_navList) {
         m_navList->setEnabled(true);
     }
