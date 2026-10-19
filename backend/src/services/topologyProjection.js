@@ -1,3 +1,5 @@
+import { resultCategory } from './scanResultCatalog.js';
+import { verificationSummary } from './findingVerificationSummary.js';
 import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import { extractTopologyFromResults } from './topologyBuilder.js';
@@ -87,7 +89,7 @@ export function projectTopology(target, scans, results, flowId, owner, origin = 
     const host = address(data.host || data.ip || data.target || data.url) || targetHost;
     const node = nodeFor(host, provenance(row));
     if (!node) continue;
-    if (riskTypes.has(row.result_type)) {
+    if (riskTypes.has(row.result_type) && ['vulnerability','credential'].includes(resultCategory(row))) {
       risks.push({ findingId: row.id, nodeId: node.id, name: row.result_type === 'credential' ? '凭证相关候选（不展示凭证内容）'
         : text(data.title || data.name || data.finding || data.template || row.result_type), severity: text(row.severity || data.severity),
       status: 'candidate', provenance: provenance(row) });
@@ -382,6 +384,10 @@ export function pipelineTopology(db, pipeline) {
         }
       }
     }
+  }
+  for (const risk of graph.risks) {
+    const verification=verificationSummary(db,risk.findingId,pipeline.pipeline_id);
+    if(verification) risk.verification={...verification,status:verification.conclusion,runId:verification.run_id};
   }
   return annotateTaskGraph(db, pipeline, graph, results);
 }

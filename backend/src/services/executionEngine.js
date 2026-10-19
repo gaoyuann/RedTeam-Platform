@@ -78,7 +78,7 @@ function buildRecommendations(evidenceType, success) {
 }
 
 // ── Record evidence for a step ─────────────────────────────────────────
-function recordEvidence(db, runId, stepIndex, toolId, result, target, expectedMitre, payloadInfo, attemptId, sourceLinkage) {
+function recordEvidence(db, runId, stepIndex, toolId, result, target, expectedMitre, payloadInfo, attemptId, sourceLinkage, findingLinkage) {
   const evidenceType = EVIDENCE_TYPE_MAP[toolId] || 'tool_output';
   const mitreHits = [];
 
@@ -157,6 +157,7 @@ function recordEvidence(db, runId, stepIndex, toolId, result, target, expectedMi
       ...(structuredEvidence?.data || { summary: dataSummary, success: result.success }),
       success: result.success, exit_code: result.exitCode, error: result.error || null,
       ...(sourceLinkage ? {source_verification:sourceLinkage} : {}),
+      ...(findingLinkage ? {finding_verification:findingLinkage} : {}),
       ...(comparison ? {source_comparison:comparison} : {}),
       ...(diagnostics.length ? {source_diagnostics:{provenance:'untrusted_target_response',items:diagnostics,
         note:'响应中的诊断文本需核对目标日志、构建版本及源码关联，不能单独证明漏洞'}} : {}),
@@ -194,7 +195,12 @@ export async function executeRun(runId) {
   ).get(runId);
   if (!run) return { ok: false, error: 'Run not found' };
   if (run.status !== 'PENDING') return { ok: false, error: `Run status is ${run.status}, expected PENDING` };
-  const pipeline=db.prepare('SELECT * FROM pipelines WHERE run_id=? AND target=? AND created_by=?').get(runId,run.target,run.user_sub);
+  let findingVerification;
+  try { findingVerification=JSON.parse(run.plan_data || '{}').finding_verification; } catch {}
+  const pipeline=findingVerification
+    ? db.prepare('SELECT * FROM pipelines WHERE pipeline_id=? AND created_by=?').get(findingVerification.pipeline_id,run.user_sub)
+    : db.prepare('SELECT * FROM pipelines WHERE run_id=? AND target=? AND created_by=?').get(runId,run.target,run.user_sub);
+  if (findingVerification && !pipeline) return {ok:false,error:'验证任务归属失效',processStopped:true};
   const scope=pipeline ? taskScope(pipeline) : null;
 
   let sourceVerification;
@@ -202,7 +208,7 @@ export async function executeRun(runId) {
   const programAgent=sourceVerification?.agent?.enabled === true && run.engine_type!=='mechanical'
     ? createProgramAgentState(sourceVerification.context) : null;
   // Program testing uses typed JSON decisions; the generic XML ReAct path is separate.
-  let engineType = sourceVerification ? (programAgent ? 'react' : 'mechanical') : run.engine_type;
+  let engineType = findingVerification ? 'mechanical' : sourceVerification ? (programAgent ? 'react' : 'mechanical') : run.engine_type;
   if (!engineType || engineType === 'auto' || engineType === 'playbook') {
     engineType = determineEngineType(db);
   }
@@ -221,6 +227,7 @@ export async function executeRun(runId) {
   const controller = new AbortController();
   runControllers.set(runId, controller);
   let deadlineTimer;
+  let verificationStopConfirmed = true;
   try {
   db.prepare("UPDATE execution_runs SET status = 'RUNNING', engine_type = ?, stop_reason = NULL, updated_at = datetime('now') WHERE run_id = ?")
     .run(engineType, runId);
@@ -313,6 +320,7 @@ export async function executeRun(runId) {
       console.warn(`[executionEngine] Compilation error: ${err}`);
     }
   }
+  if (findingVerification && !compiled.ok) throw new Error('验证计划编译失败，未执行任何步骤');
   // Use compiled steps (even with warnings, non-BLOCKED steps can still run)
   const runnableSteps = compiled.compiledSteps.filter(s => !s.compile_status.startsWith('BLOCKED'));
   const blockedCount = compiled.compiledSteps.length - runnableSteps.length;
@@ -371,7 +379,7 @@ export async function executeRun(runId) {
   let reactStopped = false;
   const sessionDirectory = resolve(PROJECT_ROOT, 'data/output', `run-${Buffer.from(runId).toString('hex')}`);
 
-    const executionEnvironment = sourceVerification ? 'builtin' : await getEngine();
+    const executionEnvironment = sourceVerification || (findingVerification && runnableSteps.every(s=>s.tool_id==='target-request')) ? 'builtin' : await getEngine();
     // Use mutable steps array (ReAct may insert new steps)
     const mutableSteps = runnableSteps.map(step => ({ ...step, source: 'playbook' }));
     const removedSteps = compiled.compiledSteps.filter(step => step.compile_status.startsWith('BLOCKED'));
@@ -380,7 +388,7 @@ export async function executeRun(runId) {
     // Global run deadline — prevents runaway execution from hanging forever.
     // Default 4h, configurable via RUN_TIMEOUT_MS env var (min 1 minute).
     const _parsedDeadline = parseInt(process.env.RUN_TIMEOUT_MS || '', 10);
-    const RUN_DEADLINE_MS = sourceVerification ? Math.min(_parsedDeadline>=60000 ? _parsedDeadline : PROGRAM_AGENT_LIMITS.duration_ms,PROGRAM_AGENT_LIMITS.duration_ms)
+    const RUN_DEADLINE_MS = findingVerification ? Math.min(findingVerification.duration_ms || 300000,900000) : sourceVerification ? Math.min(_parsedDeadline>=60000 ? _parsedDeadline : PROGRAM_AGENT_LIMITS.duration_ms,PROGRAM_AGENT_LIMITS.duration_ms)
       : _parsedDeadline >= 60_000 ? _parsedDeadline : (4 * 60 * 60 * 1000);
     const runStartTime = Date.now();
     deadlineTimer = setTimeout(() => { timeoutAbort = true; controller.abort(); }, RUN_DEADLINE_MS);
@@ -474,6 +482,7 @@ export async function executeRun(runId) {
       } else {
         // Use adjusted args if blue team modified them
         if (preExecResult.adjustedArgs) {
+          if(findingVerification && JSON.stringify(args)!==JSON.stringify(preExecResult.adjustedArgs)) throw new Error('冻结验证计划不允许运行时改写参数');
           args = preExecResult.adjustedArgs;
         }
 
@@ -499,13 +508,14 @@ export async function executeRun(runId) {
             result = await runTool(step.tool_id, args, { timeout: getToolTimeout(step.tool_id), signal: controller.signal, target: run.target });
           }
         } catch (err) {
-          result = { success: false, exitCode: -1, stdout: '', stderr: err.message, executionMode: 'error' };
+          result = { success: false, exitCode: -1, stdout: '', stderr: err.message, executionMode: 'error', processStopped: findingVerification ? false : undefined };
         }
       }
 
       // Record step result
       // (DELETE first to handle retry case — adjust action may re-execute a step)
       if (abortFlags.get(runId)) { aborted = true; manualAbort = true; stopReason = '操作员手动中止'; }
+      if (findingVerification && result.processStopped === false) verificationStopConfirmed = false;
       if (timeoutAbort) { aborted = true; stopReason = '运行超时'; }
       const output = [result.stdout, result.stderr, result.error].filter(Boolean).join('\n').slice(0, MAX_OUTPUT_LENGTH);
       const source = step.source || 'react';
@@ -538,7 +548,9 @@ export async function executeRun(runId) {
           version: step.payload_data.version, source: step.payload_data.source,
           consumption: step.payload_data.consumption?.type } : null, attemptId,
         sourceVerification ? {...JSON.parse(step.evidence_config || '{"finding_ids":[]}'),scan_task_id:sourceVerification.scan_task_id,
-          source_versions:sourceVerification.reproducibility?.source_versions || [],deployment_version_verified:false} : null);
+          source_versions:sourceVerification.reproducibility?.source_versions || [],deployment_version_verified:false} : null,
+        findingVerification ? {...findingVerification, consumption:JSON.parse(step.evidence_config || '{}').consumption,
+          payload_version:JSON.parse(step.evidence_config || '{}').payload_version} : null);
       db.prepare(`INSERT INTO audit_log (type, execution_id, run_id, tool_id, args, user_role, target, execution_mode, success, exit_code, duration_ms, output_size, reasons, timestamp)
         VALUES ('tool_execution', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         String(attemptId), runId, step.tool_id, JSON.stringify(redactToolArgs(args, step.tool_id)), run.user_role || null, run.target,
@@ -996,6 +1008,12 @@ export async function executeRun(runId) {
     runControllers.delete(runId);
     runningRuns.delete(runId);
     abortFlags.delete(runId);
+    if (findingVerification) {
+      let summary = {};
+      try {summary=JSON.parse(db.prepare('SELECT final_summary FROM execution_runs WHERE run_id=?').get(runId)?.final_summary || '{}');} catch {}
+      summary.verification_stop_confirmed = verificationStopConfirmed;
+      db.prepare('UPDATE execution_runs SET final_summary=? WHERE run_id=?').run(JSON.stringify(summary),runId);
+    }
     const finalRun = db.prepare('SELECT status, final_summary, stop_reason, user_sub FROM execution_runs WHERE run_id = ?').get(runId);
     const wsEnd = getWsManager();
     if (wsEnd && finalRun && ['COMPLETED', 'FAILED', 'ABORTED'].includes(finalRun.status)) {

@@ -1,3 +1,14 @@
+// Only an unqualified enumeration of these ordinary methods is informational.
+// Additional methods or claims about unsafe behavior remain candidates for review.
+export function ordinaryHttpMethods(row) {
+  if(row.source_tool!=='nikto' || !['web_vuln','information'].includes(row.result_type))return false;
+  const data=parseResultData(row.result_data);
+  const finding=data?.finding ?? data?.legacy_text;
+  if(typeof finding!=='string')return false;
+  const match=finding.trim().match(/^Allowed HTTP Methods:\s*([A-Z]+(?:[\s,]+[A-Z]+)*)[.\s]*$/i);
+  if(!match)return false;
+  return match[1].split(/[\s,]+/).every(method=>['GET','POST','HEAD','OPTIONS'].includes(method.toUpperCase()));
+}
 // Raw records are not deduplicated vulnerability instances.
 const vulnerabilities = new Set(['vulnerability','web_vuln','sql_injection','misconfiguration','auth_finding','source_vuln','source_finding','program_finding']);
 const assets = new Set(['open_port','service_info','host_discovery','lan_host_discovery','network_context','network_link','lan_scope','http_probe','technology_detection','api_parameter','api_endpoint']);
@@ -5,6 +16,7 @@ export function resultCategory(row) {
   if (['scan_error','scan_warning'].includes(row.result_type)) return 'error';
   if (['raw_output','scan_evidence'].includes(row.result_type)) return 'evidence';
   if (row.result_type === 'credential') return 'credential';
+  if (ordinaryHttpMethods(row)) return 'information';
   if (assets.has(row.result_type)) return 'asset';
   if (vulnerabilities.has(row.result_type)) return ['info','inf'].includes(String(row.severity || '').trim().toLowerCase()) ? 'information' : 'vulnerability';
   if (row.result_type === 'information') return 'information';

@@ -31,6 +31,7 @@ set(SOURCES
     src/pages/DeployConfigPage.cpp
     src/pages/PlaybookPage.cpp
     src/pages/KnowledgeGraphPage.cpp
+    src/pages/FindingVerificationDialog.cpp
     src/pages/ScanPage.cpp
     src/pages/PayloadPage.cpp
     src/pages/ExecutionPage.cpp
@@ -77,6 +78,7 @@ set(HEADERS
     src/pages/DeployConfigPage.h
     src/pages/PlaybookPage.h
     src/pages/KnowledgeGraphPage.h
+    src/pages/FindingVerificationDialog.h
     src/pages/ScanPage.h
     src/pages/PayloadPage.h
     src/pages/ExecutionPage.h

@@ -14,6 +14,7 @@
 #include "MainWindow.h"
 #include "pages/FlowPage.h"
 #include "pages/ScanPage.h"
+#include "pages/FindingVerificationDialog.h"
 #include "pages/AnalysisPage.h"
 #include "pages/TaskAiPanel.h"
 #include "pages/TaskPlanPage.h"
@@ -189,6 +190,31 @@ int main(int argc, char **argv)
     verify(awaitCondition([&]() { return aggregate.m_aggregateRecords.size() == 235; }), "all 235 records are reachable without payloads");
     verify(!aggregate.m_moreResultsButton->isEnabled() && aggregate.m_resultHint->text().contains("235 / 235"), "list count and paging completion agree");
     verify(aggregate.m_statusLabel->text().contains("未执行") && aggregate.m_statusLabel->text().contains("部分完成"), "incomplete checks remain visible beside findings");
+    QJsonArray informationRows{QJsonObject{{"id",9999},{"result_type","web_vuln"},{"category","information"},{"severity","low"},{"source_tool","nikto"},{"result_data","{\"finding\":\"Allowed HTTP Methods: GET, POST\"}"}}};
+    aggregate.renderGroupedResults(informationRows);
+    auto *informationItem=aggregate.m_resultTree->topLevelItem(0)->child(0);
+    verify(informationItem->data(0,Qt::CheckStateRole).isNull(),"legacy informational Nikto finding has no verification checkbox");
+    verify(aggregate.m_resultOverview->findChild<QFrame*>("findingMetric")->findChild<QLabel*>("metricValue")->text()=="0","legacy informational Nikto finding is excluded from vulnerability count");
+    aggregate.renderGroupedResults(aggregate.m_aggregateRecords);
+    auto *firstFinding=aggregate.m_resultTree->topLevelItem(0)->child(0);
+    auto *secondFinding=aggregate.m_resultTree->topLevelItem(0)->child(1);
+    verify(firstFinding->flags().testFlag(Qt::ItemIsUserCheckable),"vulnerability rows expose checkboxes");
+    firstFinding->setCheckState(0,Qt::Checked);secondFinding->setCheckState(0,Qt::Checked);
+    aggregate.renderGroupedResults(aggregate.m_aggregateRecords);
+    firstFinding=aggregate.m_resultTree->topLevelItem(0)->child(0);
+    verify(firstFinding->checkState(0)==Qt::Checked,"checked findings survive result rerender");
+    aggregate.m_resultTree->itemDoubleClicked(firstFinding,1);
+    auto dialogs=aggregate.findChildren<FindingVerificationDialog*>();
+    verify(dialogs.size()==1,"double click opens finding verification directly");
+    verify(awaitCondition([&]{return aggregateServer.requests.value("POST /api/pipelines/A/verifications")==1;}),"double click prepares exactly the clicked finding");
+    delete dialogs.first();
+    aggregate.findChild<QPushButton*>("openCheckedFindings")->click();
+    dialogs=aggregate.findChildren<FindingVerificationDialog*>();
+    verify(dialogs.size()==1,"checked findings open a single verification window");
+    verify(awaitCondition([&]{return aggregateServer.requests.value("POST /api/pipelines/A/verifications")==3;}),"checkbox batch sends exactly two selected findings");
+    bool started=false;for(auto it=aggregateServer.requests.cbegin();it!=aggregateServer.requests.cend();++it)if(it.key().endsWith("/execute"))started=true;
+    verify(!started,"opening single or checked findings never executes tools");
+    delete dialogs.first();
     aggregate.m_resultCategory->setCurrentIndex(aggregate.m_resultCategory->findData("error"));
     verify(awaitCondition([&]() { return aggregate.m_aggregateRecords.size() == 1; }), "tool errors have their own queryable category");
     verify(aggregate.m_resultTree->topLevelItem(0)->child(0)->text(1).contains("fixture timeout"), "tool error reason is visible in the result list");
