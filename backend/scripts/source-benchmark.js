@@ -5,50 +5,33 @@ import {fileURLToPath} from 'node:url';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {createSourceSnapshot} from '../src/services/sourceSnapshot.js';
-import {sourceToolArgs} from '../src/services/sourceScanPolicy.js';
-import {parseCppcheck,parseFlawfinder} from '../src/services/sourceToolParsers.js';
-import {runTool} from '../src/tools/toolRunner.js';
 import {scoreSourceBenchmark} from '../src/services/sourceBenchmark.js';
 import {parseSourceDiagnostics} from '../src/services/sourceDiagnostics.js';
 
 const directory=fileURLToPath(new URL('../test/fixtures/source/',import.meta.url));
 const cases=JSON.parse(await readFile(join(directory,'benchmark.json'),'utf8'));
 const temporary=await mkdtemp(join(tmpdir(),'rt-benchmark-')),execute=promisify(execFile);
-const report={created_at:new Date().toISOString(),scope:'三个已知缺陷与三个修复对照，不代表真实项目精度',ai_evaluated:false,
+const report={created_at:new Date().toISOString(),scope:'三个已知缺陷与三个修复对照，不代表真实项目精度',cscan_evaluated:false,
   tools:{},diagnostics:[],errors:[]};
-const rawResults=new Map();
 try {
   const snapshot=await createSourceSnapshot({id:'benchmark',kind:'local',source_root:directory,architecture:process.arch},{snapshotRoot:temporary});
   report.source_versions=snapshot.files;
-  for(const tool of ['cppcheck','flawfinder']) {
-    const result=await runTool(tool,sourceToolArgs(tool),{sourceDir:snapshot.sourceDir,timeout:120000});
-    rawResults.set(tool,result);
-    if(!result.success) {report.errors.push({tool,error:result.error});continue;}
-    const rows=(tool==='cppcheck'?parseCppcheck:parseFlawfinder)(result.stdout+'\n'+result.stderr);
-    const findings=rows.map(row=>({...row.result_data,file:row.result_data.file.replace('/src/project/','').replace(snapshot.sourceDir+'/','')}));
-    report.tools[tool]=scoreSourceBenchmark(findings,cases);
-    report.tools[tool].findings=findings.map(({file,line,cwe,rule})=>({file,line,cwe,rule}));
-  }
-  if(process.argv.includes('--ai')) {
-    // A temporary database requires explicit environment configuration, never the production DB.
-    const {getDb,closeDb}=await import('../src/db/connection.js');
-    const {auditSources}=await import('../src/services/sourceAudit.js');
-    const db=getDb(':memory:');
-    try {
-      db.exec('CREATE TABLE system_config(category TEXT,config_key TEXT,config_value TEXT); CREATE TABLE scan_results(id INTEGER PRIMARY KEY,scan_task_id TEXT,result_type TEXT,result_data TEXT,severity TEXT,source_tool TEXT,captured_at TEXT); CREATE TABLE source_audits(scan_task_id TEXT PRIMARY KEY,snapshot_id TEXT,connection_id TEXT,manifest TEXT,analysis TEXT,created_at TEXT);');
-      await auditSources({scan_task_id:'benchmark',target:'http://127.0.0.1:9/'},{db,
-        parameters:{source_url:'/fixture/',input_kind:'source',ai_batches:24},snapshot:async()=>snapshot,
-        runTool:async tool=>rawResults.get(tool),
-        parseResults:(type,output)=>(type==='source_scan_cppcheck'?parseCppcheck:parseFlawfinder)(output)});
-      const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
-      const findings=db.prepare("SELECT result_data FROM scan_results WHERE result_type='source_finding'").all()
-        .map(row=>JSON.parse(row.result_data)).filter(finding=>finding.tools.includes('source-ai'));
-      report.ai={primary:scoreSourceBenchmark(findings,cases),after_counter_review:scoreSourceBenchmark(findings.filter(finding=>finding.counter_review?.verdict!=='unlikely'),cases),
-        coverage,conclusion:'这是模型候选筛选指标，未复核/条件未知的候选仍算告警，不能据此声称已验证漏洞'};
-      report.ai_evaluated=coverage.ai_complete;
-      if(!coverage.ai_complete) report.errors.push({tool:'source-ai',error:'模型审阅或反证复核未完整完成，AI指标不能用作完整测评'});
-    } finally {closeDb();}
-  }
+  // Use exactly the CScan-only production scanner with an isolated database.
+  const {getDb,closeDb}=await import('../src/db/connection.js');
+  const {auditSources}=await import('../src/services/sourceAudit.js');
+  const db=getDb(':memory:');
+  try {
+    db.exec('CREATE TABLE scan_results(id INTEGER PRIMARY KEY,scan_task_id TEXT,result_type TEXT,result_data TEXT,severity TEXT,source_tool TEXT,captured_at TEXT); CREATE TABLE source_audits(scan_task_id TEXT PRIMARY KEY,snapshot_id TEXT,connection_id TEXT,manifest TEXT,analysis TEXT,created_at TEXT);');
+    await auditSources({scan_task_id:'benchmark',target:'http://127.0.0.1:9/'},{db,
+      parameters:{source_url:'/fixture/',input_kind:'source'},snapshot:async()=>snapshot,
+      runTool:()=>{throw new Error('CScan benchmark does not use local scan tools');}});
+    const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
+    const findings=db.prepare("SELECT result_data FROM scan_results WHERE result_type='source_finding'").all().map(row=>JSON.parse(row.result_data));
+    report.cscan={score:scoreSourceBenchmark(findings,cases),coverage,
+      conclusion:'CScan 候选筛选指标，不代表运行时已验证漏洞或真实项目检出率'};
+    report.cscan_evaluated=coverage.cscan_complete;
+    if(!coverage.cscan_complete) report.errors.push({tool:'cscan',error:'CScan 分析未完整完成，指标不能用作完整测评'});
+  } finally {closeDb();}
   if(process.argv.includes('--diagnostics')) {
     // Only these checked-in fixtures and fixed wrappers are compiled. Never uploaded source.
     const calls={'bounds-vulnerable':'overflow()', 'bounds-fixed':'copy_input(buffer,sizeof(buffer),"ok")',

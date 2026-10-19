@@ -1,3 +1,4 @@
+import {cscanFixture} from './helpers/cscanFixture.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises';
@@ -156,31 +157,14 @@ test('benchmark metrics report missed defects and fixed-version warnings separat
   assert.equal(scoreSourceBenchmark([{file:'bad.c',line:5,cwe:'CWE-999'}],[{file:'bad.c',line:5,vulnerable:true,cwe:'CWE-120'}]).false_negative,1);
 });
 
-test('benchmark AI option evaluates actual frozen tools with bounded model protocol and isolated database',
-  {skip:process.env.SOURCE_TEST_SAST!=='1'},async t=>{
-  const directory=await mkdtemp(join(tmpdir(),'rt-model-benchmark-'));t.after(()=>rm(directory,{recursive:true,force:true}));
-  let modelCalls=0;
-  const server=http.createServer(async(req,res)=>{
-    let body='';for await(const chunk of req) body+=chunk;
-    const messages=JSON.parse(body).messages,payload=JSON.parse(messages[1].content);modelCalls++;
-    let result;
-    if(messages[0].content.includes('独立的源码反证复核员')) result={reviews:payload.candidates.map(item=>({finding_id:item.finding_id,
-      assessment:{...assessment,reason:'Fixture review remains subject to runtime linkage',citations:[{...cite,file:item.finding.file,start_line:item.finding.start_line,end_line:item.finding.start_line}]}}))};
-    else {
-      const file=payload.document.file,lines={'vulnerable/bounds.c':4,'vulnerable/null.c':3,'vulnerable/lifetime.cpp':4};
-      result={findings:lines[file] ? [{file,start_line:lines[file],title:'Controlled fixture candidate',reason:'Known fixture diagnostic site',severity:'high',
-        cwe:({'vulnerable/bounds.c':'CWE-120','vulnerable/null.c':'CWE-476','vulnerable/lifetime.cpp':'CWE-416'})[file],
-        assessment:{...assessment,citations:[{...cite,file,start_line:lines[file],end_line:lines[file]}]}}] : []};
-    }
-    res.setHeader('content-type','application/json');res.end(JSON.stringify({choices:[{message:{content:JSON.stringify(result)}}]}));
-  });
-  server.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
-  t.after(()=>new Promise(resolve=>server.close(resolve)));
+test('benchmark uses the CScan protocol and isolated database without local scan models',async t=>{
+  const directory=await mkdtemp(join(tmpdir(),'rt-cscan-benchmark-'));t.after(()=>rm(directory,{recursive:true,force:true}));
+  const fixture=await cscanFixture(t,[['bounds.c',4,'CWE-120'],['null.c',3,'CWE-476'],['lifetime.cpp',4,'CWE-416']].map(([name,line,cwe])=>({
+    file:'vulnerable/'+name,start_line:line,title:'Controlled fixture candidate',reason:'Test-owned diagnostic site',severity:'high',cwe})));
   const output=join(directory,'report.json');
-  await promisify(execFile)(process.execPath,[fileURLToPath(new URL('../scripts/source-benchmark.js',import.meta.url)),'--ai','--output',output],
-    {timeout:30000,maxBuffer:2*1024*1024,env:{...process.env,LLM_API_KEY:'fixture',LLM_BASE_URL:'http://127.0.0.1:'+server.address().port,LLM_MODEL:'fixture'}});
+  await promisify(execFile)(process.execPath,[fileURLToPath(new URL('../scripts/source-benchmark.js',import.meta.url)),'--output',output],
+    {timeout:30000,maxBuffer:2*1024*1024,env:{...process.env,...fixture.env,LLM_API_KEY:''}});
   const report=JSON.parse(await readFile(output,'utf8'));
-  assert.equal(report.ai_evaluated,true);assert.equal(report.ai.primary.true_positive,3);assert.equal(report.ai.primary.false_positive,0);
-  assert.ok(report.ai.coverage.ai_counter_review.reviewed>0);assert.equal(report.ai.coverage.ai_model_calls,modelCalls);
-  assert.equal(report.errors.length,0);
+  assert.equal(report.cscan_evaluated,true);assert.equal(report.cscan.score.true_positive,3);assert.equal(report.cscan.score.false_positive,0);
+  assert.equal(fixture.counts.created,1);assert.equal(report.cscan.coverage.engine,'cscan');assert.equal(report.errors.length,0);
 });

@@ -201,7 +201,7 @@ async function runPipelineScan(db, pipeline) {
         db.prepare(
           `INSERT INTO scan_tasks (scan_task_id, target, scan_type, target_class, parameters, created_by, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)`
-        ).run(scanTaskId, scanTarget, scanType, resolveTargetProfile(scanTarget).target_class, JSON.stringify(isProgramScan(scanType) ? {connection_id:config.source_connection_id || null,source_url:config.source_url || null,ai_analysis:true,input_kind:config.input_kind || 'runtime',runtime_target:config.runtime_target || null} : scanType === 'port_scan' ? { discover_topology: true, pipeline_id:pipelineId } : {}), pipeline.created_by || 'pipeline', now);
+        ).run(scanTaskId, scanTarget, scanType, resolveTargetProfile(scanTarget).target_class, JSON.stringify(isProgramScan(scanType) ? {connection_id:config.source_connection_id || null,source_url:config.source_url || null,input_kind:config.input_kind || 'runtime',runtime_target:config.runtime_target || null} : scanType === 'port_scan' ? { discover_topology: true, pipeline_id:pipelineId } : {}), pipeline.created_by || 'pipeline', now);
 
         if(hasScanIntegrity(db)) db.prepare('UPDATE scan_tasks SET pipeline_id=? WHERE scan_task_id=?').run(pipelineId,scanTaskId);
         if(planned.check_id) markCheck(db,planned.check_id,'running',{scanTaskId});

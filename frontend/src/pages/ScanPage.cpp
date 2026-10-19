@@ -245,6 +245,17 @@ QString ScanPage::formatResultData(const QString &json, const QString &resultTyp
         obj["error"].isNull() ? QString("响应已保存（不代表漏洞验证成功）") : obj["error"].toString(),
         obj["response"].toString().left(300));
     if (resultType == "source_coverage") {
+      if (obj["engine"].toString() == "cscan" && obj["source_read"].toBool()) {
+        const auto flow = obj["cscan"].toObject();
+        const QMap<QString,QString> states={{"preparing","准备源码"},{"submitting","正在提交"},{"created","已创建"},
+          {"running","扫描中"},{"waiting","等待输入"},{"finished","扫描结束"},{"error","扫描失败"},
+          {"report_error","报告导入失败"},{"timed_out","扫描超时"},{"cancelled","已取消"},{"interrupted","服务重启中断"}};
+        QStringList errors;for(const auto &error:obj["source_errors"].toArray()) errors.append(error.toString());
+        return QString("CScan 扫描：%1；Flow %2；已采集 %3 个源码文件，服务报告已审阅 %4 个。%5\n%6\n%7")
+          .arg(states.value(flow["state"].toString(),flow["state"].toString()), flow["flow_id"].toString()).arg(obj["files"].toInt())
+          .arg(obj["reviewed_files"].toArray().size())
+          .arg(obj["cscan_complete"].toBool() ? "快照分析完成。" : "分析未完成或存在覆盖缺口。", obj["note"].toString(),errors.join("；"));
+      }
       if (!obj["source_read"].toBool()) {
         QStringList errors;for(const auto &error:obj["source_errors"].toArray()) errors.append(error.toString());
         if(!errors.isEmpty()) return "源码读取失败："+errors.join("；")+"。本次未完成源码审阅。";
@@ -1025,16 +1036,7 @@ void ScanPage::setupUI() {
     auto *browseSource = new QPushButton("浏览远端目录…");
     h->addWidget(browseSource, 3, 2);
     connect(browseSource, &QPushButton::clicked, this, &ScanPage::browseSourceDirectory);
-    m_sourceAiCheck = new QCheckBox("读取源码后使用 AI 分析代码");
-    m_sourceAiCheck->setChecked(true);
-    h->addWidget(m_sourceAiCheck, 4, 1);
-    m_sourceAiBatches = new QSpinBox;
-    m_sourceAiBatches->setRange(1, 24);
-    m_sourceAiBatches->setValue(12);
-    m_sourceAiBatches->setPrefix("AI 分析批次：");
-    m_sourceAiBatches->setToolTip("优先审查静态告警和危险操作；增加批次可扩大源码覆盖");
-    h->addWidget(m_sourceAiBatches, 4, 2);
-    connect(m_sourceAiCheck, &QCheckBox::toggled, m_sourceAiBatches, &QSpinBox::setEnabled);
+    h->addWidget(new QLabel("源码扫描由 CScan 独立服务执行，完成后可选择发现生成攻击测试预案。"), 4, 1, 1, 2);
     m_sourceAdaptiveCheck = new QCheckBox("生成预案时允许 Agent 根据执行证据补充验证请求");
     m_sourceAdaptiveCheck->setChecked(true);
     h->addWidget(m_sourceAdaptiveCheck, 5, 1, 1, 2);
@@ -1802,8 +1804,6 @@ void ScanPage::onCreateScan() {
     if(!sourceDirectory.isEmpty()) parameters["source_url"]=sourceDirectory;
     parameters["input_kind"] = m_programInputKind->currentData().toString();
     if (!m_programRuntimeInput->text().trimmed().isEmpty()) parameters["runtime_target"] = m_programRuntimeInput->text().trimmed();
-    parameters["ai_analysis"] = m_sourceAiCheck->isChecked();
-    parameters["ai_batches"] = m_sourceAiBatches->value();
   }
   if (!parameters.isEmpty()) body["parameters"] = parameters;
 
