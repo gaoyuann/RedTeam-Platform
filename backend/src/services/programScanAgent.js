@@ -18,6 +18,8 @@ HTTP/TCP请求只能访问给定运行入口的同协议、主机和端口；源
 // A real observe/decide/tool/feedback loop, using the existing model and tool runner.
 export async function scanProgramAgent(task, context, {llm=callLlm} = {}) {
   const {db,parameters={},signal} = context;
+  // Source scanning, including its agent, belongs entirely to CScan.
+  if(parameters.source_url || parameters.connection_id) return auditSources(task,context);
   const started=Date.now(), done=new Set(), history=[];
   const outcomes=[];
   let count=0,finished=false;
@@ -39,9 +41,7 @@ export async function scanProgramAgent(task, context, {llm=callLlm} = {}) {
     done.add(action);history.push({action,reason:'实际检查用户提供的输入，作为后续方法选择依据'});
     store('program_agent_step',{turn:0,action,reason:'输入检查；保留实际结果和覆盖缺口'});
   };
-  if(parameters.source_url || parameters.connection_id) {
-    await required('source',()=>auditSources(task,{...context,parameters,llm}));
-  } else if(runtime) {
+  if(runtime) {
     await required('inspect',()=>scanProgram({...task,target:runtime},{...context,tools:[]}));
   }
   for(let turn=0;turn<PROGRAM_SCAN_LIMITS.decisions;turn++) {

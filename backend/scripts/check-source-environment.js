@@ -5,10 +5,11 @@ import {constants} from 'node:fs';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {getEngine} from '../src/tools/containerEngine.js';
+import {cscanConfig,createCscanClient} from '../src/services/cscanClient.js';
 import {IMAGE_MAP} from '../src/tools/toolRunner.js';
 
-// Inspect the same engine/account as the backend. Never pull/build images,
-// contact a target/model, read credentials, or modify runtime data.
+// Read-only preflight. --api additionally authenticates to CScan without creating a Flow.
+// Never pull/build images, contact a target/model, or modify runtime data.
 const execute=promisify(execFile),args=process.argv.slice(2);
 function option(name,fallback) {
   const index=args.indexOf(name);
@@ -19,8 +20,8 @@ function option(name,fallback) {
 const sourceKind=option('--source-kind','http');
 if(!['http','local','ssh'].includes(sourceKind)) throw new Error('--source-kind must be http, local, or ssh');
 const projectRoot=fileURLToPath(new URL('../../',import.meta.url));
-const engine=await getEngine(),architecture={x64:'amd64',arm64:'arm64'}[process.arch] || process.arch;
-const report={checked_at:new Date().toISOString(),scope:'source collection and static tool environment; model and target execution require separate validation',
+const engine=args.includes('--all-images') ? await getEngine() : null,architecture={x64:'amd64',arm64:'arm64'}[process.arch] || process.arch;
+const report={checked_at:new Date().toISOString(),scope:'CScan source input and report directories; --api checks authentication without submitting a scan',
   node:process.version,engine,architecture,source_kind:sourceKind,checks:[],optional_images:[],missing:[]};
 async function command(binary,argv) {
   try {const result=await execute(binary,argv,{timeout:30000,maxBuffer:65536});return {passed:true,output:(result.stdout || result.stderr).trim().slice(0,250)};}
@@ -47,23 +48,26 @@ for(const directory of ['data','data/output','data/source-scan/snapshots']) {
     await access(path,constants.W_OK | constants.X_OK);check(directory,true,directory+' has a writable destination');
   } catch {check(directory,false,directory+' cannot be created or written by the backend account');}
 }
-if(engine!=='host') {
-  const image=await command(engine,['image','inspect','rt-sast-c:latest','--format','{{.Id}} {{.Architecture}} {{.Os}}']);
-  report.sast_image=image.output || null;
-  check('sast_image',image.passed,image.passed?image.output:'Missing rt-sast-c:latest; build containers/sast-c or load a matching offline image into '+engine);
-  if(image.passed) {
-    const actual=image.output.split(' ')[1];check('sast_architecture',actual===architecture,'rt-sast-c architecture must match '+architecture+' (found '+actual+')');
-    for(const tool of ['cppcheck','flawfinder']) {
-      const result=await command(engine,['run','--rm','--pull=never','--network=none','--read-only','--cap-drop=ALL','--security-opt=no-new-privileges','rt-sast-c:latest',tool,'--version']);
-      check(tool,result.passed,result.passed?result.output:tool+' cannot start in rt-sast-c');
-    }
+try {
+  const config=cscanConfig();
+  for(const [name,path,permissions] of [['cscan_sources',config.sourcesDir,constants.W_OK | constants.X_OK],
+    ['cscan_reports',config.workDir,constants.R_OK | constants.X_OK]]) {
+    try {await access(path,permissions);check(name,(await stat(path)).isDirectory(),name+' accessible');}
+    catch {check(name,false,name+' inaccessible; configure the shared CScan workspace for the backend account');}
   }
-  if(args.includes('--all-images')) for(const name of [...new Set(Object.values(IMAGE_MAP))].filter(name=>!['builtin','rt-sast-c'].includes(name))) {
+  let credentials=!!config.token;
+  if(!credentials && config.tokenFile) try {await access(config.tokenFile,constants.R_OK);credentials=true;} catch {}
+  check('cscan_credentials',credentials,'CSCAN_TOKEN_FILE or CSCAN_API_TOKEN must be available to the backend');
+  if(args.includes('--api')) {
+    try {const client=await createCscanClient(config);await client.health();check('cscan_api',true,'CScan GraphQL authentication succeeded');}
+    catch(error) {check('cscan_api',false,error.message);}
+  }
+} catch(error) {check('cscan_config',false,error.message);}
+if(args.includes('--all-images') && engine!=='host') {
+  for(const name of [...new Set(Object.values(IMAGE_MAP))].filter(name=>!['builtin','rt-sast-c'].includes(name))) {
     const result=await command(engine,['image','inspect',name+':latest','--format','{{.Id}} {{.Architecture}}']);
     report.optional_images.push({image:name+':latest',available:result.passed,identity:result.output || null});
   }
-} else for(const tool of ['cppcheck','flawfinder']) {
-  const result=await command(tool,['--version']);check(tool,result.passed,result.passed?result.output:'Host execution requires '+tool+' on PATH');
 }
 report.passed=report.missing.length===0;
 const output=JSON.stringify(report,null,2)+'\n';

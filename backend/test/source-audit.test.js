@@ -13,7 +13,8 @@ import {createSourceContextIndex,relatedSourceContext} from '../src/services/sou
 import {buildProgramContext} from '../src/services/programAgent.js';
 import {normalizeSourceFinding} from '../src/services/sourceScanFindings.js';
 import {runTargetRequest,parseTargetRequest} from '../src/tools/targetRequest.js';
-import {auditSources} from '../src/services/sourceAudit.js';
+import {auditSources,recoverCscanAudits} from '../src/services/sourceAudit.js';
+import {parseCscanMarkdown} from '../src/services/cscanReport.js';
 import {generateSourceVerification,recordSourceVerification} from '../src/services/sourceVerification.js';
 import {parseResults} from '../src/services/scanExecutor.js';
 import {runTool} from '../src/tools/toolRunner.js';
@@ -47,6 +48,8 @@ function auditDb(t) {
   db.exec("CREATE TABLE scan_results(id INTEGER PRIMARY KEY,scan_task_id TEXT,result_type TEXT,result_data TEXT,severity TEXT,source_tool TEXT,captured_at TEXT); CREATE TABLE source_audits(scan_task_id TEXT PRIMARY KEY,snapshot_id TEXT,connection_id TEXT,manifest TEXT,analysis TEXT,created_at TEXT);");
   t.after(()=>db.close()); return db;
 }
+const cscanReport=(source,findings=[])=>({snapshot_id:source.snapshot_id,flow_id:'12',findings,
+  coverage:{reviewed_files:source.documents.map(doc=>doc.path),omitted_files:[],complete:true}});
 const args=spec=>[JSON.stringify(spec)];
 
 test('source projects bind exact deployment endpoints and do not expose credential paths',async t=>{
@@ -123,7 +126,7 @@ test('task-supplied HTTP directory is read by the audit without a configured sou
   }));
   const db=auditDb(t), snapshotRoot=await temp(t), target=`http://127.0.0.1:${port}/app/`;
   const result=await auditSources({scan_task_id:'custom',target},{db,
-    parameters:{source_url:'/custom/',ai_analysis:false},
+    parameters:{source_url:'/custom/',ai_analysis:false},cscan:async source=>cscanReport(source),
     runTool:async()=>({success:true,stdout:'{}',stderr:''}),parseResults:()=>[],
     snapshot:(connection,options)=>createSourceSnapshot(connection,{...options,snapshotRoot})});
   assert.equal(result.outcomes.find(o=>o.tool_id==='source-reader').success,true);
@@ -197,74 +200,51 @@ test('remote-only audits never claim source coverage, and source failures retain
   assert.equal(failedCoverage.source_errors.length,1);
 });
 
-test('tool and model exceptions preserve the frozen snapshot and explicit incomplete coverage',async t=>{
-  const db=auditDb(t),path=await temp(t),config=join(path,'config.json');
-  const previous=process.env.SOURCE_SCAN_CONNECTIONS_FILE;
-  process.env.SOURCE_SCAN_CONNECTIONS_FILE=config;
-  t.after(()=>{if(previous===undefined) delete process.env.SOURCE_SCAN_CONNECTIONS_FILE;else process.env.SOURCE_SCAN_CONNECTIONS_FILE=previous;});
-  await writeFile(config,JSON.stringify([{id:'p',kind:'local',source_root:path,targets:['http://127.0.0.1:8090/']}]));
-  const document={path:'main.c',content:'int main(){return 0;}',start_line:1,end_line:1,sha256:'fixture'};
+test('CScan exceptions preserve the frozen snapshot and explicit incomplete coverage without local fallback',async t=>{
+  const db=auditDb(t),document={path:'main.c',content:'int main(){return 0;}',start_line:1,end_line:1,sha256:'fixture'};
   const calls=[];
   const result=await auditSources({scan_task_id:'exceptions',target:'http://127.0.0.1:8090/'},{db,
-    parameters:{connection_id:'p'},
-    snapshot:async()=>({snapshot_id:'frozen',connection_id:'p',files:[{path:'main.c'}],skipped:[],documents:[document],sourceDir:path}),
-    runTool:async tool=>{calls.push(tool);if(tool==='cppcheck') throw new Error('fixture tool unavailable');return {success:true,stdout:'{}'};},
-    parseResults:()=>{throw new Error('fixture malformed tool output');},
-    llm:async()=>{throw new Error('fixture model disconnected');}});
-  assert.deepEqual(calls,['target-request','cppcheck','flawfinder']);
-  assert.equal(result.outcomes.filter(o=>['cppcheck','flawfinder','source-ai'].includes(o.tool_id) && !o.success).length,3);
+    parameters:{source_url:'/code/'},
+    snapshot:async()=>({snapshot_id:'frozen',connection_id:'p',files:[{path:'main.c'}],skipped:[],documents:[document],sourceDir:'/fixture'}),
+    runTool:async tool=>{calls.push(tool);return {success:true,stdout:'{}'};},
+    cscan:async(source,{onProgress})=>{onProgress({flow_id:'8',state:'running'});throw new Error('CScan API 请求超时');},
+    llm:()=>assert.fail('local source model must not run')});
+  assert.deepEqual(calls,['target-request']);
+  assert.equal(result.outcomes.find(o=>o.tool_id==='cscan').success,false);
   const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
-  assert.equal(coverage.snapshot_id,'frozen');assert.equal(coverage.ai_complete,false);
-  assert.deepEqual(coverage.ai_errors,['fixture model disconnected']);
-  assert.equal(coverage.static_tools.every(item=>!item.success),true);
+  assert.equal(coverage.snapshot_id,'frozen');assert.equal(coverage.cscan_complete,false);
+  assert.equal(coverage.cscan.flow_id,'8');assert.deepEqual(coverage.source_errors,['CScan API 请求超时']);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='source_coverage'").get().n,1);
 });
 
-test('audit accepts cited findings but rejects invented locations and marks coverage incomplete',async t=>{
-  const db=auditDb(t), path=await temp(t), config=join(path,'config.json');
-  const previous=process.env.SOURCE_SCAN_CONNECTIONS_FILE;
-  process.env.SOURCE_SCAN_CONNECTIONS_FILE=config;
-  t.after(()=>{if(previous===undefined) delete process.env.SOURCE_SCAN_CONNECTIONS_FILE;else process.env.SOURCE_SCAN_CONNECTIONS_FILE=previous;});
-  await writeFile(config,JSON.stringify([{id:'p',kind:'local',source_root:path,targets:['http://127.0.0.1:8090']}]));
-  const document={path:'a.c',content:'void f(char *s) {\n char b[8]; strcpy(b,s);\n}',start_line:1,end_line:3,sha256:'hash'};
+test('CScan accepts cited findings but rejects invented locations and marks coverage incomplete',async t=>{
+  const db=auditDb(t),document={path:'a.c',content:'void f(char *s) {\n char b[8]; strcpy(b,s);\n}',start_line:1,end_line:3,sha256:'hash'};
   let calls=0;
-  const result=await auditSources({scan_task_id:'audit',target:'http://127.0.0.1:8090'},{
-    db,parameters:{connection_id:'p'},parseResults,
-    snapshot:async()=>({snapshot_id:'version',connection_id:'p',architecture:'arm64',files:[{path:'a.c'}],skipped:[],documents:[document],sourceDir:path}),
-    runTool:async tool=>({success:true,stdout:tool==='target-request'?'{"connected":true,"response":"OK"}':''}),
-    llm:async messages=>{
-      calls++;
-      if(calls===2) {
-        assert.match(messages.at(-1).content,/imaginary.c/);
-        return {ok:true,content:JSON.stringify({findings:[{file:'a.c',start_line:2,title:'unchecked copy',reason:'no length check',cwe:'CWE-120'}]})};
-      }
-      return {ok:true,content:JSON.stringify({findings:[
+  const result=await auditSources({scan_task_id:'audit',target:'http://127.0.0.1:8090/'},{db,
+    parameters:{source_url:'/code/'},
+    snapshot:async()=>({snapshot_id:'version',connection_id:'p',files:[{path:'a.c'}],skipped:[],documents:[document],sourceDir:'/fixture'}),
+    runTool:async()=>({success:true,stdout:'{}'}),
+    cscan:async source=>{calls++;return cscanReport(source,[
       {file:'a.c',start_line:2,title:'unchecked copy',reason:'no length check',cwe:'CWE-120'},
-      {file:'imaginary.c',start_line:1,title:'fake',reason:'fake'}
-    ]})};}
-  });
+      {file:'imaginary.c',start_line:1,title:'fake',reason:'fake'}]);}});
   assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='source_finding'").get().n,1);
   const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
-  assert.equal(coverage.ai_rejected_findings,1);assert.equal(coverage.ai_complete,false);
-  assert.equal(calls,2);assert.equal(coverage.ai_correction_attempts,1);assert.equal(coverage.ai_corrected_findings,1);
-  assert.equal(coverage.ai_rejected_details[0].file,'imaginary.c');
-  assert.match(coverage.ai_rejected_details[0].reason,/未读取/);
-  assert.ok(result.outcomes.some(o=>!o.success));
+  assert.equal(calls,1);assert.equal(coverage.rejected_findings.length,1);assert.equal(coverage.cscan_complete,false);
+  assert.match(coverage.rejected_findings[0].reason,/未读取/);assert.ok(result.outcomes.some(o=>!o.success));
 });
 
-test('invalid AI citations cannot trigger unlimited corrections or enter accepted findings',async t=>{
-  const db=auditDb(t),document={path:'main.c',content:Array.from({length:250},()=> 'int fixture;').join('\n'),
-    start_line:1,end_line:250,sha256:'fixture'};
-  let calls=0;
-  await auditSources({scan_task_id:'budget',target:'http://127.0.0.1:8090/'},{db,
-    parameters:{source_url:'/code/',ai_batches:3},parseResults:()=>[],
-    runTool:async()=>({success:true,stdout:'{}'}),
+test('concurrent or repeated source audits never duplicate a remote CScan submission',async t=>{
+  const db=auditDb(t),document={path:'main.c',content:'int fixture;',start_line:1,end_line:1,sha256:'fixture'};
+  const task={scan_task_id:'duplicate',target:'http://127.0.0.1:8090/'};let calls=0;
+  const context={db,parameters:{source_url:'/code/',input_kind:'source'},
     snapshot:async()=>({snapshot_id:'frozen',connection_id:'fixture',files:[{path:'main.c'}],skipped:[],documents:[document],sourceDir:'/fixture'}),
-    llm:async()=>{calls++;return {ok:true,content:JSON.stringify({findings:[{file:'invented.c',start_line:1,title:'invalid',reason:'no evidence'}]})};}});
+    runTool:()=>assert.fail('no local tool for a source-only scan'),
+    cscan:async source=>{calls++;await new Promise(resolve=>setTimeout(resolve,10));return cscanReport(source);}};
+  await Promise.all([auditSources(task,context),auditSources(task,context)]);
+  assert.equal(calls,1);
+  await assert.rejects(auditSources(task,context),/避免重复提交/);assert.equal(calls,1);
   const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
-  assert.equal(calls,5);assert.equal(coverage.ai_model_calls,5);assert.equal(coverage.ai_correction_attempts,2);
-  assert.equal(coverage.ai_rejected_findings,5);assert.equal(coverage.ai_complete,false);
-  assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='source_finding'").get().n,0);
+  assert.equal(coverage.cscan_complete,true);assert.equal(coverage.whole_project_complete,false);
 });
 
 test('generated TCP verification executes through the real engine and links manual review to evidence',async t=>{
@@ -309,7 +289,7 @@ test('actual SAST tools inspect a frozen demo snapshot', {skip:process.env.SOURC
   assert.ok(findings>0);
 });
 
-test('source review retrieves related callers and preserves corroboration and real cross-file citations',async t=>{
+test('CScan preserves validated cross-file citations for downstream verification',async t=>{
   const db=auditDb(t),path=await temp(t),config=join(path,'config.json');
   const previous=process.env.SOURCE_SCAN_CONNECTIONS_FILE;
   process.env.SOURCE_SCAN_CONNECTIONS_FILE=config;
@@ -329,44 +309,23 @@ test('source review retrieves related callers and preserves corroboration and re
       {file:'copy.c',start_line:2,end_line:2,role:'sink',note:'Copy has no length argument'}]};
   assert.throws(()=>normalizeSourceFinding({...finding,trace:[{...finding.trace[0],start_line:99,end_line:99}]},documents),/未读取/);
   assert.throws(()=>normalizeSourceFinding({...finding,trace:[{...finding.trace[0],role:'confirmed'}]},documents),/角色/);
-  let prompts=0;
   await auditSources({scan_task_id:'trace',target:'http://127.0.0.1:8090'},{
-    db,parameters:{connection_id:'p',ai_batches:1},parseResults,
+    db,parameters:{connection_id:'p'},
     snapshot:async()=>({snapshot_id:'frozen',connection_id:'p',files:documents.map(d=>({path:d.path})),skipped:[],documents,sourceDir:path}),
-    runTool:async tool=>({success:true,stdout:tool==='target-request'?'{"connected":true}':tool==='cppcheck'
-      ?'<results><errors><error id="bufferAccessOutOfBounds" severity="error" msg="Buffer overflow" cwe="120"><location file="/src/project/copy.c" line="2"/></error></errors></results>':''}),
-    llm:async messages=>{
-      prompts++;
-      if(messages[0].content.includes('独立的源码反证复核员')) {
-        const payload=JSON.parse(messages[1].content);
-        return {ok:true,content:JSON.stringify({reviews:payload.candidates.map(item=>({finding_id:item.finding_id,
-          assessment:{verdict:'needs_information',input_control:'unknown',reachability:'unknown',guard:'unknown',
-            reason:'Caller citation alone does not establish runtime reachability',missing_conditions:['Need actual runtime linkage'],citations:[],counter_evidence:[]}}))})};
-      }
-      const payload=JSON.parse(messages[1].content);
-      assert.equal(payload.document.file,'copy.c');
-      assert.ok(payload.related_context.some(d=>d.file==='entry.c' && d.numbered_code.includes('copy(request)')));
-      return {ok:true,content:JSON.stringify({findings:prompts===1 ? [finding,{...finding,trace:[{...finding.trace[0],file:'unrelated.c',start_line:1,end_line:1}]}] : [finding]})};
-    }
+    runTool:async tool=>{assert.equal(tool,'target-request');return {success:true,stdout:'{"connected":true}'};},
+    cscan:async source=>cscanReport(source,[finding,{...finding,file:'../outside.c'},
+      {...finding,trace:[{...finding.trace[0],file:'invented.c'}]}])
   });
-  assert.equal(prompts,3);
   const rows=db.prepare("SELECT * FROM scan_results WHERE result_type='source_finding'").all();
   assert.equal(rows.length,1);
   const saved=JSON.parse(rows[0].result_data);
-  assert.deepEqual(saved.tools,['cppcheck','source-ai']);
-  assert.equal(saved.analyses.length,2);
-  assert.equal(saved.reason,finding.reason);
-  assert.equal(saved.trace[0].code,' copy(request);');
-  assert.equal(saved.trace[0].source_sha256,'entryhash');
-  assert.equal(saved.runtime_verified,false);
-  assert.equal(saved.counter_review.verdict,'needs_information');
+  assert.deepEqual(saved.tools,['cscan']);assert.equal(saved.analyses.length,1);
+  assert.equal(saved.reason,finding.reason);assert.equal(saved.trace[0].code,' copy(request);');
+  assert.equal(saved.trace[0].source_sha256,'entryhash');assert.equal(saved.runtime_verified,false);
   const planContext=buildProgramContext(rows);
-  assert.equal(planContext[0].data.trace[0].file,'entry.c');
-  assert.equal(planContext[0].data.analyses.length,2);
+  assert.equal(planContext[0].data.trace[0].file,'entry.c');assert.equal(planContext[0].data.analyses.length,1);
   const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
-  assert.equal(coverage.ai_rejected_findings,1);
-  assert.equal(coverage.ai_complete,false);
-  assert.equal(coverage.cross_file_analysis_complete,false);
+  assert.equal(coverage.rejected_findings.length,2);assert.equal(coverage.cscan_complete,false);
 });
 
 test('related source retrieval remains bounded for widespread symbols and large bodies',()=>{
@@ -375,4 +334,74 @@ test('related source retrieval remains bounded for widespread symbols and large 
   const context=relatedSourceContext(documents[0],createSourceContextIndex(documents));
   assert.ok(context.length<=4);
   assert.ok(context.reduce((n,d)=>n+d.content.length,0)<=16000);
+});
+
+test('CScan cancellation retains Flow identity and coverage without importing late findings',async t=>{
+  const db=auditDb(t),controller=new AbortController();
+  const document={path:'main.c',content:'int x;',start_line:1,end_line:1,sha256:'fixture'};
+  await assert.rejects(auditSources({scan_task_id:'cancel',target:'http://127.0.0.1:9/code/'},{db,
+    parameters:{source_url:'/code/',input_kind:'source'},signal:controller.signal,
+    snapshot:async()=>({snapshot_id:'v1',connection_id:'p',documents:[document],files:[{path:'main.c'}],skipped:[]}),
+    cscan:async(source,{onProgress})=>{onProgress({flow_id:'41',state:'running'});controller.abort();return cscanReport(source);}}),/取消/);
+  const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
+  assert.equal(coverage.cscan.flow_id,'41');assert.equal(coverage.cscan.state,'cancelled');
+  assert.equal(coverage.cscan_complete,false);
+  assert.equal(db.prepare("SELECT count(*) n FROM scan_results WHERE result_type='source_finding'").get().n,0);
+});
+
+test('startup reconciles orphaned CScan flows, preserves unknown submissions and leaves legacy audits intact',async t=>{
+  const db=auditDb(t);
+  db.exec('CREATE TABLE scan_tasks(scan_task_id TEXT PRIMARY KEY,status TEXT,completed_at TEXT,error_message TEXT)');
+  for(const [id,cscan] of [['known',{flow_id:'7',state:'running'}],['unknown',{state:'submitting',submission_uncertain:true}],
+    ['unreachable',{flow_id:'8',state:'cancelled',stop_status:'unconfirmed'}],['legacy',null]]) {
+    const coverage=cscan?{engine:'cscan',cscan,source_errors:[]}:{files:1,ai_complete:true};
+    db.prepare('INSERT INTO source_audits VALUES (?,?,?,\'{}\',?,\'fixture\')').run(id,'v1','p',JSON.stringify(coverage));
+    db.prepare("INSERT INTO scan_tasks(scan_task_id,status) VALUES (?,'RUNNING')").run(id);
+    db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data) VALUES (?,'source_coverage',?)").run(id,JSON.stringify(coverage));
+  }
+  const stopped=[];
+  const recovered=await recoverCscanAudits(db,{connect:async()=>({stop:async id=>{stopped.push(id);if(id==='8') throw new Error('unreachable');}})});
+  assert.equal(recovered,3);assert.deepEqual(stopped.sort(),['7','8']);
+  const read=id=>JSON.parse(db.prepare('SELECT analysis FROM source_audits WHERE scan_task_id=?').get(id).analysis);
+  assert.equal(read('known').cscan.stop_status,'acknowledged');assert.equal(read('unreachable').cscan.stop_status,'unconfirmed');
+  assert.equal(read('unknown').cscan.submission_uncertain,true);assert.match(read('unknown').source_errors[0],/不确定/);
+  assert.equal(db.prepare("SELECT status FROM scan_tasks WHERE scan_task_id='legacy'").get().status,'RUNNING');
+  assert.equal(db.prepare("SELECT count(*) n FROM scan_tasks WHERE status='FAILED'").get().n,3);
+  assert.equal(read('legacy').ai_complete,true);
+});
+
+test('native Markdown findings enter verification context but never claim complete source coverage',async t=>{
+  const db=auditDb(t),document={path:'input.c',content:'void copy(char *s) {\n char b[8]; strcpy(b,s);\n}',
+    start_line:1,end_line:3,sha256:'fixture'};
+  const result=await auditSources({scan_task_id:'markdown',target:'http://127.0.0.1:9/code/'},{db,
+    parameters:{source_url:'/code/',input_kind:'source'},
+    snapshot:async()=>({snapshot_id:'v1',connection_id:'p',documents:[document],files:[{path:'input.c'}],skipped:[]}),
+    cscan:async source=>({...parseCscanMarkdown('## Copy input\nFile: input.c\nLine: 2\nEvidence: No capacity check\nSeverity: high',source.snapshot_id),flow_id:'42'})});
+  const finding=db.prepare("SELECT * FROM scan_results WHERE result_type='source_finding'").get();
+  assert.equal(JSON.parse(finding.result_data).code,' char b[8]; strcpy(b,s);');
+  assert.equal(JSON.parse(finding.result_data).runtime_verified,false);
+  assert.equal(buildProgramContext([finding])[0].data.file,'input.c');
+  const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
+  assert.equal(coverage.report_format,'markdown');assert.equal(coverage.cscan_complete,false);
+  assert.equal(coverage.reviewed_files.length,0);assert.equal(result.outcomes.find(o=>o.tool_id==='coverage').success,false);
+  const raw=JSON.parse(db.prepare("SELECT result_data FROM scan_results WHERE result_type='raw_output'").get().result_data);
+  assert.match(raw.report,/No capacity check/);
+});
+
+test('restart finishes completed Flow cleanup without failing completed scans and reconciles interrupted report imports',async t=>{
+  const db=auditDb(t);
+  db.exec('CREATE TABLE scan_tasks(scan_task_id TEXT PRIMARY KEY,status TEXT,completed_at TEXT,error_message TEXT)');
+  for(const [id,status,remote] of [['finalize','PARTIAL',{state:'finished',flow_id:'51',finish_status:'unconfirmed'}],
+    ['import','RUNNING',{state:'finished',flow_id:'52',flow_status:'finished',finish_status:'acknowledged'}]]) {
+    const coverage={engine:'cscan',cscan:remote,cscan_complete:true,source_errors:[]};
+    db.prepare('INSERT INTO source_audits VALUES (?,?,?,\'{}\',?,\'fixture\')').run(id,'v1','p',JSON.stringify(coverage));
+    db.prepare('INSERT INTO scan_tasks(scan_task_id,status) VALUES (?,?)').run(id,status);
+  }
+  const finished=[];
+  await recoverCscanAudits(db,{connect:async()=>({finish:async id=>finished.push(id),stop:()=>assert.fail('completed Flows must not be stopped')})});
+  assert.deepEqual(finished,['51']);
+  assert.equal(db.prepare("SELECT status FROM scan_tasks WHERE scan_task_id='finalize'").get().status,'PARTIAL');
+  assert.equal(db.prepare("SELECT status FROM scan_tasks WHERE scan_task_id='import'").get().status,'FAILED');
+  const coverage=JSON.parse(db.prepare("SELECT analysis FROM source_audits WHERE scan_task_id='import'").get().analysis);
+  assert.equal(coverage.cscan.stop_status,'not_required');assert.equal(coverage.cscan_complete,false);
 });

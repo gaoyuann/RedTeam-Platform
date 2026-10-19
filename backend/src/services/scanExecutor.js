@@ -67,7 +67,7 @@ const SCAN_TOOL_MAP = {
   cloud_scan: 'cloudmapper', // Cloud security audit
   // app_discovery and api_fuzz are handled specially (dual-step)
   auth_audit: 'nuclei',      // Nuclei with auth templates
-  // source_scan is handled specially: runs cppcheck then flawfinder (dual-step)
+  // source_scan is handled by the independent CScan service.
 };
 
 // ── Build tool arguments from scan parameters ─────────────────────────
@@ -403,7 +403,6 @@ export async function executeScan(scanTaskId) {
         totalResults = await runAndStore('brute_force', 'hydra', task.target, parameters, timeoutMs);
       }
     } else if (isProgramScan(task.scan_type)) {
-      db.prepare('DELETE FROM source_audits WHERE scan_task_id=?').run(scanTaskId);
       const controller = new AbortController();
       const audit = await raceScanWithAbort((async () => {
         const context = {db, parameters, signal:controller.signal, runTool, parseResults};

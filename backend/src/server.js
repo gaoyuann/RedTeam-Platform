@@ -33,6 +33,7 @@ import labRoutes from './routes/labs.js';
 import pipelineRoutes from './routes/pipelines.js';
 import captureRoutes from './routes/captures.js';
 import { cleanupOrphanedPipelines } from './services/pipelineEngine.js';
+import { recoverCscanAudits } from './services/sourceAudit.js';
 
 // ── Config ──────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -150,6 +151,7 @@ async function start() {
 
   // Clean up pipelines/steps stuck 'running' from a crash/kill before this boot
   cleanupOrphanedPipelines();
+  await recoverCscanAudits(db);
 
   server.listen(PORT, HOST, () => {
     console.log(`[Server] RedTeam Backend running on http://${HOST}:${PORT}`);

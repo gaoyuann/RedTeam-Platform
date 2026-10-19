@@ -1,3 +1,4 @@
+import {cscanFixture} from './helpers/cscanFixture.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
@@ -33,8 +34,11 @@ test('bounded review prioritizes an alert deep in a file and rejects unsafe anal
   assert.ok(sourceToolArgs('cppcheck',{standard:'c++17',defines:['FEATURE=1']}).includes('-DFEATURE=1'));
 });
 
-test('real frozen C/C++ scan finds known defects, preserves tool traces and separates corrected files',
-  {skip:process.env.SOURCE_TEST_SAST!=='1'},async t=>{
+test('CScan executor imports version-bound fixture findings and preserves corrected files and history',async t=>{
+  await cscanFixture(t,['bounds.c','null.c','lifetime.cpp'].map((name,index)=>({
+    file:'vulnerable/'+name,start_line:[4,3,4][index],title:'Fixture '+name,reason:'Test-owned source candidate',severity:'high',
+    trace:[{file:'vulnerable/'+name,start_line:1,role:'supporting',note:'Fixture context'},
+      {file:'vulnerable/'+name,start_line:[4,3,4][index],role:'sink',note:'Fixture diagnostic site'}]})));
   const directory=await mkdtemp(join(tmpdir(),'rt-quality-'));
   t.after(()=>rm(directory,{recursive:true,force:true}));
   const db=getDb(':memory:');t.after(closeDb);
@@ -52,18 +56,19 @@ test('real frozen C/C++ scan finds known defects, preserves tool traces and sepa
   assert.equal(result.status,'PARTIAL',JSON.stringify(result));
   const task=db.prepare("SELECT target_class FROM scan_tasks WHERE scan_task_id='quality'").get();
   assert.equal(task.target_class,'web_url');
-  assert.ok(result.outcomes.filter(item=>['cppcheck','flawfinder'].includes(item.tool_id)).every(item=>item.success),JSON.stringify(result.outcomes));
+  assert.equal(result.outcomes.find(item=>item.tool_id==='cscan').success,true);
+  assert.equal(result.outcomes.some(item=>['cppcheck','flawfinder','source-ai'].includes(item.tool_id)),false);
   const findings=db.prepare("SELECT * FROM scan_results WHERE result_type='source_finding'").all().map(row=>JSON.parse(row.result_data));
-  const cpp=findings.filter(item=>item.tools.includes('cppcheck'));
+  const cpp=findings.filter(item=>item.tools.includes('cscan'));
   for(const filename of ['bounds.c','null.c','lifetime.cpp']) assert.ok(cpp.some(item=>item.file==='vulnerable/'+filename),filename);
   assert.equal(cpp.filter(item=>item.file.startsWith('fixed/')).length,0);
   assert.ok(cpp.find(item=>item.file==='vulnerable/lifetime.cpp').trace.length>=2);
   assert.ok(findings.every(item=>item.code && item.source_sha256 && item.snapshot_id && !item.runtime_verified));
   const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
-  assert.equal(coverage.files,6);assert.equal(coverage.ai_requested,false);
+  assert.equal(coverage.files,6);assert.equal(coverage.cscan_complete,true);assert.equal(coverage.engine,'cscan');
   const snapshot=coverage.snapshot_id;
   assert.equal((await executeScan('quality')).ok,false);
   assert.equal(JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis).snapshot_id,snapshot);
   // Corrected memcpy can still produce a lexical warning: do not pretend rules prove safety.
-  console.log('C/C++ quality fixture:',JSON.stringify({known_defects:3,cppcheck_detected:cpp.length,total_candidates:findings.length}));
+  assert.equal(cpp.length,3,'all three protocol fixture findings survive the production importer');
 });
