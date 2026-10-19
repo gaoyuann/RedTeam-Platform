@@ -22,6 +22,7 @@ await mock.module('../src/tools/toolRunner.js',{namedExports:{...toolModule,
     : tool==='target-request' ? toolModule.runTool(tool,args,options) : assert.fail('Source scanning must use CScan, not '+tool)}});
 const {default:pipelineRoutes}=await import('../src/routes/pipelines.js');
 const {default:scanRoutes}=await import('../src/routes/scans.js');
+const {ensureVerification,verificationDetail}=await import('../src/services/findingVerification.js');
 
 async function listen(t,server) {
   server.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
@@ -105,6 +106,13 @@ for(const [mode,protocol] of [['source_assisted','http'],['program_dynamic','tcp
     assert.equal(coverage.engine,'cscan');assert.equal(coverage.cscan_complete,true);assert.equal(cscan.counts.created,1);
     const findings=db.prepare("SELECT id,result_data FROM scan_results WHERE result_type='source_finding'").all();assert.ok(findings.length);
     const finding=findings.find(row=>JSON.parse(row.result_data).title==='Fixture input bounds');assert.ok(finding);
+    const taskPipeline=db.prepare('SELECT * FROM pipelines WHERE pipeline_id=?').get(id);
+    const verification=ensureVerification(db,taskPipeline,finding.id);
+    const detail=verificationDetail(db,taskPipeline,verification.id);
+    assert.equal(detail.eligible,true,'CScan source finding is eligible for the F08 verification workflow');
+    assert.equal(detail.finding.id,finding.id);assert.equal(detail.default_target,target);
+    assert.deepEqual(JSON.parse(detail.finding.result_data).tools,['cscan']);
+    assert.equal(detail.summary.conclusion,'pending','importing a finding never confirms a runtime vulnerability');
     assert.equal(effects.length,0,'no verification request before plan approval');
     const generated=await request('/scans/'+task.scan_task_id+'/generate-playbook',{finding_ids:[finding.id],demonstration:true,adaptive:false});
     const sources=await request('/pipelines/'+id+'/plan/sources',undefined,'alice','GET');

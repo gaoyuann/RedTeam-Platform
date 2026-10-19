@@ -88,7 +88,10 @@ test('CScan cancellation and deadline stop the known remote flow without using t
       flow:async()=>({id:'9',status:kind==='waiting'?'waiting':'running',tasks:[{id:'1',status:'waiting',subtasks:[]}]}),
       stop:async(id,options)=>{assert.equal(options,undefined);stops.push(id);},
     };
-    await assert.rejects(runCscan(source,{config,client,signal:controller.signal,onProgress:p=>{
+    // Exercise deadline/stop semantics without letting unrelated filesystem
+    // scheduling consume the short test deadline before a Flow is created.
+    await assert.rejects(runCscan(source,{config,client,signal:controller.signal,
+      stage:async()=>({key:'fixture',containerPath:'/src/fixture'}),onProgress:p=>{
       progress.push(p);if(kind==='cancel' && p.state==='running') controller.abort();
     }}),/取消|超时|等待人工输入|扫描失败/);
     assert.deepEqual(stops,kind==='failed'?[]:['9']);
