@@ -29,17 +29,17 @@ int main(int argc,char **argv) {
       QJsonValue data;
       if(path.endsWith("/verifications"))data=QJsonObject{{"id","v1"},{"finding_id",123},{"state",state}};
       else if(path.endsWith("/generate") && mode=="preparation-result") {state="preparation_failed";reason="方案准备失败，未启动新的验证执行：未提供可执行步骤。";data=QJsonObject{};}
-      else if(path.endsWith("/template"))data=plan;
+      else if(path.endsWith("/select-template"))data=plan;
       else if(path.endsWith("/plans"))data=QJsonObject{};
-      else if(path.endsWith("/sources"))data=QJsonArray{};
+      else if(path.contains("/sources"))data=QJsonObject{{"items",QJsonArray{QJsonObject{{"name","Fixture template"},{"playbook_id","fixture"},{"source",QJsonObject{{"label","内置模板"}}}}}},{"total",1}};
       else if(path.endsWith("/confirm")){data=QJsonObject{{"state","ready"}};}
-      else if(path.endsWith("/execute")){data=QJsonObject{{"state","queued"},{"run_id","run-fixture"}};}
+      else if(path.endsWith("/start")){data=QJsonObject{{"state","queued"},{"run_id","run-fixture"}};}
       else if(path.endsWith("/cancel")){state="cancelling";data=QJsonObject{{"state",state}};}
-      else data=QJsonObject{{"id","v1"},{"finding_id",123},{"revision",revision},{"state",state},{"eligible",eligible},{"reason",reason},{"ineligibility_reason","此记录现归为信息，仅保留历史与停止操作。"},{"default_target","http://fixture.invalid/item"},{"finding",QJsonObject{{"id",123},{"result_data","SQL injection candidate"}}},
-        {"summary",QJsonObject{{"conclusion",conclusion}}},{"plans",revision==0?QJsonArray{}:QJsonArray{QJsonObject{{"revision",revision},{"confirmed_at","fixture"},{"content",plan}}}},
+      else data=QJsonObject{{"id","v1"},{"finding_id",123},{"readiness",QJsonObject{{"ready",revision>0&&eligible&&(state=="ready"||state=="completed")},{"reasons",QJsonArray{}}}},{"revision",revision},{"state",state},{"eligible",eligible},{"reason",reason},{"ineligibility_reason","此记录现归为信息，仅保留历史与停止操作。"},{"default_target","http://fixture.invalid/item"},{"finding",QJsonObject{{"id",123},{"result_data","SQL injection candidate"}}},
+        {"summary",QJsonObject{{"conclusion",conclusion}}},{"plans",revision==0?QJsonArray{}:QJsonArray{QJsonObject{{"revision",revision},{"fingerprint","fp"+QString::number(revision)},{"confirmed_at","fixture"},{"content",plan}}}},
         {"attempts",QJsonArray{}},{"payloads",QJsonObject{{"matches",QJsonArray{}}}}};
       const auto payload=QJsonDocument(QJsonObject{{"status",(path.endsWith("/plans") || path.endsWith("/generate")&&mode=="preparation-result")?"error":"ok"},{"error",QJsonObject{{"message",reason.isEmpty()?QString("fixture rejected plan"):reason}}},{"data",data}}).toJson(QJsonDocument::Compact);
-      QPointer<QTcpSocket> guard(socket);QTimer::singleShot(path.endsWith("/template")?250:path.endsWith("/v1")?detailDelay:path.endsWith("/execute")?executeDelay:0,&app,[&,guard,payload,path]{if(path.endsWith("/execute"))state="running";if(guard){guard->write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: "+QByteArray::number(payload.size())+"\r\n\r\n"+payload);guard->disconnectFromHost();}});
+      QPointer<QTcpSocket> guard(socket);QTimer::singleShot(path.endsWith("/select-template")?250:path.endsWith("/v1")?detailDelay:path.endsWith("/start")?executeDelay:0,&app,[&,guard,payload,path]{if(path.endsWith("/start"))state="running";if(guard){guard->write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: "+QByteArray::number(payload.size())+"\r\n\r\n"+payload);guard->disconnectFromHost();}});
     });
   }});
   if(!server.listen(QHostAddress::LocalHost))return 1;
@@ -57,8 +57,8 @@ int main(int argc,char **argv) {
     for(auto *button:dialog.findChildren<QPushButton*>())
       if(button->text()=="取消当前验证并停止队列")QTest::mouseClick(button,Qt::LeftButton);
   };
-  const QString confirmKey="POST /api/pipelines/p/verifications/v1/confirm";
-  const QString executeKey="POST /api/pipelines/p/verifications/v1/execute";
+  const QString confirmKey="POST /api/pipelines/p/verifications/v1/start";
+  const QString executeKey="POST /api/pipelines/p/verifications/v1/start";
   const QString cancelKey="POST /api/pipelines/p/verifications/v1/cancel";
   if(mode=="preparation-result") {
     revision=0;state="needs_conditions";dialog.load(true);
@@ -79,8 +79,9 @@ int main(int argc,char **argv) {
     return 0;
   }
   if(mode=="template-late-edit") {
-    for(auto *button:dialog.findChildren<QPushButton*>())if(button->text()=="使用模板")QTest::mouseClick(button,Qt::LeftButton);
-    if(!wait([&]{return requests.value("POST /api/pipelines/p/verifications/v1/template")==1;}))return 60;
+    if(!wait([&]{return dialog.m_sources->count()==1;}))return 62;dialog.m_sourceChooser->setChecked(true);dialog.m_sources->setCurrentIndex(0);
+    for(auto *button:dialog.findChildren<QPushButton*>())if(button->text()=="使用此方案")QTest::mouseClick(button,Qt::LeftButton);
+    if(!wait([&]{return requests.value("POST /api/pipelines/p/verifications/v1/select-template")==1;}))return 60;
     dialog.m_criteria->setPlainText("EDIT_AFTER_TEMPLATE_REQUEST");
     QTest::qWait(450);
     if(dialog.m_criteria->toPlainText()!="EDIT_AFTER_TEMPLATE_REQUEST" || !dialog.m_dirty)return 61;
@@ -117,16 +118,16 @@ int main(int argc,char **argv) {
     revision=2;plan["target"]="http://fixture.invalid/different-entry";
     dialog.load(false);if(!wait([&]{return !dialog.m_loading&&dialog.m_detail["revision"].toInt()==2;}))return 21;
     if(dialog.m_revision!=1 || dialog.m_target->text()!=before || !dialog.m_stale)return 22;
-    dialog.m_confirm->setChecked(true);QTest::mouseClick(dialog.m_confirmButton,Qt::LeftButton);
-    QTest::mouseClick(dialog.m_start,Qt::LeftButton);QTest::qWait(60);
-    if(requests.value(confirmKey)!=0 || requests.value(executeKey)!=0)return 23;
+    dialog.m_startSimple->click();QTest::qWait(60);
+    if(requests.value(executeKey)!=0)return 23;
     if(mode=="dirty-revision" && dialog.m_criteria->toPlainText()!="local unsaved criteria")return 24;
     dialog.load(true);if(!wait([&]{return !dialog.m_loading&&!dialog.m_stale&&dialog.m_revision==2;}))return 25;
-    if(dialog.m_target->text()!=plan["target"].toString() || dialog.m_confirm->isChecked())return 26;
+    if(dialog.m_target->text()!=plan["target"].toString())return 26;
     QTimer::singleShot(0,[]{auto *box=qobject_cast<QMessageBox*>(QApplication::activeModalWidget());if(box)box->button(QMessageBox::Yes)->click();});
-    dialog.m_confirm->setChecked(true);QTest::mouseClick(dialog.m_confirmButton,Qt::LeftButton);
-    if(!wait([&]{return requests.value(confirmKey)==1;}))return 27;
-    if(bodies.value(confirmKey)["revision"].toInt()!=2)return 28;
+    dialog.m_startSimple->click();
+    if(!wait([&]{return requests.value(executeKey)==1;}))return 27;
+    const auto sent=bodies.value(executeKey);
+    if(sent["revision"].toInt()!=2 || sent["fingerprint"].toString()!="fp2" || !sent["confirmed"].toBool())return 28;
     return 0;
   }
   if(mode=="reload-in-flight") {
@@ -139,7 +140,7 @@ int main(int argc,char **argv) {
   }
   if(mode.startsWith("single-")) {
     executeDelay=350;
-    QTest::mouseClick(dialog.m_start,Qt::LeftButton);
+    QTimer::singleShot(0,[]{auto *box=qobject_cast<QMessageBox*>(QApplication::activeModalWidget());if(box)box->button(QMessageBox::Yes)->click();});QTest::mouseClick(dialog.m_start,Qt::LeftButton);
     if(!wait([&]{return requests.value(executeKey)==1;}))return 40;
     const bool cancel=mode!="single-close-running";
     if(cancel)clickCancel();
@@ -152,7 +153,7 @@ int main(int argc,char **argv) {
     return 0;
   }
   if(mode=="cancel-start" || mode=="cancel-start-close" || mode=="cancel-start-destroy") {
-    executeDelay=350;dialog.m_queue<<"v1";dialog.executeNext();
+    executeDelay=350;dialog.m_queuePlans["v1"]=dialog.m_detail["plans"].toArray().first().toObject();dialog.m_queue<<"v1";dialog.executeNext();
     if(!wait([&]{return requests.value(executeKey)==1;}))return 31;
     clickCancel();
     if(mode=="cancel-start-close")dialog.accept();
@@ -162,7 +163,7 @@ int main(int argc,char **argv) {
     return 0;
   }
   detailDelay=350;
-  dialog.m_queue<<"v1";dialog.executeNext();
+  dialog.m_queuePlans["v1"]=dialog.m_detail["plans"].toArray().first().toObject();dialog.m_queue<<"v1";dialog.executeNext();
   QTest::qWait(30);
   if(mode=="close-details")dialog.accept();else clickCancel();
   QTest::qWait(900);

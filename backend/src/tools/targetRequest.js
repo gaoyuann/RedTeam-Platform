@@ -42,10 +42,10 @@ export function parseTargetRequest(args, authorizedTarget) {
 export async function runTargetRequest(args, options = {}) {
   let spec;
   try { spec = parseTargetRequest(args, options.target); }
-  catch (error) { return { success:false, exitCode:1, stdout:'', stderr:error.message, error:error.message, executionMode:'builtin' }; }
+  catch (error) { return { success:false, exitCode:1, stdout:'', stderr:error.message, error:error.message, executionMode:'builtin',toolStarted:false }; }
   const start = Date.now();
   return new Promise(resolve => {
-    let socket, request, timer, idle, sequence, promptTimer, done = false, connected = false, bytes = 0, statusCode, responseHeaders;
+    let socket, request, timer, idle, sequence, promptTimer, done = false, connected = false, bytes = 0, statusCode, responseHeaders, cookieAttributes=[], cookieAttributesComplete=false;
     const chunks = [], sent = [], transcript = [];
     let transcriptBytes=0;
     const trace=(direction,data)=>{
@@ -64,12 +64,13 @@ export async function runTargetRequest(args, options = {}) {
       options.signal?.removeEventListener('abort', abort);
       socket?.destroy(); request?.destroy();
       const observation = { url: spec.url.href, protocol: spec.url.protocol, connected,
-        ...(statusCode !== undefined ? { status_code:statusCode, response_headers:responseHeaders } : {}),
+        ...(statusCode !== undefined ? { status_code:statusCode, response_headers:responseHeaders, cookie_attributes:cookieAttributes, cookie_attributes_complete:cookieAttributesComplete } : {}),
+        complete:!error, truncated:!!flags.outputLimitExceeded,
         ...(spec.exchanges ? { sent, transcript } : { method:spec.method }),
         response:Buffer.concat(chunks).toString('utf8'), received_bytes:bytes,
         verification_status:'needs_review' };
       resolve({ success:!error, exitCode:error ? 1 : 0, stdout:JSON.stringify(observation),
-        stderr:error || '', error, executionMode:'builtin', durationMs:Date.now()-start, ...flags });
+        stderr:error || '', error, executionMode:'builtin',toolStarted:connected || !!request || !!socket, durationMs:Date.now()-start, ...flags });
     };
     const abort = () => finish('请求已取消', {aborted:true});
     const collect = chunk => {
@@ -122,7 +123,15 @@ export async function runTargetRequest(args, options = {}) {
       const transport = spec.url.protocol === 'https:' ? https : http;
       request=transport.request(spec.url, {method:spec.method, headers:spec.headers}, response=>{
         connected=true; statusCode=response.statusCode;
-        responseHeaders=Object.fromEntries(Object.entries(response.headers).filter(([name])=>['content-type','location','server','www-authenticate'].includes(name)));
+        responseHeaders=Object.fromEntries(Object.entries(response.headers).filter(([name])=>['content-type','location','server','www-authenticate','x-content-type-options','x-frame-options','content-security-policy'].includes(name)));
+        const cookies=response.headers['set-cookie'] || [];
+        cookieAttributesComplete=cookies.length<=20;
+        cookieAttributes=cookies.slice(0,20).flatMap(value=>{
+          const parts=value.split(';'),name=parts[0].split('=',1)[0].trim();
+          if(!parts[0].includes('=') || !/^[!#$%&'*+.^_`|~\w-]{1,128}$/.test(name)){cookieAttributesComplete=false;return [];}
+          const attributes=new Set(parts.slice(1).map(p=>p.trim().split('=')[0].toLowerCase()));
+          return [{name,httponly:attributes.has('httponly'),secure:attributes.has('secure')}];
+        });
         response.on('data',collect);
         response.on('end',()=>finish());
         response.on('error',error=>finish(error.message));

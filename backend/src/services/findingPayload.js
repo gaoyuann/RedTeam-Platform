@@ -26,7 +26,7 @@ function contextFromRow(row) {
     throw Object.assign(new Error('该记录不支持生成攻击载荷：发现内容表明漏洞未成立'), { status: 422 });
   const identity = details.cve || details.cve_id || details.template || details.vuln_type || details.title || details.finding;
   if (!identity) throw Object.assign(new Error('漏洞缺少可复用的类型或标识，无法生成载荷'), { status: 422 });
-  const targetType = /^https?:\/\//i.test(row.target || '') ? 'web' : 'intranet';
+  const targetType = /^(?:https?|tcp):\/\//i.test(row.target || '') || ['web_vuln','sql_injection'].includes(row.result_type) ? 'web' : 'intranet';
   let location = details.path || '';
   try { location ||= new URL(details.matched_at || details.url).pathname; } catch { /* non-URL finding */ }
   const signature = createHash('sha256').update(JSON.stringify([

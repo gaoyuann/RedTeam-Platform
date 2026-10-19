@@ -17,7 +17,7 @@ const IMPACT_TECHNIQUES = /^(?:T1498|T1499|T1491|T1485|T1486|T1565|T1048|T1041|T
 const IMPACT_ARGS = /--(?:os-shell|os-pwn|dump(?:-all)?|file-(?:write|read)|sql-(?:shell|query))\b|\bshutdown\b|\brm\s+-rf\b/;
 
 export function matchPlaybooks(scanResults, targetClass = null, options = {}) {
-  const db = getDb();
+  const db = options.db || getDb();
   const profile = typeof targetClass === 'object' && targetClass !== null ? targetClass : {};
   if (profile.target_class) targetClass = profile.target_class;
   else if (typeof targetClass === 'object') targetClass = null;

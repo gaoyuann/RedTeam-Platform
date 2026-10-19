@@ -469,7 +469,7 @@ export async function executeRun(runId) {
         target: run.target,
       });
 
-      let result;
+      let result, toolStarted=false;
       if (preparationError || !preExecResult.allowed) {
         // Blocked by blue team — skip execution entirely
         result = {
@@ -488,6 +488,7 @@ export async function executeRun(runId) {
 
         // Execute tool
         try {
+          toolStarted=true;
           const isDvwaLogin = isSessionProducer;
           if (isDvwaLogin) {
             targetContext.dvwa_cookie = '';
@@ -544,12 +545,12 @@ export async function executeRun(runId) {
 
       // Record evidence (with structured parsing + rules engine)
       const evidenceResult = recordEvidence(db, runId, step.step_index, step.tool_id, result, run.target, step.expected_mitre,
-        step.payload_data ? { id: step.payload_data.id, name: step.payload_data.name,
+        toolStarted && result.toolStarted!==false && step.payload_data && !['blocked','error'].includes(result.executionMode) ? { id: step.payload_data.id, name: step.payload_data.name,
           version: step.payload_data.version, source: step.payload_data.source,
           consumption: step.payload_data.consumption?.type } : null, attemptId,
         sourceVerification ? {...JSON.parse(step.evidence_config || '{"finding_ids":[]}'),scan_task_id:sourceVerification.scan_task_id,
           source_versions:sourceVerification.reproducibility?.source_versions || [],deployment_version_verified:false} : null,
-        findingVerification ? {...findingVerification, consumption:JSON.parse(step.evidence_config || '{}').consumption,
+        findingVerification ? {...findingVerification, tool_started:toolStarted && result.toolStarted!==false && !['blocked','error'].includes(result.executionMode),payload_consumed:!!(toolStarted && result.toolStarted!==false && step.payload_data && !['blocked','error'].includes(result.executionMode)),consumption:JSON.parse(step.evidence_config || '{}').consumption,
           payload_version:JSON.parse(step.evidence_config || '{}').payload_version} : null);
       db.prepare(`INSERT INTO audit_log (type, execution_id, run_id, tool_id, args, user_role, target, execution_mode, success, exit_code, duration_ms, output_size, reasons, timestamp)
         VALUES ('tool_execution', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
