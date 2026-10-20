@@ -69,6 +69,31 @@ test('native source scan passes the service path and requirements, consumes task
   assert.ok(calls.some(c=>c.query.includes('CScanReport')));assert.ok(calls.at(-1).query.includes('finishFlow'));
 });
 
+test('source paths with spaces reach the remote Flow through legacy and agent audit inputs',async t=>{
+  for(const key of ['source_path','cscan_target']) await t.test(key,async t=>{
+    const source=key==='source_path'?'/src/my project':'/var/www/my project';
+    const db=new Database(':memory:');t.after(()=>db.close());
+    db.exec('CREATE TABLE scan_results(id INTEGER PRIMARY KEY,scan_task_id TEXT,result_type TEXT,result_data TEXT,severity TEXT,source_tool TEXT,captured_at TEXT);CREATE TABLE source_audits(scan_task_id TEXT PRIMARY KEY,snapshot_id TEXT,connection_id TEXT,manifest TEXT,analysis TEXT,created_at TEXT)');
+    const {calls,config}=await protocol(t,'Source-Access: available\n'+report);
+    const result=await auditSources({scan_task_id:'spaced-path',target:source},{db,
+      parameters:{[key]:source,input_kind:key==='source_path'?'source':'agent'},
+      nativeScan:(target,options)=>scanCscanTarget(target,{...options,config,
+        llm:()=>assert.fail('explicit report fields need no second model')})});
+    assert.ok(result.outcomes.length>0);
+    assert.ok(result.outcomes.every(outcome=>outcome.success),JSON.stringify(result.outcomes));
+    assert.equal(calls.filter(call=>call.query.includes('createFlow')).length,1);
+    assert.ok(calls.find(call=>call.query.includes('createFlow')).variables.input.includes(source));
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='source_finding'").get().n,1);
+    assert.equal(JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis).cscan_complete,true);
+  });
+});
+
+test('allowing spaces in source paths preserves invalid path and network target rejection',()=>{
+  for(const target of ['/src/my project/../private','/src/my\tproject','/src/my\nproject','/src/my\\project',
+    'http://example.invalid/my project','example .invalid','192.0.2.40: 8089'])
+    assert.throws(()=>cscanTarget(target),target);
+});
+
 test('remote target and audit requirements go to the Flow together with the exact scope',async t=>{
   const {calls,config}=await protocol(t,'Source-Access: available\n'+report);
   const scope=normalizeTaskScope({task_scope:{excludes:['http://192.0.2.40:8089/private/']}},'http://192.0.2.40:8089/');

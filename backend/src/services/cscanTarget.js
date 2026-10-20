@@ -12,10 +12,11 @@ export function cscanRemotePath(value) {
 // Like the reference client, submit the target to the remote Flow, not to a
 // local filesystem picker. A filesystem path belongs to the execution side.
 export function cscanTarget(value) {
+  // Filesystem paths may contain spaces; keep the legacy path validation.
+  if(typeof value==='string' && value.trim().startsWith('/')) return cscanRemotePath(value);
   if(typeof value!=='string' || !value.trim() || value.length>1024 || /[\x00-\x20\\]/.test(value.trim()))
     throw new Error('请填写靶机 IP、主机:端口、HTTP/TCP 地址或远端源码路径');
   const target=value.trim();
-  if(target.startsWith('/')) return cscanRemotePath(target);
   if(/^(?:https?|tcp):\/\//i.test(target) || /^[^/:]+:\d+$/.test(target)) {
     const url=new URL(/^[^/:]+:\d+$/.test(target)?'tcp://'+target:target);
     if(!['http:','https:','tcp:'].includes(url.protocol) || !url.hostname || url.username || url.password || url.hash
