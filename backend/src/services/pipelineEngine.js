@@ -1,4 +1,5 @@
-import { pipelineScans } from './scanResultQuery.js';
+import { pipelineScans, scanCollection } from './scanResultQuery.js';
+import { usesFindingWorkflow, findingStatistics } from './findingStatistics.js';
 import { hasScanIntegrity } from './scanResultStore.js';
 import { beginCoverage, completeCoverage, hasScanCoverage, markCheck, observePortScan, observeWebScan, pendingChecks } from './scanCoverage.js';
 import { requestScanAbort } from './scanExecutor.js';
@@ -263,7 +264,7 @@ async function runPipelineScan(db, pipeline) {
       output_data: stepOutput,
     });
 
-    pipelineLog(pipelineId, `扫描阶段完成，共 ${totalResults} 条发现`);
+    pipelineLog(pipelineId, `扫描阶段结束，共保存 ${totalResults} 条记录（含资产、输出和错误，不等于漏洞数量）`);
 
     return { ok: true, scanTaskIds, totalResults };
   } catch (err) {
@@ -664,6 +665,29 @@ export async function runPipeline(pipelineId) {
       return { ok: scanResult.ok !== false, pipeline_id: pipelineId, status: 'failed', error: scanResult.error };
     }
 
+    // New task entry stops at actual findings. Preparation/model calls only
+    // happen after a user selects a finding; legacy task behavior stays intact.
+    if (usesFindingWorkflow(pipelineConfig)) {
+      if (isCancelled(pipelineId)) return {ok:false,pipeline_id:pipelineId,status:'cancelled'};
+      const current = db.prepare('SELECT * FROM pipelines WHERE pipeline_id=?').get(pipelineId);
+      const collection = scanCollection(db,current,{metadataOnly:true});
+      const statistics = findingStatistics(db,current,collection.rows);
+      for (const [order,type] of [[1,STEP_ANALYZE],[2,STEP_GENERATE],[3,STEP_EXECUTE]]) {
+        ensureStep(db,pipelineId,order,type);
+        updateStep(db,pipelineId,order,'skipped',{step_type:type,
+          output_data:{note:'在漏洞表中逐条准备方案、载荷并确认测试，不自动执行整任务预案'}});
+      }
+      const result = {scan_task_ids:scanResult.scanTaskIds,paused_at:'finding_selection',
+        paused_at_time:new Date().toISOString(),verification_statistics:statistics,
+        scan_completeness:collection.summary.completeness};
+      // Even a zero-finding/incomplete scan waits for explicit review. It must
+      // not turn into either an invented attack plan or an automatic safe result.
+      updateStatus(db,pipelineId,'awaiting_approval',{result});
+      runningPipelines.delete(pipelineId);
+      pipelineLog(pipelineId,`扫描结果已保存：${statistics.candidate_records} 条漏洞候选，请在漏洞表中选择逐条测试；无候选时检查扫描错误及覆盖。`);
+      return {ok:true,pipeline_id:pipelineId,status:'awaiting_approval'};
+    }
+
     // ── Step 1: Analyze ─────────────────────────────────────────────────
     pipelineLog(pipelineId, '=== 步骤 1: 分析 ===');
     const analysisResult = await runPipelineAnalysis(db, pipeline, scanResult.scanTaskIds);
@@ -851,6 +875,7 @@ export async function resumePipelineAfterApproval(pipelineId) {
   const db = getDb();
   const pipeline = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(pipelineId);
   if (!pipeline) return { ok: false, error: `Pipeline ${pipelineId} not found` };
+  if (usesFindingWorkflow(pipeline.config)) return {ok:false,error:'逐漏洞任务应从漏洞表确认测试'};
   if (pipeline.status !== 'awaiting_approval') {
     return { ok: false, error: `Pipeline status is "${pipeline.status}", expected "awaiting_approval"` };
   }

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { usesFindingWorkflow } from '../services/findingStatistics.js';
 import { getTaskPlan, getTaskPlanSources, createTaskPlan, saveTaskPlan, addTaskPlanSuggestion, transitionTaskPlan } from '../services/taskPlan.js';
 
 export default function taskPlanRoutes(db, loadResume = async () => (await import('../services/pipelineEngine.js')).resumePipelineAfterApproval) {
@@ -8,6 +9,8 @@ export default function taskPlanRoutes(db, loadResume = async () => (await impor
     if (!pipeline) return res.status(404).json({ status: 'error', error: { message: '任务不存在' } });
     if (req.user.role !== 'admin' && pipeline.created_by !== req.user.sub)
       return res.status(403).json({ status: 'error', error: { message: '没有权限访问此任务预案' } });
+    if(req.method!=='GET' && usesFindingWorkflow(pipeline.config))
+      return res.status(409).json({status:'error',error:{message:'请在漏洞表中为每条漏洞准备方案并确认测试'}});
     next();
   });
   router.get('/', (req, res) => res.json({ status: 'ok', data: getTaskPlan(db, req.params.id) }));
