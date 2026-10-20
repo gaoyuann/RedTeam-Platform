@@ -12,6 +12,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QTabWidget>
+#include "../widgets/FindingStatisticsPanel.h"
 
 class QCheckBox;
 class ApiClient;
@@ -24,13 +25,14 @@ public:
 
   /// Pre-fill all 4 target inputs (used when embedded in FlowPage workbench)
   void setTarget(const QString &target);
-  void setPipelineScope(const QString &pipelineId, const QStringList &taskIds, const QString &state = {});
+  void setPipelineScope(const QString &pipelineId, const QStringList &taskIds, const QString &state = {}, bool findingWorkflow = false);
   void setTaskScope(const QStringList &taskIds);
   void clearTaskScope();
   static QString chooseHttpSourceDirectory(ApiClient *api, const QString &target, const QString &initial, QWidget *parent);
   void showTaskContextError(const QString &message);
 
 signals:
+  void workflowCompleted();
   void sourceGenerationStatus(const QString &message, bool error);
   void sourcePlaybookGenerated(const QString &playbookId);
   void playbookNavigateRequested(const QString &playbookId, const QString &target = "");
@@ -60,6 +62,10 @@ private:
   void renderCoverage(const QJsonObject &coverage);
   QString m_pipelineId;
   QString m_pipelineScanState;
+  bool m_findingWorkflow = false;
+  FindingStatisticsPanel *m_findingStats = nullptr;
+  QPushButton *m_completeFindings = nullptr;
+  QJsonObject m_verificationStatistics;
   QString m_retryRequestId;
   QString m_retryRequestSource;
   bool m_allScanResults = false;

@@ -7,6 +7,7 @@ import { isTargetInScope, taskScope } from './taskScope.js';
 import { scanCoverage } from './scanCoverage.js';
 import { getPayloadIndex } from './payloadLoader.js';
 import { findingPayloadSummary } from './findingPayloads.js';
+import { findingStatistics } from './findingStatistics.js';
 
 export function pipelineScans(db,pipeline) {
   const linked=[...new Set(String(pipeline.scan_task_id || '').split(',').map(s=>s.trim()).filter(Boolean))];
@@ -74,6 +75,7 @@ export function scanPage(db,pipeline,query={}) {
   const records=selected.length?db.prepare(`SELECT * FROM scan_results WHERE id IN (${selected.map(()=>'?').join(',')}) ORDER BY id`).all(...selected.map(r=>r.id))
     .map(row=>({...publicScanRecord(row),verification:verificationSummary(db,row.id,pipeline.pipeline_id),payload_match:payloadIndex ? findingPayloadSummary(db,row,payloadIndex) : null})):[];
   return {scan_summary:collection.summary,scan_coverage:collection.coverage,scan_records:records,
+    verification_statistics:findingStatistics(db,pipeline,collection.rows),
     scan_sources:collection.scans.map(s=>({scan_task_id:s.scan_task_id,scan_type:s.scan_type,status:s.status,target:s.target,error_message:redactScanValue(s.error_message),retry_of_scan_task_id:s.retry_of_scan_task_id || null})),
     scan_runs:collection.runs.map(({evidence,...r})=>({...r,outcome:parseResultData(r.outcome),diagnostics:parseResultData(r.diagnostics)})),
     page:{total:filtered.length,returned:selected.length,after,through,limit,category,scan_task_id:query.scan_task_id || null,

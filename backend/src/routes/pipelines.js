@@ -15,6 +15,8 @@ import { recommendForScans } from '../services/playbookRecommendations.js';
 import { captureTopologyOrigin, readTopologyOrigin } from '../services/topologyOrigin.js';
 import { sourceTarget, httpSourceConnection, resolveSourceConnection } from '../services/sourceScanConnections.js';
 import { normalizeTaskScope, scopeBlockingConditions, scopeConditions, taskScope } from '../services/taskScope.js';
+import { usesFindingWorkflow, findingStatistics } from '../services/findingStatistics.js';
+import { scanCollection } from '../services/scanResultQuery.js';
 
 // ── Validation helpers ────────────────────────────────────────────────────
 const asyncRoute = handler => (req,res,next) => Promise.resolve().then(()=>handler(req,res,next)).catch(next);
@@ -35,6 +37,7 @@ function validateTarget(target) {
 }
 
 async function normalizeProgramConfig(config, target) {
+  if(config.workflow!==undefined && !['legacy','per_finding'].includes(config.workflow)) throw new Error('测试流程无效');
   if (!isProgramMode(config.scan_mode) && !['source','program'].includes(config.test_type) && !/^tcp:\/\//i.test(target)) return {config,target};
   target=sourceTarget(target);
   const inputKind=config.input_kind || 'runtime';
@@ -250,7 +253,7 @@ export default function (db) {
         const parsed = typeof config === 'string' ? JSON.parse(config) : config;
         // Only allow known config keys
         const sanitized = {};
-        const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id', 'input_kind', 'runtime_target', 'task_scope'];
+        const allowedKeys = ['workflow', 'auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id', 'input_kind', 'runtime_target', 'task_scope'];
         for (const key of allowedKeys) {
           if (parsed[key] !== undefined) sanitized[key] = parsed[key];
         }
@@ -315,7 +318,7 @@ export default function (db) {
         if (typeof parsed === 'object' && parsed !== null) {
           // Only allow known config keys (same whitelist as create)
           const sanitized = {};
-          const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id', 'input_kind', 'runtime_target', 'task_scope'];
+          const allowedKeys = ['workflow', 'auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id', 'input_kind', 'runtime_target', 'task_scope'];
           for (const key of allowedKeys) {
             if (parsed[key] !== undefined) sanitized[key] = parsed[key];
           }
@@ -325,9 +328,12 @@ export default function (db) {
       try {
         const previous=JSON.parse(pipeline.config || '{}');
         const requested=JSON.parse(configStr);
+        if(requested.workflow === undefined && previous.workflow !== undefined) requested.workflow=previous.workflow;
         if(requested.task_scope === undefined) requested.task_scope=previous.task_scope;
         const normalized=await normalizeProgramConfig(requested,pipeline.target);
         normalized.config.task_scope=normalizeTaskScope(normalized.config,normalized.target);
+        if(pipeline.status!=='created' && (previous.workflow || 'legacy')!==(normalized.config.workflow || 'legacy'))
+          return res.status(409).json({status:'error',error:{message:'任务启动后不能切换测试流程，请创建新任务'}});
         if(pipeline.status!=='created' && JSON.stringify(previous.task_scope || normalizeTaskScope(previous,pipeline.target))!==JSON.stringify(normalized.config.task_scope))
           return res.status(409).json({status:'error',error:{message:'扫描已启动，不能改变测试范围；请新建任务'}});
         if(pipeline.status!=='created' && ['scan_mode','source_url','source_connection_id','input_kind','runtime_target'].some(key=>(previous[key] ?? null)!==(normalized.config[key] ?? null))) {
@@ -433,6 +439,8 @@ export default function (db) {
     if (!canModifyPipeline(req, pipeline)) {
       return res.status(403).json({ status: 'error', error: { message: '没有权限取消此流水线' } });
     }
+    if(usesFindingWorkflow(pipeline.config) && db.prepare("SELECT 1 FROM finding_verification_attempts WHERE pipeline_id=? AND state IN ('queued','running','cancelling','unknown')").get(pipeline.pipeline_id))
+      return res.status(409).json({status:'error',error:{message:'请先在逐漏洞窗口停止当前验证并核实停止状态，再取消任务'}});
     if (!['running', 'awaiting_approval'].includes(pipeline.status)) {
       return res.status(400).json({ status: 'error', error: { message: '只有运行中或待确认的流水线可以取消' } });
     }
@@ -456,6 +464,36 @@ export default function (db) {
     res.json({ status: 'ok', data: row });
   });
 
+  router.post('/:id/complete-verifications', requireActor(db), (req,res,next) => {
+    try {
+      const result=db.transaction(()=>{
+        const pipeline=db.prepare('SELECT * FROM pipelines WHERE pipeline_id=?').get(req.params.id);
+        const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
+        if(!pipeline) fail(404,'任务不存在');
+        if(!canModifyPipeline(req,pipeline)) fail(403,'没有权限结束此任务');
+        if(!usesFindingWorkflow(pipeline.config)) fail(409,'此任务使用原有任务预案流程');
+        if(pipeline.status==='completed') return JSON.parse(pipeline.result || '{}');
+        if(pipeline.status!=='awaiting_approval') fail(409,'扫描尚未结束或任务已取消');
+        if(req.body?.confirmed!==true) fail(400,'请确认汇总当前测试结果，未测试项将保留');
+        const collection=scanCollection(db,pipeline,{metadataOnly:true});
+        const statistics=findingStatistics(db,pipeline,collection.rows);
+        if(collection.scans.some(s=>['PENDING','RUNNING'].includes(s.status)) || collection.summary.active_calls.length
+          || statistics.active_attempts || statistics.unknown_attempts) fail(409,'仍有扫描、验证或停止未确认的调用，请等待结束');
+        const snapshot={scan_task_ids:collection.scans.map(s=>s.scan_task_id),paused_at:'finding_complete',
+          verification_statistics:statistics,scan_completeness:collection.summary.completeness,completed_at:new Date().toISOString()};
+        db.prepare("UPDATE pipelines SET status='completed',result=?,updated_at=? WHERE pipeline_id=?")
+          .run(JSON.stringify(snapshot),snapshot.completed_at,pipeline.pipeline_id);
+        appendTaskLog(db,pipeline.pipeline_id,'已汇总逐漏洞测试结果；未测试和待复核项保留，不推定漏洞已全部验证');
+        return snapshot;
+      })();
+      broadcastTaskEvent(db,'pipeline:status',{pipeline_id:req.params.id,status:'completed'});
+      res.json({status:'ok',data:result});
+    } catch(error) {
+      if(error.status) return res.status(error.status).json({status:'error',error:{message:error.message}});
+      next(error);
+    }
+  });
+
   // Approve a pipeline awaiting human approval (resume from execute step)
   router.post('/:id/approve', async (req, res) => {
     const pipeline = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(req.params.id);
@@ -464,6 +502,7 @@ export default function (db) {
       return res.status(403).json({ status: 'error', error: { message: '没有权限审批此流水线' } });
     }
     let approvalConfig={};try {approvalConfig=JSON.parse(pipeline.config || '{}');} catch {}
+    if(usesFindingWorkflow(approvalConfig)) return res.status(409).json({status:'error',error:{message:'请在漏洞表中逐条确认测试，不执行整任务预案'}});
     if(isProgramMode(approvalConfig.scan_mode)) {
       return res.status(409).json({status:'error',error:{message:'程序测试需先选择发现并建立任务预案，不能绕过演示对象清单直接执行'}});
     }
