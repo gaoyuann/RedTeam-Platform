@@ -45,9 +45,11 @@ signals:
   /// Carries the run_id so listeners (e.g. EvaluatePage) can focus it.
   void runCompleted(const QString &runId);
   void runSelected(const QString &runId);
+  void findingVerificationChanged(const QString &pipelineId);
 
 public slots:
   void onRefreshRuns();
+  void refreshTaskRecords();
   void onRunReact(const QJsonObject &data);
 
 protected:

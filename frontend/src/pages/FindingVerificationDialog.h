@@ -19,12 +19,15 @@ class QGroupBox;
 class FindingVerificationDialog : public QDialog {
   Q_OBJECT
 public:
-  FindingVerificationDialog(ApiClient *api, const QString &pipeline, const QList<qint64> &findings, QWidget *parent=nullptr);
+  FindingVerificationDialog(ApiClient *api, const QString &pipeline, const QList<qint64> &findings, QWidget *parent=nullptr,
+      const QString &existingVerificationId={}, const QString &existingAttemptId={});
 protected:
   void done(int result) override;
+  void resizeEvent(QResizeEvent *event) override;
 private:
   bool allowDiscardDraft();
   void addFinding(qint64 finding);
+  void addExistingFinding(const QString &id, qint64 finding, const QString &state={});
   void load(bool editor=false);
   void loadSources();
   void showSourcePreview();
@@ -33,6 +36,8 @@ private:
   void startChecked();
   QString confirmationText(const QJsonObject &detail) const;
   void renderAttempt(int index);
+  void renderEvidence(int row);
+  void setStatus(const QString &text);
   void displayPlan(const QJsonObject &plan);
   QJsonObject planInput() const;
   void action(const QString &path, const QJsonObject &body, bool reloadEditor=false);
@@ -46,16 +51,19 @@ private:
   ApiClient *m_api;
   QString m_pipeline;
   QTableWidget *m_items, *m_steps, *m_evidenceTable;
-  QLineEdit *m_name, *m_target;
-  QPlainTextEdit *m_conditions, *m_missing, *m_criteria, *m_cleanup, *m_evidence, *m_note, *m_context;
-  QComboBox *m_sources, *m_payloads, *m_attempts, *m_conclusion;
+  QLineEdit *m_name, *m_target, *m_objective;
+  QPlainTextEdit *m_conditions, *m_missing, *m_criteria, *m_cleanup, *m_evidence, *m_note, *m_context, *m_evidenceDetails;
+  QComboBox *m_sources, *m_payloads, *m_attempts, *m_conclusion, *m_objectiveCategory;
   QCheckBox *m_confirm;
   QLabel *m_status;
+  QLabel *m_attemptContext, *m_executionSummary, *m_resultConclusion, *m_automaticSummary, *m_manualSummary, *m_disagreement, *m_resultBasis=nullptr;
   QTabWidget *m_tabs;
+  QTabWidget *m_resultDetails;
+  QGroupBox *m_resultSummary;
   QPlainTextEdit *m_planSummary;
   QPushButton *m_prepareSimple, *m_confirmSimple, *m_startSimple;
   QTimer *m_timer;
-  QPushButton *m_save, *m_start, *m_confirmButton, *m_generate;
+  QPushButton *m_systemEvidence, *m_save, *m_start, *m_confirmButton, *m_generate;
   QJsonObject m_detail;
   QJsonArray m_matches, m_planSteps, m_sourceItems;
   QPlainTextEdit *m_sourcePreview, *m_payloadPreview;
@@ -70,6 +78,9 @@ private:
   int m_sourceOffset=0;
   quint64 m_sourceRequest=0;
   QString m_evidenceAttempt, m_pendingPayload;
+  QString m_pendingAttemptRunId;
+  QString m_pendingExistingAttemptId;
+  quint64 m_attemptSelectionGeneration=0;
   QStringList m_queue;
   QString m_activeQueue, m_queueRunId;
   quint64 m_queueGeneration=0, m_contextGeneration=0, m_editGeneration=0, m_templateGeneration=0;

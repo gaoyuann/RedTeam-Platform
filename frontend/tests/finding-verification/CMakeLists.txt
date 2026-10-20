@@ -29,3 +29,27 @@ target_include_directories(finding-workflow PRIVATE ../../src)
 target_link_libraries(finding-workflow Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Network Qt5::Test)
 add_test(NAME finding-workflow COMMAND finding-workflow)
 set_tests_properties(finding-workflow PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 20)
+
+add_executable(finding-verification-results FindingVerificationResults.cpp
+  ../../src/pages/FindingVerificationDialog.cpp ../../src/pages/FindingVerificationDialog.h
+  ../../src/ApiClient.cpp ../../src/ApiClient.h)
+target_include_directories(finding-verification-results PRIVATE ../../src)
+target_link_libraries(finding-verification-results Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Network Qt5::Test)
+add_test(NAME finding-verification-results COMMAND finding-verification-results)
+set_tests_properties(finding-verification-results PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 20)
+
+add_executable(finding-statistics-policy TaskStatisticsPolicy.cpp ../../src/ApiClient.cpp ../../src/ApiClient.h)
+target_include_directories(finding-statistics-policy PRIVATE ../../src)
+target_link_libraries(finding-statistics-policy Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Network Qt5::Test)
+add_test(NAME finding-statistics-policy COMMAND finding-statistics-policy)
+set_tests_properties(finding-statistics-policy PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 20)
+
+add_executable(finding-verification-selection FindingVerificationSelection.cpp
+  ../../src/pages/FindingVerificationDialog.cpp ../../src/pages/FindingVerificationDialog.h
+  ../../src/ApiClient.cpp ../../src/ApiClient.h)
+target_include_directories(finding-verification-selection PRIVATE ../../src)
+target_link_libraries(finding-verification-selection Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Network Qt5::Test)
+foreach(scenario selection-start selection-poll selection-cancel-late selection-user-history selection-user-history-same selection-deferred-run selection-stale-detail selection-existing-read)
+  add_test(NAME finding-verification-${scenario} COMMAND finding-verification-selection ${scenario})
+  set_tests_properties(finding-verification-${scenario} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 20)
+endforeach()

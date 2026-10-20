@@ -226,7 +226,7 @@ export function taskReportHtml(document) {
     <p class="notice">${escapeHtml(content.notice)}<br>${escapeHtml(results.assessment.notice)}</p>
     <h2>来源链</h2><pre>${escapeHtml(JSON.stringify(content.provenance, null, 2))}</pre>
     <p>Run 状态：${escapeHtml(results.execution.run?.status || '无主执行 Run')} · 风险：${escapeHtml(results.assessment.risk_level)} · 教学得分：${escapeHtml(results.assessment.teaching_score?.percent ?? '未记录')}</p>
-    ${results.statistics ? `<h2>统一统计</h2><pre>${escapeHtml(JSON.stringify(results.statistics,null,2))}</pre>${table('漏洞实例', ['实例','扫描标签','当前结论','原始记录'], results.instances.map(i=>[i.instance_id,i.severity,i.conclusion,i.record_ids.join(', ')]))}` : '<p>该历史报告未记录 F09 统计</p>'}
+    ${results.statistics ? `<h2>统一统计</h2><p>${results.statistics.result_policy==='system_evidence_only'?'系统证据口径 v1；人工意见不参与目标达成计数':'历史统计口径，仅供参考'}</p><pre>${escapeHtml(JSON.stringify(results.statistics,null,2))}</pre>${table('漏洞实例', ['实例','扫描标签','当前结论','原始记录'], results.instances.map(i=>[i.instance_id,i.severity,i.conclusion,i.record_ids.join(', ')]))}` : '<p>该历史报告未记录 F09 统计</p>'}
     ${table('扫描全量记录（未去重）', ['记录 ID','子扫描','类别','工具','内容'], (results.scan_records || []).map(row=>[row.id,row.scan_task_id,row.category,row.source_tool,row.result_data]))}
     <pre>${escapeHtml(JSON.stringify(results.scan_summary || {completeness:'legacy_unknown'},null,2))}</pre>
     ${table('发现候选（未复核）', ['类别', '名称', '风险标签', '来源'], results.findings.map(row => [row.category, row.name, row.severity, row.source]))}

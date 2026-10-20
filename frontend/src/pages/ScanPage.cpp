@@ -2960,5 +2960,12 @@ void ScanPage::reviewSourceFinding(int findingId) {
 void ScanPage::openFindingVerification(const QList<qint64> &ids) {
   if(m_pipelineId.isEmpty() || ids.isEmpty())return;
   auto *dialog=new FindingVerificationDialog(m_api,m_pipelineId,ids,this);
+  const QString pipeline=m_pipelineId;
+  const int context=m_scopeRevision;
+  connect(dialog,&QDialog::finished,this,[this,pipeline,context](){
+    if(m_pipelineId!=pipeline || m_scopeRevision!=context)return;
+    onRefreshTasks();
+    emit findingVerificationChanged(pipeline);
+  });
   dialog->setAttribute(Qt::WA_DeleteOnClose);dialog->show();
 }

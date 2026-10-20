@@ -30,8 +30,8 @@ int main(int argc,char **argv) {
     {"plans",revision?QJsonArray{QJsonObject{{"revision",revision},{"fingerprint","fp"+QString::number(revision)},{"content",p}}}:QJsonArray{}},
     {"readiness",QJsonObject{{"ready",revision>0},{"reasons",revision?QJsonArray{}:QJsonArray{"请选择方案"}}}},
     {"payloads",QJsonObject{{"matches",generated?QJsonArray{payload}:QJsonArray{}}}},
-    {"summary",QJsonObject{{"run_id",state=="completed"?"run-workflow":""},{"conclusion",state=="completed"?(reviewed?"inconclusive":"confirmed"):"pending"},{"method",state=="completed"?(reviewed?"manual":"automatic"):"pending"},{"note","根据实际响应判定"}}},
-    {"attempts",state=="completed"?QJsonArray{QJsonObject{{"id","attempt"},{"state",state},{"stop_confirmed",1},{"revision",revision},{"evidence",QJsonArray{evidence}},
+    {"summary",QJsonObject{{"run_id",state=="completed"?"run-workflow":""},{"conclusion",state=="completed"?"confirmed":"pending"},{"method",state=="completed"?"automatic":"pending"},{"note","根据实际响应判定"},{"result",QJsonObject{{"schema_version",1},{"status",state=="completed"?"achieved":"not_performed"},{"objective",QJsonObject{{"label","确认防护响应头缺失"}}},{"object",QJsonObject{{"target","http://fixture.invalid/item"}}},{"reason","完整响应满足平台配置检查判据"}}}}},
+    {"attempts",state=="completed"?QJsonArray{QJsonObject{{"id","attempt"},{"summary",QJsonObject{{"result",QJsonObject{{"schema_version",1},{"status","achieved"},{"objective",QJsonObject{{"label","确认防护响应头缺失"}}},{"object",QJsonObject{{"target","http://fixture.invalid/item"}}},{"reason","完整响应满足平台配置检查判据"}}}}},{"reviews",reviewed?QJsonArray{QJsonObject{{"conclusion","inconclusive"},{"note","需要结合部署要求"}}}:QJsonArray{}},{"state",state},{"stop_confirmed",1},{"revision",revision},{"evidence",QJsonArray{evidence}},
       {"assessments",QJsonArray{QJsonObject{{"conclusion","confirmed"},{"reason","完整 HTML 缺少防护头"},{"limitations","仅检查本入口配置"}}}}}}:QJsonArray{}}};
  };
  QObject::connect(&server,&QTcpServer::newConnection,&app,[&]{while(server.hasPendingConnections()){
@@ -74,10 +74,10 @@ int main(int argc,char **argv) {
  QTimer::singleShot(0,[]{auto *box=qobject_cast<QMessageBox*>(QApplication::activeModalWidget());if(box)box->button(QMessageBox::Yes)->click();});dialog.m_startSimple->click();
  if(!wait([&]{return dialog.m_detail["summary"].toObject()["conclusion"]=="confirmed"&&!dialog.m_loading;}))return 13;
  const auto started=bodies.value("/api/pipelines/p/verifications/v/start");if(started["fingerprint"]!="fp2"||!started["confirmed"].toBool())return 14;
- dialog.m_tabs->setCurrentIndex(1);if(!dialog.m_evidence->toPlainText().contains("自动判定")||!dialog.m_evidence->toPlainText().contains("实际消费载荷"))return 15;
+ dialog.m_tabs->setCurrentIndex(1);if(!dialog.m_evidence->toPlainText().contains("已保存自动判断")||!dialog.m_evidence->toPlainText().contains("实际消费载荷"))return 15;
  dialog.m_evidenceTable->item(0,0)->setCheckState(Qt::Checked);dialog.m_note->setPlainText("需要结合应用部署要求复核");dialog.m_conclusion->setCurrentIndex(dialog.m_conclusion->findData("inconclusive"));
- for(auto *button:dialog.findChildren<QPushButton*>())if(button->text()=="保存证据复核")button->click();
- if(!wait([&]{return dialog.m_detail["summary"].toObject()["method"]=="manual"&&!dialog.m_loading;}))return 16;
+ dialog.m_resultDetails->setCurrentIndex(1);for(auto *button:dialog.findChildren<QPushButton*>())if(button->text()=="保存人工意见"){qobject_cast<QScrollArea*>(dialog.m_resultDetails->widget(1))->ensureWidgetVisible(button,0,0);QTest::qWait(20);if(!button->isVisible())return 20;QTest::mouseClick(button,Qt::LeftButton);}
+ if(!wait([&]{return reviewed && dialog.m_detail["attempts"].toArray().first().toObject()["reviews"].toArray().size()==1 && dialog.m_resultConclusion->text().contains("目标已达成")&&!dialog.m_loading;}))return 16;
  if(bodies.value("/api/pipelines/p/verifications/v/reviews")["evidence_ids"].toArray()!=QJsonArray{77})return 17;
  dialog.grab().save("workflow-result.png");
  return 0;

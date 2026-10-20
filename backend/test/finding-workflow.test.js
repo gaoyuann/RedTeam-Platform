@@ -1,16 +1,18 @@
+import {buildVerificationContract} from '../src/services/findingVerificationResult.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 import express from 'express';
 import http from 'node:http';
 import {fileURLToPath} from 'node:url';
+import {createHash} from 'node:crypto';
 import {runMigrations} from '../src/db/migrate.js';
-import {ensureVerification,verificationDetail,saveVerificationPlan,selectVerificationTemplate,confirmAndStart,changeStepPayload} from '../src/services/findingVerification.js';
+import {ensureVerification,verificationDetail,saveVerificationPlan,selectVerificationTemplate,confirmAndStart,changeStepPayload,reviewVerification} from '../src/services/findingVerification.js';
 import {payloadVersion} from '../src/services/findingPayloads.js';
 import {getPayloadById} from '../src/services/payloadLoader.js';
 import {launchVerification} from '../src/services/findingVerificationRunner.js';
 import {assessVerificationAttempt} from '../src/services/findingVerificationAssessment.js';
-import {evaluateFindingRule,findingRule} from '../src/services/findingVerificationRules.js';
+import {evaluateFindingRule,findingRule,directoryEvidenceCriteria} from '../src/services/findingVerificationRules.js';
 import routes from '../src/routes/findingVerifications.js';
 const actor={sub:'f08_alice',role:'user'};
 async function fixture(existingDb) {
@@ -48,6 +50,25 @@ function setFinding(f,finding) {
  f.db.prepare("UPDATE scan_results SET source_tool='nikto',result_type='web_vuln',result_data=? WHERE id=?")
    .run(JSON.stringify({finding,url:f.plan.target}),f.finding);
 }
+test('AI objective drafts are explicit metadata and cannot grant automatic assessment capability',async()=>{
+ const f=await fixture();let prompts;
+ const objective={label:'对照指定输入所产生的可观察效果',category:'effect'};
+ const client=await api(f,{llm:async messages=>{
+  prompts=messages;return {ok:true,content:JSON.stringify({...f.plan,objective_draft:objective})};
+ }});
+ try {
+  assert.equal((await client.request('/generate',{expected_revision:0})).status,200);
+  const request=JSON.parse(prompts[1].content);
+  assert.ok(request.output_example.objective_draft);
+  assert.ok(request.requirements.some(v=>v.includes('objective_draft') && v.includes('capability')));
+  const detail=(await client.request('')).body.data,plan=detail.plans[0].content;
+  assert.deepEqual(plan.objective_draft,objective);assert.equal(plan.verification_contract.objective.label,objective.label);
+  assert.equal(plan.verification_contract.capability.automatic,false);assert.equal(plan.verification_contract.criterion,null);
+  assert.equal(detail.attempts.length,0);assert.equal(f.db.prepare('SELECT count(*) n FROM execution_runs').get().n,0);
+  const invalid=await client.request('/plans',{...f.plan,expected_revision:1,objective_draft:{...objective,capability:{automatic:true}}});
+  assert.equal(invalid.status,400);assert.equal((await client.request('')).body.data.revision,1);
+ }finally{await client.close();f.db.close();}
+});
 test('template selection, manual payload binding, one confirmation, actual consumption and automatic/manual result form one chain',async()=>{
  const f=await fixture();setFinding(f,'The X-Content-Type-Options header is not set.');
  let modelCalls=0,toolCalls=0;
@@ -58,8 +79,10 @@ test('template selection, manual payload binding, one confirmation, actual consu
    const cfg=JSON.parse(step.evidence_config);
    f.db.prepare("INSERT INTO execution_steps(run_id,step_index,tool_id,success) VALUES(?,0,'target-request',1)").run(runId);
    f.db.prepare(`INSERT INTO evidence_records(run_id,step_index,tool_id,evidence_data,raw_stdout) VALUES(?,0,'target-request',?,?)`)
-     .run(runId,JSON.stringify({success:true,exit_code:0,payload_id:step.payload_id,finding_verification:{...linkage,tool_started:true,payload_consumed:true}}),
+     .run(runId,JSON.stringify({success:true,exit_code:0,payload_id:step.payload_id,finding_verification:{...linkage,tool_started:true,payload_consumed:true,payload_version:cfg.payload_version}}),
        JSON.stringify({url:run.target,method:'GET',connected:true,complete:true,status_code:200,response_headers:{'content-type':'text/html'},response:'<html>Fixture</html>'}));
+   const call=Number(f.db.prepare("INSERT INTO execution_attempts(run_id,step_index,tool_id) VALUES(?,0,'target-request')").run(runId).lastInsertRowid);
+   f.db.prepare('UPDATE evidence_records SET target=?,attempt_id=? WHERE run_id=?').run(run.target,call,runId);
    f.db.prepare("UPDATE execution_runs SET status='COMPLETED' WHERE run_id=?").run(runId);
    return {processStopped:true};
  }};
@@ -88,7 +111,7 @@ test('template selection, manual payload binding, one confirmation, actual consu
   const attempt=detail.attempts[0];assert.equal(attempt.evidence[0].evidence_data.payload_id,generated.id);assert.equal(attempt.assessments.length,1);
   assessVerificationAttempt(f.db,attempt.id);assert.equal(f.db.prepare('SELECT count(*) n FROM finding_verification_assessments').get().n,1);
   assert.equal((await client.request('/reviews',{attempt_id:attempt.id,conclusion:'inconclusive',evidence_ids:[attempt.evidence[0].id],note:'Need application context'})).status,200);
-  detail=(await client.request('')).body.data;assert.equal(detail.summary.method,'manual');assert.equal(detail.summary.conclusion,'inconclusive');assert.equal(detail.attempts[0].assessments[0].conclusion,'confirmed');
+  detail=(await client.request('')).body.data;assert.equal(detail.summary.method,'automatic');assert.equal(detail.summary.conclusion,'confirmed');assert.equal(detail.summary.human_opinions[0].conclusion,'inconclusive');assert.equal(detail.attempts[0].assessments[0].conclusion,'confirmed');
  }finally{await client.close();f.db.close();}
 });
 
@@ -130,6 +153,122 @@ test('directory rule checks the path-specific title, parent navigation and same-
  for(const response of ['Index of /dir/',html.replace('/dir/','/other/'),html.replace('<a href="../">Parent Directory</a>',''),html.replace('file.txt','https://outside.invalid/file.txt')])assert.equal(f.judge({response}).conclusion,'not_verified');
  assert.equal(f.judge({response:html,complete:false}).conclusion,'inconclusive');
  assert.equal(findingRule({source_tool:'nikto',result_data:JSON.stringify({finding:'Admin login page/section found.'})},'http://fixture.invalid/'),null);
+});
+
+test('directory v2 permits only one trailing slash difference and frozen v1 retains its original result',()=>{
+ const f=evidenceFixture('Directory indexing found.');
+ const html='<title>Index of /dir</title><a href="../">Parent Directory</a><a href="file.txt">file.txt</a>';
+ assert.equal(f.rule.id,'f08-directory-index-v1');assert.equal(f.rule.version,2);
+ const record=response=>({...f.record,raw_stdout:JSON.stringify({...f.obs,response})});
+ assert.equal(f.judge({response:html}).conclusion,'confirmed');
+ assert.equal(evaluateFindingRule({...f.rule,version:1},[record(html)],f.attempt,f.plan).conclusion,'not_verified');
+ assert.equal(evaluateFindingRule({...f.rule,version:99},[record(html)],f.attempt,f.plan).conclusion,'inconclusive');
+ assert.match(f.judge({response:html.replace('<a href="../">Parent Directory</a>','')}).reason,/父目录导航/);
+ for(const response of [html.replace('/dir','/Dir'),html.replace('/dir','/other'),html.replace('/dir','/dir//'),
+   html.replace('/dir','/dir%2f'),html.replace('/dir','/dir%5c'),html.replace('<a href="../">Parent Directory</a>',''),
+   html.replace('file.txt','https://outside.invalid/dir/file.txt'),html.replace('file.txt','file%2fchild.txt'),html.replace('file.txt','file%252fchild.txt'),
+   html.replace('file.txt','file%25252fchild.txt'),html.replace('file.txt','sub//child.txt')])
+   assert.notEqual(f.judge({response}).conclusion,'confirmed',response);
+ assert.equal(f.judge({response:html.replace('file.txt','https://fixture.invalid/dir/file.txt')}).conclusion,'confirmed');
+ for(const target of ['https://fixture.invalid/dir//','https://fixture.invalid/dir%2f/','https://fixture.invalid/dir%252f/','https://fixture.invalid/dir%5c/','https://fixture.invalid/dir\\/']) {
+   const other=evidenceFixture('Directory indexing found.',target);
+   assert.equal(other.judge({response:html}).conclusion,'inconclusive');
+ }
+ for(const change of [{status_code:403},{status_code:302},{complete:false},{truncated:true},{connected:false},{response:html+'<input type="password">'},{response:undefined}])
+   assert.equal(f.judge({response:html,...change}).conclusion,'inconclusive');
+});
+
+test('directory criteria explain the frozen version using linked original evidence without exposing HTML',()=>{
+ const f=evidenceFixture('Directory indexing found.');
+ const response='<title>Index of /dir</title><a href="../">Parent Directory</a><a href="file.txt">file.txt</a><div>PRIVATE_HTML</div>';
+ const record={...f.record,raw_stdout:JSON.stringify({...f.obs,response})};
+ const criteria=directoryEvidenceCriteria({...f.rule,version:1},record,f.attempt,f.plan);
+ assert.equal(criteria.rule_version,1);assert.equal(criteria.source,'saved_evidence');assert.deepEqual(criteria.evidence_ids,[1]);
+ assert.equal(criteria.target_path,'/dir/');assert.equal(criteria.title_path,'/dir');
+ assert.deepEqual(criteria.checks.map(c=>c.status),['passed','failed','passed','passed']);
+ assert.equal(JSON.stringify(criteria).includes('PRIVATE_HTML'),false);
+ assert.deepEqual(directoryEvidenceCriteria(f.rule,record,f.attempt,f.plan).checks.map(c=>c.status),['passed','passed','passed','passed']);
+ for(const raw_stdout of ['broken','null',JSON.stringify({...f.obs,response:undefined})]) {
+   const incomplete=directoryEvidenceCriteria(f.rule,{...record,raw_stdout},f.attempt,f.plan);
+   assert.ok(incomplete.checks.every(c=>c.status==='unknown'));
+ }
+ for(const change of [{response_headers:{}},{status_code:undefined},{connected:undefined},{complete:undefined}]) {
+   const missing=directoryEvidenceCriteria(f.rule,{...record,raw_stdout:JSON.stringify({...f.obs,response,...change})},f.attempt,f.plan);
+   assert.ok(missing.checks.every(c=>c.status==='unknown'));
+ }
+ for(const key of ['success','exit_code']) {
+   const data=JSON.parse(record.evidence_data);delete data[key];
+   assert.ok(directoryEvidenceCriteria(f.rule,{...record,evidence_data:JSON.stringify(data)},f.attempt,f.plan).checks.every(c=>c.status==='unknown'));
+ }
+ const failed=directoryEvidenceCriteria(f.rule,{...record,raw_stdout:JSON.stringify({...f.obs,response,complete:false})},f.attempt,f.plan);
+ assert.equal(failed.checks[0].status,'failed');assert.ok(failed.checks.slice(1).every(c=>c.status==='unknown'));
+ assert.ok(directoryEvidenceCriteria({...f.rule,version:99},record,f.attempt,f.plan).checks.every(c=>c.status==='unknown'));
+ const unowned={...record,evidence_data:JSON.stringify({success:true,exit_code:0,finding_verification:{attempt_id:'other'}})};
+ assert.ok(directoryEvidenceCriteria(f.rule,unowned,f.attempt,f.plan).checks.every(c=>c.status==='unknown'));
+});
+
+function completeDirectoryAttempt(f,{version,request_id}) {
+ let snapshot=f.db.prepare('SELECT * FROM finding_verification_plans WHERE verification_id=? ORDER BY revision DESC LIMIT 1').get(f.item.id);
+ if(version) {
+   const content=JSON.parse(snapshot.content);content.assessment_rule.version=version;content.verification_contract=buildVerificationContract(content,f.finding);
+   const raw=JSON.stringify(content);const fp=createHash('sha256').update(raw).digest('hex');
+   f.db.prepare('UPDATE finding_verification_plans SET content=?,fingerprint=? WHERE verification_id=? AND revision=?').run(raw,fp,f.item.id,snapshot.revision);
+   snapshot={...snapshot,content:raw,fingerprint:fp};
+ }
+ const a=confirmAndStart(f.db,f.pipeline,actor,f.item.id,{revision:snapshot.revision,fingerprint:snapshot.fingerprint,request_id,confirmed:true});
+ f.db.prepare("UPDATE finding_verification_attempts SET state='completed',stop_confirmed=1,completed_at=datetime('now') WHERE id=?").run(a.id);
+ f.db.prepare("UPDATE finding_verifications SET state='completed' WHERE id=?").run(f.item.id);
+ f.db.prepare("UPDATE execution_runs SET status='COMPLETED' WHERE run_id=?").run(a.run_id);
+ f.db.prepare("INSERT INTO execution_steps(run_id,step_index,tool_id,success,exit_code) VALUES(?,0,'target-request',1,0)").run(a.run_id);
+ const link={attempt_id:a.id,verification_id:f.item.id,pipeline_id:f.pipeline.pipeline_id,finding_id:f.finding,revision:a.revision,fingerprint:snapshot.fingerprint,tool_started:true};
+ const raw=JSON.stringify({url:f.plan.target,method:'GET',connected:true,complete:true,status_code:200,response_headers:{'content-type':'text/html'},
+   response:'<title>Index of /docs</title><a href="../">Parent Directory</a><a href="file.txt">file.txt</a>'});
+ const evidenceId=Number(f.db.prepare("INSERT INTO evidence_records(run_id,step_index,tool_id,evidence_type,evidence_data,raw_stdout) VALUES(?,0,'target-request','observation',?,?)")
+   .run(a.run_id,JSON.stringify({success:true,exit_code:0,finding_verification:link}),raw).lastInsertRowid);
+ const call=Number(f.db.prepare("INSERT INTO execution_attempts(run_id,step_index,tool_id) VALUES(?,0,'target-request')").run(a.run_id).lastInsertRowid);
+ f.db.prepare('UPDATE evidence_records SET target=?,attempt_id=? WHERE id=?').run(f.plan.target,call,evidenceId);
+ return {a,evidenceId,snapshot,raw};
+}
+
+test('attempt summaries isolate historical conclusions and frozen revisions while read-only criteria preserve old assessments',async()=>{
+ const f=await fixture();f.plan.target='http://fixture.invalid/docs/';setFinding(f,'Directory indexing found.');
+ try {
+   selectVerificationTemplate(f.db,f.pipeline,actor,f.item.id,{playbook_id:'f08-directory-index-v1',expected_revision:0});
+   const old=completeDirectoryAttempt(f,{version:1,request_id:'old-directory'});
+   const saved=assessVerificationAttempt(f.db,old.a.id);assert.equal(saved.conclusion,'not_verified');
+   reviewVerification(f.db,f.pipeline,actor,f.item.id,{attempt_id:old.a.id,conclusion:'confirmed',evidence_ids:[old.evidenceId],note:'Manual review confirms the directory listing'});
+   const client=await api(f);
+   try {
+     const before=f.db.prepare('SELECT total_changes() n').get().n;
+     let detail=(await client.request('')).body.data;
+     assert.equal(f.db.prepare('SELECT total_changes() n').get().n,before,'detail GET cannot persist reassessment or update history');
+     assert.equal(detail.attempts[0].summary.conclusion,'not_verified');assert.equal(detail.attempts[0].summary.method,'automatic');
+     assert.equal(detail.attempts[0].summary.disagreement,true);assert.equal(detail.attempts[0].summary.automatic.conclusion,'not_verified');
+     assert.equal(detail.attempts[0].evidence[0].criteria.checks[1].status,'failed');
+     assert.equal(f.db.prepare('SELECT raw_stdout FROM evidence_records WHERE id=?').get(old.evidenceId).raw_stdout,old.raw);
+     selectVerificationTemplate(f.db,f.pipeline,actor,f.item.id,{playbook_id:'f08-directory-index-v1',expected_revision:1});
+     detail=verificationDetail(f.db,f.pipeline,f.item.id);
+     assert.equal(detail.plans[0].content.assessment_rule.version,2);assert.equal(detail.plans[1].content.assessment_rule.version,1);
+     assert.equal(detail.state,'draft');assert.equal(detail.summary.state,'draft');assert.equal(detail.summary.revision,2);
+     assert.equal(detail.attempts[0].summary.state,'completed');assert.equal(detail.attempts[0].summary.revision,1);
+     const latest=completeDirectoryAttempt(f,{request_id:'new-directory'});
+     assert.equal(assessVerificationAttempt(f.db,latest.a.id).conclusion,'confirmed');
+     reviewVerification(f.db,f.pipeline,actor,f.item.id,{attempt_id:old.a.id,conclusion:'inconclusive',evidence_ids:[old.evidenceId],note:'Historical review with a narrower conclusion'});
+     detail=verificationDetail(f.db,f.pipeline,f.item.id);
+     assert.equal(detail.summary.method,'automatic');assert.equal(detail.summary.conclusion,'confirmed');
+     assert.equal(detail.attempts[0].summary.attempt_id,latest.a.id);assert.equal(detail.attempts[0].summary.manual,null);
+     assert.equal(detail.attempts[1].summary.conclusion,'not_verified');assert.equal(detail.attempts[1].summary.manual.note,'Historical review with a narrower conclusion');
+     assert.equal(detail.attempts[0].evidence[0].criteria.rule_version,2);assert.ok(detail.attempts[0].evidence[0].criteria.checks.every(c=>c.status==='passed'));
+     reviewVerification(f.db,f.pipeline,actor,f.item.id,{attempt_id:latest.a.id,conclusion:'inconclusive',evidence_ids:[latest.evidenceId],note:'Need application context'});
+     detail=verificationDetail(f.db,f.pipeline,f.item.id);
+     assert.equal(detail.summary.method,'automatic');assert.equal(detail.summary.result.status,'achieved');assert.equal(detail.attempts[0].summary.disagreement,true);
+     assert.equal(detail.attempts[0].summary.automatic.conclusion,'confirmed');assert.equal(detail.attempts[0].summary.manual.conclusion,'inconclusive');
+     f.db.prepare("UPDATE evidence_records SET raw_stdout='broken' WHERE id=?").run(old.evidenceId);
+     assert.deepEqual(assessVerificationAttempt(f.db,old.a.id),saved,'repeat assessment returns the saved judgement rather than a new computation');
+     assert.equal(f.db.prepare('SELECT count(*) n FROM finding_verification_assessments WHERE attempt_id=?').get(old.a.id).n,1);
+     assert.equal(f.db.prepare('SELECT content FROM finding_verification_plans WHERE verification_id=? AND revision=1').get(f.item.id).content,old.snapshot.content);
+   }finally{await client.close();}
+ }finally{f.db.close();}
 });
 
 test('payload preparation is scoped to the step, records generated/reused events, and never binds automatically',async()=>{

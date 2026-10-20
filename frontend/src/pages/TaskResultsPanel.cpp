@@ -52,6 +52,16 @@ QString kind(const QString &value)
   return value == "trace_snapshot" ? QStringLiteral("任务追溯快照") : value == "legacy" ? QStringLiteral("旧报告 / 来源不完整") : QStringLiteral("来源无效 / 待核对");
 }
 
+QString findingSystemResult(const QJsonObject &finding)
+{
+  const auto verification=finding.value("verification").toObject();
+  if(verification.isEmpty())return QStringLiteral("未开展适用验证");
+  const auto result=verification.value("result").toObject();
+  if(result.value("schema_version").toInt()!=1)return QStringLiteral("证据不足（旧版接口）");
+  const QMap<QString,QString> labels{{"achieved","目标已达成"},{"not_achieved","目标未达成"},{"inconclusive","证据不足"},{"not_performed","未开展适用验证"},{"pending","等待结果"}};
+  return labels.value(result.value("status").toString(),QStringLiteral("证据不足（未知结果状态）"));
+}
+
 QString time(const QString &value)
 {
   auto parsed = QDateTime::fromString(value, Qt::ISODateWithMs);
@@ -225,7 +235,7 @@ void TaskResultsPanel::clearTaskContext()
   m_state->setText(QStringLiteral("选择任务后查看结果与报告"));
   m_state->setStyleSheet(Theme::StatusInfoStyle);
   m_identity->clear(); m_assessment->clear(); m_updated->clear(); m_trace->clear();
-  m_detail->setPlainText(QStringLiteral("发现候选、工具结果与人工复核结论分开处理；选择记录查看来源。"));
+  m_detail->setPlainText(QStringLiteral("发现候选、工具结果、系统验证结论与人工意见分开处理；选择记录查看来源。"));
   updateButtons();
 }
 
@@ -385,7 +395,7 @@ void TaskResultsPanel::render()
       : QStringLiteral("Run %1 · %2").arg(state(run.value("status").toString()), run.value("stop_reason").toString()));
   m_state->setStyleSheet(run.value("status").toString() == "FAILED" ? Theme::StatusErrorStyle : Theme::StatusInfoStyle);
   m_assessment->setText(assessment.value("risk_level").toString() + "\n" + assessment.value("notice").toString()
-      + QStringLiteral(" 教学分仅展示历史存储值，本页不会自动评分；没有人工复核记录时不标为已验证。"));
+      + QStringLiteral(" 教学分仅展示历史存储值，本页不会自动评分；系统结论由适用判据和证据决定，人工意见单独保留。"));
   m_metrics[0]->setValue(number(m_snapshot.value("finding_count")));
   m_metrics[0]->setToolTip(QStringLiteral("当前候选摘要中的记录数，包含 AI 候选；不是去重漏洞数。完整扫描记录见同名标签。"));
   m_metrics[1]->setValue(run.isEmpty() ? QStringLiteral("—") : number(counts.value("returned")) + " / " + number(counts.value("steps")));
@@ -410,7 +420,7 @@ void TaskResultsPanel::render()
       const auto row = arrays[tableIndex][rowIndex].toObject();
       QStringList cells;
       if (tableIndex == 0) cells = QStringList{row.value("category").toString() == "scan_candidate" ? "扫描候选" : "分析候选", row.value("name").toString(),
-        row.value("severity").toString(), "待人工复核", row.value("source").toString() == "structured_scan" ? "结构化扫描结果" : "任务 AI 分析"};
+        row.value("severity").toString(), findingSystemResult(row), row.value("source").toString() == "structured_scan" ? "结构化扫描结果" : "任务 AI 分析"};
       else if (tableIndex == 1) cells = QStringList{number(row.value("step_index")), row.value("tool_id").toString(), state(row.value("state").toString()),
         number(row.value("attempt_id")), row.value("source").toString() == "playbook" ? "预案" : "动态 / 来源待核对", number(row.value("exit_code"))};
       else if (tableIndex == 2) cells = QStringList{number(row.value("id")), number(row.value("step_index")), row.value("tool_id").toString(),
@@ -504,7 +514,7 @@ void TaskResultsPanel::renderDetail()
   if (!item || !table->selectionModel()->hasSelection()) {
     m_detail->setPlainText(QStringLiteral("选择一条候选、工具结果或证据记录查看来源；缺少记录不能推断为安全或验证成功。")); return;
   }
-  const QString detail = QStringLiteral("任务：%1\n候选和工具结果仍需人工复核，source_state 只校验记录关联。\n\n").arg(m_pipelineId) + pretty(item->data(Qt::UserRole).toJsonObject());
+  const QString detail = QStringLiteral("任务：%1\n候选和工具结果不自动代表目标达成，source_state 只校验记录关联。\n\n").arg(m_pipelineId) + pretty(item->data(Qt::UserRole).toJsonObject());
   if (m_detail->toPlainText() != detail) m_detail->setPlainText(detail);
 }
 

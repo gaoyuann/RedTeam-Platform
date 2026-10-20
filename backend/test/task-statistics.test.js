@@ -1,3 +1,5 @@
+import {createHash} from 'node:crypto';
+import {buildVerificationContract} from '../src/services/findingVerificationResult.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
@@ -62,28 +64,52 @@ test('full counts, idempotent mapping, unknown denominators and baseline revisio
 function attempt(db,finding,n,{conclusion='confirmed',started=true,state='completed',forged=false,manual=null}={}) {
   const verification='verify-'+finding, attemptId='attempt-'+n, run='run-'+n;
   db.prepare("INSERT OR IGNORE INTO finding_verifications(id,pipeline_id,finding_id,scan_task_id,revision,state) VALUES (?,'f09',?,'s',1,'completed')").run(verification,finding);
-  db.prepare("INSERT OR IGNORE INTO finding_verification_plans(verification_id,revision,content,fingerprint) VALUES (?,1,?,'fingerprint')").run(verification,JSON.stringify({target:'http://192.0.2.2/login'}));
-  const link={pipeline_id:'f09',finding_id:finding,verification_id:verification,attempt_id:attemptId,revision:1,fingerprint:'fingerprint'};
+  const plan={target:'http://192.0.2.2/login',steps:[{step_id:'check',step_index:0,tool_id:'target-request',name:'Observe HTML headers',consumption:'none'}],assessment_rule:{id:'f08-web-headers-v1',version:1,kind:'headers',attribute:'nosniff',target:'http://192.0.2.2/login',step_id:'check',limitations:'Fixture scope'}};
+  plan.verification_contract=buildVerificationContract(plan,finding);
+  const fingerprint=createHash('sha256').update(JSON.stringify(plan)).digest('hex');
+  db.prepare("INSERT OR IGNORE INTO finding_verification_plans(verification_id,revision,content,fingerprint) VALUES (?,1,?,?)").run(verification,JSON.stringify(plan),fingerprint);
+  const link={pipeline_id:'f09',finding_id:finding,verification_id:verification,attempt_id:attemptId,revision:1,fingerprint};
   db.prepare("INSERT INTO execution_runs(run_id,target,user_sub,status,plan_data,preflight_status) VALUES (?,'http://192.0.2.2/login','f09alice','COMPLETED',?,'PASSED')").run(run,JSON.stringify({finding_verification:link}));
   db.prepare("INSERT INTO finding_verification_attempts(id,verification_id,pipeline_id,revision,run_id,request_id,state,stop_confirmed) VALUES (?,?,'f09',1,?,?,?,?)")
     .run(attemptId,verification,run,attemptId,state,state==='unknown'?0:1);
   const call=Number(db.prepare("INSERT INTO execution_attempts(run_id,step_index,tool_id) VALUES (?,0,'target-request')").run(run).lastInsertRowid);
+  db.prepare("INSERT INTO execution_steps(run_id,step_index,tool_id,success,exit_code) VALUES (?,0,'target-request',1,0)").run(run);
   const evidence=Number(db.prepare("INSERT INTO evidence_records(run_id,step_index,tool_id,evidence_type,evidence_data,target,attempt_id) VALUES (?,0,'target-request','http',?,'http://192.0.2.2/login',?)")
-    .run(run,JSON.stringify({finding_verification:{...link,attempt_id:forged?'other':attemptId,tool_started:started}}),call).lastInsertRowid);
-  db.prepare("INSERT INTO finding_verification_assessments(attempt_id,rule_id,rule_version,conclusion,evidence_ids,reason,limitations) VALUES (?,'r',1,?,?,'fixture','fixture')")
+    .run(run,JSON.stringify({success:true,exit_code:0,finding_verification:{...link,attempt_id:forged?'other':attemptId,tool_started:started}}),call).lastInsertRowid);
+  db.prepare("INSERT INTO finding_verification_assessments(attempt_id,rule_id,rule_version,conclusion,evidence_ids,reason,limitations) VALUES (?,'f08-web-headers-v1',1,?,?,'fixture','fixture')")
     .run(attemptId,conclusion,JSON.stringify([evidence]));
+  db.prepare('UPDATE evidence_records SET raw_stdout=? WHERE id=?').run(JSON.stringify({url:plan.target,method:'GET',connected:true,complete:true,status_code:200,response_headers:{'content-type':'text/html',...(conclusion==='not_verified'?{'x-content-type-options':'nosniff'}:{})},response:'<html>Fixture</html>'}),evidence);
   if(manual)db.prepare("INSERT INTO finding_verification_reviews(attempt_id,conclusion,evidence_ids,note,reviewed_by) VALUES (?,?,?,'review','f09alice')").run(attemptId,manual,JSON.stringify([evidence]));
   return {run,attemptId};
 }
 
-test('verification counts use starts and scoped evidence, latest review and conflicts',async()=>{
+test('non-dispatch proof updates start counts only after actual stop is confirmed',async()=>{
+ const {db,p,add}=await fixture();try {
+  const finding=add();syncInstances(db,p);
+  const created=attempt(db,finding,999,{state:'aborted'});
+  db.prepare('DELETE FROM evidence_records WHERE run_id=?').run(created.run);
+  db.prepare('DELETE FROM execution_steps WHERE run_id=?').run(created.run);
+  db.prepare('DELETE FROM execution_attempts WHERE run_id=?').run(created.run);
+  db.prepare("UPDATE execution_runs SET status='ABORTED',final_summary=? WHERE run_id=?")
+   .run(JSON.stringify({verification_dispatch_started:false}),created.run);
+  let result=taskStatistics(db,p);
+  assert.equal(result.statistics.verifications.not_started,1);assert.equal(result.statistics.verifications.start_unknown,0);
+  assert.equal(result.attempts[0].result.status,'not_performed');
+  db.prepare("UPDATE finding_verification_attempts SET state='unknown',stop_confirmed=0 WHERE id=?").run(created.attemptId);
+  result=taskStatistics(db,p);
+  assert.equal(result.statistics.verifications.not_started,0);assert.equal(result.statistics.verifications.start_unknown,1);
+  assert.equal(result.attempts[0].result.status,'inconclusive');
+ }finally{db.close();}
+});
+
+test('verification counts use starts and scoped evidence, system results and independent opinions',async()=>{
   const {db,p,add}=await fixture();try{
     const a=add(),b=add();syncInstances(db,p);
     attempt(db,a,1);attempt(db,a,2);attempt(db,a,3);
     let s=taskStatistics(db,p);assert.equal(s.statistics.verifications.started,3);assert.equal(s.statistics.verifications.executed_instances,1);assert.equal(s.statistics.verifications.confirmed_instances,1);
-    attempt(db,b,4,{manual:'false_positive'});assert.equal(taskStatistics(db,p).instances[0].conclusion,'conflict');
-    attempt(db,a,5,{state:'unknown'});s=taskStatistics(db,p);assert.equal(s.instances[0].conclusion,'false_positive');assert.equal(s.statistics.report_ready,false);
-    attempt(db,b,6,{forged:true});s=taskStatistics(db,p);assert.equal(s.instances[0].conclusion,'pending');assert.equal(s.statistics.verifications.confirmed_instances,0);assert.equal(s.statistics.verifications.start_unknown,1);
+    attempt(db,b,4,{manual:'false_positive'});assert.equal(taskStatistics(db,p).instances[0].conclusion,'confirmed');assert.equal(taskStatistics(db,p).statistics.verifications.human_opinions,1);
+    attempt(db,a,5,{state:'unknown'});s=taskStatistics(db,p);assert.equal(s.instances[0].conclusion,'confirmed');assert.equal(s.statistics.report_ready,false);
+    attempt(db,b,6,{forged:true});s=taskStatistics(db,p);assert.equal(s.instances[0].conclusion,'inconclusive');assert.equal(s.statistics.verifications.confirmed_instances,0);assert.equal(s.statistics.verifications.start_unknown,1);
     attempt(db,a,7,{started:false});s=taskStatistics(db,p);assert.equal(s.statistics.verifications.not_started,1);assert.equal(s.statistics.verifications.confirmed_instances,0);
   }finally{db.close();}
 });
@@ -217,7 +243,7 @@ test('review: invalid evidence IDs are suppressed in judgement details as well a
   const {db,p,add}=await fixture();try{
     const finding=add();syncInstances(db,p);attempt(db,finding,1,{forged:true});
     const data=taskStatistics(db,p),view=data.instances[0].attempts[0];
-    assert.equal(view.conclusion,'pending');assert.deepEqual(view.evidence_ids,[]);
+    assert.equal(view.conclusion,'inconclusive');assert.deepEqual(view.evidence_ids,[]);
     assert.equal(view.judgement,null);
   }finally{db.close();}
 });

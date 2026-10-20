@@ -1,3 +1,4 @@
+import {findingVerificationExecution} from './findingVerificationExecution.js';
 import { sanitizeTaskLog } from './taskActivity.js';
 import { summarizeRunResultCounts } from './runResultCounts.js';
 
@@ -44,7 +45,7 @@ export function taskExecutionSnapshot(db, pipeline) {
     const snapshot = { version: 1, pipeline_id: pipeline.pipeline_id, target: text(pipeline.target), owner: pipeline.created_by,
       pipeline_status: pipeline.status, plan: plan ? { state: plan.state, revision: plan.revision } : null,
       requires_approval: config.require_approval !== false, run: null, steps: [], attempts: [], evidence: [], preflight: [],
-      limits: { records: 200, text: 2000 }, captured_at: new Date().toISOString() };
+      limits: { records: 200, text: 2000 }, verification_runs:findingVerificationExecution(db,pipeline), captured_at: new Date().toISOString() };
     if (!pipeline.run_id) return snapshot;
     const run = db.prepare('SELECT * FROM execution_runs WHERE run_id = ? AND user_sub = ? AND target = ?')
       .get(pipeline.run_id, pipeline.created_by, pipeline.target);

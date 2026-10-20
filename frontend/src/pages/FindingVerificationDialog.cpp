@@ -26,6 +26,9 @@
 #include <QSet>
 #include <QGroupBox>
 #include <QInputDialog>
+#include <QGuiApplication>
+#include <QScreen>
+#include <QResizeEvent>
 
 namespace {
 void comboPlaceholder(QComboBox *combo,const QString &text) {
@@ -39,7 +42,7 @@ QString stateText(const QString &s) {
   static const QMap<QString,QString> labels{{"needs_conditions","待补条件"},{"preparation_failed","方案未就绪"},{"draft","草稿"},{"ready","就绪"},
     {"queued","排队中"},{"running","执行中"},{"cancelling","取消中"},{"unknown","停止待核查"},
     {"completed","执行结束"},{"failed","执行异常"},{"aborted","已中止"},
-    {"pending","待判定"},{"confirmed","验证成立"},{"not_verified","未能验证"},{"inconclusive","条件不足"},{"false_positive","人工判定误报"}};
+    {"achieved","目标已达成"},{"not_achieved","目标未达成"},{"not_performed","未开展适用验证"},{"pending","等待结果"},{"confirmed","验证成立"},{"not_verified","未能验证"},{"inconclusive","证据不足"},{"false_positive","人工判定误报"}};
   return labels.value(s,s);
 }
 QString readable(const QJsonValue &value) {
@@ -54,6 +57,14 @@ QString readable(const QJsonValue &value) {
   return {};
 }
 QString join(const QJsonArray &array) {return readable(array);}
+QString attemptBudgetText(const QJsonObject &detail) {
+  const auto readiness=detail["readiness"].toObject();
+  const int used=readiness["attempts_used"].toInt(detail["attempts"].toArray().size());
+  const auto plans=detail["plans"].toArray();
+  const int limit=readiness["max_attempts"].toInt(plans.isEmpty()?0:plans.first().toObject()["content"].toObject()["max_attempts"].toInt());
+  return limit>0?QString("本漏洞已用 %1/%2 次尝试").arg(used).arg(limit):QString("本漏洞已执行 %1 次（上限未记录）").arg(used);
+}
+QString judgementText(const QJsonValue &value) {return value.isString()?value.toString().trimmed():readable(value);}
 QJsonArray lines(QPlainTextEdit *edit) {
   QJsonArray result;for(const auto &line:edit->toPlainText().split('\n'))if(!line.trimmed().isEmpty())result.append(line.trimmed());return result;
 }
@@ -98,17 +109,61 @@ QString evidenceFacts(const QJsonObject &e) {
   if(result.isEmpty())result<<"未提取到关键观察数据，不能据此认定漏洞成立。";
   return result.join('\n');
 }
+QJsonObject observation(const QJsonObject &e) {
+  return e["observation"].isObject()?e["observation"].toObject():QJsonDocument::fromJson(e["raw_stdout"].toString().toUtf8()).object();
+}
+bool supportedSystemResultStatus(const QString &status) {
+  static const QStringList statuses{"achieved","not_achieved","inconclusive","not_performed","pending"};
+  return statuses.contains(status);
+}
+QJsonObject attemptSummary(const QJsonObject &attempt) {
+  auto summary=attempt["summary"].toObject(),result=summary["result"].toObject();
+  if(result["schema_version"].toInt()==1) {
+    if(!supportedSystemResultStatus(result["status"].toString())) {
+      result["status"]="inconclusive";result["reason"]="未知结果状态，无法确认系统验证结论";
+      auto unverified=result["unverified"].toArray();unverified.append(result["reason"]);result["unverified"]=unverified;summary["result"]=result;
+    }
+    return summary;
+  }
+  // Never promote a legacy manual/automatic label into a new system result.
+  return {{"result",QJsonObject{{"schema_version",1},{"status","inconclusive"},
+    {"reason","旧版接口，无法确认系统结果"},{"objective",QJsonObject{{"label","历史验证目标未记录"}}},
+    {"unverified",QJsonArray{"缺少版本化验证契约；历史判断仅供参考"}}}}};
+}
+QString systemResultLabel(const QJsonObject &summary) {
+  const auto result=summary["result"].toObject();
+  if(result["schema_version"].toInt()!=1)return "证据不足（旧版接口）";
+  const auto status=result["status"].toString();
+  return supportedSystemResultStatus(status)?stateText(status):QString("证据不足（未知结果状态）");
+}
+QString opinionText(const QString &value) {
+  static const QMap<QString,QString> values{{"confirmed","认为证据支持"},{"not_verified","认为证据不支持"},{"inconclusive","暂无法判断"},{"false_positive","认为原发现误报"}};
+  return values.value(value,value);
+}
+QString criteriaText(const QJsonObject &criteria) {
+  if(criteria.isEmpty())return {};
+  QStringList text{QString("目录索引判据 · 规则版本 %1 · 根据已保存证据派生").arg(criteria["rule_version"].toInt()),
+    "目标目录："+criteria["target_path"].toString("无法判断")+" · 标题目录："+criteria["title_path"].toString("无法判断")};
+  for(const auto &v:criteria["checks"].toArray()) {
+    const auto check=v.toObject();const auto status=check["status"].toString();
+    text<<check["label"].toString()+"："+(status=="passed"?"通过":status=="failed"?"未通过":"无法判断")+" · "+readable(check["detail"]);
+  }
+  text<<"目录索引暴露不代表敏感文件泄露或获得系统权限。";
+  return text.join('\n');
+}
 QString attemptText(const QJsonObject &a) {
   QStringList result{"状态："+stateText(a["state"].toString()),"执行时间："+a["created_at"].toString(),
     QString("方案版本：%1 · 停止确认：%2").arg(a["revision"].toInt()).arg(a["stop_confirmed"].toInt()==1?"已确认":"未确认"),readable(a["reason"])};
   for(const auto &v:a["steps"].toArray()){const auto step=v.toObject();result<<QString("步骤 %1 · %2 · %3").arg(step["step_index"].toInt()+1).arg(step["tool_id"].toString(),step["success"].toInt()==1?"工具完成":"执行异常");}
-  if(a["state"]=="completed" && a["assessments"].toArray().isEmpty() && a["reviews"].toArray().isEmpty())result<<"执行已完成，尚无漏洞结论：请按方案判据查看证据并人工复核。";
-  for(const auto &v:a["assessments"].toArray()){const auto judgement=v.toObject();result<<"自动判定："+stateText(judgement["conclusion"].toString())<<"依据："+readable(judgement["reason"])<<"限制："+readable(judgement["limitations"]);}
+  if(a["state"]=="completed" && a["assessments"].toArray().isEmpty() && a["reviews"].toArray().isEmpty())result<<"执行已完成；是否达成目标请查看系统结果，人工意见为可选补充。";
+  for(const auto &v:a["assessments"].toArray()){const auto judgement=v.toObject();result<<"已保存自动判断（原始记录）："+stateText(judgement["conclusion"].toString())<<"依据："+judgementText(judgement["reason"])<<"限制："+judgementText(judgement["limitations"]);}
   for(const auto &v:a["evidence"].toArray()){const auto data=v.toObject()["evidence_data"].toObject();const auto link=data["finding_verification"].toObject();
     if(link["payload_consumed"].toBool())result<<"实际消费载荷："+data["payload_id"].toString()+" · 版本 "+readable(data["payload_version"]);
     else if(!data["payload_id"].toString().isEmpty())result<<"历史载荷引用（未确认实际消费）："+data["payload_id"].toString();
   }
-  for(const auto &v:a["reviews"].toArray()){const auto review=v.toObject();result<<"复核结论："+stateText(review["conclusion"].toString())<<"依据："+readable(review["note"]);}
+  for(const auto &v:a["reviews"].toArray()){const auto review=v.toObject();result<<"\n人工意见（不替代自动验证结论）："+opinionText(review["conclusion"].toString())+" · "+readable(review["created_at"])+" · 复核人："+readable(review["reviewed_by"])<<"依据："+judgementText(review["note"]);}
+  const auto system=attemptSummary(a)["result"].toObject();
+  result.prepend("系统结果："+stateText(system["status"].toString())+"\n目标："+system["objective"].toObject()["label"].toString()+"\n系统依据："+judgementText(system["reason"])+"\n尚未验证："+join(system["unverified"].toArray()));
   return result.join('\n');
 }
 QString stepInputSummary(const QJsonObject &step,const QString &target) {
@@ -133,18 +188,22 @@ QString stepInputSummary(const QJsonObject &step,const QString &target) {
 }
 QString cell(QTableWidget *table,int row,int col) {return table->item(row,col)?table->item(row,col)->text():QString();}
 }
-FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QString &pipeline,const QList<qint64> &findings,QWidget *parent)
+FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QString &pipeline,const QList<qint64> &findings,QWidget *parent,
+    const QString &existingVerificationId,const QString &existingAttemptId)
   :QDialog(parent),m_api(api),m_pipeline(pipeline) {
-  setWindowTitle("逐漏洞攻击测试 · "+pipeline);resize(1200,820);
+  setWindowTitle("逐漏洞攻击测试 · "+pipeline);setWindowFlag(Qt::WindowMaximizeButtonHint,true);
+  const auto *screen=parent?parent->screen():QGuiApplication::primaryScreen();
+  resize(QSize(1360,860).boundedTo(screen?screen->availableGeometry().size():QSize(1360,860)));
   auto *layout=new QVBoxLayout(this);
   layout->addWidget(new QLabel("针对勾选的漏洞选择方案和载荷，统一确认后测试。执行结果与漏洞结论分别记录。"));
   auto *split=new QSplitter(this);layout->addWidget(split,1);
-  m_items=new QTableWidget(0,6);m_items->setHorizontalHeaderLabels({"选择","执行状态","验证结论","漏洞名称","位置","严重程度"});
+  m_items=new QTableWidget(0,6);m_items->setHorizontalHeaderLabels({"选择","执行状态","最新系统结果","漏洞名称","位置","严重程度"});
+  m_items->setMinimumWidth(0);
   m_items->setSelectionBehavior(QAbstractItemView::SelectRows);m_items->setSelectionMode(QAbstractItemView::SingleSelection);
   m_items->setEditTriggers(QAbstractItemView::NoEditTriggers);m_items->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);m_items->horizontalHeader()->moveSection(3,1);m_items->hideColumn(4);m_items->hideColumn(5);
   m_items->setColumnWidth(3,170);m_items->horizontalHeader()->setSectionResizeMode(3,QHeaderView::Stretch);
   split->addWidget(m_items);
-  auto *tabs=new QTabWidget;m_tabs=tabs;split->addWidget(tabs);split->setStretchFactor(1,3);split->setSizes({360,840});
+  auto *tabs=new QTabWidget;m_tabs=tabs;tabs->setMinimumWidth(0);split->addWidget(tabs);split->setStretchFactor(0,1);split->setStretchFactor(1,3);split->setSizes({330,990});
   auto *mainPage=new QWidget;auto *mainLayout=new QVBoxLayout(mainPage);
   auto *scroll=new QScrollArea;scroll->setWidgetResizable(true);scroll->setWidget(mainPage);
   auto *mainHost=new QWidget;auto *hostLayout=new QVBoxLayout(mainHost);hostLayout->setContentsMargins(0,0,0,0);hostLayout->addWidget(scroll,1);tabs->addTab(mainHost,"攻击测试方案");
@@ -162,7 +221,9 @@ FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QStrin
   m_sourcesPrevious=new QPushButton("上一页");m_sourcesNext=new QPushButton("下一页");browse->addWidget(m_sourceSearch,1);browse->addWidget(search);browse->addWidget(m_sourcesPrevious);browse->addWidget(m_sourcesNext);candidateLayout->addLayout(browse);
   m_planSummary=new QPlainTextEdit;m_planSummary->setReadOnly(true);m_planSummary->setMinimumHeight(130);m_planSummary->setMaximumHeight(130);sourceSection->addWidget(m_planSummary);
   auto *editBox=new QGroupBox("调整当前草稿（按需展开）");editBox->setCheckable(true);editBox->setChecked(false);auto *editLayout=new QVBoxLayout(editBox);auto *editBody=new QWidget;auto *p=new QVBoxLayout(editBody);editLayout->addWidget(editBody);editBody->hide();connect(editBox,&QGroupBox::toggled,editBody,&QWidget::setVisible);sourceSection->addWidget(editBox);
-  auto *form=new QFormLayout;m_name=new QLineEdit;m_target=new QLineEdit;form->addRow("方案名称",m_name);form->addRow("实际入口",m_target);p->addLayout(form);
+  auto *form=new QFormLayout;m_name=new QLineEdit;m_target=new QLineEdit;m_objective=new QLineEdit;m_objective->setMaxLength(200);m_objective->setPlaceholderText("说明本次要确认的具体目标；填写目标不代表具备自动判据");
+  m_objectiveCategory=new QComboBox;m_objectiveCategory->addItem("效果验证","effect");m_objectiveCategory->addItem("可访问性检查","accessibility");m_objectiveCategory->addItem("配置／暴露事实","configuration_exposure");
+  form->addRow("方案名称",m_name);form->addRow("实际入口",m_target);form->addRow("本次验证目标",m_objective);form->addRow("目标类别",m_objectiveCategory);p->addLayout(form);
   auto field=[p](const QString &label,QPlainTextEdit *&edit){p->addWidget(new QLabel(label));edit=new QPlainTextEdit;edit->setMaximumHeight(65);p->addWidget(edit);};
   field("前置条件",m_conditions);field("缺失条件",m_missing);
   m_steps=new QTableWidget(0,3);m_steps->setHorizontalHeaderLabels({"步骤名称","工具","预期证据"});m_steps->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);m_steps->setMinimumHeight(100);p->addWidget(m_steps);
@@ -187,22 +248,53 @@ FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QStrin
   connect(m_bindStep,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int){showPayloadPreview();updateButtons();});
   connect(m_bindPayload,&QPushButton::clicked,this,[this]{const int i=m_payloads->currentIndex();if(i<0||m_bindStep->currentIndex()<0)return;const auto payload=m_matches[i].toObject();action("/payloads/bind",{{"expected_revision",m_revision},{"step_id",m_bindStep->currentData().toString()},{"payload_id",payload["payload_id"]},{"version",payload["version"]}},true);});
   connect(m_unbindPayload,&QPushButton::clicked,this,[this]{if(m_bindStep->currentIndex()>=0)action("/payloads/unbind",{{"expected_revision",m_revision},{"step_id",m_bindStep->currentData().toString()}},true);});
-  connect(m_resolvePayload,&QPushButton::clicked,this,[this]{if(m_bindStep->currentIndex()<0){m_status->setText("请先手动选择步骤。");return;}action("/payloads/prepare",{{"expected_revision",m_revision},{"step_id",m_bindStep->currentData().toString()}},false);});
+  connect(m_resolvePayload,&QPushButton::clicked,this,[this]{if(m_bindStep->currentIndex()<0){setStatus("请先手动选择步骤。");return;}action("/payloads/prepare",{{"expected_revision",m_revision},{"step_id",m_bindStep->currentData().toString()}},false);});
   connect(m_startSimple,&QPushButton::clicked,this,&FindingVerificationDialog::startCurrent);
-  auto *evidenceWidget=new QWidget;auto *e=new QVBoxLayout(evidenceWidget);auto *resultScroll=new QScrollArea;resultScroll->setWidgetResizable(true);resultScroll->setWidget(evidenceWidget);tabs->addTab(resultScroll,"测试结果与历史");
-  m_attempts=new QComboBox;e->addWidget(m_attempts);m_evidence=new QPlainTextEdit;m_evidence->setReadOnly(true);m_evidence->setMaximumHeight(80);e->addWidget(m_evidence);
-  e->addWidget(new QLabel("勾选支持结论的证据，再填写判断依据。工具完成不等于漏洞成立。"));
-  m_evidenceTable=new QTableWidget(0,4);m_evidenceTable->setHorizontalHeaderLabels({"选用","步骤","工具","关键观察"});
-  m_evidenceTable->setMinimumHeight(130);m_evidenceTable->setColumnWidth(0,45);m_evidenceTable->setColumnWidth(1,50);m_evidenceTable->setColumnWidth(2,110);
-  m_evidenceTable->setEditTriggers(QAbstractItemView::NoEditTriggers);m_evidenceTable->setWordWrap(true);
-  m_evidenceTable->horizontalHeader()->setSectionResizeMode(3,QHeaderView::Stretch);e->addWidget(m_evidenceTable,1);
-  auto *reviewForm=new QFormLayout;m_conclusion=new QComboBox;m_conclusion->addItem("请选择复核结论",QString());for(const auto &key:QStringList{"confirmed","not_verified","inconclusive","false_positive"})m_conclusion->addItem(stateText(key),key);
-  reviewForm->addRow("复核结论",m_conclusion);e->addLayout(reviewForm);
-  m_note=new QPlainTextEdit;m_note->setPlaceholderText("对照保存的成功判据，说明实际证据及判定限制");m_note->setMaximumHeight(60);e->addWidget(m_note);auto *review=new QPushButton("保存证据复核");e->addWidget(review);
-  layout->addWidget(new QLabel("默认最多 2 次尝试，每次 5 分钟。关闭窗口停止待执行队列；当前调用继续，可重新打开查看或取消。"));
-  m_queueLabel=new QLabel; m_queueLabel->setWordWrap(true);layout->addWidget(m_queueLabel);
-  m_status=new QLabel;m_status->setWordWrap(true);layout->addWidget(m_status);
+  auto *resultWidget=new QWidget;auto *resultLayout=new QVBoxLayout(resultWidget);tabs->addTab(resultWidget,"测试结果与历史");
+  resultLayout->setContentsMargins(8,8,8,8);resultLayout->setSpacing(6);
+  m_attempts=new QComboBox;m_attempts->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);m_attempts->setMinimumContentsLength(12);resultLayout->addWidget(m_attempts);
+  m_resultSummary=new QGroupBox("本次结果");m_resultSummary->setObjectName("findingResultSummary");
+  auto *summaryLayout=new QVBoxLayout(m_resultSummary);summaryLayout->setContentsMargins(10,5,10,6);summaryLayout->setSpacing(2);
+  auto label=[summaryLayout](const QString &name){auto *value=new QLabel;value->setObjectName(name);value->setTextFormat(Qt::PlainText);value->setWordWrap(true);value->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Minimum);value->setMinimumHeight(value->fontMetrics().height()+2);summaryLayout->addWidget(value);return value;};
+  m_attemptContext=label("findingAttemptContext");m_attemptContext->setStyleSheet(QString("color:%1;").arg(Theme::TextSecondary));
+  m_executionSummary=label("findingExecutionSummary");
+  m_resultConclusion=label("findingResultConclusion");auto resultFont=m_resultConclusion->font();resultFont.setPointSize(resultFont.pointSize()+2);resultFont.setBold(true);m_resultConclusion->setFont(resultFont);
+  m_resultConclusion->setMinimumHeight(m_resultConclusion->fontMetrics().height()+10);
+  m_automaticSummary=label("findingAutomaticSummary");m_manualSummary=label("findingManualSummary");m_automaticSummary->setWordWrap(false);m_manualSummary->setWordWrap(false);
+  summaryLayout->removeWidget(m_automaticSummary);summaryLayout->removeWidget(m_manualSummary);auto *judgements=new QHBoxLayout;judgements->addWidget(m_automaticSummary,1);judgements->addWidget(m_manualSummary,1);summaryLayout->addLayout(judgements);
+  m_disagreement=label("findingResultDisagreement");m_disagreement->setStyleSheet(QString("color:%1; font-weight:600; padding:2px 0;").arg(Theme::Warning));m_disagreement->hide();
+  m_resultBasis=label("findingResultBasis");m_resultBasis->setWordWrap(false);m_resultBasis->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);resultLayout->addWidget(m_resultSummary);
+  m_resultDetails=new QTabWidget;resultLayout->addWidget(m_resultDetails,1);
+  m_systemEvidence=new QPushButton("定位系统证据");m_systemEvidence->setObjectName("findingSystemEvidence");m_systemEvidence->setEnabled(false);m_resultDetails->setCornerWidget(m_systemEvidence,Qt::TopRightCorner);
+  connect(m_systemEvidence,&QPushButton::clicked,this,[this]{
+    const auto attempts=m_detail["attempts"].toArray();const int index=m_attempts->currentIndex();if(index<0||index>=attempts.size())return;
+    const auto ids=attemptSummary(attempts[index].toObject())["result"].toObject()["evidence_ids"].toArray();if(ids.isEmpty())return;
+    for(int row=0;row<m_evidenceTable->rowCount();++row)if(m_evidenceTable->item(row,0)->data(Qt::UserRole).toInt()==ids.first().toInt()){
+      m_resultDetails->setCurrentIndex(0);m_evidenceTable->setCurrentCell(row,1);m_evidenceTable->scrollToItem(m_evidenceTable->item(row,1));
+      qobject_cast<QScrollArea*>(m_resultDetails->widget(0))->ensureWidgetVisible(m_evidenceDetails,0,0);break;
+    }
+  });
+  auto *evidenceWidget=new QWidget;auto *e=new QVBoxLayout(evidenceWidget);e->setContentsMargins(6,6,6,6);e->setSpacing(5);
+  auto *evidenceScroll=new QScrollArea;evidenceScroll->setWidgetResizable(true);evidenceScroll->setWidget(evidenceWidget);m_resultDetails->addTab(evidenceScroll,"证据与判据");
+  auto *evidenceHint=new QLabel("选中行即可查看系统证据，无需勾选或填写人工意见。");evidenceHint->setObjectName("findingEvidenceHint");evidenceHint->setToolTip("勾选框仅用于可选人工意见，不影响系统结果或执行就绪状态。");evidenceHint->setWordWrap(true);e->addWidget(evidenceHint);
+  m_evidenceTable=new QTableWidget(0,6);m_evidenceTable->setObjectName("findingEvidenceTable");m_evidenceTable->setHorizontalHeaderLabels({"选用","步骤","工具","HTTP","完整性","观察摘要"});
+  m_evidenceTable->setToolTip("选中行查看详情；勾选框用于人工意见。行选中不会勾选证据，工具完成不等于漏洞成立。");
+  m_evidenceTable->setMinimumHeight(100);m_evidenceTable->setMaximumHeight(180);m_evidenceTable->setColumnWidth(0,42);m_evidenceTable->setColumnWidth(1,42);m_evidenceTable->setColumnWidth(2,108);m_evidenceTable->setColumnWidth(3,56);m_evidenceTable->setColumnWidth(4,70);
+  m_evidenceTable->setEditTriggers(QAbstractItemView::NoEditTriggers);m_evidenceTable->setWordWrap(false);m_evidenceTable->setSelectionBehavior(QAbstractItemView::SelectRows);m_evidenceTable->setSelectionMode(QAbstractItemView::SingleSelection);
+  m_evidenceTable->verticalHeader()->hide();m_evidenceTable->verticalHeader()->setDefaultSectionSize(32);m_evidenceTable->horizontalHeader()->setSectionResizeMode(5,QHeaderView::Stretch);e->addWidget(m_evidenceTable,1);
+  m_evidenceDetails=new QPlainTextEdit;m_evidenceDetails->setObjectName("findingEvidenceDetails");m_evidenceDetails->setReadOnly(true);m_evidenceDetails->setMinimumHeight(160);e->addWidget(m_evidenceDetails,2);
+  auto *reviewWidget=new QWidget;auto *reviewLayout=new QVBoxLayout(reviewWidget);auto *reviewScroll=new QScrollArea;reviewScroll->setWidgetResizable(true);reviewScroll->setWidget(reviewWidget);m_resultDetails->addTab(reviewScroll,"人工意见与历史");
+  auto *reviewHint=new QLabel("人工意见为可选补充，不替代自动验证结论。无需填写也可查看结果、结束流程；填写意见不会恢复尝试次数。");reviewHint->setObjectName("findingOpinionHint");reviewHint->setWordWrap(true);reviewLayout->addWidget(reviewHint);
+  auto *reviewForm=new QFormLayout;m_conclusion=new QComboBox;m_conclusion->addItem("请选择人工意见",QString());for(const auto &key:QStringList{"confirmed","not_verified","inconclusive","false_positive"})m_conclusion->addItem(opinionText(key),key);
+  reviewForm->addRow("人工意见",m_conclusion);reviewLayout->addLayout(reviewForm);
+  m_note=new QPlainTextEdit;m_note->setPlaceholderText("对照保存的成功判据，说明实际证据及判定限制");m_note->setMinimumHeight(70);m_note->setMaximumHeight(100);reviewLayout->addWidget(m_note);auto *review=new QPushButton("保存人工意见");reviewLayout->addWidget(review);
+  reviewLayout->addWidget(new QLabel("本次尝试的完整判断依据、限制与复核历史"));m_evidence=new QPlainTextEdit;m_evidence->setReadOnly(true);m_evidence->setMinimumHeight(160);reviewLayout->addWidget(m_evidence,1);
+  const QString budgetHint="默认最多 2 次尝试，每次 5 分钟。关闭窗口停止待执行队列；当前调用继续，可重新打开查看或取消。";
+  auto *budget=new QLabel(budgetHint);budget->setObjectName("findingBudgetHint");layout->addWidget(budget);
+  m_queueLabel=new QLabel;m_queueLabel->setObjectName("findingQueueSummary");m_queueLabel->setWordWrap(true);layout->addWidget(m_queueLabel);
+  m_status=new QLabel;m_status->setWordWrap(true);m_status->setMaximumHeight(36);m_status->hide();layout->addWidget(m_status);
   auto *global=new QHBoxLayout;auto *refresh=new QPushButton("刷新");auto *queue=new QPushButton("顺序测试已就绪漏洞");m_queueButton=queue;auto *cancel=new QPushButton("取消当前验证并停止队列");auto *close=new QPushButton("关闭窗口");
+  queue->setToolTip(budgetHint);close->setToolTip(budgetHint);
   for(auto *button:{refresh,queue,cancel,close})global->addWidget(button);layout->addLayout(global);
   m_timer=new QTimer(this);m_timer->setInterval(2000);connect(m_timer,&QTimer::timeout,this,[this]{load(false);});m_timer->start();
   connect(m_items,&QTableWidget::currentCellChanged,this,[this](int row,int,int previousRow,int previousColumn){
@@ -212,29 +304,43 @@ FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QStrin
       m_items->setCurrentCell(previousRow,previousColumn);
       return;
     }
-    ++m_contextGeneration;m_pendingPayload.clear();m_browseSources=false;m_sourceOffset=0;m_detail={};
+    ++m_contextGeneration;++m_attemptSelectionGeneration;m_pendingAttemptRunId.clear();m_pendingExistingAttemptId.clear();m_pendingPayload.clear();m_browseSources=false;m_sourceOffset=0;m_detail={};
     m_sources->blockSignals(true);m_sources->clear();m_sources->blockSignals(false);m_sourceItems={};m_sourcePreview->clear();
     m_payloads->blockSignals(true);m_payloads->clear();m_payloads->blockSignals(false);m_matches={};m_payloadPreview->clear();
     m_context->clear();m_planSummary->setPlainText("正在读取此漏洞的方案与载荷…");m_revision=0;m_dirty=false;m_stale=true;
+    renderAttempt(-1);
     m_confirm->setChecked(false);updateButtons();load(true);
   });
   connect(refresh,&QPushButton::clicked,this,[this]{if(allowDiscardDraft())load(true);});connect(close,&QPushButton::clicked,this,&QDialog::accept);
   connect(m_save,&QPushButton::clicked,this,[this]{action("/plans",planInput(),true);});
-  connect(m_attempts,QOverload<int>::of(&QComboBox::currentIndexChanged),this,&FindingVerificationDialog::renderAttempt);
+  connect(m_attempts,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int index){
+    // An explicit history selection wins over a start response that arrives later.
+    ++m_attemptSelectionGeneration;m_pendingAttemptRunId.clear();m_pendingExistingAttemptId.clear();renderAttempt(index);
+  });
+  connect(m_attempts,QOverload<int>::of(&QComboBox::activated),this,[this](int){
+    // Re-selecting the same history item is also an explicit user choice.
+    ++m_attemptSelectionGeneration;m_pendingAttemptRunId.clear();m_pendingExistingAttemptId.clear();
+  });
+  connect(m_evidenceTable,&QTableWidget::currentCellChanged,this,[this](int row,int,int,int){renderEvidence(row);});
   connect(review,&QPushButton::clicked,this,[this]{
-    if(m_conclusion->currentData().toString().isEmpty()){m_status->setText("请明确选择复核结论；执行完成不代表漏洞成立。");return;}
+    if(m_conclusion->currentData().toString().isEmpty()){setStatus("请明确选择人工意见；它不替代自动验证结论。");return;}
     QJsonArray ids;for(int row=0;row<m_evidenceTable->rowCount();row++)if(m_evidenceTable->item(row,0)->checkState()==Qt::Checked)ids.append(m_evidenceTable->item(row,0)->data(Qt::UserRole).toInt());
     action("/reviews",{{"attempt_id",m_attempts->currentData().toString()},{"conclusion",m_conclusion->currentData().toString()},{"evidence_ids",ids},{"note",m_note->toPlainText()}});
   });
   connect(queue,&QPushButton::clicked,this,&FindingVerificationDialog::startChecked);
   connect(cancel,&QPushButton::clicked,this,&FindingVerificationDialog::cancelCurrent);
   auto changed=[this] {if(!m_setting){++m_editGeneration;m_dirty=true;m_confirm->setChecked(false);updateButtons();}};
-  connect(m_name,&QLineEdit::textChanged,this,changed);connect(m_target,&QLineEdit::textChanged,this,changed);
+  connect(m_name,&QLineEdit::textChanged,this,changed);connect(m_target,&QLineEdit::textChanged,this,changed);connect(m_objective,&QLineEdit::textChanged,this,changed);connect(m_objectiveCategory,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[changed](int){changed();});
   for(auto *edit:{m_conditions,m_missing,m_criteria,m_cleanup})connect(edit,&QPlainTextEdit::textChanged,this,changed);
   connect(m_steps,&QTableWidget::itemChanged,this,[changed](QTableWidgetItem*){changed();});
 
   connect(m_items,&QTableWidget::itemChanged,this,[this](QTableWidgetItem*){updateQueue();});
-  for(qint64 finding:findings)addFinding(finding);
+  if(existingVerificationId.isEmpty())for(qint64 finding:findings)addFinding(finding);
+  else {
+    addExistingFinding(existingVerificationId,findings.isEmpty()?0:findings.first());
+    m_pendingExistingAttemptId=existingAttemptId;
+    m_tabs->setCurrentIndex(1);
+  }
   updateButtons();
 }
 bool FindingVerificationDialog::allowDiscardDraft() {
@@ -248,17 +354,21 @@ void FindingVerificationDialog::addFinding(qint64 finding) {
   QPointer<FindingVerificationDialog> self(this);
   m_api->post(base(),{{"finding_id",finding}},10000,[self,finding](const QJsonObject &response){
     if(!self || self->m_finished)return;
-    if(response["status"]!="ok"){self->m_status->setText(response["error"].toObject()["message"].toString());return;}
-    const auto data=response["data"].toObject();const QString id=data["id"].toString();
-    const int row=self->m_items->rowCount();self->m_items->insertRow(row);
+    if(response["status"]!="ok"){self->setStatus(response["error"].toObject()["message"].toString());return;}
+    const auto data=response["data"].toObject();self->addExistingFinding(data["id"].toString(),finding,data["state"].toString());
+  });
+}
+void FindingVerificationDialog::addExistingFinding(const QString &id,qint64 finding,const QString &state) {
+    const int row=m_items->rowCount();m_items->insertRow(row);
     auto *choice=new QTableWidgetItem;choice->setToolTip(QString("发现记录 #%1").arg(finding));choice->setData(Qt::UserRole,id);
-    choice->setFlags(choice->flags()|Qt::ItemIsUserCheckable);choice->setCheckState(Qt::Checked);self->m_items->setItem(row,0,choice);
-    self->m_items->setItem(row,1,new QTableWidgetItem(stateText(data["state"].toString())));
-    self->m_items->setItem(row,2,new QTableWidgetItem("待判定"));
-    for(int col=3;col<6;col++)self->m_items->setItem(row,col,new QTableWidgetItem);
-    self->m_items->item(row,3)->setText("读取发现…");
-    if(row==0){self->m_items->setCurrentCell(0,0);return;}
-    self->m_api->get(self->base()+"/"+id,10000,[self,id](const QJsonObject &reply){
+    choice->setFlags(choice->flags()|Qt::ItemIsUserCheckable);choice->setCheckState(Qt::Checked);m_items->setItem(row,0,choice);
+    m_items->setItem(row,1,new QTableWidgetItem(stateText(state)));
+    m_items->setItem(row,2,new QTableWidgetItem("待判定"));
+    for(int col=3;col<6;col++)m_items->setItem(row,col,new QTableWidgetItem);
+    m_items->item(row,3)->setText("读取发现…");
+    if(row==0){m_items->setCurrentCell(0,0);return;}
+    QPointer<FindingVerificationDialog> self(this);
+    m_api->get(base()+"/"+id,10000,[self,id](const QJsonObject &reply){
       if(!self || self->m_finished)return;
       for(int row=0;row<self->m_items->rowCount();row++)if(self->m_items->item(row,0)->data(Qt::UserRole).toString()==id){
         if(reply["status"]!="ok"){self->m_items->item(row,3)->setText("读取失败，点击重试");return;}
@@ -266,14 +376,14 @@ void FindingVerificationDialog::addFinding(qint64 finding) {
         const auto value=QJsonDocument::fromJson(finding["result_data"].toString().toUtf8()).object();
         self->m_items->item(row,3)->setText(value["title"].toString(value["name"].toString(value["finding"].toString("漏洞候选"))));
         self->m_items->item(row,3)->setToolTip(self->m_items->item(row,3)->text());
-        self->m_items->item(row,2)->setText(stateText(detail["summary"].toObject()["conclusion"].toString()));return;
+        self->m_items->item(row,2)->setText(systemResultLabel(detail["summary"].toObject()));return;
       }
     });
-  });
 }
 void FindingVerificationDialog::displayPlan(const QJsonObject &plan) {
   m_setting=true;
   m_sourceId=plan["source_playbook_id"].toString();m_name->setText(plan["name"].toString());m_target->setText(plan["target"].toString());
+  const auto objective=plan["objective_draft"].isObject()?plan["objective_draft"].toObject():plan["verification_contract"].toObject()["objective"].toObject();m_objective->setText(objective["label"].toString());const int category=m_objectiveCategory->findData(objective["category"].toString("effect"));m_objectiveCategory->setCurrentIndex(category<0?0:category);
   m_conditions->setPlainText(join(plan["prerequisites"].toArray()));m_missing->setPlainText(join(plan["missing_conditions"].toArray()));m_criteria->setPlainText(plan["success_criteria"].toString());m_cleanup->setPlainText(plan["cleanup"].toString());
   m_planSteps=plan["steps"].toArray();m_steps->setRowCount(m_planSteps.size());
   for(int row=0;row<m_planSteps.size();row++){const auto step=m_planSteps[row].toObject();
@@ -289,7 +399,9 @@ QJsonObject FindingVerificationDialog::planInput() const {
     if(step["args_template"].isString())step["args_template"]=QJsonDocument::fromJson(step["args_template"].toString().toUtf8()).array();
     steps.append(step);
   }
-  return {{"expected_revision",m_revision},{"name",m_name->text()},{"target",m_target->text()},{"source_playbook_id",m_sourceId},{"prerequisites",lines(m_conditions)},{"missing_conditions",lines(m_missing)},{"success_criteria",m_criteria->toPlainText()},{"cleanup",m_cleanup->toPlainText()},{"max_attempts",2},{"duration_ms",300000},{"steps",steps}};
+  QJsonObject input{{"expected_revision",m_revision},{"name",m_name->text()},{"target",m_target->text()},{"source_playbook_id",m_sourceId},{"prerequisites",lines(m_conditions)},{"missing_conditions",lines(m_missing)},{"success_criteria",m_criteria->toPlainText()},{"cleanup",m_cleanup->toPlainText()},{"max_attempts",2},{"duration_ms",300000},{"steps",steps}};
+  if(!m_objective->text().trimmed().isEmpty())input["objective_draft"]=QJsonObject{{"label",m_objective->text().trimmed()},{"category",m_objectiveCategory->currentData().toString()}};
+  return input;
 }
 void FindingVerificationDialog::load(bool editor) {
   const auto id=currentId();
@@ -299,13 +411,13 @@ void FindingVerificationDialog::load(bool editor) {
   const auto context=m_contextGeneration;
   const auto edits=m_editGeneration;
   QPointer<FindingVerificationDialog> self(this);
-  m_api->get(base()+"/"+id,10000,[self,id,editor,context,edits](const QJsonObject &r){if(!self || self->m_finished)return;self->m_loading=false;if(self->m_reloadEditor || self->currentId()!=id || self->m_contextGeneration!=context){const bool switched=self->currentId()!=id || self->m_contextGeneration!=context;self->m_reloadEditor=false;self->load(switched || edits==self->m_editGeneration);return;}if(r["status"]!="ok"){self->m_status->setText(r["error"].toObject()["message"].toString());return;}
+  m_api->get(base()+"/"+id,10000,[self,id,editor,context,edits](const QJsonObject &r){if(!self || self->m_finished)return;self->m_loading=false;if(self->m_reloadEditor || self->currentId()!=id || self->m_contextGeneration!=context){const bool switched=self->currentId()!=id || self->m_contextGeneration!=context;self->m_reloadEditor=false;self->load(switched || edits==self->m_editGeneration);return;}if(r["status"]!="ok"){self->setStatus(r["error"].toObject()["message"].toString());return;}
     self->m_detail=r["data"].toObject();self->m_details[id]=self->m_detail;self->m_context->setPlainText(contextText(self->m_detail));const bool replaceEditor=editor && edits==self->m_editGeneration;if(replaceEditor) {
       self->m_revision=self->m_detail["revision"].toInt();self->m_stale=false;
     } else if(self->m_revision!=self->m_detail["revision"].toInt()) {
       self->m_stale=true;self->m_confirm->setChecked(false);
-      self->m_status->setText("计划版本已变化，当前显示内容已过期。请刷新完整计划并重新核对。");
-    }const auto summary=self->m_detail["summary"].toObject();const QString state=self->m_detail["state"].toString();const int row=self->m_items->currentRow();self->m_items->item(row,1)->setText(stateText(state));self->m_items->item(row,2)->setText(stateText(summary["conclusion"].toString()));const auto finding=self->m_detail["finding"].toObject();const auto found=QJsonDocument::fromJson(finding["result_data"].toString().toUtf8()).object();self->m_items->item(row,3)->setText(found["title"].toString(found["name"].toString(found["finding"].toString())));self->m_items->item(row,4)->setText(found["url"].toString(found["location"].toString()));self->m_items->item(row,5)->setText(finding["severity"].toString());for(int c=0;c<6;c++)self->m_items->item(row,c)->setToolTip(self->m_items->item(row,c)->text());
+      self->setStatus("计划版本已变化，当前显示内容已过期。请刷新完整计划并重新核对。");
+    }const auto summary=self->m_detail["summary"].toObject();const QString state=self->m_detail["state"].toString();const int row=self->m_items->currentRow();self->m_items->item(row,1)->setText(stateText(state));self->m_items->item(row,2)->setText(systemResultLabel(summary));const auto finding=self->m_detail["finding"].toObject();const auto found=QJsonDocument::fromJson(finding["result_data"].toString().toUtf8()).object();self->m_items->item(row,3)->setText(found["title"].toString(found["name"].toString(found["finding"].toString())));self->m_items->item(row,4)->setText(found["url"].toString(found["location"].toString()));self->m_items->item(row,5)->setText(finding["severity"].toString());for(int c=0;c<6;c++)self->m_items->item(row,c)->setToolTip(self->m_items->item(row,c)->text());
     if(replaceEditor)self->m_sourceChooser->setChecked(self->m_detail["plans"].toArray().isEmpty());
     if(replaceEditor){const auto plans=self->m_detail["plans"].toArray();if(!plans.isEmpty())self->displayPlan(plans.first().toObject()["content"].toObject());else self->displayPlan({{"name","发现 #"+QString::number(self->m_detail["finding_id"].toInt())+" 验证"},{"target",self->m_detail["default_target"]}});}
     const auto findingRecord=self->m_detail["finding"].toObject();
@@ -321,7 +433,7 @@ void FindingVerificationDialog::load(bool editor) {
         <<"\n前置条件：\n"+join(plan["prerequisites"].toArray());
       int number=0;overview<<"\n计划步骤：";
       for(const auto &v:plan["steps"].toArray()){const auto step=v.toObject();overview<<QString("%1. %2\n   预期证据：%3").arg(++number).arg(step["name"].toString(),step["expected_evidence"].toString());overview<<"   实际输入："+stepInputSummary(step,plan["target"].toString());}
-      overview<<"\n判断方式："+(plan["assessment_rule"].toObject().isEmpty()?QString("人工证据复核"):QString("平台定向规则自动判断，仍可人工复核"))
+      overview<<"\n判断方式："+(plan["verification_contract"].toObject()["capability"].toObject()["automatic"].toBool()?QString("平台适用判据与同次操作证据决定系统结果"):QString("尚无受支持的自动判据，不能确认目标达成"))<<"人工意见：可选补充，不替代系统验证结论"
         <<"\n成功判据与限制：\n"+plan["success_criteria"].toString()<<"\n清理说明：\n"+plan["cleanup"].toString();
       if(!plan["missing_conditions"].toArray().isEmpty())overview<<"\n尚缺条件：\n"+join(plan["missing_conditions"].toArray());
     }
@@ -330,8 +442,21 @@ void FindingVerificationDialog::load(bool editor) {
     if(!self->m_detail["reason"].toString().isEmpty())overview<<"\n需要处理："+self->m_detail["reason"].toString();
     const auto readiness=self->m_detail["readiness"].toObject();
     overview<<"\n执行前检查："+(readiness["ready"].toBool()?QString("已就绪，开始前统一确认"):join(readiness["reasons"].toArray()));
+    if(!savedPlans.isEmpty()) {const auto contract=savedPlans.first().toObject()["content"].toObject()["verification_contract"].toObject();overview.prepend("验证目标："+contract["objective"].toObject()["label"].toString("旧方案目标未明确，请保存新版本"));if(!contract["capability"].toObject()["automatic"].toBool())overview.prepend("尚无适用的验证方案或自动效果判据；已有步骤不代表效果已证实。");}
     self->m_planSummary->setPlainText(overview.join('\n'));
-    const QString selected=self->m_attempts->currentData().toString();self->m_attempts->blockSignals(true);self->m_attempts->clear();for(const auto &v:self->m_detail["attempts"].toArray()){const auto a=v.toObject();self->m_attempts->addItem(a["created_at"].toString()+" · "+stateText(a["state"].toString()),a["id"].toString());}const int index=self->m_attempts->findData(selected);self->m_attempts->setCurrentIndex(index<0?0:index);self->m_attempts->blockSignals(false);const auto attempts=self->m_detail["attempts"].toArray();self->renderAttempt(self->m_attempts->currentIndex());
+    const QString selected=self->m_attempts->currentData().toString();
+    const auto attempts=self->m_detail["attempts"].toArray();int startedIndex=-1,existingIndex=-1;
+    self->m_attempts->blockSignals(true);self->m_attempts->clear();
+    for(int i=0;i<attempts.size();++i){
+      const auto a=attempts[i].toObject();self->m_attempts->addItem(a["created_at"].toString()+" · "+stateText(a["state"].toString()),a["id"].toString());
+      if(!self->m_pendingAttemptRunId.isEmpty()&&a["run_id"].toString()==self->m_pendingAttemptRunId)startedIndex=i;
+      if(!self->m_pendingExistingAttemptId.isEmpty()&&a["id"].toString()==self->m_pendingExistingAttemptId)existingIndex=i;
+    }
+    const int selectedIndex=self->m_attempts->findData(selected);
+    self->m_attempts->setCurrentIndex(startedIndex>=0?startedIndex:existingIndex>=0?existingIndex:selectedIndex<0?0:selectedIndex);self->m_attempts->blockSignals(false);
+    if(existingIndex>=0)self->m_pendingExistingAttemptId.clear();
+    if(startedIndex>=0){self->m_pendingAttemptRunId.clear();self->m_tabs->setCurrentIndex(1);self->m_resultDetails->setCurrentIndex(0);}
+    self->renderAttempt(self->m_attempts->currentIndex());
     const auto chosenStep=self->m_bindStep->currentData().toString();self->m_bindStep->blockSignals(true);self->m_bindStep->clear();
     if(!savedPlans.isEmpty())for(const auto &v:savedPlans.first().toObject()["content"].toObject()["steps"].toArray()){const auto step=v.toObject();self->m_bindStep->addItem(step["name"].toString()+" · "+step["tool_id"].toString(),step["step_id"].toString());}
     self->m_bindStep->setCurrentIndex(chosenStep.isEmpty()?-1:self->m_bindStep->findData(chosenStep));self->m_bindStep->blockSignals(false);
@@ -339,29 +464,41 @@ void FindingVerificationDialog::load(bool editor) {
     self->m_payloads->blockSignals(true);self->m_payloads->clear();for(const auto &v:self->m_matches){const auto payload=v.toObject();self->m_payloads->addItem(payload["name"].toString()+ (payload["created_here"].toBool()?" · 本次新生成":" · 已有载荷"),payload["payload_id"].toString());}
     self->m_payloads->setCurrentIndex(self->m_payloads->findData(selectedPayload));self->m_payloads->blockSignals(false);
     self->showPayloadPreview();self->updateButtons();self->updateQueue();
-    if(!self->m_detail["reason"].toString().isEmpty())self->m_status->setText(self->m_detail["reason"].toString());
+    if(!self->m_detail["reason"].toString().isEmpty())self->setStatus(self->m_detail["reason"].toString());
     if(!self->m_queueStarting && !self->m_queueRunId.isEmpty() && summary["run_id"].toString()==self->m_queueRunId && self->m_activeQueue==id && QStringList{"completed","failed","aborted","unknown"}.contains(state)){self->m_activeQueue.clear();self->m_queueRunId.clear();self->m_items->setEnabled(true);self->updateButtons();if(state=="unknown"||state=="aborted")self->m_queue.clear();self->executeNext();}
   });
   if(editor)loadSources();
 }
 void FindingVerificationDialog::action(const QString &path,const QJsonObject &body,bool editor) {
   if(m_finished||m_busy||currentId().isEmpty())return;
-  if(m_stale && path!="/reviews") {m_status->setText("请刷新最新完整计划后再操作。");return;}const auto id=currentId();const auto edits=m_editGeneration;const auto context=m_contextGeneration;m_busy=true;updateButtons();m_status->setText("正在处理…");QPointer<FindingVerificationDialog> self(this);
-  m_api->post(base()+"/"+id+path,body,path=="/generate"?130000:15000,[self,id,editor,edits,context,path](const QJsonObject &r){if(!self)return;self->m_busy=false;self->updateButtons();if(self->currentId()!=id || self->m_contextGeneration!=context)return;self->m_status->setText(r["status"]=="ok"?(r["data"].toObject()["state"]=="needs_conditions"?"方案尚缺条件，未启动验证。":"已保存；请查看当前状态与证据。"):r["error"].toObject()["message"].toString());if(path=="/payloads/prepare" && r["status"]=="ok") {
+  if(m_stale && path!="/reviews") {setStatus("请刷新最新完整计划后再操作。");return;}const auto id=currentId();const auto edits=m_editGeneration;const auto context=m_contextGeneration;m_busy=true;updateButtons();setStatus("正在处理…");QPointer<FindingVerificationDialog> self(this);
+  m_api->post(base()+"/"+id+path,body,path=="/generate"?130000:15000,[self,id,editor,edits,context,path](const QJsonObject &r){if(!self)return;self->m_busy=false;self->updateButtons();if(self->currentId()!=id || self->m_contextGeneration!=context)return;self->setStatus(r["status"]=="ok"?(r["data"].toObject()["state"]=="needs_conditions"?"方案尚缺条件，未启动验证。":"已保存；请查看当前状态与证据。"):r["error"].toObject()["message"].toString());if(path=="/payloads/prepare" && r["status"]=="ok") {
       self->m_pendingPayload=r["data"].toObject()["payload_id"].toString();
-      self->m_status->setText(r["data"].toObject()["state"]=="generated"?"本次新生成载荷，尚未验证。请预览后手动绑定步骤。":"已找到库中载荷，请预览后手动绑定步骤。");
+      self->setStatus(r["data"].toObject()["state"]=="generated"?"本次新生成载荷，尚未验证。请预览后手动绑定步骤。":"已找到库中载荷，请预览后手动绑定步骤。");
     }
     self->load(editor && r["status"]=="ok" && edits==self->m_editGeneration);});
 }
+void FindingVerificationDialog::setStatus(const QString &text) {
+  m_status->setText(text);m_status->setToolTip(text);m_status->setVisible(!text.isEmpty());
+}
 void FindingVerificationDialog::done(int result) {
   m_finished=true;
+  ++m_attemptSelectionGeneration;m_pendingAttemptRunId.clear();
   ++m_queueGeneration;
   m_queue.clear();
   m_timer->stop();
   // Closing prevents future dispatch. Calls already submitted keep running unless cancelled.
   QDialog::done(result);
 }
+void FindingVerificationDialog::resizeEvent(QResizeEvent *event) {
+  QDialog::resizeEvent(event);
+  for(const auto &name:{"findingEvidenceHint","findingBudgetHint"})if(auto *hint=findChild<QLabel*>(name))hint->setVisible(width()>=1200);
+  if(auto *queue=findChild<QLabel*>("findingQueueSummary")){queue->setWordWrap(width()>=1200);queue->setText(width()>=1200?queue->toolTip():queue->fontMetrics().elidedText(queue->toolTip().simplified(),Qt::ElideRight,qMax(100,width()-22)));}
+  for(auto *label:{m_automaticSummary,m_manualSummary})if(label && !label->toolTip().isEmpty())label->setText(label->fontMetrics().elidedText(label->toolTip(),Qt::ElideRight,label->width()));
+  if(m_resultBasis && !m_resultBasis->toolTip().isEmpty())m_resultBasis->setText(m_resultBasis->fontMetrics().elidedText((m_evidenceAttempt.isEmpty()?QString():QString("系统依据："))+m_resultBasis->toolTip(),Qt::ElideRight,m_resultBasis->width()));
+}
 void FindingVerificationDialog::cancelCurrent() {
+  ++m_attemptSelectionGeneration;m_pendingAttemptRunId.clear();
   ++m_queueGeneration;
   *m_queueCancelled=true;
   m_queue.clear();
@@ -372,7 +509,7 @@ void FindingVerificationDialog::cancelCurrent() {
   QPointer<FindingVerificationDialog> self(this);
   m_api->post(base()+"/"+id+"/cancel",{},10000,[self](const QJsonObject &r){
     if(!self || self->m_finished) return;
-    self->m_status->setText(r["status"]=="ok"?"取消请求已提交，等待实际停止确认。":r["error"].toObject()["message"].toString());
+    self->setStatus(r["status"]=="ok"?"取消请求已提交，等待实际停止确认。":r["error"].toObject()["message"].toString());
     self->load(false);
   });
 }
@@ -393,7 +530,7 @@ void FindingVerificationDialog::executeNext() {
     const auto approved=self->m_queuePlans.value(id);
     if(r["status"]!="ok" || plans.isEmpty() || !d["readiness"].toObject()["ready"].toBool()
         || plans.first().toObject()["revision"]!=approved["revision"] || plans.first().toObject()["fingerprint"]!=approved["fingerprint"]) {
-      self->m_status->setText("队列已停止：方案版本或条件变化，请刷新并重新确认。");self->m_queue.clear();self->updateQueue();return;
+      self->setStatus("队列已停止：方案版本或条件变化，请刷新并重新确认。");self->m_queue.clear();self->updateQueue();return;
     }
     self->m_details[id]=d;
     self->startAttempt(id,d["revision"].toInt());
@@ -417,25 +554,30 @@ void FindingVerificationDialog::startAttempt(const QString &id,int revision) {
   const auto generation=m_queueGeneration;
   const auto cancelled=m_queueCancelled;
   m_activeQueue=id;
+  m_pendingAttemptRunId.clear();m_pendingExistingAttemptId.clear();
   m_queueRunId.clear();
   m_queueStarting=true;
   updateButtons();
   m_items->setEnabled(false);
   for(int row=0;row<m_items->rowCount();row++)
     if(m_items->item(row,0)->data(Qt::UserRole).toString()==id) m_items->setCurrentCell(row,0);
+  const auto selectionGeneration=m_attemptSelectionGeneration;
   const auto path=base()+"/"+id;
   QPointer<FindingVerificationDialog> self(this);
   QPointer<ApiClient> api(m_api);
   m_api->post(path+"/start",{{"revision",revision},{"fingerprint",m_queuePlans.value(id)["fingerprint"]},{"confirmed",true},{"request_id",QUuid::createUuid().toString(QUuid::WithoutBraces)}},15000,
-    [self,api,path,id,generation,cancelled](const QJsonObject &reply){
+    [self,api,path,id,generation,cancelled,selectionGeneration](const QJsonObject &reply){
       // Both single and queued starts retain cancellation independently of the window lifetime.
       if(*cancelled && api) api->post(path+"/cancel",{},10000);
       if(!self || self->m_finished || self->m_activeQueue!=id) return;
       self->m_queueStarting=false;
       self->m_queueRunId=reply["data"].toObject()["run_id"].toString();
+      if(reply["status"]=="ok" && !self->m_queueRunId.isEmpty() && !*cancelled
+          && generation==self->m_queueGeneration && selectionGeneration==self->m_attemptSelectionGeneration && self->currentId()==id)
+        self->m_pendingAttemptRunId=self->m_queueRunId;
       if(generation!=self->m_queueGeneration) self->m_queue.clear();
       if(reply["status"]!="ok") {
-        self->m_status->setText(reply["error"].toObject()["message"].toString());
+        self->setStatus(reply["error"].toObject()["message"].toString());
         self->m_activeQueue.clear();self->m_items->setEnabled(true);self->m_queue.clear();
       }
       self->updateButtons();
@@ -447,6 +589,7 @@ void FindingVerificationDialog::updateButtons() {
   m_prepareSimple->setEnabled(idle&&!m_dirty);m_adjustAI->setEnabled(idle&&!m_dirty&&m_revision>0);
   m_useSource->setEnabled(idle&&!m_dirty&&m_sources->currentIndex()>=0);
   m_startSimple->setEnabled(idle&&!m_dirty&&m_detail["readiness"].toObject()["ready"].toBool());
+  m_startSimple->setToolTip(attemptBudgetText(m_detail)+"。"+join(m_detail["readiness"].toObject()["reasons"].toArray())+"\n人工意见为可选补充，不影响执行就绪。保存新方案不恢复尝试次数。");
   m_save->setEnabled(idle&&m_dirty);updateQueue();
   const int payload=m_payloads->currentIndex(),step=m_bindStep->currentIndex();bool compatible=false;
   if(payload>=0 && step>=0)for(const auto &v:m_matches[payload].toObject()["compatible_steps"].toArray()){const auto c=v.toObject();if(c["step_id"].toString()==m_bindStep->currentData().toString())compatible=c["compatible"].toBool();}
@@ -457,16 +600,68 @@ void FindingVerificationDialog::updateButtons() {
 
 void FindingVerificationDialog::renderAttempt(int index) {
   const auto attempts=m_detail["attempts"].toArray();
-  if(index<0 || index>=attempts.size()){m_evidence->clear();m_evidenceTable->setRowCount(0);m_evidenceAttempt.clear();return;}
+  if(index<0 || index>=attempts.size()){
+    m_attemptContext->setText("暂无执行尝试");m_executionSummary->setText("本次执行：尚未执行");m_resultConclusion->setText("系统验证结果：未开展适用验证");m_resultConclusion->setStyleSheet(Theme::StatusInfoStyle);
+    const auto plans=m_detail["plans"].toArray();const auto plan=plans.isEmpty()?QJsonObject():plans.first().toObject()["content"].toObject();const auto contract=plan["verification_contract"].toObject();
+    const QString target=plans.isEmpty()?QString("验证目标：尚无适用的验证方案"):QString("目标：")+contract["objective"].toObject()["label"].toString("旧方案目标未明确，请保存新版本");
+    const QString capability=plans.isEmpty()?QString("对象：尚未选择方案"):QString("对象：")+contract["object"].toObject()["target"].toString(plan["target"].toString("未记录"));
+    m_automaticSummary->setToolTip(target);m_manualSummary->setToolTip(capability);m_automaticSummary->setText(target);m_manualSummary->setText(capability);m_disagreement->hide();
+    const QString basis=plans.isEmpty()?QString("选择并完整确认方案后才会执行。打开窗口或查看详情不会请求目标。"):contract["capability"].toObject()["automatic"].toBool()?QString("已保存适用方案；尚未执行，开始前仍需完整确认。"):contract.isEmpty()?QString("历史方案缺少版本化验证契约，请保存新版本并重新确认。"):contract["capability"].toObject()["reason"].toString("尚无受支持的自动判据，当前不能确认目标达成");
+    m_resultBasis->setToolTip(basis);m_resultBasis->setText(basis);
+    m_systemEvidence->setEnabled(false);m_evidence->clear();m_evidenceDetails->clear();m_evidenceTable->setRowCount(0);m_evidenceAttempt.clear();m_conclusion->setCurrentIndex(0);m_note->clear();return;
+  }
   const auto attempt=attempts[index].toObject();QSet<int> checked;
+  int selectedEvidence=-1;if(m_evidenceTable->currentRow()>=0&&m_evidenceTable->item(m_evidenceTable->currentRow(),0))selectedEvidence=m_evidenceTable->item(m_evidenceTable->currentRow(),0)->data(Qt::UserRole).toInt();
   if(m_evidenceAttempt==attempt["id"].toString())for(int row=0;row<m_evidenceTable->rowCount();row++)if(m_evidenceTable->item(row,0)->checkState()==Qt::Checked)checked.insert(m_evidenceTable->item(row,0)->data(Qt::UserRole).toInt());
-  if(m_evidenceAttempt!=attempt["id"].toString()){m_conclusion->setCurrentIndex(0);m_note->clear();}
+  if(m_evidenceAttempt!=attempt["id"].toString()){m_conclusion->setCurrentIndex(0);m_note->clear();selectedEvidence=-1;}
   m_evidenceAttempt=attempt["id"].toString();m_evidence->setPlainText(attemptText(attempt));
+  const auto summary=attemptSummary(attempt),result=summary["result"].toObject();
+  const auto status=result["status"].toString("inconclusive");
+  m_systemEvidence->setEnabled(!result["evidence_ids"].toArray().isEmpty());
+  m_attemptContext->setText((index==0?QString("最新尝试"):QString("正在查看历史尝试 · 左侧为最新系统结果"))+" · "+attempt["created_at"].toString());
+  m_executionSummary->setText(QString("本次执行：%1 · 方案版本 %2 · 停止确认：%3").arg(stateText(attempt["state"].toString())).arg(attempt["revision"].toInt()).arg(attempt["stop_confirmed"].toInt()==1?"已确认":"未确认"));
+  m_resultConclusion->setText("系统验证结果："+stateText(status));
+  m_resultConclusion->setStyleSheet(status=="achieved"?Theme::StatusSuccessStyle:status=="inconclusive"?Theme::StatusWarningStyle:Theme::StatusInfoStyle);
+  const auto objective=result["objective"].toObject();
+  m_automaticSummary->setText("目标："+objective["label"].toString("目标未明确"));
+  m_manualSummary->setText("对象："+result["object"].toObject()["target"].toString("未记录"));
+  m_automaticSummary->setToolTip(m_automaticSummary->text());m_manualSummary->setToolTip(m_manualSummary->text());
+  for(auto *label:{m_automaticSummary,m_manualSummary})label->setText(label->fontMetrics().elidedText(label->toolTip(),Qt::ElideRight,qMax(100,label->width())));
+  m_disagreement->setText("存在人工补充意见；意见不替代系统验证结论。");
+  m_disagreement->setVisible(!attempt["reviews"].toArray().isEmpty());
+  const auto note=readable(result["reason"]);m_resultBasis->setToolTip(note);
+  m_resultBasis->setText(m_resultBasis->fontMetrics().elidedText("系统依据："+note,Qt::ElideRight,qMax(100,m_resultBasis->width())));
+  const QSignalBlocker tableSignals(m_evidenceTable);
   const auto records=attempt["evidence"].toArray();m_evidenceTable->setRowCount(records.size());
+  int selectedRow=0;
   for(int row=0;row<records.size();row++){const auto record=records[row].toObject();auto *choice=new QTableWidgetItem;choice->setTextAlignment(Qt::AlignTop|Qt::AlignHCenter);choice->setData(Qt::UserRole,record["id"].toInt());choice->setFlags(choice->flags()|Qt::ItemIsUserCheckable);choice->setCheckState(checked.contains(record["id"].toInt())?Qt::Checked:Qt::Unchecked);m_evidenceTable->setItem(row,0,choice);
-    m_evidenceTable->setItem(row,1,new QTableWidgetItem(QString::number(record["step_index"].toInt()+1)));m_evidenceTable->setItem(row,2,new QTableWidgetItem(record["tool_id"].toString()));m_evidenceTable->setItem(row,3,new QTableWidgetItem(evidenceFacts(record)));
-  }m_evidenceTable->resizeRowsToContents();
-  for(int row=0;row<m_evidenceTable->rowCount();row++)for(int col=1;col<4;col++)m_evidenceTable->item(row,col)->setTextAlignment(Qt::AlignTop|Qt::AlignLeft);
+    const auto observed=observation(record),data=record["evidence_data"].toObject();
+    const auto http=observed.contains("status_code")?observed["status_code"]:data["status_code"];
+    QString brief=readable(data["summary"]);if(brief.isEmpty())brief=readable(observed["summary"]);if(brief.isEmpty())brief=readable(observed["error"]);if(brief.isEmpty())brief=observed["connected"]==true?"已连接；选中查看事实与判据":"选中查看事实与判据";
+    m_evidenceTable->setItem(row,1,new QTableWidgetItem(QString::number(record["step_index"].toInt()+1)));m_evidenceTable->setItem(row,2,new QTableWidgetItem(record["tool_id"].toString()));
+    m_evidenceTable->setItem(row,3,new QTableWidgetItem(http.isUndefined()?"未记录":readable(http)));
+    m_evidenceTable->setItem(row,4,new QTableWidgetItem(observed.contains("complete")?(observed["complete"].toBool()?"完整":"不完整"):"未记录"));
+    m_evidenceTable->setItem(row,5,new QTableWidgetItem(brief.simplified()));
+    for(int col=1;col<6;col++)m_evidenceTable->item(row,col)->setToolTip(m_evidenceTable->item(row,col)->text());
+    if(record["id"].toInt()==selectedEvidence)selectedRow=row;
+    m_evidenceTable->setRowHeight(row,32);
+  }
+  if(!records.isEmpty())m_evidenceTable->setCurrentCell(selectedRow,1);
+  renderEvidence(records.isEmpty()?-1:selectedRow);
+}
+void FindingVerificationDialog::renderEvidence(int row) {
+  for(const auto &value:m_detail["attempts"].toArray()) {
+    const auto attempt=value.toObject();if(attempt["id"].toString()!=m_evidenceAttempt)continue;
+    const auto records=attempt["evidence"].toArray();if(row<0||row>=records.size())break;
+    const auto record=records[row].toObject();QStringList text{QString("步骤 %1 · %2 · 证据 #%3").arg(record["step_index"].toInt()+1).arg(record["tool_id"].toString()).arg(record["id"].toInt())};
+    const auto criteria=criteriaText(record["criteria"].toObject());if(!criteria.isEmpty())text<<criteria+"\n";
+    const auto system=attemptSummary(attempt)["result"].toObject();
+    text<<"验证目标："+system["objective"].toObject()["label"].toString()<<"系统依据："+judgementText(system["reason"])<<"尚未验证："+join(system["unverified"].toArray());
+    for(const auto &v:system["operations"].toArray()){const auto op=v.toObject();if(op["step_index"]==record["step_index"])text<<"操作："+op["name"].toString()+" · 实际启动："+(op["started"].isBool()?readable(op["started"]):QString("未记录"));}
+    text<<evidenceFacts(record);
+    m_evidenceDetails->setPlainText(text.join('\n'));return;
+  }
+  m_evidenceDetails->setPlainText("暂无可查看的证据。缺少证据不能认定漏洞成立。");
 }
 
 void FindingVerificationDialog::loadSources() {
@@ -489,7 +684,7 @@ void FindingVerificationDialog::loadSources() {
 void FindingVerificationDialog::showSourcePreview() {
   const int i=m_sources->currentIndex();if(i<0||i>=m_sourceItems.size())return;const auto source=m_sourceItems[i].toObject();m_sourcePreview->show();
   const QString status=source["status"]=="directional_candidate"?"定向候选，仍须核对条件":source["status"]=="needs_conditions"?"待补条件":"相关参考";
-  QStringList text{source["description"].toString(),"匹配状态："+status,"依据："+source["match_basis"].toString(),"待核对："+join(source["missing_conditions"].toArray())};
+  QStringList text{source["verification_capability"].toObject()["reason"].toString("尚无适用的验证方案或自动效果判据"),source["description"].toString(),"匹配状态："+status,"依据："+source["match_basis"].toString(),"待核对："+join(source["missing_conditions"].toArray())};
   for(const auto &v:source["steps"].toArray()){const auto step=v.toObject();text<<step["name"].toString()+" · "+step["tool_id"].toString();}
   m_sourcePreview->setPlainText(text.join('\n'));
 }
@@ -513,7 +708,7 @@ void FindingVerificationDialog::showPayloadPreview() {
 QString FindingVerificationDialog::confirmationText(const QJsonObject &detail) const {
   const auto plans=detail["plans"].toArray();if(plans.isEmpty())return "暂无方案";
   const auto plan=plans.first().toObject()["content"].toObject();
-  QStringList text{plan["name"].toString(),"来源："+plan["provenance"].toObject()["label"].toString("历史来源未记录"),"目标："+plan["target"].toString(),"前提："+join(plan["prerequisites"].toArray())};
+  QStringList text{plan["name"].toString(),"来源："+plan["provenance"].toObject()["label"].toString("历史来源未记录"),"目标："+plan["target"].toString(),"本次验证目标："+plan["verification_contract"].toObject()["objective"].toObject()["label"].toString("目标未明确，请先保存新版本"),"前提："+join(plan["prerequisites"].toArray())};
   for(const auto &v:plan["steps"].toArray()){const auto s=v.toObject();text<<s["name"].toString()+" · "+s["tool_id"].toString()+" · "+(s["payload_id"].toString().isEmpty()?"无独立载荷":s["payload_id"].toString())<<stepInputSummary(s,plan["target"].toString());}
   text<<"判据："+plan["success_criteria"].toString()<<"清理："+plan["cleanup"].toString()<<QString("最多 %1 次尝试，每次 %2 秒").arg(plan["max_attempts"].toInt()).arg(plan["duration_ms"].toInt()/1000)<<"确认后将执行以上步骤。";
   return text.join('\n');
@@ -526,8 +721,12 @@ void FindingVerificationDialog::updateQueue() {
     if(detail["readiness"].toObject()["ready"].toBool()&&!(current&&(m_dirty||m_stale)))++ready;
     else missing<<cell(m_items,row,3)+"："+(current&&m_dirty?"有未保存修改":join(detail["readiness"].toObject()["reasons"].toArray()));
   }
-  m_queueLabel->setText(QString("已勾选 %1 条，其中 %2 条就绪").arg(selected).arg(ready)+(missing.isEmpty()?QString():"\n未就绪："+missing.join("；")));
+  const auto budget=attemptBudgetText(m_detail);
+  const auto queueText=QString("已勾选 %1 条，其中 %2 条就绪 · %3").arg(selected).arg(ready).arg(budget)+(missing.isEmpty()?QString():"\n未就绪："+missing.join("；"));
+  if(auto *hint=findChild<QLabel*>("findingBudgetHint"))hint->setText(budget+"。保存新方案不恢复次数；人工意见可选。关闭窗口停止待执行队列；当前调用继续。");
+  m_queueLabel->setToolTip(queueText);m_queueLabel->setWordWrap(width()>=1200);m_queueLabel->setText(width()>=1200?queueText:m_queueLabel->fontMetrics().elidedText(queueText.simplified(),Qt::ElideRight,qMax(100,width()-22)));
   m_queueButton->setText(QString("顺序测试 %1 条已就绪漏洞").arg(ready));
+  m_queueButton->setToolTip(queueText+"\n人工意见为可选补充，不影响是否就绪。保存新方案不恢复尝试次数。");
   m_queueButton->setEnabled(ready>0&&!m_busy&&!m_queuePreparing&&!m_queueStarting&&m_activeQueue.isEmpty());
 }
 void FindingVerificationDialog::startChecked() {
