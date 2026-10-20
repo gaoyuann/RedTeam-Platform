@@ -116,7 +116,6 @@ private:
   QLineEdit *m_webTargetInput;
   QLineEdit *m_bruteTargetInput;
   QLineEdit *m_sourceTargetInput;
-  QLineEdit *m_sourceDirectoryInput;
   QLineEdit *m_sourceNotesInput;
   QComboBox *m_programInputKind;
   QLineEdit *m_programRuntimeInput;

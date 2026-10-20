@@ -15,7 +15,7 @@ import { recommendForScans } from '../services/playbookRecommendations.js';
 import { captureTopologyOrigin, readTopologyOrigin } from '../services/topologyOrigin.js';
 import { sourceTarget, httpSourceConnection, resolveSourceConnection } from '../services/sourceScanConnections.js';
 import { normalizeTaskScope, scopeBlockingConditions, scopeConditions, taskScope } from '../services/taskScope.js';
-import {cscanSourcePath,cscanNotes} from '../services/cscanTarget.js';
+import {cscanTarget,cscanRemotePath,cscanSourcePath,cscanNotes} from '../services/cscanTarget.js';
 
 // ── Validation helpers ────────────────────────────────────────────────────
 const asyncRoute = handler => (req,res,next) => Promise.resolve().then(()=>handler(req,res,next)).catch(next);
@@ -23,7 +23,8 @@ const asyncRoute = handler => (req,res,next) => Promise.resolve().then(()=>handl
 /** Validate supported network target formats. Program URLs receive stricter validation below. */
 function validateTarget(target) {
   if (typeof target !== 'string' || !target || target.length > 256) return false;
-  if(target.startsWith('/src/')) {try {cscanSourcePath(target);return true;} catch {return false;}}
+  if(target.startsWith('/')) {try {cscanRemotePath(target);return true;} catch {return false;}}
+  if(/^[^/:]+:\d+$/.test(target)) {try {cscanTarget(target);return true;} catch {return false;}}
   if (/^tcp:\/\//i.test(target)) {
     try { sourceTarget(target); return true; } catch { return false; }
   }
@@ -37,6 +38,13 @@ function validateTarget(target) {
 }
 
 async function normalizeProgramConfig(config, target) {
+  if(config.cscan_target || config.input_kind==='agent') {
+    const remote=cscanTarget(config.cscan_target || target);
+    const runtime=config.runtime_target?sourceTarget(config.runtime_target):null;
+    return {target:runtime || remote,config:{...config,cscan_target:remote,source_notes:cscanNotes(config.source_notes),
+      source_path:null,source_url:null,source_connection_id:null,test_type:'source',scan_mode:'source_assisted',
+      input_kind:'agent',runtime_target:runtime,require_approval:true}};
+  }
   if(config.source_path || target.startsWith('/src/')) {
     const source=cscanSourcePath(config.source_path || target);
     const runtime=config.runtime_target ? sourceTarget(config.runtime_target)
@@ -260,7 +268,7 @@ export default function (db) {
         const parsed = typeof config === 'string' ? JSON.parse(config) : config;
         // Only allow known config keys
         const sanitized = {};
-        const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id', 'source_path', 'source_notes', 'input_kind', 'runtime_target', 'task_scope'];
+        const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id', 'cscan_target', 'source_path', 'source_notes', 'input_kind', 'runtime_target', 'task_scope'];
         for (const key of allowedKeys) {
           if (parsed[key] !== undefined) sanitized[key] = parsed[key];
         }
@@ -325,7 +333,7 @@ export default function (db) {
         if (typeof parsed === 'object' && parsed !== null) {
           // Only allow known config keys (same whitelist as create)
           const sanitized = {};
-          const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id', 'source_path', 'source_notes', 'input_kind', 'runtime_target', 'task_scope'];
+          const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id', 'cscan_target', 'source_path', 'source_notes', 'input_kind', 'runtime_target', 'task_scope'];
           for (const key of allowedKeys) {
             if (parsed[key] !== undefined) sanitized[key] = parsed[key];
           }
@@ -340,7 +348,7 @@ export default function (db) {
         normalized.config.task_scope=normalizeTaskScope(normalized.config,normalized.target);
         if(pipeline.status!=='created' && JSON.stringify(previous.task_scope || normalizeTaskScope(previous,pipeline.target))!==JSON.stringify(normalized.config.task_scope))
           return res.status(409).json({status:'error',error:{message:'扫描已启动，不能改变测试范围；请新建任务'}});
-        if(pipeline.status!=='created' && ['scan_mode','source_url','source_connection_id','source_path','source_notes','input_kind','runtime_target'].some(key=>(previous[key] ?? null)!==(normalized.config[key] ?? null))) {
+        if(pipeline.status!=='created' && ['scan_mode','source_url','source_connection_id','cscan_target','source_path','source_notes','input_kind','runtime_target'].some(key=>(previous[key] ?? null)!==(normalized.config[key] ?? null))) {
           return res.status(409).json({status:'error',error:{message:'扫描已启动，不能改变程序测试模式或源码来源；请新建任务'}});
         }
         configStr=JSON.stringify(normalized.config);

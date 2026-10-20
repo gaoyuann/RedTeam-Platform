@@ -1,8 +1,12 @@
 import {scanCscanTarget,normalizeCscanReportedFinding} from './cscanNative.js';
-import {cscanSourcePath,cscanNotes} from './cscanTarget.js';
+import {cscanTarget,cscanSourcePath,cscanNotes} from './cscanTarget.js';
+import {taskScope} from './taskScope.js';
 
 export async function auditCscanNative(task,{db,parameters,signal,nativeScan=scanCscanTarget,llm}) {
-  const source=cscanSourcePath(parameters.source_path),notes=cscanNotes(parameters.source_notes);
+  const agentMode=Boolean(parameters.cscan_target);
+  const source=agentMode?cscanTarget(parameters.cscan_target):cscanSourcePath(parameters.source_path),notes=cscanNotes(parameters.source_notes);
+  const parent=task.pipeline_id?db.prepare('SELECT * FROM pipelines WHERE pipeline_id=? AND created_by=?').get(task.pipeline_id,task.created_by):null;
+  const scope=parent?taskScope(parent):taskScope({target:source,config:{}});
   if(signal?.aborted) throw new Error('源码扫描已取消');
   if(db.prepare('SELECT 1 FROM source_audits WHERE scan_task_id=?').get(task.scan_task_id))
     throw new Error('本任务已有 CScan 提交记录，请新建任务，避免重复扫描');
@@ -12,7 +16,7 @@ export async function auditCscanNative(task,{db,parameters,signal,nativeScan=sca
     return Number(db.prepare('INSERT INTO scan_results(scan_task_id,result_type,result_data,severity,source_tool,captured_at) VALUES (?,?,?,?,?,?)')
       .run(task.scan_task_id,type,JSON.stringify(data),severity,'cscan',new Date().toISOString()).lastInsertRowid);
   };
-  const coverage={engine:'cscan',input_mode:'service_path',source_target:source,source_read:false,
+  const coverage={engine:'cscan',input_mode:agentMode?'remote_agent':'service_path',source_target:source,source_read:false,
     source_version_verified:false,whole_project_complete:false,cscan_complete:false,
     cscan:{state:'preparing'},source_errors:[],parse_errors:[],rejected_findings:[],
     note:'源码读取和扫描由 CScan 完成。平台接收任务报告，不采集源码；报告定位和版本尚需复核。'};
@@ -25,7 +29,7 @@ export async function auditCscanNative(task,{db,parameters,signal,nativeScan=sca
   };
   const outcomes=[];
   try {
-    const report=await nativeScan(source,{notes,signal,llm,onProgress:state=>{
+    const report=await nativeScan(source,{notes,scope,signal,llm,onProgress:state=>{
       coverage.cscan={...coverage.cscan,...state};persist();
     }});
     if(signal?.aborted) throw new Error('源码扫描已取消');
@@ -34,6 +38,14 @@ export async function auditCscanNative(task,{db,parameters,signal,nativeScan=sca
     coverage.cscan={...coverage.cscan,flow_id:report.flow_id,state:'finished',finish_status:report.finish_status};
     coverage.report_format='service_task_report';coverage.parse_errors=report.parse_errors || [];
     store('raw_output',{flow_id:report.flow_id,report:report.markdown,report_source:'task_result'});
+    coverage.source_access_reported=report.source_access_reported || 'unknown';
+    if(agentMode && coverage.source_access_reported==='unavailable') {
+      const reason='CScan 未能取得目标源码，缺失条件见原始报告';
+      coverage.source_errors.push(reason);coverage.cscan.state='source_unavailable';
+      store('scan_error',{error:reason,flow_id:report.flow_id});
+      outcomes.push({tool_id:'cscan-source-access',success:false,error:reason});
+      persist();return {count,outcomes};
+    }
     const seen=new Set();
     for(const [index,finding] of report.findings.entries()) {
       try {
@@ -45,10 +57,16 @@ export async function auditCscanNative(task,{db,parameters,signal,nativeScan=sca
           analyses:[{tool:'cscan',reason:data.reason,preconditions:data.preconditions}]},data.severity);
       } catch(error) {coverage.rejected_findings.push({index,reason:error.message});}
     }
-    coverage.cscan_complete=!coverage.parse_errors.length && !coverage.rejected_findings.length;
+    coverage.cscan_complete=(!agentMode || coverage.source_access_reported==='available')
+      && !coverage.parse_errors.length && !coverage.rejected_findings.length;
     coverage.ai_complete=coverage.cscan_complete;
     outcomes.push({tool_id:'cscan',success:true});
-    if(!coverage.cscan_complete) outcomes.push({tool_id:'report-parser',success:false,error:'CScan 报告解析存在缺口，原始报告已保留'});
+    if(agentMode && coverage.source_access_reported==='unknown') {
+      const reason='CScan 未明确报告已取得目标源码，源码审计尚未确认完成';
+      coverage.source_errors.push(reason);outcomes.push({tool_id:'cscan-source-access',success:false,error:reason});
+    }
+    if(coverage.parse_errors.length || coverage.rejected_findings.length)
+      outcomes.push({tool_id:'report-parser',success:false,error:'CScan 报告解析存在缺口，原始报告已保留'});
     if(report.finish_status==='unconfirmed') outcomes.push({tool_id:'cscan-finalize',success:false,error:'CScan Flow 结束尚未确认，请核对原 Flow'});
   } catch(error) {
     coverage.source_errors.push(error.message);

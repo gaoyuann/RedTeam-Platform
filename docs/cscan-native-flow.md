@@ -8,18 +8,18 @@
 
 ## 操作
 
-1. 新建任务，选择“源码扫描（CScan） / 程序测试”，输入类型选择源码。独立扫描页同样可选择源码。
-2. 填写 CScan 执行环境中的源码文件或目录，例如 `/src/my-project`、`/src/my-project/main.c`。
-3. 可补充审计要求。平台将路径和要求写入任务说明，交给 CScan 自行读取和分析。
-4. 创建并启动任务，查看 Flow 状态、任务报告和漏洞列表。只有源码时不自动附加端口、Web 或动态程序扫描。
-5. 选择发现，继续生成方案、载荷和逐漏洞验证。执行需要独立提供对应部署程序的真实 HTTP/TCP 运行入口与条件；源码路径不会成为网络请求目标。
+1. 新建任务选择“源码扫描（CScan） / 程序测试”，输入类型默认“远端 CScan（靶机 / 源码路径）”；独立扫描页使用相同入口。
+2. 测试目标填写靶机 IP、主机:端口、HTTP/TCP 地址，例如 `http://192.168.1.113:8089/`。不需要选择本机文件夹，也不要求源码预先位于 `/src`。
+3. 在审计说明中补充靶机上的源码位置、已有授权连接的说明和关注问题。目标和要求一并传给远端 CScan Flow，由它使用既有工具和访问条件核实并读取源码。只有站点响应或二进制不等于取得源码，无法访问时必须报告缺少的条件。
+4. 如果已知源码就在远端执行环境可访问的目录，也可直接以 `/var/www/project` 等明确绝对路径作为目标。这不是客户端路径，不上传本机文件，不限定 `/src` 前缀。纯路径任务只提交 CScan，不附带网络扫描。
+5. 创建并启动任务，查看 Flow、任务/子任务报告和候选漏洞。网络目标保留独立的原目标端口及拓扑探测，邻居仍仅用于拓扑；后续攻击验证需单独确认。
 
-本机文件／目录选择器与参考客户端相同，只填写路径，不上传文件。CScan 服务的 worker 将授权源码根目录只读挂载到 `/src`；路径必须对应服务已可访问的文件。客户端的 `/home/...` 或 Windows 文件路径并不会自动出现在服务容器内。本版输入校验限定为 `/src/项目` 内的明确路径。
+界面不再弹出本机文件选择器。另有程序运行入口时，可填写可选的验证运行入口；纯路径任务缺少运行入口时，F08 继续显示缺失条件。原有“程序运行入口”模式仍使用平台动态测试流程。
 
 ## 调用与报告
 
 ```text
-目标路径 + 审计要求
+靶机目标 / 远端源码路径 + 审计要求
   → createFlow(modelProvider, input)
   → flow + tasks/subtasks 状态
   → tasks.result
@@ -44,7 +44,7 @@ CSCAN_TOKEN_FILE=/path/to/existing/cscan-token
 CSCAN_PROVIDER=custom
 ```
 
-新流程无需平台配置 `CSCAN_SOURCES_DIR`、`CSCAN_WORK_DIR`，也无需平台与 CScan 共享目录。源码如何放进 CScan 的 `/src` 仍由服务部署方配置；这里只传路径，不新增上传接口。创建 Flow 的超时单独使用 `CSCAN_CREATE_TIMEOUT_MS`（默认五分钟），参考客户端对 worker 冷启动的等待设置；查询和停止请求沿用有界的短超时。
+新流程无需平台配置 `CSCAN_SOURCES_DIR`、`CSCAN_WORK_DIR`，也无需平台与 CScan 共享目录。平台提交目标与要求；源码访问使用远端已有连接和工具，不能仅凭目标地址认定已经读取源码，不新增上传接口。创建 Flow 的超时单独使用 `CSCAN_CREATE_TIMEOUT_MS`（默认五分钟），参考客户端对 worker 冷启动的等待设置；查询和停止请求沿用有界的短超时。
 
 默认环境检查也直接检查凭据和 API，不再要求共享源码／报告目录、Python 或 SSH：
 
@@ -61,21 +61,22 @@ API 创建参数示例：
 
 ```json
 {
-  "target": "/src/my-project",
+  "target": "http://192.168.1.113:8089/",
   "scan_type": "source_scan",
   "parameters": {
-    "input_kind": "source",
-    "source_path": "/src/my-project",
-    "source_notes": "关注输入长度和权限检查",
-    "runtime_target": null
+    "input_kind": "agent",
+    "cscan_target": "http://192.168.1.113:8089/",
+    "source_notes": "源码位于靶机 /var/www/project，使用既有授权连接，关注输入长度检查"
   }
 }
 ```
 
-任务工作台在 `config` 中使用相同的 `source_path`、`source_notes`、`input_kind` 和可选 `runtime_target`。授权范围明确包含源码路径；另填运行入口时需同时纳入范围。源码任务只提交 CScan，不自动把文件路径交给网络扫描器。
+任务工作台在 `config` 中使用相同的 `cscan_target`、`source_notes`、`input_kind` 和可选 `runtime_target`。`input_kind=agent` 时省略 `cscan_target` 会采用测试目标。结构化范围及排除项一起传给远端 Flow；独立指定的源码目标和运行入口都必须纳入范围。路径不能交给网络扫描器。
+
+报告要求明确输出 `Source-Access: available|unavailable|unknown` 及源码访问依据/缺失条件。服务报告源码不可访问时保留原报告、标记扫描失败且不保存源码漏洞候选；未明确确认源码访问时保留有报告引用的候选并标记未完成，不宣称已完成源码审计。访问状态是远端报告的声明，平台仍保留源码定位、版本和运行效果未经独立验证的标记。
 
 ## 历史兼容与验证
 
-已存在的旧快照任务保留原始证据和读取方式，旧 API 参数 `source_url`／连接配置继续按原任务格式兼容；新界面不再要求这些配置，也不会从直接调用流程退回旧采集链路。旧记录中真实存在的快照与哈希不删除。
+已存在的旧快照任务保留原始证据和读取方式，旧 API 参数 `source_path`、`source_url`／连接配置继续按原任务格式兼容；新界面使用 `cscan_target`，不会把靶机 URL 当作本机源码路径，也不会从直接调用流程退回旧采集链路。旧记录中真实存在的快照与哈希不删除。
 
-执行 `cd backend && npm run test:source`。`test/cscan-native.test.js` 使用真实 HTTP GraphQL 测试服务，核实不接触本机源码/共享文件、提交路径与要求、处理 waiting 状态、读取任务报告、解析失败保留原文、范围与重复执行、工作台只产生一个源码子扫描，以及发现进入 F08 后缺少运行入口不能直接执行。协议回归不代表真实 CScan 模型质量验收。
+执行 `cd backend && npm run test:source`。`test/cscan-native.test.js` 使用真实 HTTP GraphQL 测试服务，核实不接触本机源码/共享文件、提交靶机目标或远端路径与要求、处理 waiting 状态、读取任务报告、解析失败保留原文、范围与重复执行、工作台只产生一个源码子扫描，以及发现进入 F08 后缺少运行入口不能直接执行。协议回归不代表真实 CScan 模型质量验收。

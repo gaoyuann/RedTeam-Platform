@@ -16,7 +16,7 @@ import { browseHttpSourceDirectory } from '../services/sourceSnapshot.js';
 import { recordSourceVerification } from '../services/sourceVerification.js';
 import {isProgramScan, isProgramFinding, loadProgramProjects, publicProgramProject} from '../services/programScan.js';
 import {appendTaskLog} from '../services/taskActivity.js';
-import {cscanSourcePath,cscanNotes} from '../services/cscanTarget.js';
+import {cscanTarget,cscanSourcePath,cscanNotes} from '../services/cscanTarget.js';
 
 export default function (db) {
   const router = Router();
@@ -97,7 +97,12 @@ export default function (db) {
     if (!target || !scan_type) return res.status(400).json({ status: 'error', error: { message: 'target, scan_type are required' } });
     if (isProgramScan(scan_type)) {
       try {
-        if(parameters?.source_path || (parameters?.input_kind==='source' && String(target).startsWith('/src/'))) {
+        if(parameters?.cscan_target || parameters?.input_kind==='agent') {
+          const remote=cscanTarget(parameters?.cscan_target || target);
+          const runtime=parameters?.runtime_target?sourceTarget(parameters.runtime_target):null;
+          parameters={cscan_target:remote,source_notes:cscanNotes(parameters?.source_notes),input_kind:'agent',runtime_target:runtime};
+          target=runtime || remote;scan_type='source_scan';
+        } else if(parameters?.source_path || (parameters?.input_kind==='source' && String(target).startsWith('/src/'))) {
           const source=cscanSourcePath(parameters?.source_path || target);
           const runtime=parameters?.runtime_target ? sourceTarget(parameters.runtime_target)
             : parameters?.input_kind==='runtime' ? sourceTarget(target) : null;

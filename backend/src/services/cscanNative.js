@@ -1,15 +1,15 @@
 import {runCscan,createCscanClient,cscanConfig} from './cscanClient.js';
-import {cscanSourcePath,cscanNotes} from './cscanTarget.js';
+import {cscanTarget,cscanRemotePath,cscanNotes} from './cscanTarget.js';
 import {parseCscanMarkdown} from './cscanReport.js';
 import {callLlm} from './llmClient.js';
 
 // Match PentagiService::fetchFlowReport: consume the service's task results,
 // without a platform source collector, local worker mount or report filesystem.
-export async function scanCscanTarget(target, {notes='',signal,onProgress,config=cscanConfig(),client,llm=callLlm}={}) {
-  target=cscanSourcePath(target);notes=cscanNotes(notes);
+export async function scanCscanTarget(target, {notes='',scope=null,signal,onProgress,config=cscanConfig(),client,llm=callLlm}={}) {
+  target=cscanTarget(target);notes=cscanNotes(notes);
   client ||= await createCscanClient(config);
   let rawReport='';
-  const report=await runCscan({service_target:target,notes,documents:[]},{config,client,signal,onProgress,
+  const report=await runCscan({service_target:target,notes,scope,documents:[]},{config,client,signal,onProgress,
     stage:async()=>({containerPath:target,key:null}),
     readReport:async(_,id,source,options)=>{
       rawReport=await client.report(id,{signal:options.signal});
@@ -30,7 +30,8 @@ export async function scanCscanTarget(target, {notes='',signal,onProgress,config
     } catch(error) {parseErrors.push(error.message);}
   }
   if(signal?.aborted) throw new Error('CScan 扫描已取消');
-  return {...report,findings,parse_errors:parseErrors,source_target:target};
+  const access=rawReport.match(/^\s*Source-Access:\s*(available|unavailable|unknown)\s*$/im)?.[1]?.toLowerCase() || 'unknown';
+  return {...report,findings,parse_errors:parseErrors,source_target:target,source_access_reported:access};
 }
 
 export function normalizeCscanReportedFinding(finding, report, target) {
@@ -41,8 +42,8 @@ export function normalizeCscanReportedFinding(finding, report, target) {
   const file=String(finding.file || '');
   if(file.length>1024 || /[\\\x00-\x1f]/.test(file)) throw new Error('报告文件路径无效');
   if(file.startsWith('/')) {
-    cscanSourcePath(file);
-    if(file!==target && !file.startsWith(target+'/')) throw new Error('报告定位超出本次源码目标');
+    cscanRemotePath(file);
+    if(target.startsWith('/') && file!==target && !file.startsWith(target+'/')) throw new Error('报告定位超出本次源码目标');
   } else {
     if(!file || /[\\\x00-\x1f]/.test(file) || file.split('/').some(p=>!p || p==='.' || p==='..')) throw new Error('报告文件路径无效');
   }

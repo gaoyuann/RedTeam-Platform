@@ -141,7 +141,7 @@ test('original pipeline automatically collects topology without a second scan ta
 });
 
 test('source input without runtime still collects network topology and preserves either side on failure',async t=>{
-  for(const failed of ['none','source','network']) await t.test(failed,async()=>{
+  for(const failed of ['none','source','network','remote-agent']) await t.test(failed,async()=>{
     const db=getDb(':memory:');
     db.exec([
       'CREATE TABLE pipelines (pipeline_id TEXT, target TEXT, status TEXT, config TEXT, created_by TEXT, updated_at TEXT, error_message TEXT, scan_task_id TEXT, result TEXT, analysis_result TEXT)',
@@ -149,15 +149,19 @@ test('source input without runtime still collects network topology and preserves
       "CREATE TABLE scan_tasks (id INTEGER PRIMARY KEY, scan_task_id TEXT, target TEXT, scan_type TEXT, target_class TEXT, parameters TEXT, created_by TEXT, created_at TEXT, status TEXT DEFAULT 'PENDING', started_at TEXT, completed_at TEXT, error_message TEXT, target_profile TEXT)",
       'CREATE TABLE scan_results (id INTEGER PRIMARY KEY, scan_task_id TEXT, result_type TEXT, result_data TEXT, severity TEXT, confidence TEXT, mitre_technique_id TEXT, source_tool TEXT, captured_at TEXT)',
       'CREATE TABLE source_audits (scan_task_id TEXT)',
+      'CREATE TABLE source_verifications (id INTEGER PRIMARY KEY, finding_id INTEGER)',
     ].join(';'));
     try {
       calls.length=0;failScan=failed==='network';failSource=failed==='source';
       const target='http://198.51.100.10:8089/source/';
       db.prepare('INSERT INTO pipelines(pipeline_id,target,status,config,created_by) VALUES (?,?,?,?,?)')
-        .run('static-network',target,'created',JSON.stringify({scan_mode:'source_assisted',input_kind:'source',source_url:target}),'alice');
+        .run('static-network',target,'created',JSON.stringify(failed==='remote-agent'
+          ? {scan_mode:'source_assisted',input_kind:'agent',cscan_target:target}
+          : {scan_mode:'source_assisted',input_kind:'source',source_url:target}),'alice');
       await runPipeline('static-network');
       const scans=db.prepare('SELECT * FROM scan_tasks ORDER BY id').all();
       assert.deepEqual(scans.map(scan=>scan.scan_type),['source_scan','port_scan']);
+      if(failed==='remote-agent') assert.equal(JSON.parse(scans[0].parameters).cscan_target,target);
       assert.equal(scans[0].status,failed==='source'?'FAILED':'COMPLETED');
       assert.equal(scans[1].status,failed==='network'?'FAILED':'COMPLETED');
       assert.equal(db.prepare('SELECT status FROM pipeline_steps WHERE step_order=0').get().status,'completed');
@@ -168,7 +172,11 @@ test('source input without runtime still collects network topology and preserves
       assert.ok(probe.args.includes('--traceroute'));
       assert.equal(db.prepare("SELECT count(*) n FROM scan_results WHERE result_type='source_finding'").get().n,1);
       const graph=pipelineTopology(db,db.prepare("SELECT * FROM pipelines WHERE pipeline_id='static-network'").get());
-      assert.deepEqual(graph.risks,[]);assert.equal(graph.edges.some(edge=>edge.type==='application-request'),false);
+      if(failed==='remote-agent') {
+        assert.equal(graph.risks.length,1);assert.equal(graph.risks[0].status,'candidate');
+        assert.equal(graph.risks[0].name,'Fixture static candidate');
+      } else assert.deepEqual(graph.risks,[]);
+      assert.equal(graph.edges.some(edge=>edge.type==='application-request'),false);
       if(failed!=='network') {
         assert.ok(db.prepare("SELECT * FROM scan_results WHERE result_type='host_discovery'").get());
         assert.equal(graph.edges.filter(edge=>edge.type==='route').length,2);

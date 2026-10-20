@@ -8,6 +8,7 @@ export const isProgramFinding = type => ['program_finding', 'source_finding'].in
 export function programExecutionTarget(task) {
   let parameters = {};
   try {const value=task.parameters || task.config || {}; parameters=typeof value==='string' ? JSON.parse(value) : value;} catch {}
+  if(parameters.cscan_target) return parameters.runtime_target || (parameters.cscan_target.startsWith('/')?null:parameters.cscan_target);
   if(parameters.source_path) return parameters.runtime_target || null;
   if(parameters.input_kind !== 'source') return task.target;
   if(parameters.runtime_target) return parameters.runtime_target;

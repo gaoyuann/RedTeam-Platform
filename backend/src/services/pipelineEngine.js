@@ -159,8 +159,8 @@ async function runPipelineScan(db, pipeline) {
   // Determine scan types to run
   let config={}; try {config=JSON.parse(pipeline.config || '{}');} catch {}
   const sourceMode=isProgramMode(config.scan_mode) || target.startsWith('tcp://');
-  const useCoverage=!config.source_path && Boolean(config.task_scope) && hasScanCoverage(db);
-  const initialTypes = config.source_path ? ['source_scan'] : sourceMode ? [config.scan_mode==='source_assisted' ? 'source_scan' : 'program_scan', 'port_scan']
+  const useCoverage=!config.cscan_target && !config.source_path && Boolean(config.task_scope) && hasScanCoverage(db);
+  const initialTypes = config.source_path || config.cscan_target?.startsWith('/') ? ['source_scan'] : sourceMode ? [config.scan_mode==='source_assisted' ? 'source_scan' : 'program_scan', 'port_scan']
     : useCoverage ? ['port_scan'] : isWebLike ? ['port_scan', 'app_discovery', 'web_scan'] : ['port_scan'];
   const initialScans=initialTypes.map(scan_type=>({scan_type,target:sourceMode && scan_type==='port_scan'
     ? programNetworkTarget(programExecutionTarget(pipeline) || target) : target}));
@@ -201,7 +201,7 @@ async function runPipelineScan(db, pipeline) {
         db.prepare(
           `INSERT INTO scan_tasks (scan_task_id, target, scan_type, target_class, parameters, created_by, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)`
-        ).run(scanTaskId, scanTarget, scanType, resolveTargetProfile(scanTarget).target_class, JSON.stringify(isProgramScan(scanType) ? {source_path:config.source_path || null,source_notes:config.source_notes || '',connection_id:config.source_connection_id || null,source_url:config.source_url || null,input_kind:config.input_kind || 'runtime',runtime_target:config.runtime_target || null} : scanType === 'port_scan' ? { discover_topology: true, pipeline_id:pipelineId } : {}), pipeline.created_by || 'pipeline', now);
+        ).run(scanTaskId, scanTarget, scanType, resolveTargetProfile(scanTarget).target_class, JSON.stringify(isProgramScan(scanType) ? {cscan_target:config.cscan_target || null,source_path:config.source_path || null,source_notes:config.source_notes || '',connection_id:config.source_connection_id || null,source_url:config.source_url || null,input_kind:config.input_kind || 'runtime',runtime_target:config.runtime_target || null} : scanType === 'port_scan' ? { discover_topology: true, pipeline_id:pipelineId } : {}), pipeline.created_by || 'pipeline', now);
 
         if(hasScanIntegrity(db)) db.prepare('UPDATE scan_tasks SET pipeline_id=? WHERE scan_task_id=?').run(pipelineId,scanTaskId);
         if(planned.check_id) markCheck(db,planned.check_id,'running',{scanTaskId});

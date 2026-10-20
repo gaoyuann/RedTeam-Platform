@@ -1,12 +1,13 @@
 import { isIP } from 'node:net';
-import {cscanSourcePath} from './cscanTarget.js';
+import {cscanSourcePath,cscanRemotePath} from './cscanTarget.js';
 
 function invalid(message) { throw Object.assign(new Error(message), { status: 400 }); }
 
 function address(value) {
   if (typeof value !== 'string' || !value.trim() || value.length > 256) invalid('测试范围地址无效');
-  const raw = value.trim();
-  if(raw.startsWith('/src/')) return {kind:'source',value:cscanSourcePath(raw),path:cscanSourcePath(raw)};
+  const input = value.trim();
+  const raw = /^[^/:]+:\d+$/.test(input) ? `tcp://${input}` : input;
+  if(raw.startsWith('/')) return {kind:'source',value:cscanRemotePath(raw),path:cscanRemotePath(raw)};
   if (/^https?:\/\//i.test(raw) || /^tcp:\/\//i.test(raw)) {
     let url;
     try { url = new URL(raw); } catch { invalid('测试范围 URL 无效'); }
@@ -59,12 +60,14 @@ export function normalizeTaskScope(config, target) {
     if (!Array.isArray(value) || value.length > 64 || value.some(item => typeof item !== 'string')) invalid(`${label}须为最多 64 个地址`);
     return [...new Set(value.map(item => address(item).value))];
   };
-  const includes = list(scope.includes, [...new Set([address(target).value,...(config?.source_path?[cscanSourcePath(config.source_path)]:[])])], '测试范围');
+  const includes = list(scope.includes, [...new Set([address(target).value,...(config?.source_path?[cscanSourcePath(config.source_path)]:[]),...(config?.cscan_target?[address(config.cscan_target).value]:[])])], '测试范围');
   const excludes = list(scope.excludes, [], '排除项');
   if (!includes.length || !includes.some(rule => contains(address(rule), address(target)))) invalid('主目标必须包含在测试范围内');
   if (excludes.some(rule => contains(address(rule), address(target)))) invalid('主目标不能被排除');
   if(config?.source_path && (!includes.some(rule=>contains(address(rule),address(config.source_path)))
     || excludes.some(rule=>contains(address(rule),address(config.source_path))))) invalid('CScan 源码路径未包含在授权范围内或命中排除项');
+  if(config?.cscan_target && (!includes.some(rule=>contains(address(rule),address(config.cscan_target)))
+    || excludes.some(rule=>contains(address(rule),address(config.cscan_target))))) invalid('CScan 目标未包含在授权范围内或命中排除项');
   const location = scope.execution_location ?? 'scanner';
   if (!['scanner', 'remote'].includes(location)) invalid('扫描位置无效');
   for (const key of ['environment_ref', 'auth_config_ref']) {

@@ -278,7 +278,7 @@ export async function executeScan(scanTaskId) {
   const blocked=scope ? scopeBlockReason(scope,scopedTarget,task.scan_type) : null;
   if(blocked) return rejectScope(blocked);
   let nativeSource;
-  try {nativeSource=JSON.parse(task.parameters || '{}').source_path;} catch {}
+  try {const params=JSON.parse(task.parameters || '{}');nativeSource=params.cscan_target || params.source_path;} catch {}
   if(scope && nativeSource) {
     const reason=scopeBlockReason(scope,nativeSource,'source_scan');
     if(reason) return rejectScope('CScan 源码路径：'+reason);
