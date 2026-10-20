@@ -4,6 +4,7 @@ import {normalizeSourceFinding} from './sourceScanFindings.js';
 import {sourceRuntimeMapping} from './sourceRuntimeMapping.js';
 import {programExecutionTarget} from './programScan.js';
 import {runCscan, relativeCscanPath, createCscanClient} from './cscanClient.js';
+import {auditCscanNative} from './sourceAuditNative.js';
 
 const active = new WeakMap();
 
@@ -12,7 +13,8 @@ export function auditSources(task, context) {
   let pending = active.get(context.db);
   if (!pending) {pending = new Map();active.set(context.db,pending);}
   if (pending.has(task.scan_task_id)) return pending.get(task.scan_task_id);
-  const promise = audit(task,context).finally(()=>pending.delete(task.scan_task_id));
+  const promise = (context.parameters?.source_path ? auditCscanNative(task,context) : audit(task,context))
+    .finally(()=>pending.delete(task.scan_task_id));
   pending.set(task.scan_task_id,promise);
   return promise;
 }

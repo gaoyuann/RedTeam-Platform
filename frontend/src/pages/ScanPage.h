@@ -27,7 +27,6 @@ public:
   void setPipelineScope(const QString &pipelineId, const QStringList &taskIds, const QString &state = {});
   void setTaskScope(const QStringList &taskIds);
   void clearTaskScope();
-  static QString chooseHttpSourceDirectory(ApiClient *api, const QString &target, const QString &initial, QWidget *parent);
   void showTaskContextError(const QString &message);
 
 signals:
@@ -82,8 +81,6 @@ private:
   void renderGroupedResults(const QJsonArray &results);
   void showPayloadMatches(QTreeWidgetItem *item);
   void enableCurrentTabDelBtn(bool enabled);
-  void loadSourceConnections();
-  void browseSourceDirectory();
   void showSourceEvidence(QTreeWidgetItem *item);
   void showPayloadForFinding(int findingId);
   void reviewSourceFinding(int findingId);
@@ -120,9 +117,9 @@ private:
   QLineEdit *m_bruteTargetInput;
   QLineEdit *m_sourceTargetInput;
   QLineEdit *m_sourceDirectoryInput;
+  QLineEdit *m_sourceNotesInput;
   QComboBox *m_programInputKind;
   QLineEdit *m_programRuntimeInput;
-  QComboBox *m_sourceConnectionCombo;
   QCheckBox *m_sourceAdaptiveCheck;
   QLineEdit *m_portsInput;         // port_scan specific
   QLineEdit *m_cookieInput;        // web_scan specific

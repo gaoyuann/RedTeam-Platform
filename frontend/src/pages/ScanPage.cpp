@@ -9,6 +9,7 @@
 #include <QGridLayout>
 #include <QTabBar>
 #include <QDialog>
+#include <QFileDialog>
 #include <QDialogButtonBox>
 #include <QScrollArea>
 #include <QVBoxLayout>
@@ -255,6 +256,13 @@ QString ScanPage::formatResultData(const QString &json, const QString &resultTyp
         obj["error"].isNull() ? QString("响应已保存（不代表漏洞验证成功）") : obj["error"].toString(),
         obj["response"].toString().left(300));
     if (resultType == "source_coverage") {
+      if (obj["engine"].toString() == "cscan" && obj["input_mode"].toString()=="service_path") {
+        const auto flow=obj["cscan"].toObject();
+        QStringList errors;for(const auto &v:obj["source_errors"].toArray()) errors.append(v.toString());
+        for(const auto &v:obj["parse_errors"].toArray()) errors.append(v.toString());
+        return QString("CScan 源码目标：%1；Flow %2；状态：%3\n%4\n%5")
+          .arg(obj["source_target"].toString(),flow["flow_id"].toString(),flow["state"].toString(),obj["note"].toString(),errors.join("；"));
+      }
       if (obj["engine"].toString() == "cscan" && obj["source_read"].toBool()) {
         const auto flow = obj["cscan"].toObject();
         const QMap<QString,QString> states={{"preparing","准备源码"},{"submitting","正在提交"},{"created","已创建"},
@@ -482,7 +490,6 @@ void ScanPage::enableCurrentTabDelBtn(bool enabled) {
 ScanPage::ScanPage(ApiClient *api, const QString &role, const QString &username, QWidget *parent) : QWidget(parent), m_api(api) {
   (void)role; (void)username;
   setupUI();
-  loadSourceConnections();
   onRefreshTasks();
 }
 
@@ -992,8 +999,8 @@ void ScanPage::setupUI() {
     auto *h = new QGridLayout;
     h->addWidget(new QLabel("程序 / 源码地址:"), 0, 0);
     m_sourceTargetInput = new QLineEdit;
-    m_sourceTargetInput->setPlaceholderText("http://192.168.1.113:8089 或 tcp://192.168.1.113:8091");
-    m_sourceTargetInput->setText("http://192.168.1.113:8089/source/");
+    m_sourceTargetInput->setPlaceholderText("CScan 中的源码路径，例如 /src/my-project 或 /src/my-project/main.c");
+    m_sourceTargetInput->clear();
     m_sourceTargetInput->setMinimumWidth(150);
     auto *completer = new QCompleter(history, this);
     completer->setCaseSensitivity(Qt::CaseInsensitive);
@@ -1002,7 +1009,7 @@ void ScanPage::setupUI() {
     m_programInputKind = new QComboBox;
     m_programInputKind->addItem("静态源码目录", "source");
     m_programInputKind->addItem("程序运行入口", "runtime");
-    m_programInputKind->setCurrentIndex(1);
+    m_programInputKind->setCurrentIndex(0);
     h->addWidget(m_programInputKind, 0, 2);
     m_programRuntimeInput = new QLineEdit;
     m_programRuntimeInput->setPlaceholderText("可选：对应程序的 HTTP/TCP 运行入口；只有文件也能扫描");
@@ -1018,40 +1025,33 @@ void ScanPage::setupUI() {
       m_sourceTargetInput->setText(preset->currentData().toString());
       m_programInputKind->setCurrentIndex(1);
     });
-    m_sourceConnectionCombo = new QComboBox;
-    m_sourceConnectionCombo->addItem("不提供源码（远程测试）", "");
-    h->addWidget(new QLabel("源码映射（按运行地址自动匹配）:"), 2, 0);
-    h->addWidget(m_sourceConnectionCombo, 2, 1);
-    m_sourceConnectionCombo->setEnabled(false);
-    auto *reloadSources = new QPushButton("刷新源码项目");
-    h->addWidget(reloadSources, 2, 2);
-    connect(reloadSources, &QPushButton::clicked, this, &ScanPage::loadSourceConnections);
-    connect(m_sourceTargetInput, &QLineEdit::textChanged, this, [this](const QString &value) {
-      const QString target=value.trimmed().toLower().remove(QRegularExpression("/$"));
-      int match=0;
-      for(int i=1;i<m_sourceConnectionCombo->count();++i) {
-        const auto targets=m_sourceConnectionCombo->itemData(i,Qt::UserRole+1).toStringList();
-        for(const auto &candidate:targets) {
-          if(candidate.toLower().remove(QRegularExpression("/$"))==target) { match=i; break; }
-        }
-        if(match) break;
-      }
-      m_sourceConnectionCombo->setCurrentIndex(match);
-      const QString mapped=m_sourceConnectionCombo->itemData(match,Qt::UserRole+2).toString();
-      m_sourceDirectoryInput->setPlaceholderText(mapped.isEmpty() ? "填写 /实际目录/ 或完整 HTTP 源码目录 URL；留空使用项目配置" : "留空使用：" + mapped);
-    });
     m_sourceDirectoryInput = new QLineEdit;
-    m_sourceDirectoryInput->setPlaceholderText("填写 /实际目录/ 或完整 HTTP 源码目录 URL；留空使用项目配置");
-    h->addWidget(new QLabel("源码目录地址:"), 3, 0);
+    m_sourceDirectoryInput->setPlaceholderText("可选：对运行程序补充 CScan 源码路径，例如 /src/my-project");
+    h->addWidget(new QLabel("CScan 源码路径:"), 3, 0);
     h->addWidget(m_sourceDirectoryInput, 3, 1);
-    auto *browseSource = new QPushButton("浏览远端目录…");
-    h->addWidget(browseSource, 3, 2);
-    connect(browseSource, &QPushButton::clicked, this, &ScanPage::browseSourceDirectory);
-    h->addWidget(new QLabel("源码扫描由 CScan 独立服务执行，完成后可选择发现生成攻击测试预案。"), 4, 1, 1, 2);
+    auto *chooseFolder = new QPushButton("选择文件夹…");
+    auto *chooseFile = new QPushButton("选择文件…");
+    h->addWidget(chooseFolder, 2, 1);h->addWidget(chooseFile, 2, 2);
+    connect(chooseFolder,&QPushButton::clicked,this,[this]() {
+      const QString path=QFileDialog::getExistingDirectory(this,"选择源码目录（仅填写路径，不上传）");
+      if(!path.isEmpty()) {m_sourceTargetInput->setText(path);m_programInputKind->setCurrentIndex(0);}
+    });
+    connect(chooseFile,&QPushButton::clicked,this,[this]() {
+      const QString path=QFileDialog::getOpenFileName(this,"选择源码文件（仅填写路径，不上传）");
+      if(!path.isEmpty()) {m_sourceTargetInput->setText(path);m_programInputKind->setCurrentIndex(0);}
+    });
+    m_sourceNotesInput = new QLineEdit;
+    m_sourceNotesInput->setMaxLength(4000);
+    m_sourceNotesInput->setPlaceholderText("可选：审计范围、关注问题和补充要求");
+    h->addWidget(new QLabel("审计说明:"), 4, 0);h->addWidget(m_sourceNotesInput, 4, 1, 1, 2);
+    connect(m_programInputKind,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int) {
+      m_sourceTargetInput->setPlaceholderText(m_programInputKind->currentData().toString()=="source"
+        ? "CScan 服务中的路径，例如 /src/my-project；本机选择器不上传文件" : "程序运行入口：http://主机:端口/ 或 tcp://主机:端口");
+    });
     m_sourceAdaptiveCheck = new QCheckBox("生成预案时允许 Agent 根据执行证据补充验证请求");
     m_sourceAdaptiveCheck->setChecked(true);
     h->addWidget(m_sourceAdaptiveCheck, 5, 1, 1, 2);
-    auto *hint = new QLabel("扫描 → 生成预案 → 攻击测试 → 攻击效果。程序测试默认填写 HTTP/CGI 地址或 TCP 服务地址，源码目录单独填写，结合源码与实际响应验证。只有源码时可生成验证草稿；动态执行需对应程序的调用方式，不要求源码包含 main 函数。网络拓扑独立探测，不依赖预案执行条件。");
+    auto *hint = new QLabel("源码扫描直接调用 CScan：填写服务中可访问的 /src/项目目录或文件，按审计说明建立 Flow，读取任务报告并解析漏洞。本机选择器仅填写路径，不上传文件；所选路径必须对应 CScan 已挂载的源码。攻击验证另需真实运行入口。");
     hint->setWordWrap(true);
     hint->setStyleSheet("color:#64748b; font-size:12px;");
     h->addWidget(hint, 6, 0, 1, 3);
@@ -1847,7 +1847,9 @@ void ScanPage::onCreateScan() {
   }
   if (isProgramScan(scanType)) {
     const QString sourceDirectory=m_sourceDirectoryInput->text().trimmed();
-    if(!sourceDirectory.isEmpty()) parameters["source_url"]=sourceDirectory;
+    if(!sourceDirectory.isEmpty()) parameters["source_path"]=sourceDirectory;
+    else if(m_programInputKind->currentData().toString()=="source") parameters["source_path"]=target;
+    parameters["source_notes"]=m_sourceNotesInput->text().trimmed();
     parameters["input_kind"] = m_programInputKind->currentData().toString();
     if (!m_programRuntimeInput->text().trimmed().isEmpty()) parameters["runtime_target"] = m_programRuntimeInput->text().trimmed();
   }
@@ -2670,107 +2672,6 @@ void ScanPage::onPollStatus() {
       });
     }
   });
-}
-
-void ScanPage::loadSourceConnections() {
-  m_api->get("/api/scan-tasks/source-connections", 5000, [this](const QJsonObject &res) {
-    if(res["status"].toString()!="ok") {
-      m_statusLabel->setText("源码项目配置未就绪，仍可选择远程测试：" + res["error"].toObject()["message"].toString());
-      return;
-    }
-    const QString selected=m_sourceConnectionCombo->currentData().toString();
-    m_sourceConnectionCombo->blockSignals(true);
-    m_sourceConnectionCombo->clear();
-    m_sourceConnectionCombo->addItem("不提供源码（远程测试）", "");
-    for(const auto &value:res["data"].toArray()) {
-      const auto source=value.toObject();
-      m_sourceConnectionCombo->addItem(source["name"].toString(),source["id"].toString());
-      QStringList targets; for(const auto &target:source["targets"].toArray()) targets<<target.toString();
-      m_sourceConnectionCombo->setItemData(m_sourceConnectionCombo->count()-1,targets,Qt::UserRole+1);
-      m_sourceConnectionCombo->setItemData(m_sourceConnectionCombo->count()-1,source["source_url"].toString(),Qt::UserRole+2);
-    }
-    const int index=m_sourceConnectionCombo->findData(selected);
-    m_sourceConnectionCombo->setCurrentIndex(index>=0?index:0);
-    m_sourceConnectionCombo->blockSignals(false);
-    const QString target=m_sourceTargetInput->text();
-    int match=0;
-    for(int i=1;i<m_sourceConnectionCombo->count();++i) {
-      for(const auto &candidate:m_sourceConnectionCombo->itemData(i,Qt::UserRole+1).toStringList()) {
-        if(QUrl(candidate)==QUrl(target)) { match=i; break; }
-        if(candidate.toLower().remove(QRegularExpression("/$"))==target.toLower().remove(QRegularExpression("/$"))) { match=i; break; }
-      }
-      if(match) break;
-    }
-    m_sourceConnectionCombo->setCurrentIndex(match);
-    const QString mapped=m_sourceConnectionCombo->itemData(match,Qt::UserRole+2).toString();
-    m_sourceDirectoryInput->setPlaceholderText(mapped.isEmpty() ? "填写 /实际目录/ 或完整 HTTP 源码目录 URL；留空使用项目配置" : "留空使用：" + mapped);
-  });
-}
-
-void ScanPage::browseSourceDirectory() {
-  const QString target=m_sourceTargetInput->text().trimmed();
-  QString initial=m_sourceDirectoryInput->text().trimmed();
-  if(initial.isEmpty()) initial=m_sourceConnectionCombo->currentData(Qt::UserRole+2).toString();
-  const QString selected=chooseHttpSourceDirectory(m_api,target,initial,this);
-  if(!selected.isEmpty()) m_sourceDirectoryInput->setText(selected);
-}
-
-QString ScanPage::chooseHttpSourceDirectory(ApiClient *api, const QString &target, const QString &initialDirectory, QWidget *owner) {
-  const QUrl runtime(target);
-  if(runtime.scheme()!="http" && runtime.scheme()!="https") {
-    QMessageBox::information(owner,"源码目录","远端目录浏览支持 HTTP/HTTPS。TCP 程序请使用后端配置的 SSH 源码项目。");
-    return QString();
-  }
-  QDialog dialog(owner);
-  dialog.setWindowTitle("选择远端 HTTP 源码目录");
-  dialog.resize(760,480);
-  auto *layout=new QVBoxLayout(&dialog);
-  auto *hint=new QLabel("输入目录地址并打开，双击子目录进入；选择当前目录后将递归读取 C/C++ 源码。服务器需要提供目录索引。",&dialog);
-  hint->setWordWrap(true); layout->addWidget(hint);
-  auto *row=new QHBoxLayout;
-  auto *address=new QLineEdit(&dialog);
-  QString initial=initialDirectory;
-  if(initial.isEmpty()) { QUrl root=runtime; root.setPath("/"); root.setQuery(QString()); root.setFragment(QString()); initial=root.toString(); }
-  address->setText(initial);
-  auto *open=new QPushButton("打开",&dialog);
-  auto *parent=new QPushButton("上一级",&dialog); parent->setEnabled(false);
-  row->addWidget(address,1); row->addWidget(open); row->addWidget(parent); layout->addLayout(row);
-  auto *tree=new QTreeWidget(&dialog); tree->setHeaderLabels({"目录 / C/C++ 文件","类型"}); tree->setRootIsDecorated(false); layout->addWidget(tree,1);
-  auto *status=new QLabel(&dialog); status->setWordWrap(true); layout->addWidget(status);
-  auto *buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel,&dialog);
-  auto *choose=buttons->button(QDialogButtonBox::Ok); choose->setText("选择当前目录"); choose->setEnabled(false);
-  layout->addWidget(buttons);
-  auto load= [api,target,address,open,parent,tree,status,choose,guard=QPointer<QDialog>(&dialog)]() {
-    open->setEnabled(false); parent->setEnabled(false); choose->setEnabled(false); tree->clear(); status->setText("正在读取远端目录…");
-    const QString requested=address->text().trimmed();
-    api->post("/api/scan-tasks/source-directory",QJsonObject{{"target",target},{"source_url",requested}},15000,
-      [guard,address,open,parent,tree,status,choose](const QJsonObject &res) {
-        if(!guard) return;
-        open->setEnabled(true);
-        if(res["status"].toString()!="ok") { status->setText("目录读取失败："+res["error"].toObject()["message"].toString()); return; }
-        const auto data=res["data"].toObject();
-        address->setText(data["url"].toString());
-        parent->setProperty("directoryUrl",data["parent"].toString()); parent->setEnabled(!data["parent"].toString().isEmpty());
-        for(const auto &entry:data["entries"].toArray()) {
-          const auto obj=entry.toObject(); auto *item=new QTreeWidgetItem(tree,{obj["name"].toString(),obj["directory"].toBool()?"目录":"源码文件"});
-          item->setData(0,Qt::UserRole,obj["url"].toString()); item->setData(0,Qt::UserRole+1,obj["directory"].toBool());
-        }
-        tree->resizeColumnToContents(0);
-        status->setText(data["note"].toString());
-        choose->setProperty("directoryUrl",data["url"].toString()); choose->setEnabled(!data["entries"].toArray().isEmpty());
-      });
-  };
-  connect(open,&QPushButton::clicked,&dialog,load);
-  connect(address,&QLineEdit::returnPressed,&dialog,[load,open](){if(open->isEnabled()) load();});
-  connect(address,&QLineEdit::textEdited,&dialog,[choose](){choose->setEnabled(false);});
-  connect(parent,&QPushButton::clicked,&dialog,[address,parent,load](){address->setText(parent->property("directoryUrl").toString());load();});
-  connect(tree,&QTreeWidget::itemDoubleClicked,&dialog,[address,open,load](QTreeWidgetItem *item,int){
-    if(open->isEnabled() && item->data(0,Qt::UserRole+1).toBool()) { address->setText(item->data(0,Qt::UserRole).toString()); load(); }
-  });
-  connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);
-  connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
-  load();
-  return dialog.exec()==QDialog::Accepted ? choose->property("directoryUrl").toString() : QString();
 }
 
 void ScanPage::showPayloadForFinding(int findingId) {

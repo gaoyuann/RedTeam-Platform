@@ -383,8 +383,31 @@ int main(int argc, char **argv)
   verify(flow.m_scanTab->m_currentTarget.isEmpty() && flow.m_scanTab->m_resultTree->topLevelItemCount() == 0, "late scan detail cannot restore old target or results");
   sourceOnly = true;
   ScanPage sourcePage(&api, "user", "fixture-user");
-  verify(sourcePage.m_programInputKind->currentData().toString() == "runtime",
-      "program testing defaults to a callable target with a separate source directory");
+  verify(sourcePage.m_programInputKind->currentData().toString() == "source",
+      "source scanning defaults to the CScan service path input");
+  {
+    MockServer nativeServer;
+    nativeServer.listen(QHostAddress::LocalHost,0);
+    nativeServer.handler=[](const QString &method,const QString &path)->MockReply {
+      if(method=="POST" && path=="/api/scan-tasks")
+        return {QJsonObject{{"status","error"},{"error",QJsonObject{{"message","fixture: creation captured without execution"}}}}};
+      return {success(QJsonArray())};
+    };
+    ApiClient nativeApi(QStringLiteral("http://127.0.0.1:%1").arg(nativeServer.serverPort()));
+    ScanPage nativePage(&nativeApi,"user","fixture-user");
+    nativePage.m_scanTypeTabs->setCurrentIndex(4);
+    nativePage.m_sourceTargetInput->setText("/src/fixture-project");
+    nativePage.m_sourceNotesInput->setText("check fixture input bounds");
+    nativePage.onCreateScan();
+    verify(awaitCondition([&]() {return nativeServer.requestBodies.contains("POST /api/scan-tasks");}),
+        "source creation submits an actual request to the platform adapter");
+    const auto nativeBody=QJsonDocument::fromJson(nativeServer.requestBodies.value("POST /api/scan-tasks")).object();
+    const auto nativeParameters=nativeBody["parameters"].toObject();
+    verify(nativeParameters["source_path"].toString()=="/src/fixture-project"
+        && nativeParameters["source_notes"].toString()=="check fixture input bounds"
+        && !nativeParameters.contains("source_url"),
+        "source request forwards the service path and audit requirements without a collection URL");
+  }
   sourcePage.setTaskScope({"scan-source"});
   verify(awaitCondition([&]() { return sourcePage.m_selectedTaskId == "scan-source" && sourcePage.m_sourceDemoBtn->isEnabled(); }), "source task loads in scoped workbench with demonstration selector");
   verify(sourcePage.m_sourceScanTable->rowCount() == 1 && sourcePage.m_scanTypeTabs->currentIndex() == 4, "C/C++ task selects its existing scan tab");

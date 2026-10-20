@@ -62,7 +62,7 @@ export function sourceFindingsContext(results) {
     if (row.result_type !== 'source_finding') continue;
     let data;
     try { data = typeof row.result_data === 'string' ? JSON.parse(row.result_data) : row.result_data; } catch { continue; }
-    if (!data?.file || !data?.start_line || !data?.code) continue;
+    if (!data?.file || !data?.start_line || (!data?.code && !(data.evidence_origin==='cscan_report' && data.reason))) continue;
     findings.push(data);
   }
   if (!findings.length) return '';
