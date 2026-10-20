@@ -2,9 +2,10 @@ import {scanCscanTarget,normalizeCscanReportedFinding} from './cscanNative.js';
 import {cscanTarget,cscanSourcePath,cscanNotes} from './cscanTarget.js';
 import {taskScope} from './taskScope.js';
 
-export async function auditCscanNative(task,{db,parameters,signal,nativeScan=scanCscanTarget,llm}) {
+export async function auditCscanNative(task,{db,parameters,signal,nativeScan=scanCscanTarget,llm,sourceLocation=''}) {
   const agentMode=Boolean(parameters.cscan_target);
-  const source=agentMode?cscanTarget(parameters.cscan_target):cscanSourcePath(parameters.source_path),notes=cscanNotes(parameters.source_notes);
+  const source=agentMode?cscanTarget(parameters.cscan_target):cscanSourcePath(parameters.source_path);
+  const notes=cscanNotes(parameters.source_notes);
   const parent=task.pipeline_id?db.prepare('SELECT * FROM pipelines WHERE pipeline_id=? AND created_by=?').get(task.pipeline_id,task.created_by):null;
   const scope=parent?taskScope(parent):taskScope({target:source,config:{}});
   if(signal?.aborted) throw new Error('源码扫描已取消');
@@ -16,12 +17,12 @@ export async function auditCscanNative(task,{db,parameters,signal,nativeScan=sca
     return Number(db.prepare('INSERT INTO scan_results(scan_task_id,result_type,result_data,severity,source_tool,captured_at) VALUES (?,?,?,?,?,?)')
       .run(task.scan_task_id,type,JSON.stringify(data),severity,'cscan',new Date().toISOString()).lastInsertRowid);
   };
-  const coverage={engine:'cscan',input_mode:agentMode?'remote_agent':'service_path',source_target:source,source_read:false,
+  const coverage={engine:'cscan',input_mode:agentMode?'remote_agent':'service_path',source_target:source,source_location:sourceLocation,source_read:false,
     source_version_verified:false,whole_project_complete:false,cscan_complete:false,
     cscan:{state:'preparing'},source_errors:[],parse_errors:[],rejected_findings:[],
     note:'源码读取和扫描由 CScan 完成。平台接收任务报告，不采集源码；报告定位和版本尚需复核。'};
   db.prepare('INSERT INTO source_audits(scan_task_id,snapshot_id,connection_id,manifest,analysis,created_at) VALUES (?,?,?,?,?,?)')
-    .run(task.scan_task_id,'cscan-report:'+task.scan_task_id,'cscan',JSON.stringify({kind:'service_report',source_target:source,files:[]}),JSON.stringify(coverage),new Date().toISOString());
+    .run(task.scan_task_id,'cscan-report:'+task.scan_task_id,'cscan',JSON.stringify({kind:'service_report',source_target:source,source_location:sourceLocation,files:[]}),JSON.stringify(coverage),new Date().toISOString());
   const id=store('source_coverage',coverage);
   const persist=()=>{
     db.prepare('UPDATE source_audits SET analysis=? WHERE scan_task_id=?').run(JSON.stringify(coverage),task.scan_task_id);
@@ -29,7 +30,7 @@ export async function auditCscanNative(task,{db,parameters,signal,nativeScan=sca
   };
   const outcomes=[];
   try {
-    const report=await nativeScan(source,{notes,scope,signal,llm,onProgress:state=>{
+    const report=await nativeScan(source,{notes,sourceLocation,scope,signal,llm,onProgress:state=>{
       coverage.cscan={...coverage.cscan,...state};persist();
     }});
     if(signal?.aborted) throw new Error('源码扫描已取消');

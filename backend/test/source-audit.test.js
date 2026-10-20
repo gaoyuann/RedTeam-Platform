@@ -53,7 +53,7 @@ const cscanReport=(source,findings=[])=>({snapshot_id:source.snapshot_id,flow_id
   coverage:{reviewed_files:source.documents.map(doc=>doc.path),omitted_files:[],complete:true}});
 const args=spec=>[JSON.stringify(spec)];
 
-test('selected target directory is collected, delivered to CScan and imported without a PentAGI service',async t=>{
+test('legacy HTTP snapshot remains compatible without being the new project input',async t=>{
   const db=auditDb(t),hits=[];
   const server=http.createServer((req,res)=>{
     hits.push(req.url);
@@ -70,8 +70,8 @@ test('selected target directory is collected, delivered to CScan and imported wi
     return [];
   });
   const snapshotRoot=await temp(t);
-  const result=await auditSources({scan_task_id:'directory-cscan',target},{db,
-    parameters:{input_kind:'remote_directory',source_url:target+'selected/'},
+  const result=await auditSources({scan_task_id:'directory-cscan',target:target+'selected/'},{db,
+    parameters:{input_kind:'source',source_url:target+'selected/'},
     snapshot:(connection,options)=>createSourceSnapshot(connection,{...options,snapshotRoot}),
     runTool:()=>assert.fail('a source-folder task must not invoke network scanning')});
   assert.ok(result.outcomes.every(item=>item.success),JSON.stringify(result.outcomes));
@@ -83,6 +83,35 @@ test('selected target directory is collected, delivered to CScan and imported wi
   assert.equal(coverage.cscan_complete,true);
   assert.equal(coverage.cscan.task_progress.finished,1);
   assert.equal(coverage.cscan.subtask_progress.finished,1);
+});
+
+test('selected SSH folder submits only its location, never collects or uploads files',async t=>{
+  const db=auditDb(t),root=await temp(t),connections=join(root,'connections.json');
+  await writeFile(connections,JSON.stringify([{id:'project',kind:'ssh',source_root:'/opt/project',host:'192.0.2.40',port:22,username:'reader',identity_file:'/private/key',targets:['http://example.test/']}]));
+  const old=process.env.SOURCE_SCAN_CONNECTIONS_FILE;process.env.SOURCE_SCAN_CONNECTIONS_FILE=connections;
+  t.after(()=>{if(old===undefined) delete process.env.SOURCE_SCAN_CONNECTIONS_FILE;else process.env.SOURCE_SCAN_CONNECTIONS_FILE=old;});
+  let calls=0;
+  const result=await auditSources({scan_task_id:'selected',target:'http://example.test/'},{db,
+    parameters:{input_kind:'remote_directory',connection_id:'project',source_subdir:'module'},
+    snapshot:()=>assert.fail('must not collect source'),cscan:()=>assert.fail('must not invoke snapshot scanner'),
+    nativeScan:async (target,options)=>{calls++;assert.equal(target,'http://example.test/');
+      assert.match(options.sourceLocation,/192\.0\.2\.40/);assert.match(options.sourceLocation,/\/opt\/project\/module/);
+      assert.ok(!JSON.stringify(options).includes('/private/key'));
+      return {flow_id:'20',markdown:'Source-Access: unavailable\nMissing access.',findings:[],source_access_reported:'unavailable'};}});
+  assert.equal(calls,1);assert.equal(result.outcomes[0].success,false);
+  const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
+  assert.equal(coverage.input_mode,'remote_agent');assert.equal(coverage.cscan.state,'source_unavailable');
+  assert.equal(coverage.transfer,undefined);
+});
+
+test('selected HTTP directory is passed to CScan without downloading its contents',async t=>{
+  const db=auditDb(t);
+  const result=await auditSources({scan_task_id:'http-direct',target:'http://example.test/'},{db,
+    parameters:{input_kind:'remote_directory',source_url:'/project/'},
+    snapshot:()=>assert.fail('must not download source'),
+    nativeScan:async target=>{assert.equal(target,'http://example.test/project/');
+      return {flow_id:'21',markdown:'Source-Access: available\nNo findings.',findings:[],source_access_reported:'available'};}});
+  assert.ok(result.outcomes.every(item=>item.success));
 });
 
 test('source projects bind exact deployment endpoints and do not expose credential paths',async t=>{

@@ -5,6 +5,7 @@ import {sourceRuntimeMapping} from './sourceRuntimeMapping.js';
 import {programExecutionTarget} from './programScan.js';
 import {runCscan, relativeCscanPath, createCscanClient} from './cscanClient.js';
 import {auditCscanNative} from './sourceAuditNative.js';
+import {posix} from 'node:path';
 
 const active = new WeakMap();
 
@@ -13,10 +14,26 @@ export function auditSources(task, context) {
   let pending = active.get(context.db);
   if (!pending) {pending = new Map();active.set(context.db,pending);}
   if (pending.has(task.scan_task_id)) return pending.get(task.scan_task_id);
-  const promise = (context.parameters?.cscan_target || context.parameters?.source_path ? auditCscanNative(task,context) : audit(task,context))
+  const operation = context.parameters?.input_kind==='remote_directory'
+    ? auditSelectedDirectory(task,context)
+    : context.parameters?.cscan_target || context.parameters?.source_path ? auditCscanNative(task,context) : audit(task,context);
+  const promise = operation
     .finally(()=>pending.delete(task.scan_task_id));
   pending.set(task.scan_task_id,promise);
   return promise;
+}
+
+async function auditSelectedDirectory(task,context) {
+  const connection=await resolveTaskSource(context.parameters,task.target);
+  if(!connection) throw new Error('请选择目标源码目录或直接填写源码路径／地址');
+  const path=connection.kind==='http' ? connection.source_url
+    : posix.join(connection.source_root,connection.source_subdir || '');
+  const target=connection.kind==='ssh' ? task.target : path;
+  const location=connection.kind==='ssh'
+    ? `目标源码位于主机 ${connection.host} 的目录 ${path}（SSH 端口 ${connection.port}）。请使用执行环境已有的授权访问条件自行读取；不要把此路径当成容器本机路径。`
+    : `目标源码地址或执行侧路径：${path}。`;
+  return auditCscanNative(task,{...context,parameters:{...context.parameters,cscan_target:target},
+    sourceLocation:location});
 }
 
 async function audit(task, {db, parameters = {}, signal, runTool, snapshot = createSourceSnapshot, cscan = runCscan}) {

@@ -1,16 +1,16 @@
 # 直接调用 CScan 的源码扫描流程
 
-> 当前默认入口已改为“选择目标主机的源码文件夹”，见 [目标源码文件夹选择](remote-source-folder.md)。本文的直接提交方式保留为“直接交给 CScan（高级）”，供执行环境已经能访问目标的场景使用；默认文件夹选择会实际采集并交付源码。
+> 默认入口为“源码路径／地址（CScan 自行读取）”。也可浏览目标目录后提交位置，见 [源码位置选择](remote-source-folder.md)。两种方式都不上传文件、不创建快照或挂载。
 
 源码扫描参考 `/home/zxf/code/pentagi-v3` 中的实际调用逻辑：在扫描弹窗指定目标、审计要求，通过 GraphQL `createFlow` 提交给服务，轮询任务和子任务，读取 `tasks.result` 报告，再解析为漏洞列表。
 
 接口契约已对照服务部署中的 `/home/aistation/apps/cscan-agent/backend/pkg/server/docs/swagger.yaml` 和 `/home/aistation/apps/cscan-agent/backend/pkg/graph/schema.graphqls`：Swagger 明确列出 `/api/v1/graphql`；REST 对应创建接口为 `POST /flows/`（`provider`、`input`），结果为 `GET /flows/{flowID}/tasks/`、`subtasks/` 的 `result`，结束操作为 `PUT /flows/{flowID}` 的 `finish` action。这里沿用参考客户端的 GraphQL 调用，不要求另建上传接口或固定 JSON 文件。
 
-新界面使用此流程，不再以平台下载源码、冻结快照、运行 cppcheck / Flawfinder、本地模型审计代码或访问共享报告文件作为前置条件。PentAGI 是扫描执行服务，CScan 是同一套框架拆出的源码审计实例；平台仅作为调用方和结果展示、验证流程的衔接方。
+平台只提交源码位置和审计要求，不下载源码，不以平台快照或共享报告文件作为前置条件。CScan 复用 PentAGI 的执行框架但独立运行，平台不把扫描任务转交原 PentAGI 服务。
 
 ## 操作
 
-1. 新建任务选择“源码扫描（CScan） / 程序测试”，输入类型默认“远端 CScan（靶机 / 源码路径）”；独立扫描页使用相同入口。
+1. 新建任务选择“源码扫描（CScan） / 程序测试”，默认输入“源码路径／地址（CScan 自行读取）”；独立扫描页使用相同入口。
 2. 测试目标填写靶机 IP、主机:端口、HTTP/TCP 地址，例如 `http://192.168.1.113:8089/`。不需要选择本机文件夹，也不要求源码预先位于 `/src`。
 3. 在审计说明中补充靶机上的源码位置、已有授权连接的说明和关注问题。目标和要求一并传给远端 CScan Flow，由它使用既有工具和访问条件核实并读取源码。只有站点响应或二进制不等于取得源码，无法访问时必须报告缺少的条件。
 4. 如果已知源码就在远端执行环境可访问的目录，也可直接以 `/var/www/project` 等明确绝对路径作为目标。这不是客户端路径，不上传本机文件，不限定 `/src` 前缀。纯路径任务只提交 CScan，不附带网络扫描。
@@ -81,6 +81,6 @@ API 创建参数示例：
 
 ## 历史兼容与验证
 
-已存在的旧快照任务保留原始证据和读取方式，旧 API 参数 `source_path`、`source_url`／连接配置继续按原任务格式兼容；新界面使用 `cscan_target`，不会把靶机 URL 当作本机源码路径，也不会从直接调用流程退回旧采集链路。旧记录中真实存在的快照与哈希不删除。
+已存在的旧快照任务保留原始证据和读取方式。新建直接提交使用 `cscan_target`，目录选择使用 `remote_directory`，二者均走原生服务调用，不退回旧采集链路。旧记录中真实存在的快照与哈希不删除。
 
 执行 `cd backend && npm run test:source`。`test/cscan-native.test.js` 使用真实 HTTP GraphQL 测试服务，核实不接触本机源码/共享文件、提交靶机目标或远端路径与要求、处理 waiting 状态、读取任务报告、解析失败保留原文、范围与重复执行、工作台只产生一个源码子扫描，以及发现进入 F08 后缺少运行入口不能直接执行。协议回归不代表真实 CScan 模型质量验收。

@@ -86,7 +86,7 @@ private:
           item->setData(Qt::UserRole,(connection.isEmpty()?entry["url"]:entry["path"]).toString());
         }
         status->setText(data["truncated"].toBool() ? "目录较多，仅显示前 500 项；可输入子目录后读取。"
-          : "双击进入子文件夹，或选择当前文件夹。只采集所选目录中的 C/C++ 源码。");
+          : "仅将所选路径或地址交给 CScan，由 Agent 自行读取；不上传文件，浏览成功不代表 CScan 已有访问权限。");
         ok->setEnabled(true);
       });
     };
@@ -116,6 +116,7 @@ private:
           if(QUrl(v.toString()).adjusted(QUrl::StripTrailingSlash)==QUrl(target).adjusted(QUrl::StripTrailingSlash)) matches=true;
         if(matches) mode->addItem(c["name"].toString()+"（SSH）",c["id"].toString());
       }
+      if(mode->count()>1) mode->setCurrentIndex(1);
     });
     dialog->setModal(true);dialog->show();
     if(target.isEmpty()) {load->setEnabled(false);status->setText("请先填写目标主机地址。");}

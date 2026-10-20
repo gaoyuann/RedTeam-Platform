@@ -291,8 +291,11 @@ QString ScanPage::formatResultData(const QString &json, const QString &resultTyp
         const auto flow=obj["cscan"].toObject();
         QStringList errors;for(const auto &v:obj["source_errors"].toArray()) errors.append(v.toString());
         for(const auto &v:obj["parse_errors"].toArray()) errors.append(v.toString());
+        const auto tasks=flow["task_progress"].toObject(),subs=flow["subtask_progress"].toObject();
+        const QString progress=tasks.isEmpty()?QString():QString("\n任务完成 %1/%2；子任务完成 %3/%4")
+          .arg(tasks["finished"].toInt()).arg(tasks["total"].toInt()).arg(subs["finished"].toInt()).arg(subs["total"].toInt());
         return QString("CScan 审计目标：%1；Flow %2；状态：%3\n%4\n%5")
-          .arg(obj["source_target"].toString(),flow["flow_id"].toString(),flow["state"].toString(),obj["note"].toString(),errors.join("；"));
+          .arg(obj["source_target"].toString(),flow["flow_id"].toString(),flow["state"].toString(),obj["note"].toString(),errors.join("；"))+progress;
       }
       if (obj["engine"].toString() == "cscan" && obj["source_read"].toBool()) {
         const auto flow = obj["cscan"].toObject();
@@ -1034,7 +1037,7 @@ void ScanPage::setupUI() {
     auto *h = new QGridLayout;
     h->addWidget(new QLabel("程序 / 源码地址:"), 0, 0);
     m_sourceTargetInput = new QLineEdit;
-    m_sourceTargetInput->setPlaceholderText("目标主机地址，例如 http://主机:端口/");
+    m_sourceTargetInput->setPlaceholderText("源码路径或局域网源码地址，例如 /opt/project 或 http://主机/project/");
     m_sourceTargetInput->clear();
     m_sourceTargetInput->setMinimumWidth(150);
     auto *completer = new QCompleter(history, this);
@@ -1044,10 +1047,11 @@ void ScanPage::setupUI() {
     m_programInputKind = new QComboBox;
     m_programInputKind->addItem("选择目标主机的源码文件夹", "remote_directory");
     m_programInputKind->addItem("程序运行入口", "runtime");
-    m_programInputKind->addItem("直接交给 CScan（高级）", "agent");
-    m_programInputKind->setCurrentIndex(0);
+    m_programInputKind->addItem("源码路径／地址（CScan 自行读取）", "agent");
+    m_programInputKind->setCurrentIndex(m_programInputKind->findData("agent"));
     h->addWidget(m_programInputKind, 0, 2);
     m_remoteSourcePicker=new RemoteSourcePicker(m_api,this);
+    m_remoteSourcePicker->hide();
     h->addWidget(m_remoteSourcePicker,2,0,1,3);
     connect(m_sourceTargetInput,&QLineEdit::textChanged,m_remoteSourcePicker,&RemoteSourcePicker::setTarget);
     connect(m_programInputKind,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int){
@@ -1078,7 +1082,7 @@ void ScanPage::setupUI() {
     m_sourceAdaptiveCheck = new QCheckBox("生成预案时允许 Agent 根据执行证据补充验证请求");
     m_sourceAdaptiveCheck->setChecked(true);
     h->addWidget(m_sourceAdaptiveCheck, 5, 1, 1, 2);
-    auto *hint = new QLabel("先填写目标主机地址，再浏览并选择该主机的源码文件夹。支持网站公开的目录索引和已配置的 SSH 连接。平台将所选目录的 C/C++ 源码交付给 CScan，无需填写扫描容器路径。");
+    auto *hint = new QLabel("填写源码路径或局域网源码地址，可在审计说明中注明目标主机及目录。平台仅提交位置和要求，由 CScan Agent 自行访问、读取和扫描；访问失败时显示服务返回原因，不上传源码或创建挂载。");
     hint->setWordWrap(true);
     hint->setStyleSheet("color:#64748b; font-size:12px;");
     h->addWidget(hint, 6, 0, 1, 3);
