@@ -194,6 +194,52 @@ int main(int argc, char **argv)
     auto *informationItem=aggregate.m_resultTree->topLevelItem(0)->child(0);
     verify(informationItem->data(0,Qt::CheckStateRole).isNull(),"legacy informational Nikto finding has no verification checkbox");
     verify(aggregate.m_resultOverview->findChild<QFrame*>("findingMetric")->findChild<QLabel*>("metricValue")->text()=="0","legacy informational Nikto finding is excluded from vulnerability count");
+    QJsonArray tableRows;
+    const QStringList states{"", "running", "cancelling", "unknown", "completed", "failed", "ready"};
+    for (int row = 0; row < states.size(); ++row) {
+      QJsonObject finding{{"id", 500 + row}, {"category", "vulnerability"}, {"result_type", "web_vuln"},
+        {"severity", "high"}, {"source_tool", "fixture"},
+        {"result_data", "{\"title\":\"Fixture directory candidate\",\"url\":\"https://fixture.invalid/docs/\",\"cwe\":\"CWE-548\"}"},
+        {"verification", QJsonValue::Null}, {"payload_match", QJsonObject{{"status", "candidate"}}}};
+      if (row) finding["verification"] = QJsonObject{{"state", states[row]}, {"conclusion", "confirmed"},
+        {"result", QJsonObject{{"schema_version", 1}, {"status", row == 4 ? "achieved" : "inconclusive"},
+          {"objective", QJsonObject{{"label", "目录索引暴露"}}}, {"reason", "fixture evidence"}}}};
+      tableRows.append(finding);
+    }
+    tableRows.append(informationRows.first());
+    tableRows.append(QJsonObject{{"id", 600}, {"result_type", "open_port"}, {"severity", "info"}, {"result_data", "{\"port\":443}"}});
+    tableRows.append(QJsonObject{{"id", 601}, {"result_type", "scan_error"}, {"severity", "info"}, {"result_data", "{\"error\":\"fixture timeout\"}"}});
+    aggregate.renderGroupedResults(tableRows);
+    auto *candidates = aggregate.m_resultTree->topLevelItem(0);
+    verify(candidates->childCount() == 7 && aggregate.m_resultTree->topLevelItemCount() == 4,
+      "candidate table separates informational findings, ports and scan errors");
+    verify(candidates->child(0)->text(6) == "未测试" && candidates->child(0)->text(7) == "待判定",
+      "unverified candidate is never marked successful");
+    verify(candidates->child(3)->text(6) == "停止未知" && candidates->child(4)->text(6) == "已完成"
+      && candidates->child(4)->text(7) == "目标已达成", "execution state remains independent from evidence-based objective result");
+    verify(candidates->child(0)->text(1).contains("CWE-548") && candidates->child(0)->text(5).contains("/docs/")
+      && candidates->child(0)->text(0) == "500" && candidates->child(0)->text(4) == "高危", "rule, location and stable finding identity remain visible");
+    verify(aggregate.m_resultTree->columnCount() == 8
+      && aggregate.m_resultTree->findChildren<QPushButton*>("findingRowAction").isEmpty(),
+      "finding table has no operation column or per-row action buttons");
+    const QString tableCapture = qEnvironmentVariable("F04_SCREENSHOT_DIR");
+    if (!tableCapture.isEmpty()) {
+      aggregate.m_resultHint->setText("隔离布局夹具：7 条漏洞候选、1 条信息、1 条端口、1 条工具错误；无真实扫描");
+      aggregate.m_statusLabel->setText("隔离布局夹具 · 扫描部分失败，已获得结果保留；网站检查未执行（fixture timeout）");
+      app.processEvents(); aggregate.grab().save(tableCapture + "/finding-table-1360.png");
+      aggregate.resize(1024, 600); app.processEvents(); aggregate.grab().save(tableCapture + "/finding-table-1024.png");
+      aggregate.resize(1360, 860);
+    }
+    auto legacy = tableRows.first().toObject();
+    legacy["verification"] = QJsonObject{{"state", "completed"}, {"conclusion", "confirmed"}};
+    aggregate.renderGroupedResults(QJsonArray{legacy});
+    verify(aggregate.m_resultTree->topLevelItem(0)->child(0)->text(7).contains("旧记录"),
+      "legacy confirmed or manual opinion cannot masquerade as a supported system result");
+    verify(ScanPage::buildResultSummary(QJsonArray{
+      QJsonObject{{"result_type", "web_vuln"}, {"severity", "high"}},
+      QJsonObject{{"result_type", "sql_injection"}, {"severity", "high"}},
+      QJsonObject{{"result_type", "web_vuln"}, {"category", "information"}}}, "web_scan")
+        == QStringLiteral("网站漏洞：1, SQL注入: 1"), "table grouping preserves web scan summary counts");
     aggregate.renderGroupedResults(aggregate.m_aggregateRecords);
     auto *firstFinding=aggregate.m_resultTree->topLevelItem(0)->child(0);
     auto *secondFinding=aggregate.m_resultTree->topLevelItem(0)->child(1);
