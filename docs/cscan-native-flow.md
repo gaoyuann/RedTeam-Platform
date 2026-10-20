@@ -1,5 +1,7 @@
 # 直接调用 CScan 的源码扫描流程
 
+> 当前默认入口已改为“选择目标主机的源码文件夹”，见 [目标源码文件夹选择](remote-source-folder.md)。本文的直接提交方式保留为“直接交给 CScan（高级）”，供执行环境已经能访问目标的场景使用；默认文件夹选择会实际采集并交付源码。
+
 源码扫描参考 `/home/zxf/code/pentagi-v3` 中的实际调用逻辑：在扫描弹窗指定目标、审计要求，通过 GraphQL `createFlow` 提交给服务，轮询任务和子任务，读取 `tasks.result` 报告，再解析为漏洞列表。
 
 接口契约已对照服务部署中的 `/home/aistation/apps/cscan-agent/backend/pkg/server/docs/swagger.yaml` 和 `/home/aistation/apps/cscan-agent/backend/pkg/graph/schema.graphqls`：Swagger 明确列出 `/api/v1/graphql`；REST 对应创建接口为 `POST /flows/`（`provider`、`input`），结果为 `GET /flows/{flowID}/tasks/`、`subtasks/` 的 `result`，结束操作为 `PUT /flows/{flowID}` 的 `finish` action。这里沿用参考客户端的 GraphQL 调用，不要求另建上传接口或固定 JSON 文件。
@@ -29,6 +31,8 @@
 ```
 
 CScan 的 `waiting` 不一定是失败。平台核对扫描任务和子任务是否完成；失败或等待人工输入明确显示原因，不自动重复创建 Flow。取得任务报告后结束本次 Flow。取消、请求超时、重启恢复仍保留原 Flow 的对应关系。
+
+若连续三次查询都返回 `waiting` 且任务列表为空，平台报告“未创建扫描任务”，并请求停止原 Flow，不再等待整个扫描超时，也不自动重提。短暂的初始空列表允许继续等待；恢复到运行状态会重新计数。此情况可能发生于 CScan 调用模型生成任务标题失败，应检查 CScan 服务端日志及模型连接。
 
 报告已有明确字段时直接提取；普通文字报告参考客户端的做法，调用平台已配置的模型整理已完成任务的结果。这个模型只接收报告，不读取或扫描源代码。解析失败时保留完整原文并标记缺口，不以本地源码扫描兜底。文件和依据必须出现在原始报告中，不接受解析模型新增的证据。
 

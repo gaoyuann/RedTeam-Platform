@@ -68,6 +68,12 @@ export function normalizeTaskScope(config, target) {
     || excludes.some(rule=>contains(address(rule),address(config.source_path))))) invalid('CScan 源码路径未包含在授权范围内或命中排除项');
   if(config?.cscan_target && (!includes.some(rule=>contains(address(rule),address(config.cscan_target)))
     || excludes.some(rule=>contains(address(rule),address(config.cscan_target))))) invalid('CScan 目标未包含在授权范围内或命中排除项');
+  if(config?.input_kind==='remote_directory' && config.source_url) {
+    const source=address(config.source_url);
+    if(!includes.some(rule=>contains(address(rule),source))
+      || excludes.some(rule=>contains(address(rule),source) || contains(source,address(rule))))
+      invalid('所选源码目录未包含在授权范围内或包含排除项，请缩小目录选择');
+  }
   const location = scope.execution_location ?? 'scanner';
   if (!['scanner', 'remote'].includes(location)) invalid('扫描位置无效');
   for (const key of ['environment_ref', 'auth_config_ref']) {

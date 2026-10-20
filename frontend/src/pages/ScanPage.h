@@ -15,6 +15,7 @@
 
 class QCheckBox;
 class ApiClient;
+class RemoteSourcePicker;
 class ScanResultOverview;
 
 class ScanPage : public QWidget {
@@ -119,6 +120,7 @@ private:
   QLineEdit *m_sourceTargetInput;
   QLineEdit *m_sourceNotesInput;
   QComboBox *m_programInputKind;
+  RemoteSourcePicker *m_remoteSourcePicker;
   QLineEdit *m_programRuntimeInput;
   QCheckBox *m_sourceAdaptiveCheck;
   QLineEdit *m_portsInput;         // port_scan specific

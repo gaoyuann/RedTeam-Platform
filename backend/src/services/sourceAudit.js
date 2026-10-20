@@ -78,7 +78,7 @@ async function audit(task, {db, parameters = {}, signal, runTool, snapshot = cre
   };
   let report;
   try {
-    report = await cscan(source,{signal,onProgress:progress=>{
+    report = await cscan({...source,notes:parameters.source_notes || ''},{signal,onProgress:progress=>{
       coverage.cscan = {...coverage.cscan,...progress};persist();
     }});
     checkAbort();

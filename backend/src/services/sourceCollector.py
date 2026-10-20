@@ -3,6 +3,17 @@ import os, sys, json, base64, stat
 root = os.path.realpath(base64.b64decode(sys.argv[1]).decode("utf-8"))
 if root == "/" or not os.path.isdir(root):
     raise ValueError("source root must be an existing project directory")
+subdir = sys.argv[3] if len(sys.argv) > 3 else ""
+base = root
+for part in subdir.split("/") if subdir else []:
+    if part in ("", ".", "..") or "\\" in part:
+        raise ValueError("invalid source subdirectory")
+    root = os.path.join(root, part)
+    if os.path.islink(root):
+        raise ValueError("symlink directory excluded")
+root = os.path.realpath(root)
+if os.path.commonpath([base, root]) != base or not os.path.isdir(root):
+    raise ValueError("source directory outside configured root")
 extensions = {".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".hxx"}
 excluded = {".git", "node_modules", "vendor", "build", "dist", ".cache"}
 files, skipped = [], []

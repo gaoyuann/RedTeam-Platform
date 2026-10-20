@@ -57,6 +57,7 @@ test('CScan stages immutable snapshot, creates once, polls and reads version-bou
   const result = await runCscan(source,{config,onProgress:item=>progress.push(item)});
   assert.equal(result.flow_id,'12');assert.equal(result.markdown,'Fixture report');
   assert.equal(result.findings.length,1);assert.equal(requests.length,2);
+  assert.deepEqual(progress.find(p=>p.task_progress)?.task_progress,{total:1,finished:1,failed:0,running:0});
   assert.deepEqual(progress.map(p=>p.state),['submitting','running','finished','finished']);
   assert.equal(progress[0].submission_uncertain,true);
   const staged = await stageCscanSource(source,config);
@@ -165,6 +166,51 @@ test('CScan staging failure is not an uncertain submission and completed flows a
 });
 
 const markdownReport = '## Unchecked copy\n- File: `lib/input.c`\n- Line: 2\n- Severity: high\n- CWE: CWE-120\n- Evidence: Unbounded copy into a fixed buffer\n- Preconditions: Caller-controlled input remains to be verified\n- Remediation: Enforce the destination capacity\n';
+
+test('waiting without tasks fails promptly after confirmed polls and stops the original Flow once',async t=>{
+  const {source,config}=await fixture(t),progress=[];
+  let creates=0,polls=0,stops=0;
+  config.apiUrl=await server(t,(req,res,body)=>{
+    if(body.query.includes('createFlow')) {
+      creates++;res.end(JSON.stringify({data:{createFlow:{id:'82',status:'running'}}}));
+    } else if(body.query.includes('stopFlow')) {
+      stops++;assert.equal(body.variables.id,'82');
+      res.end(JSON.stringify({data:{stopFlow:'success'}}));
+    } else {
+      polls++;res.end(JSON.stringify({data:{flow:{id:'82',status:'waiting'},tasks:[]}}));
+    }
+  });
+  await assert.rejects(runCscan(source,{config,onProgress:p=>progress.push(p),
+    stage:async()=>({key:null,containerPath:'/src/fixture'}),
+    readReport:()=>assert.fail('no task can produce a report')}),/未创建扫描任务/);
+  assert.equal(creates,1);assert.equal(polls,3);assert.equal(stops,1);
+  assert.equal(progress.at(-1).flow_id,'82');
+  assert.equal(progress.at(-1).stop_status,'acknowledged');
+});
+
+test('transient empty waiting states do not reject a Flow that starts or completes',async t=>{
+  const {source,config}=await fixture(t);
+  for(const statuses of [
+    ['waiting','waiting','running','waiting','waiting','finished'],
+    ['waiting','finished'],
+  ]) {
+    let polls=0;
+    const result=await runCscan(source,{config,
+      stage:async()=>({key:null,containerPath:'/src/fixture'}),
+      readReport:async()=>({findings:[],markdown:'Completed'}),
+      client:{
+        create:async()=>({id:'83',status:'waiting'}),
+        flow:async()=>{
+          const status=statuses[polls++];
+          return {id:'83',status:status==='finished'?'waiting':status,
+            tasks:status==='finished'?[{status:'finished',subtasks:[]}]:[]};
+        },
+        finish:async()=>{},
+        stop:()=>assert.fail('successful Flow must not be stopped'),
+      }});
+    assert.equal(result.flow_id,'83');assert.equal(polls,statuses.length);
+  }
+});
 
 test('upstream waiting plus finished task imports native Markdown then finalizes Flow',async t=>{
   const {source,config}=await fixture(t),calls=[];
