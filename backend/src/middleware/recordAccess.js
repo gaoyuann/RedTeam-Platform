@@ -39,6 +39,7 @@ export function canAccessRecord(db, kind, record, user) {
   if (!record || !user?.sub || !['admin', 'user'].includes(user.role)) return false;
   if (user.role === 'admin') return true;
   if (kind !== 'report') return recordOwner(kind, record) === user.sub;
+  if(record.pipeline_id) return canAccessRecord(db,'pipeline',getRecord(db,'pipeline',record.pipeline_id),user);
   const sources = [];
   if (record.run_id) sources.push(['run', record.run_id]);
   if (record.scan_task_id) sources.push(['scan', record.scan_task_id]);

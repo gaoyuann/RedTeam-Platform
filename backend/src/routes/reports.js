@@ -49,7 +49,7 @@ export default function (db) {
     for (const row of db.prepare('SELECT * FROM test_reports ORDER BY created_at DESC, id DESC').all()) {
       if (!canAccessRecord(db, 'report', row, req.user) || !allowed(req, row)) continue;
       let document;
-      if (row.template === 'task_trace_v1') {
+      if (['task_trace_v1','task_trace_v2'].includes(row.template)) {
         try { document = traceDocument(row, req.user); } catch { continue; }
       }
       const reportKind = document ? 'trace_snapshot' : 'legacy';
@@ -71,7 +71,7 @@ export default function (db) {
   router.get('/', (req, res) => {
     const rows = db.prepare('SELECT * FROM test_reports ORDER BY created_at DESC').all().filter(row => {
       if (!canAccessRecord(db, 'report', row, req.user) || !allowed(req, row)) return false;
-      if (row.template !== 'task_trace_v1') return true;
+      if (!['task_trace_v1','task_trace_v2'].includes(row.template)) return true;
       try { traceDocument(row, req.user); return true; } catch { return false; }
     });
     res.json({ status: 'ok', data: rows, meta: { total: rows.length } });
@@ -154,7 +154,7 @@ export default function (db) {
 
   router.use('/:reportId', (req, res, next) => {
     const row = db.prepare('SELECT * FROM test_reports WHERE report_id = ?').get(req.params.reportId);
-    if (row?.template !== 'task_trace_v1') return next();
+    if (!['task_trace_v1','task_trace_v2'].includes(row?.template)) return next();
     try {
       req.taskTraceDocument = traceDocument(row, req.user);
       if (req.method !== 'GET') return res.status(409).json({ status: 'error', error: { message: '任务追溯报告是保存时的只读草稿，不能经旧接口编辑、删除、发布或按当前 Run 重新导出模板' } });
@@ -164,7 +164,7 @@ export default function (db) {
 
   router.post('/', (req, res) => {
     const { report_id, title, run_id, scan_task_id, template, content } = req.body;
-    if (template === 'task_trace_v1') return res.status(400).json({ status: 'error', error: { message: '任务追溯模板仅允许通过任务来源接口生成' } });
+    if (['task_trace_v1','task_trace_v2'].includes(template)) return res.status(400).json({ status: 'error', error: { message: '任务追溯模板仅允许通过任务来源接口生成' } });
     if (!report_id || !title) return res.status(400).json({ status: 'error', error: { message: 'report_id, title are required' } });
     const now = new Date().toISOString();
     db.prepare(`INSERT INTO test_reports (report_id, title, run_id, scan_task_id, template, content, generated_by, created_at, updated_at)
@@ -195,7 +195,7 @@ export default function (db) {
     try {
       const report = db.prepare('SELECT * FROM test_reports WHERE report_id = ?').get(req.params.reportId);
       if (!report) return res.status(404).json({ status: 'error', error: { message: 'Report not found' } });
-      if (!report.run_id) return res.status(400).json({ status: 'error', error: { message: 'Report has no associated run_id' } });
+      if (!report.run_id && !req.taskTraceDocument) return res.status(400).json({ status: 'error', error: { message: 'Report has no associated run_id' } });
 
       const format = req.query.format || 'docx';
       if (req.taskTraceDocument) {

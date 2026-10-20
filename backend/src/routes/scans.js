@@ -1,3 +1,4 @@
+import { hasStatistics } from '../services/findingInstances.js';
 import { publicScanRecord, summarizeScanRecords } from '../services/scanResultCatalog.js';
 import { hasScanIntegrity } from '../services/scanResultStore.js';
 import { normalizeTopologyTarget } from '../services/nmapTopology.js';
@@ -173,6 +174,9 @@ export default function (db) {
       return res.status(409).json({status:'error',error:{message:'扫描尚未收束，不能删除'}});
     if(hasScanIntegrity(db) && db.prepare('SELECT 1 FROM scan_tasks WHERE retry_of_scan_task_id=?').get(req.params.scanTaskId))
       return res.status(409).json({status:'error',error:{message:'存在关联重试，须保留原扫描来源'}});
+    if(hasStatistics(db) && db.prepare(`SELECT 1 FROM finding_instance_records m JOIN scan_results r ON r.id=m.finding_id
+      WHERE r.scan_task_id=? LIMIT 1`).get(req.params.scanTaskId))
+      return res.status(409).json({status:'error',error:{message:'扫描发现已被漏洞实例引用，须保留原始证据'}});
     const result = db.prepare('DELETE FROM scan_tasks WHERE scan_task_id = ?').run(req.params.scanTaskId);
     if (result.changes === 0) return res.status(404).json({ status: 'error', error: { message: 'Scan task not found' } });
     res.json({ status: 'ok', data: { deleted: true } });
