@@ -89,6 +89,23 @@ export function isTargetInScope(scope, candidate) {
     && !scope.excludes.some(rule => contains(address(rule), parsed));
 }
 
+// A single IPv4 test may discover its directly connected LAN for topology only.
+// Keep this scope separate from the task's service/security execution scope.
+export function topologyDiscoveryScope(scope, target, cidr) {
+  const network = address(cidr), requested = address(target);
+  if (network.kind !== 'cidr') return null;
+  const singleIPv4 = requested.kind !== 'cidr' && isIP(requested.host) === 4
+    && contains(network, requested);
+  if (scope && !isTargetInScope(scope, cidr)
+      && !(singleIPv4 && isTargetInScope(scope, target))) return null;
+  // Host discovery cannot honor URL paths or ports: exclude the whole host.
+  const excludes = (scope?.excludes || []).map(value => {
+    const rule = address(value);
+    return rule.kind === 'cidr' ? rule.value : rule.host;
+  });
+  return { includes: [network.value], excludes: [...new Set(excludes)] };
+}
+
 export function scopeBlockReason(scope, candidate, scanType = '') {
   if (!isTargetInScope(scope, candidate)) return '目标超出任务范围或命中排除项';
   const requested=address(candidate);

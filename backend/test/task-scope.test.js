@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeTaskScope, isTargetInScope, scopeBlockReason, scopeConditions } from '../src/services/taskScope.js';
+import { normalizeTaskScope, isTargetInScope, scopeBlockReason, scopeConditions, topologyDiscoveryScope } from '../src/services/taskScope.js';
 
 test('TCP runtime scopes accept both URL forms when moving tasks between environments', () => {
   for (const target of ['tcp://192.0.2.30:8091', 'tcp://192.0.2.30:8091/']) {
@@ -30,6 +30,36 @@ test('structured scope bounds hosts, URLs, CIDRs and exclusions', () => {
   assert.equal(scopeBlockReason(scope,'https://example.invalid/app/check','target-request'),null);
   assert.throws(()=>normalizeTaskScope({task_scope:{includes:['192.0.2.0/28'],excludes:['192.0.2.1']}},'192.0.2.1'),/排除/);
   assert.throws(()=>normalizeTaskScope({task_scope:{includes:['https://example.invalid/app/']}},'https://other.invalid/'),/包含/);
+});
+
+test('single IPv4 topology discovery has a separate scope and preserves host exclusions', () => {
+  for (const target of ['192.0.2.2', 'http://192.0.2.2:8080/app/', 'tcp://192.0.2.2:8091']) {
+    const scope = normalizeTaskScope({task_scope:{excludes:[
+      '192.0.2.3', '192.0.2.16/28', 'http://192.0.2.4:8080/private/', 'tcp://192.0.2.3:22',
+    ]}}, target);
+    const before = JSON.stringify(scope);
+    const discovery = topologyDiscoveryScope(scope, target, '192.0.2.0/26');
+    assert.deepEqual(discovery, {includes:['192.0.2.0/26'], excludes:['192.0.2.3','192.0.2.16/28','192.0.2.4']});
+    assert.equal(isTargetInScope(discovery, '192.0.2.5'), true);
+    for (const host of ['192.0.2.3','192.0.2.4','192.0.2.20','192.0.2.65'])
+      assert.equal(isTargetInScope(discovery, host), false);
+    assert.equal(isTargetInScope(scope, '192.0.2.5'), false);
+    assert.match(scopeBlockReason(scope, '192.0.2.5', 'port_scan'), /超出任务范围/);
+    assert.equal(JSON.stringify(scope), before, 'the execution scope is never expanded');
+    assert.equal(topologyDiscoveryScope(scope, target, '198.51.100.0/24'), null);
+  }
+});
+
+test('topology discovery keeps legacy and explicit CIDR scopes without expanding other targets', () => {
+  for (const target of ['example.invalid', 'https://example.invalid/', '2001:db8::2', '192.0.2.0/28']) {
+    const scope = normalizeTaskScope({}, target);
+    assert.equal(topologyDiscoveryScope(scope, target, '192.0.2.0/24'), null);
+  }
+  const explicit = normalizeTaskScope({task_scope:{includes:['192.0.2.0/24'],excludes:['192.0.2.3']}}, '192.0.2.2');
+  assert.deepEqual(topologyDiscoveryScope(explicit, '192.0.2.2', '192.0.2.0/24'),
+    {includes:['192.0.2.0/24'],excludes:['192.0.2.3']});
+  assert.deepEqual(topologyDiscoveryScope(null, 'example.invalid', '192.0.2.0/24'),
+    {includes:['192.0.2.0/24'],excludes:[]});
 });
 
 test('remote prerequisite and execution requests are checked against task scope', () => {

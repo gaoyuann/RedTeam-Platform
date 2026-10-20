@@ -201,6 +201,38 @@ test('node scans use server-side assets, task scope and idempotent identities', 
   assert.equal((await request('/topology/generate-from-scan',{scan_task_id:scanId},'bob')).status,403);
 });
 
+test('single IP topology neighbors are visible but cannot expand the parent scan scope', async t => {
+  const {db,request} = await fixture(t);
+  const config = {task_scope:{includes:['192.0.2.10'],excludes:[],execution_location:'scanner'}};
+  db.prepare("INSERT INTO pipelines(pipeline_id,target,config,created_by) VALUES ('single-ip','192.0.2.10',?,'alice')")
+    .run(JSON.stringify(config));
+  db.prepare("INSERT INTO scan_tasks(scan_task_id,target,scan_type,status,created_by,pipeline_id,parameters) VALUES ('single-seed','192.0.2.10','port_scan','COMPLETED','alice','single-ip',?)")
+    .run(JSON.stringify({pipeline_id:'single-ip',discover_topology:true}));
+  const insert = db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data,source_tool) VALUES ('single-seed',?,?,'nmap')");
+  insert.run('host_discovery', JSON.stringify({host:'192.0.2.10',status:'up'}));
+  insert.run('network_context', JSON.stringify({interfaces:[{device:'eth0',address:'192.0.2.5',prefix:26}],
+    routes:[{destination:'192.0.2.0/26',device:'eth0',metric:0,gateway:''}]}));
+  insert.run('lan_scope', JSON.stringify({cidr:'192.0.2.0/26',serverAddress:'192.0.2.5',device:'eth0',complete:true,purpose:'topology_only'}));
+  insert.run('lan_host_discovery', JSON.stringify({host:'192.0.2.30',status:'up',scope:'192.0.2.0/26'}));
+  const response = await request('/topology/from-pipeline/single-ip');
+  assert.equal(response.status, 200);
+  const graph = response.body.data.topology;
+  const neighbor = graph.nodes.find(node => node.ip === '192.0.2.30');
+  assert.ok(neighbor);
+  assert.equal(neighbor.scan.eligible, false);
+  assert.deepEqual(neighbor.services, []);
+  assert.deepEqual(neighbor.checks, []);
+  assert.deepEqual(neighbor.findings, []);
+  for (const scan_type of ['topology_scan','port_scan']) {
+    const rejected = await request('/topology/from-pipeline/single-ip/node-scans',
+      {node_id:neighbor.id,scan_type,request_id:'single_ip_' + scan_type});
+    assert.equal(rejected.status, 403);
+    assert.match(rejected.body.error.message, /超出任务范围/);
+  }
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_tasks WHERE pipeline_id='single-ip'").get().n, 1);
+  assert.deepEqual(JSON.parse(db.prepare("SELECT config FROM pipelines WHERE pipeline_id='single-ip'").get().config), config);
+});
+
 test('logical LAN edges cite only their own observed scope', async t => {
   const {db,request}=await fixture(t);
   db.prepare("INSERT INTO pipelines(pipeline_id,target,config,created_by) VALUES ('multi','10.2.0.10',?,'alice')")
