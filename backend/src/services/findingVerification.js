@@ -14,7 +14,6 @@ import { assertPlaybookUse } from './playbookAccess.js';
 import { getPayloadById } from './payloadLoader.js';
 import { findingPayloadMatches } from './findingPayloads.js';
 import { compilePlaybook } from './playbookCompiler.js';
-import { usesFindingWorkflow } from './findingStatistics.js';
 
 export const json = (value, fallback = {}) => { try { return typeof value === 'string' ? JSON.parse(value) : value ?? fallback; } catch { return fallback; } };
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
@@ -82,9 +81,6 @@ export function selectVerificationTemplate(db,pipeline,actor,id,input) {
 export function verificationReadiness(db,pipeline,item,record) {
   if(!record)return {ready:false,reasons:['请先选择或生成攻击测试方案']};
   const content=json(record.content),reasons=[...scopeConditions(taskScope(pipeline)),...(content.missing_conditions || []),...(content.blockers || [])];
-  if(usesFindingWorkflow(pipeline.config) && pipeline.status!=='awaiting_approval') reasons.push('任务尚未完成扫描或已结束；已有记录仍可查看和复核');
-  const entry=findingVerificationEntry(db,pipeline,taskFinding(db,pipeline,item.finding_id,{requireVulnerability:false}));
-  if(entry.target===null) reasons.push(...(entry.missing_conditions || ['缺少实际运行入口']));
   if(resultCategory(taskFinding(db,pipeline,item.finding_id,{requireVulnerability:false}))!=='vulnerability')reasons.push('此记录仅保留历史，不可新建验证');
   if(!content.success_criteria)reasons.push('缺少成功判据');if(!content.cleanup)reasons.push('缺少清理说明');
   const compiled=compilePlaybook({db,target:content.target,steps:content.steps || []});
@@ -186,8 +182,6 @@ export function saveVerificationPlan(db,pipeline,actor,id,input,{provenance,allo
 }
 export function checkVerificationPlan(db,pipeline,actor,id,revision) {
   const item=verification(db,pipeline,id);
-  const entry=findingVerificationEntry(db,pipeline,taskFinding(db,pipeline,item.finding_id));
-  if(entry.target===null) fail(409,(entry.missing_conditions || ['缺少实际运行入口']).join('; '));
   if(revision!==item.revision) fail(409,'计划版本已变化');
   const record=dbSafe(db,'SELECT * FROM finding_verification_plans WHERE verification_id=? AND revision=?',id,revision);
   if(!record) fail(409,'尚未保存计划');
@@ -215,8 +209,6 @@ export function createVerificationAttempt(db,pipeline,actor,id,input) {
     verification(db,pipeline,id);
     const old=dbSafe(db,'SELECT * FROM finding_verification_attempts WHERE verification_id=? AND request_id=?',id,requestId);
     if(old) return {...old,reused:true};
-    const current = dbSafe(db,'SELECT status,config FROM pipelines WHERE pipeline_id=?',pipeline.pipeline_id);
-    if(usesFindingWorkflow(current?.config) && current.status!=='awaiting_approval') fail(409,'任务尚未完成扫描或已结束，请新建任务进行测试');
     const {item,record,content}=checkVerificationPlan(db,pipeline,actor,id,input.revision);
     if(!record.confirmed_at) fail(409,'请先确认计划');
     if(dbSafe(db,"SELECT 1 FROM finding_verification_attempts WHERE pipeline_id=? AND state IN ('queued','running','cancelling','unknown')",pipeline.pipeline_id)) fail(409,'本任务还有活动验证或未确认停止的调用');

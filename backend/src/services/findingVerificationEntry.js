@@ -6,9 +6,6 @@ import { taskScope, isTargetInScope } from './taskScope.js';
 // calls or guessing a protocol/port for a host-only task.
 export function findingVerificationEntry(db, pipeline, finding) {
   const data=parseResultData(finding.result_data) || {};
-  const config=parseResultData(pipeline.config) || {};
-  if(finding.result_type==='source_finding' && config.input_kind==='source' && !config.runtime_target)
-    return {target:null,source:'unresolved',missing_conditions:['仅提供了源码目录，尚未配置对应程序的实际运行入口；源码服务地址不能作为攻击目标。']};
   const scope=taskScope(pipeline);
   const scan=db.prepare('SELECT target FROM scan_tasks WHERE scan_task_id=?').get(finding.scan_task_id);
   const parse=value=>{

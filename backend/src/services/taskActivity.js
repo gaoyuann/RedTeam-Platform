@@ -1,7 +1,6 @@
 import { pipelineScans } from './scanResultQuery.js';
 import { summarizeScanRecords } from './scanResultCatalog.js';
 import { getWsManager } from './wsManager.js';
-import { findingStatistics } from './findingStatistics.js';
 
 export function broadcastTaskEvent(db, event, data) {
   const ws = getWsManager();
@@ -43,9 +42,7 @@ export function appendTaskLog(db, pipelineId, message, level = 'info') {
 
 export function taskSummary(db, pipeline) {
   const scanIds=pipelineScans(db,pipeline).map(s=>s.scan_task_id);
-  const scanRows=scanIds.length ? db.prepare(`SELECT id,result_type,severity,source_tool,
-    CASE WHEN source_tool='nikto' THEN result_data ELSE NULL END AS result_data
-    FROM scan_results WHERE scan_task_id IN (${scanIds.map(()=>'?').join(',')})`).all(...scanIds) : [];
+  const scanRows=scanIds.length ? db.prepare(`SELECT result_type,severity FROM scan_results WHERE scan_task_id IN (${scanIds.map(()=>'?').join(',')})`).all(...scanIds) : [];
   const counts=summarizeScanRecords(scanRows);
   const scanFindings=counts.categories.vulnerability;
   let analysis = {};
@@ -59,7 +56,6 @@ export function taskSummary(db, pipeline) {
   const countForRun = table => run ? db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE run_id = ?`).get(run.run_id).count : 0;
   const plan = db.prepare('SELECT state, revision FROM task_plans WHERE pipeline_id = ?').get(pipeline.pipeline_id);
   return { scan_task_ids: scanIds, scan_findings: scanFindings, scan_record_counts:counts, candidate_risks: candidateRisks,
-    verification_statistics:findingStatistics(db,pipeline,scanRows),
     evidence_records: countForRun('evidence_records'), reports: countForRun('test_reports'),
     execution: run || null, plan: plan || null };
 }

@@ -162,35 +162,19 @@ int main(int argc, char **argv)
   {
     MockServer aggregateServer;
     bool delay = false;
-    bool programFindings = false, emptyFindings = false;
     aggregateServer.handler = [&](const QString &, const QString &requestPath) -> MockReply {
       const QUrl url(requestPath); const QUrlQuery query(url);
-      if(url.path().endsWith("/complete-verifications"))return {success(QJsonObject())};
       if (!url.path().contains("/results")) return {success(QJsonArray())};
       const QString task = url.path().split('/').value(3);
       const int after = query.queryItemValue("after").toInt();
       const bool errors = query.queryItemValue("category") == "error";
-      const int total = emptyFindings ? 0 : errors ? 1 : 235;
+      const int total = errors ? 1 : 235;
       QJsonArray rows;
-      for (int i = after; i < qMin(after + 100, total); ++i) {
-        const QJsonObject evidenceData=errors ? QJsonObject{{"error","fixture timeout"}}
-          : programFindings ? QJsonObject{{"file","fixture.c"},{"start_line",i+1},{"title",task+" fixture"},{"cwe","CWE-20"}}
-          : QJsonObject{{"finding",task+" fixture"}};
-        QJsonObject row{{"id",i+1},{"scan_task_id","scan-"+task},
-          {"result_type",errors ? "scan_error" : programFindings ? "source_finding" : "vulnerability"},
-          {"category",errors ? "error" : "vulnerability"},{"severity",errors ? "info" : "high"},{"source_tool","fixture"},
-          {"result_data",QString::fromUtf8(QJsonDocument(evidenceData).toJson(QJsonDocument::Compact))}};
-        if(programFindings && i==0) {
-          row["verification"]=QJsonObject{{"state","completed"},{"conclusion","confirmed"}};
-          row["payload_match"]=QJsonObject{{"status","linked"},{"name","fixture existing payload"}};
-        }
-        rows.append(row);
-      }
+      for (int i = after; i < qMin(after + 100, total); ++i) rows.append(QJsonObject{
+        {"id", i + 1}, {"scan_task_id", "scan-" + task}, {"result_type", errors ? "scan_error" : "vulnerability"},
+        {"severity", errors ? "info" : "high"}, {"source_tool", "fixture"}, {"result_data", errors ? QStringLiteral("{\"error\":\"fixture timeout\"}") : "{\"finding\":\"" + task + " fixture\"}"}});
       const QJsonObject page{{"total", total}, {"next_after", after + rows.size()}, {"through", total}, {"has_more", after + rows.size() < total}};
       const QJsonObject data{{"scan_records", rows}, {"page", page},
-        {"verification_statistics",QJsonObject{{"candidate_records",total},{"tested_records",emptyFindings?0:1},
-          {"confirmed_records",emptyFindings?0:1},{"attempt_count",emptyFindings?0:2},{"untested_records",emptyFindings?0:234},
-          {"unreviewed_records",0},{"active_attempts",0},{"unknown_attempts",0},{"conclusion","fixture evidence summary"}}},
         {"scan_summary", QJsonObject{{"record_count",235}, {"completeness","incomplete"}, {"unexecuted_checks",QJsonArray{"web_scan"}}}},
         {"scan_sources", QJsonArray{QJsonObject{{"scan_task_id","scan-"+task},{"scan_type","vuln_scan"},{"status","PARTIAL"},{"error_message","fixture timeout"}}}}};
       return {success(data), delay && task == "A" ? 250 : 0};
@@ -245,34 +229,6 @@ int main(int argc, char **argv)
     if (!capture.isEmpty()) aggregate.grab().save(capture + "/scan-results-unified.png");
     aggregate.clearTaskScope();
     verify(aggregate.m_resultTree->topLevelItemCount() == 0 && aggregate.m_pipelineId.isEmpty(), "leaving aggregate clears all visible records and identity");
-    programFindings=true;
-    aggregate.setPipelineScope("program",{},"awaiting_approval",true);
-    verify(awaitCondition([&]{return aggregate.m_aggregateRecords.size()==100;}),"program task enters the shared finding list");
-    verify(aggregate.m_resultCategory->currentData()=="vulnerability","demo defaults to findings rather than raw records");
-    verify(aggregate.findChild<QWidget*>("scanTasksPanel")->isHidden(),"demo gives the finding list the full workspace");
-    verify(!aggregate.m_detailTabs->isTabEnabled(1),"whole-task plan is not offered inside a finding demo");
-    verify(aggregate.m_findingStats->text().contains("实际测试：1") && aggregate.m_findingStats->text().contains("尝试：2"),"finding statistics distinguish items from retries");
-    auto *knownCard=aggregate.m_findingStats->findChild<QWidget*>("findingMetric0");
-    verify(knownCard && knownCard->findChild<QLabel*>("metricValue")->text()=="—", "unknown baseline is never displayed as zero");
-    auto *testedCard=aggregate.m_findingStats->findChild<QWidget*>("findingMetric2");
-    verify(testedCard && testedCard->findChild<QLabel*>("metricValue")->text()=="1", "tested card uses task statistics rather than page size or attempt count");
-    verify(aggregate.m_findingStats->findChild<QProgressBar*>("findingTestProgress")->format().contains("1 /"), "progress describes tested findings, not attack success");
-    auto *programRow=aggregate.m_resultTree->topLevelItem(0)->child(0);
-    verify(programRow->text(1).contains("fixture.c") && programRow->text(4)=="执行完成" && programRow->text(5)=="验证成立", "finding rows retain source location and separate execution from conclusion");
-    verify(!programRow->text(1).contains("待验证"),"raw source finding status cannot contradict the latest verification column");
-    verify(aggregate.m_completeFindings->isEnabled(),"a stopped demo can be explicitly completed");
-    if (!capture.isEmpty()) aggregate.grab().save(capture + "/finding-workflow.png");
-    QTimer::singleShot(0,[]{for(auto *widget:QApplication::topLevelWidgets())if(auto *message=qobject_cast<QMessageBox*>(widget))
-      if(auto *button=message->button(QMessageBox::Yes))button->click();});
-    aggregate.m_completeFindings->click();
-    verify(awaitCondition([&]{return aggregate.m_pipelineScanState=="completed";}),"completion moves the current task to its summary");
-    verify(QJsonDocument::fromJson(aggregateServer.requestBodies.value("POST /api/pipelines/program/complete-verifications")).object()["confirmed"].toBool(),"completion sends explicit confirmation");
-    emptyFindings=true;
-    aggregate.setPipelineScope("empty",{},"awaiting_approval",true);
-    verify(awaitCondition([&]{return aggregate.m_aggregateRecords.isEmpty() && aggregate.m_resultHint->text().contains("没有有效漏洞候选");}),"no findings shows a coverage explanation instead of an attack plan");
-    aggregate.setPipelineScope("legacy",{},"awaiting_approval",false);
-    verify(!aggregate.findChild<QWidget*>("scanTasksPanel")->isHidden() && aggregate.m_detailTabs->isTabEnabled(1),"returning to legacy restores its original workspace");
-    if (!capture.isEmpty()) aggregate.grab().save(capture + "/finding-workflow-legacy.png");
   }
 
   {

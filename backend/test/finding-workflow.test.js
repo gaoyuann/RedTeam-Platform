@@ -7,7 +7,6 @@ import {fileURLToPath} from 'node:url';
 import {runMigrations} from '../src/db/migrate.js';
 import {ensureVerification,verificationDetail,saveVerificationPlan,selectVerificationTemplate,confirmAndStart,changeStepPayload} from '../src/services/findingVerification.js';
 import {payloadVersion} from '../src/services/findingPayloads.js';
-import {prepareVerificationPayload} from '../src/services/findingVerificationPayloads.js';
 import {getPayloadById} from '../src/services/payloadLoader.js';
 import {launchVerification} from '../src/services/findingVerificationRunner.js';
 import {assessVerificationAttempt} from '../src/services/findingVerificationAssessment.js';
@@ -155,21 +154,6 @@ test('payload preparation is scoped to the step, records generated/reused events
   assert.equal((await client.request('/payloads/bind',{expected_revision:1,step_id:'finding_step_0',payload_id:current.id,version})).status,200);
   assert.equal((await client.request('/payloads/unbind',{expected_revision:2,step_id:'finding_step_0'})).status,200);
   detail=(await client.request('')).body.data;assert.equal(detail.revision,3);assert.equal(detail.plans[0].content.steps[0].consumption,'pending');assert.equal(detail.readiness.ready,false);
-  // A new finding reuses the stored input, but must not inherit the original
-  // verification's "generated here" badge or manual step association.
-  const otherFinding=Number(f.db.prepare(`INSERT INTO scan_results(scan_task_id,result_type,severity,result_data)
-    SELECT scan_task_id,result_type,severity,result_data FROM scan_results WHERE id=?`).run(f.finding).lastInsertRowid);
-  const other=ensureVerification(f.db,f.pipeline,otherFinding);
-  saveVerificationPlan(f.db,f.pipeline,actor,other.id,f.plan);
-  const before=verificationDetail(f.db,f.pipeline,other.id);
-  const reused=await prepareVerificationPayload(f.db,f.pipeline,actor,before,
-    f.db.prepare('SELECT * FROM scan_results WHERE id=?').get(otherFinding),before.plans[0].content,
-    {step_id:'finding_step_0'},{generatePayload:generator});
-  assert.equal(reused.state,'existing');assert.equal(calls,1,'reuse does not call the model again');
-  const after=verificationDetail(f.db,f.pipeline,other.id);
-  const reusedMatch=after.payloads.matches.find(m=>m.payload_id==='workflow_generated');
-  assert.equal(reusedMatch.created_here,false);assert.equal(reusedMatch.provenance,'ai');
-  assert.equal(after.plans[0].content.steps[0].payload_id,null,'reuse still requires explicit binding');
  }finally{await client.close();f.db.close();}
 });
 

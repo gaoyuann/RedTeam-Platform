@@ -6,7 +6,6 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QComboBox>
-#include <QColor>
 #include <QCheckBox>
 #include <QLabel>
 #include <QPushButton>
@@ -169,11 +168,6 @@ FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QStrin
   m_steps=new QTableWidget(0,3);m_steps->setHorizontalHeaderLabels({"步骤名称","工具","预期证据"});m_steps->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);m_steps->setMinimumHeight(100);p->addWidget(m_steps);
   field("成功判据与限制",m_criteria);field("清理说明",m_cleanup);m_save=new QPushButton("保存方案调整");p->addWidget(m_save);
   auto *payloadSection=section("2. 本次载荷与步骤关联");m_payloads=new QComboBox;payloadSection->addWidget(m_payloads);
-  m_payloadOrigin=new QLabel;
-  m_payloadOrigin->setObjectName("verificationPayloadOrigin");
-  m_payloadOrigin->setTextFormat(Qt::PlainText);
-  m_payloadOrigin->setWordWrap(true);
-  payloadSection->addWidget(m_payloadOrigin);
   m_payloadPreview=new QPlainTextEdit;m_payloadPreview->setReadOnly(true);m_payloadPreview->setMinimumHeight(120);payloadSection->addWidget(m_payloadPreview);
   auto *binding=new QHBoxLayout;m_bindStep=new QComboBox;comboPlaceholder(m_bindStep,"请手动选择目标步骤");binding->addWidget(m_bindStep,1);
   m_bindPayload=new QPushButton("绑定到此步骤");m_unbindPayload=new QPushButton("解除绑定");binding->addWidget(m_bindPayload);binding->addWidget(m_unbindPayload);payloadSection->addLayout(binding);
@@ -342,14 +336,9 @@ void FindingVerificationDialog::load(bool editor) {
     if(!savedPlans.isEmpty())for(const auto &v:savedPlans.first().toObject()["content"].toObject()["steps"].toArray()){const auto step=v.toObject();self->m_bindStep->addItem(step["name"].toString()+" · "+step["tool_id"].toString(),step["step_id"].toString());}
     self->m_bindStep->setCurrentIndex(chosenStep.isEmpty()?-1:self->m_bindStep->findData(chosenStep));self->m_bindStep->blockSignals(false);
     self->m_matches=self->m_detail["payloads"].toObject()["matches"].toArray();const auto selectedPayload=self->m_pendingPayload.isEmpty()?self->m_payloads->currentData():QVariant(self->m_pendingPayload);self->m_pendingPayload.clear();
-    self->m_payloads->blockSignals(true);self->m_payloads->clear();for(const auto &v:self->m_matches){
-      const auto payload=v.toObject();const bool generated=payload["created_here"].toBool();
-      self->m_payloads->addItem(payload["name"].toString()+ (generated?" · 本次新生成":" · 已有载荷"),payload["payload_id"].toString());
-      self->m_payloads->setItemData(self->m_payloads->count()-1,QColor(generated?"#b45309":"#1d4ed8"),Qt::ForegroundRole);
-    }
+    self->m_payloads->blockSignals(true);self->m_payloads->clear();for(const auto &v:self->m_matches){const auto payload=v.toObject();self->m_payloads->addItem(payload["name"].toString()+ (payload["created_here"].toBool()?" · 本次新生成":" · 已有载荷"),payload["payload_id"].toString());}
     self->m_payloads->setCurrentIndex(self->m_payloads->findData(selectedPayload));self->m_payloads->blockSignals(false);
     self->showPayloadPreview();self->updateButtons();self->updateQueue();
-    emit self->verificationChanged();
     if(!self->m_detail["reason"].toString().isEmpty())self->m_status->setText(self->m_detail["reason"].toString());
     if(!self->m_queueStarting && !self->m_queueRunId.isEmpty() && summary["run_id"].toString()==self->m_queueRunId && self->m_activeQueue==id && QStringList{"completed","failed","aborted","unknown"}.contains(state)){self->m_activeQueue.clear();self->m_queueRunId.clear();self->m_items->setEnabled(true);self->updateButtons();if(state=="unknown"||state=="aborted")self->m_queue.clear();self->executeNext();}
   });
@@ -357,13 +346,8 @@ void FindingVerificationDialog::load(bool editor) {
 }
 void FindingVerificationDialog::action(const QString &path,const QJsonObject &body,bool editor) {
   if(m_finished||m_busy||currentId().isEmpty())return;
-  if(m_stale && path!="/reviews") {m_status->setText("请刷新最新完整计划后再操作。");return;}const auto id=currentId();const auto edits=m_editGeneration;const auto context=m_contextGeneration;m_busy=true;updateButtons();
-  m_status->setText(path=="/payloads/prepare"?"正在查找载荷；没有适用项时调用模型生成并校验，请等待（最长约两分钟）…"
-      :path=="/generate"?"正在生成并校验方案，请等待…":"正在处理…");
-  QPointer<FindingVerificationDialog> self(this);
-  // Payload generation shares the backend's 120-second model budget.
-  const int timeout=(path=="/generate" || path=="/payloads/prepare")?130000:15000;
-  m_api->post(base()+"/"+id+path,body,timeout,[self,id,editor,edits,context,path](const QJsonObject &r){if(!self)return;self->m_busy=false;self->updateButtons();if(self->currentId()!=id || self->m_contextGeneration!=context)return;self->m_status->setText(r["status"]=="ok"?(r["data"].toObject()["state"]=="needs_conditions"?"方案尚缺条件，未启动验证。":"已保存；请查看当前状态与证据。"):r["error"].toObject()["message"].toString());if(path=="/payloads/prepare" && r["status"]=="ok") {
+  if(m_stale && path!="/reviews") {m_status->setText("请刷新最新完整计划后再操作。");return;}const auto id=currentId();const auto edits=m_editGeneration;const auto context=m_contextGeneration;m_busy=true;updateButtons();m_status->setText("正在处理…");QPointer<FindingVerificationDialog> self(this);
+  m_api->post(base()+"/"+id+path,body,path=="/generate"?130000:15000,[self,id,editor,edits,context,path](const QJsonObject &r){if(!self)return;self->m_busy=false;self->updateButtons();if(self->currentId()!=id || self->m_contextGeneration!=context)return;self->m_status->setText(r["status"]=="ok"?(r["data"].toObject()["state"]=="needs_conditions"?"方案尚缺条件，未启动验证。":"已保存；请查看当前状态与证据。"):r["error"].toObject()["message"].toString());if(path=="/payloads/prepare" && r["status"]=="ok") {
       self->m_pendingPayload=r["data"].toObject()["payload_id"].toString();
       self->m_status->setText(r["data"].toObject()["state"]=="generated"?"本次新生成载荷，尚未验证。请预览后手动绑定步骤。":"已找到库中载荷，请预览后手动绑定步骤。");
     }
@@ -510,7 +494,6 @@ void FindingVerificationDialog::showSourcePreview() {
   m_sourcePreview->setPlainText(text.join('\n'));
 }
 void FindingVerificationDialog::showPayloadPreview() {
-  m_payloadOrigin->hide();
   QStringList text;const auto plans=m_detail["plans"].toArray();
   if(plans.isEmpty())text<<"请先选择方案，才能核对步骤所需载荷。";
   else for(const auto &v:plans.first().toObject()["content"].toObject()["steps"].toArray()) {
@@ -520,12 +503,6 @@ void FindingVerificationDialog::showPayloadPreview() {
   }
   const int i=m_payloads->currentIndex();
   if(i>=0&&i<m_matches.size()) {
-    const auto payload=m_matches[i].toObject();const bool generated=payload["created_here"].toBool();
-    m_payloadOrigin->setText(generated?"本次新生成 · 已保存到载荷库 · 生成不代表验证成功"
-        :payload["provenance"]=="ai"?"已有载荷 · 从载荷库复用 · 原始来源：AI":"已有载荷 · 从载荷库读取");
-    m_payloadOrigin->setStyleSheet(generated?"color:#92400e;background:#fffbeb;padding:8px;border-radius:6px;"
-        :"color:#1e40af;background:#eff6ff;padding:8px;border-radius:6px;");
-    m_payloadOrigin->show();
     const auto p=m_matches[i].toObject();text<<"\n所选载荷："+p["name"].toString()<<"来源："+(p["provenance"]=="ai"?QString("AI 生成"):QString("载荷库"))+(p["created_here"].toBool()?" · 本次新生成，尚未验证":" · 已有载荷")
       <<"用途："+(p["consumption"]=="tool_args"?QString("可执行输入，须手动绑定步骤"):QString("仅供参考，不能绑定执行"))<<"依据："+p["match_basis"].toString()<<"前提："+join(p["prerequisites"].toArray());
     for(const auto &v:p["preview"].toArray()){const auto field=v.toObject();text<<field["label"].toString()+"："+readable(field["value"]);}
