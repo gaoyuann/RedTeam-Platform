@@ -80,6 +80,7 @@ private:
   void startPollingIfNeeded();
   void renderGroupedResults(const QJsonArray &results);
   void showPayloadMatches(QTreeWidgetItem *item);
+  void decorateResultRow(QTreeWidgetItem *item, const QJsonObject &record);
   void enableCurrentTabDelBtn(bool enabled);
   void showSourceEvidence(QTreeWidgetItem *item);
   void showPayloadForFinding(int findingId);

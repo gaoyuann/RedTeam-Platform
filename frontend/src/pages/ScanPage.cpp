@@ -44,17 +44,46 @@ static bool isVerificationRecord(const QJsonObject &row) {
   const QStringList types{"vulnerability","web_vuln","sql_injection","misconfiguration","auth_finding","source_vuln","source_finding","program_finding"};
   return types.contains(row["result_type"].toString()) && !QStringList{"info","inf"}.contains(row["severity"].toString().toLower());
 }
-static void showPayloadSummary(QTreeWidgetItem *item, const QJsonObject &record, bool aggregate) {
-  item->setData(0, Qt::UserRole+2, isVerificationRecord(record)?QString("vulnerability"):record["category"].toString());
-  if (!aggregate || record["category"].toString() != "vulnerability") return;
-  const auto verification = record["verification"].toObject();
-  if (!verification.isEmpty()) item->setToolTip(0, "验证状态："+verification["state"].toString()+"\n结论："+verification["conclusion"].toString());
+// Keep record roles on column 0 and existing name/source consumers on columns 1–2.
+static void showFindingSummary(QTreeWidgetItem *item, const QJsonObject &record, bool aggregate) {
+  const bool candidate = isVerificationRecord(record);
+  item->setData(0, Qt::UserRole+2, candidate ? QString("vulnerability") : record["category"].toString());
+  if (!candidate) {
+    for (int column : {3, 6, 7}) item->setText(column, QStringLiteral("—"));
+    return;
+  }
   const auto match = record["payload_match"].toObject();
-  const QString state = match["status"].toString();
-  item->setText(3, state == "linked" ? QStringLiteral("已关联：") + match["name"].toString()
-    : state == "stale" ? QStringLiteral("需重新确认：") + match["name"].toString()
-    : state == "candidate" ? QStringLiteral("候选：") + match["name"].toString() : QStringLiteral("暂无匹配"));
-  item->setToolTip(3, match["match_basis"].toString());
+  const QMap<QString, QString> payloadLabels{{"linked", "已关联（待核对条件）"}, {"stale", "关联已失效"},
+    {"candidate", "有匹配候选"}, {"none", "暂无匹配"}};
+  item->setText(3, payloadLabels.value(match["status"].toString(), QStringLiteral("待匹配")));
+  item->setToolTip(3, match["name"].toString() + "\n" + match["match_basis"].toString()
+    + QStringLiteral("\n匹配或关联不代表可执行；载荷版本、消费方式和条件须在准备测试时核对。"));
+  // A single-scan response does not carry the task verification summary.
+  if (!aggregate || !record.contains("verification")) {
+    item->setText(6, QStringLiteral("状态未提供"));
+    item->setText(7, QStringLiteral("待核对"));
+    return;
+  }
+  const auto verification = record["verification"].toObject();
+  const QMap<QString, QString> states{{"needs_conditions", "缺少条件"}, {"preparation_failed", "准备失败"},
+    {"draft", "准备中"}, {"ready", "已就绪"}, {"queued", "排队中"}, {"running", "执行中"},
+    {"cancelling", "取消中"}, {"unknown", "停止未知"}, {"completed", "已完成"},
+    {"failed", "执行失败"}, {"aborted", "已中止"}};
+  item->setText(6, verification.isEmpty() ? QStringLiteral("未测试")
+    : states.value(verification["state"].toString(), QStringLiteral("未知状态")));
+  const auto result = verification["result"].toObject();
+  const QMap<QString, QString> conclusions{{"achieved", "目标已达成"}, {"not_achieved", "目标未达成"},
+    {"inconclusive", "证据不足"}, {"not_performed", "待判定（未验证）"}, {"pending", "待判定"}};
+  item->setText(7, verification.isEmpty() ? QStringLiteral("待判定")
+    : result["schema_version"].toInt() != 1 ? QStringLiteral("证据不足（旧记录）")
+    : conclusions.value(result["status"].toString(), QStringLiteral("证据不足（未知结论）")));
+  item->setToolTip(6, verification["reason"].toString());
+  item->setToolTip(7, QStringLiteral("验证目标：%1\n依据：%2\n限制：%3\n执行完成不等于漏洞成立；人工意见在验证详情中单独展示。")
+    .arg(result["objective"].toObject()["label"].toString(), result["reason"].toString(), result["limitations"].toString()));
+  if (result["schema_version"].toInt() == 1 && result["status"].toString() == "achieved")
+    item->setForeground(7, QColor(Theme::Success));
+  if (QStringList{"unknown", "failed", "preparation_failed"}.contains(verification["state"].toString()))
+    item->setForeground(6, QColor(Theme::Warning));
 }
 
 // ── Translate nikto finding text to Chinese ───────────────────────────
@@ -99,6 +128,8 @@ static QString translateSqlmapDetail(const QString &detail) {
 }
 
 static QString formatResultType(const QString &type) {
+  if (type == "finding_candidates") return "漏洞候选（扫描发现，非攻击成功）";
+  if (type == "information") return "信息与普通提示（不计入漏洞）";
   if (type == "program_finding") return "程序漏洞发现 / 攻击效果";
   if (type == "program_coverage") return "智能体检测覆盖";
   if (type == "program_agent_step") return "智能体检测过程";
@@ -546,7 +577,7 @@ void ScanPage::loadPipelineResults(bool append)
     m_scanThrough = page["through"].toVariant().toLongLong();
     renderGroupedResults(m_aggregateRecords);
     m_moreResultsButton->setEnabled(page["has_more"].toBool());
-    m_resultHint->setText(QStringLiteral("当前筛选已加载 %1 / %2 条记录 · 未去重 · 双击查看脱敏记录与来源")
+    m_resultHint->setText(QStringLiteral("当前筛选已加载 %1 / %2 条记录 · 未去重 · 漏洞候选不代表攻击成功；双击准备测试 / 查看证据")
         .arg(m_aggregateRecords.size()).arg(page["total"].toInt()));
     const auto summary = data["scan_summary"].toObject();
     QStringList states;
@@ -1238,7 +1269,14 @@ void ScanPage::setupUI() {
     layout->addWidget(text); dialog->show();
   });
   UiUtil::EmptyHint::attach(m_resultTree, QStringLiteral("扫描完成后在此展示结果"));
-  m_resultTree->setHeaderLabels({"严重度", "数据", "工具", "匹配载荷"});
+  m_resultTree->setHeaderLabels({"编号", "漏洞名称 / 记录内容", "来源工具", "载荷情况",
+    "严重性", "目标与位置", "测试状态", "验证结论"});
+  // Keep identity and independent status/result visible first; location and source remain horizontally reachable.
+  const QList<int> visualOrder{0, 1, 4, 6, 7, 5, 3, 2};
+  for (int visual = 0; visual < visualOrder.size(); ++visual)
+    m_resultTree->header()->moveSection(m_resultTree->header()->visualIndex(visualOrder[visual]), visual);
+  m_resultTree->headerItem()->setToolTip(0, "稳定发现 ID；扫描结果表自增编号，用于跨筛选、分页和验证追溯。");
+  m_resultTree->headerItem()->setToolTip(7, "来自系统验证目标与证据；不将工具成功或人工意见替代为自动结论。");
   m_resultTree->setAlternatingRowColors(true);
   m_resultTree->setSelectionMode(QAbstractItemView::ExtendedSelection);
   auto *verifySelected = new QPushButton("打开勾选的漏洞");
@@ -1261,11 +1299,12 @@ void ScanPage::setupUI() {
   });
   m_resultTree->setContextMenuPolicy(Qt::CustomContextMenu);
   m_resultTree->header()->setStretchLastSection(false);
-  m_resultTree->header()->setSectionResizeMode(1, QHeaderView::Stretch);
+  m_resultTree->header()->setSectionResizeMode(QHeaderView::Interactive);
+  m_resultTree->setColumnWidth(1, 240);
   m_resultTree->setColumnWidth(0, 70);
   m_resultTree->setColumnWidth(2, 85);
   m_resultTree->setColumnWidth(3, 180);
-  m_resultTree->setIndentation(20);
+  m_resultTree->setIndentation(12);
   right->addWidget(m_resultTree, 1);
   connect(m_resultTree, &QTreeWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
     auto *item = m_resultTree->itemAt(pos);
@@ -1279,8 +1318,7 @@ void ScanPage::setupUI() {
     if (!m_pipelineId.isEmpty() && item->data(0,Qt::UserRole+1).toLongLong()>0
         && item->data(0,Qt::UserRole+2).toString()=="vulnerability")
       menu.addAction("准备此漏洞验证 / 查看历史", [this,item]() {
-        auto *dialog=new FindingVerificationDialog(m_api,m_pipelineId,{item->data(0,Qt::UserRole+1).toLongLong()},this);
-        dialog->setAttribute(Qt::WA_DeleteOnClose);dialog->show();
+        openFindingVerification({item->data(0,Qt::UserRole+1).toLongLong()});
       });
     // 演示动线：漏洞结果一键发起攻击
     const QString resultType = item->data(0, Qt::UserRole).toString();
@@ -1537,18 +1575,23 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
   const QSignalBlocker blocker(m_resultTree);
   m_resultOverview->setResults(results);
   m_resultTree->clear();
-  m_resultTree->setColumnHidden(3, !m_allScanResults);
+  m_resultTree->setColumnHidden(3, false);
   m_coverageTree->clear();
   m_coverageTree->hide();
 
   // Group by result_type
   QMap<QString, QJsonArray> groups;
   // Define display order
-  QStringList order = {"program_coverage", "program_agent_step", "program_agent_summary", "program_finding", "source_coverage", "application_observation", "source_finding", "open_port", "vulnerability", "web_vuln", "source_vuln", "sql_injection",
+  QStringList order = {"finding_candidates", "information", "program_coverage", "program_agent_step", "program_agent_summary", "program_finding", "source_coverage", "application_observation", "source_finding", "open_port", "vulnerability", "web_vuln", "source_vuln", "sql_injection",
                        "credential", "service_info", "http_probe", "technology_detection", "scan_error", "raw_output"};
 
   for (const auto &r : results) {
-    QString type = r.toObject()["category"].toString()=="information" ? "information" : r.toObject()["result_type"].toString();
+    const auto row = r.toObject();
+    QString type = isVerificationRecord(row) ? "finding_candidates"
+      : (row["category"].toString()=="information"
+          || (QStringList{"info", "inf"}.contains(row["severity"].toString().trimmed().toLower())
+              && QStringList{"vulnerability", "web_vuln", "source_vuln", "source_finding", "program_finding", "auth_finding", "misconfiguration", "sql_injection"}.contains(row["result_type"].toString())))
+        ? "information" : row["result_type"].toString();
     groups[type].append(r);
   }
 
@@ -1567,7 +1610,7 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
     groupItem->setFont(0, groupFont);
     groupItem->setFirstColumnSpanned(true);
     // Group header separates result types without competing with severity colors
-    for (int col = 0; col < 4; col++) {
+    for (int col = 0; col < m_resultTree->columnCount(); col++) {
       groupItem->setBackground(col, QColor("#eaf1fa"));
       groupItem->setForeground(col, QColor("#334155"));
     }
@@ -1580,14 +1623,15 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
       QString tool = obj["source_tool"].toString();
 
       auto *child = new QTreeWidgetItem(groupItem);
-      child->setText(0, formatSeverity(sev));
-      child->setForeground(0, severityColor(sev));
+      child->setText(4, formatSeverity(sev));
+      child->setForeground(4, severityColor(sev));
       child->setData(0, Qt::UserRole+1, obj["id"].toVariant().toLongLong());
       child->setData(0, Qt::UserRole, resultType);  // 供右键"发起攻击"判断类型
       child->setText(1, formatResultData(rawData, resultType));
       child->setToolTip(1, rawData);
       child->setText(2, tool + (m_allScanResults ? " · " + obj["scan_task_id"].toString() + " #" + QString::number(obj["id"].toVariant().toLongLong()) : QString()));
-      showPayloadSummary(child, obj, m_allScanResults);
+      showFindingSummary(child, obj, m_allScanResults);
+      decorateResultRow(child, obj);
       if(!m_pipelineId.isEmpty() && isVerificationRecord(obj)) {
         child->setFlags(child->flags()|Qt::ItemIsUserCheckable);
         child->setCheckState(0,m_checkedFindings.contains(obj["id"].toVariant().toLongLong())?Qt::Checked:Qt::Unchecked);
@@ -1619,7 +1663,7 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
     groupFont.setBold(true);
     groupItem->setFont(0, groupFont);
     groupItem->setFirstColumnSpanned(true);
-    for (int col = 0; col < 4; col++) {
+    for (int col = 0; col < m_resultTree->columnCount(); col++) {
       groupItem->setBackground(col, QColor("#eaf1fa"));
       groupItem->setForeground(col, QColor("#334155"));
     }
@@ -1632,14 +1676,15 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
       QString tool = obj["source_tool"].toString();
 
       auto *child = new QTreeWidgetItem(groupItem);
-      child->setText(0, formatSeverity(sev));
-      child->setForeground(0, severityColor(sev));
+      child->setText(4, formatSeverity(sev));
+      child->setForeground(4, severityColor(sev));
       child->setData(0, Qt::UserRole+1, obj["id"].toVariant().toLongLong());
       child->setData(0, Qt::UserRole, resultType);  // 供右键"发起攻击"判断类型
       child->setText(1, formatResultData(rawData, resultType));
       child->setToolTip(1, rawData);
       child->setText(2, tool + (m_allScanResults ? " · " + obj["scan_task_id"].toString() + " #" + QString::number(obj["id"].toVariant().toLongLong()) : QString()));
-      showPayloadSummary(child, obj, m_allScanResults);
+      showFindingSummary(child, obj, m_allScanResults);
+      decorateResultRow(child, obj);
       if(!m_pipelineId.isEmpty() && isVerificationRecord(obj)) {
         child->setFlags(child->flags()|Qt::ItemIsUserCheckable);
         child->setCheckState(0,m_checkedFindings.contains(obj["id"].toVariant().toLongLong())?Qt::Checked:Qt::Unchecked);
@@ -1648,9 +1693,42 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
     groupItem->setExpanded(true);
   }
 
-  m_resultTree->setColumnWidth(0, m_allScanResults ? 110 : 90);
-  m_resultTree->setColumnWidth(2, m_allScanResults ? 260 : 80);
-  m_resultTree->setColumnWidth(3, m_allScanResults ? 180 : 90);
+  const QList<int> widths{110, 220, 160, 170, 80, 220, 100, 160};
+  for (int column = 0; column < widths.size(); ++column) m_resultTree->setColumnWidth(column, widths[column]);
+}
+
+void ScanPage::decorateResultRow(QTreeWidgetItem *item, const QJsonObject &record) {
+  const auto id = record["id"].toVariant().toLongLong();
+  item->setText(0, id > 0 ? QString::number(id) : QStringLiteral("未记录"));
+  item->setToolTip(0, QStringLiteral("稳定发现 ID：%1").arg(id));
+  const auto data = QJsonDocument::fromJson(record["result_data"].toString().toUtf8()).object();
+  QStringList locations;
+  for (const auto &key : {"target", "host", "url", "path", "file", "file_path", "parameter", "param"}) {
+    const QString value = data[key].toString();
+    if (!value.isEmpty() && !locations.contains(value)) locations << value;
+  }
+  for (const auto &key : {"port", "line", "start_line"}) {
+    const auto value = data[key];
+    if (value.isDouble() || value.isString()) locations << QString("%1: %2").arg(key, value.toVariant().toString());
+  }
+  item->setText(5, locations.isEmpty() ? QStringLiteral("未记录") : locations.join(" · "));
+  item->setToolTip(5, item->text(5));
+  if (isVerificationRecord(record)) {
+    QString name;
+    for (const auto &key : {"title", "name", "finding", "template"}) {
+      name = data[key].toString();
+      if (!name.isEmpty()) break;
+    }
+    if (!name.isEmpty()) item->setText(1, translateNiktoFinding(name));
+    QStringList rules;
+    for (const auto &key : {"cve", "cwe", "rule_id", "template_id"}) {
+      const auto value = data[key];
+      if (value.isString() && !value.toString().isEmpty()) rules << value.toString();
+      if (value.isArray()) for (const auto &entry : value.toArray()) if (entry.isString()) rules << entry.toString();
+    }
+    if (!rules.isEmpty()) item->setText(1, item->text(1) + " [" + rules.join(" / ") + "]");
+  }
+
 }
 
 void ScanPage::showPayloadMatches(QTreeWidgetItem *item) {
