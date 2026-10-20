@@ -1,4 +1,5 @@
 #include "FlowPage.h"
+#include "../widgets/RemoteSourcePicker.h"
 #include "TaskAiPanel.h"
 #include "AnalysisPage.h"
 #include "TaskPlanPage.h"
@@ -1019,12 +1020,25 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget)
   if(initialTarget.startsWith("http://") || initialTarget.startsWith("https://")) testType->setCurrentIndex(testType->findData("web"));
   form->addRow(QStringLiteral("任务类型"), testType);
   auto *programKind = new QComboBox(&dlg);
-  programKind->addItem("远端 CScan（靶机 / 源码路径）", "agent");
+  programKind->addItem("选择目标主机的源码文件夹", "remote_directory");
   programKind->addItem("程序运行入口", "runtime");
+  programKind->addItem("直接交给 CScan（高级）", "agent");
   programKind->setObjectName("taskProgramInputKind");
   programKind->setCurrentIndex(0);
   auto *programKindLabel = new QLabel("输入类型",&dlg);
   form->addRow(programKindLabel,programKind);
+  auto *sourcePicker=new RemoteSourcePicker(m_api,&dlg);
+  auto *sourcePickerLabel=new QLabel("目标源码文件夹",&dlg);
+  form->addRow(sourcePickerLabel,sourcePicker);
+  sourcePicker->setTarget(targetInput->text());sourcePicker->hide();sourcePickerLabel->hide();
+  connect(targetInput,&QLineEdit::textChanged,sourcePicker,&RemoteSourcePicker::setTarget);
+  auto updatePicker=[=] {
+    const bool show=testType->currentData().toString()=="program" && programKind->currentData().toString()=="remote_directory";
+    sourcePicker->setVisible(show);sourcePickerLabel->setVisible(show);
+    if(show) targetInput->setPlaceholderText("目标主机地址，例如 http://192.168.1.113:8089/");
+  };
+  connect(testType,QOverload<int>::of(&QComboBox::currentIndexChanged),sourcePicker,[=](int){updatePicker();});
+  connect(programKind,QOverload<int>::of(&QComboBox::currentIndexChanged),sourcePicker,[=](int){updatePicker();});
   auto *runtimeInput = new QLineEdit(&dlg);
   runtimeInput->setPlaceholderText("可选：对应程序的运行入口；只有文件也可以扫描");
   auto *runtimeLabel = new QLabel("攻击测试运行入口",&dlg);
@@ -1035,18 +1049,19 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget)
     programKind->setVisible(program);programKindLabel->setVisible(program);
     const bool agent=program && programKind->currentData().toString()=="agent";
     runtimeInput->setVisible(agent);runtimeLabel->setVisible(agent);
-    targetInput->setPlaceholderText(program ? "靶机 IP:端口、HTTP/TCP 地址或远端源码路径" : "例: 192.168.1.0/24 或 http://172.17.0.2");
+    targetInput->setPlaceholderText(program ? "目标主机地址，例如 http://主机:端口/" : "例: 192.168.1.0/24 或 http://172.17.0.2");
   });
   connect(programKind,QOverload<int>::of(&QComboBox::currentIndexChanged),&dlg,[programKind,testType,targetInput,runtimeInput,runtimeLabel](int) {
     const bool agent=testType->currentData().toString()=="program" && programKind->currentData().toString()=="agent";
     runtimeInput->setVisible(agent);runtimeLabel->setVisible(agent);
-    targetInput->setPlaceholderText(agent ? "靶机 IP:端口、HTTP/TCP 地址或远端源码路径" : "程序运行入口：http://主机:端口/ 或 tcp://主机:端口");
+    targetInput->setPlaceholderText(agent ? "靶机 IP:端口、HTTP/TCP 地址或远端源码路径"
+      : programKind->currentData().toString()=="remote_directory" ? "目标主机地址，例如 http://主机:端口/" : "程序运行入口：http://主机:端口/ 或 tcp://主机:端口");
   });
 
   auto *sourceNotes = new QLineEdit(&dlg);
   sourceNotes->setObjectName("taskSourceNotesInput");
-  sourceNotes->setMaxLength(4000);sourceNotes->setPlaceholderText("源码所在位置、已有授权连接说明、审计范围和关注问题");
-  sourceNotes->setToolTip("目标和要求交给远端 CScan 执行；可说明靶机上的源码位置及已有授权连接。无法取得源码时会保留缺失条件，不作为已完成的源码审计。");
+  sourceNotes->setMaxLength(4000);sourceNotes->setPlaceholderText("可选：审计范围和关注问题；源码文件夹请通过上方按钮选择");
+  sourceNotes->setToolTip("备注不能替代目标源码目录的选择。");
   auto *sourceNotesLabel=new QLabel("源码审计说明",&dlg);
   form->addRow(sourceNotesLabel,sourceNotes);sourceNotes->hide();sourceNotesLabel->hide();
   connect(testType,QOverload<int>::of(&QComboBox::currentIndexChanged),&dlg,[testType,sourceNotes,sourceNotesLabel](int) {
@@ -1107,7 +1122,13 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget)
                                    : QStringLiteral("创建任务"));
   confirmButton->setEnabled(false);
   connect(authorizationCheck, &QCheckBox::toggled, confirmButton, &QPushButton::setEnabled);
-  connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+  connect(btns, &QDialogButtonBox::accepted, &dlg, [=,&dlg] {
+    if(testType->currentData().toString()=="program" && programKind->currentData().toString()=="remote_directory"
+      && !sourcePicker->hasSelection()) {
+      QMessageBox::warning(&dlg,"请选择目标文件夹","请先浏览并选择目标主机的源码文件夹。");return;
+    }
+    dlg.accept();
+  });
   connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
   l->addWidget(btns);
 
@@ -1137,6 +1158,16 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget)
   if (testType->currentData().toString()=="program") {
     config["scan_mode"]="program_dynamic";
     config["input_kind"]=programKind->currentData().toString();
+    if(programKind->currentData().toString()=="remote_directory") {
+      if(!sourcePicker->hasSelection()) {
+        QMessageBox::warning(this,"无法创建任务","请先浏览并选择目标主机的源码文件夹。");return;
+      }
+      const auto selected=sourcePicker->selection();
+      config["source_url"]=selected["source_url"];
+      config["source_connection_id"]=selected["connection_id"];
+      config["source_subdir"]=selected["source_subdir"];
+      config["scan_mode"]="source_assisted";
+    }
     if(!runtimeInput->text().trimmed().isEmpty()) config["runtime_target"]=runtimeInput->text().trimmed();
     if(programKind->currentData().toString()=="agent") config["cscan_target"]=target;
     config["source_notes"]=sourceNotes->text().trimmed();

@@ -62,6 +62,23 @@ const step=(id,phase,target)=>({name:phase+' #'+id,tool_id:'target-request',phas
   args_template:[JSON.stringify({url:target+'/check?id='+id+'&value='+(phase==='baseline'?'normal':'boundary')})],
   description:'Fixture input comparison, not a real exploit',expected_evidence:'Compare fixture response; no real vulnerability claim'});
 
+test('selected target folder creates exactly one source scan and preserves its directory parameters',async t=>{
+  const {db,request}=await fixture(t),target='http://192.0.2.40:8089/';
+  const created=await request('/pipelines',{target,config:{input_kind:'remote_directory',test_type:'program',
+    source_url:'/projects/selected/',task_scope:{includes:[target]},authorization_confirmed:true,authorization_scope:target}});
+  assert.equal(created.status,201);
+  const id=created.data.pipeline_id;
+  assert.equal((await request('/pipelines/'+id+'/start',{})).status,202);
+  await until(()=>db.prepare('SELECT status FROM pipelines WHERE pipeline_id=?').get(id).status==='awaiting_approval');
+  const scans=db.prepare('SELECT * FROM scan_tasks').all();
+  assert.equal(scans.length,1);assert.equal(scans[0].scan_type,'source_scan');
+  const params=JSON.parse(scans[0].parameters);
+  assert.equal(params.input_kind,'remote_directory');
+  assert.equal(params.source_url,target+'projects/selected/');
+  assert.equal(params.cscan_target,null);
+  assert.equal((await request('/pipelines/'+id,{config:{source_url:'/projects/other/'}},'alice','PUT')).status,409);
+});
+
 const sourceDraft=ids=>({name:'静态源码测试草稿',description:'需部署程序后复核',required_conditions:['补充真实运行入口与部署版本'],
   objects:ids.map(finding_id=>({finding_id,purpose:'复核源码输入处理',baseline:'正常输入',verification:'确认输入可达后比较边界输入',
     expected_effect:'观察诊断输出，尚未执行',limitations:'仅源码疑点，未确认运行条件'}))});

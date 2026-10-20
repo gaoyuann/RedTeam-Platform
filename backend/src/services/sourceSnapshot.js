@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { httpSourceConnection } from './sourceScanConnections.js';
 import {prepareSourceCompilation,hostCompilationUnits} from './sourceCompilation.js';
+import {sourceSubdir} from './sourceRemoteDirectory.js';
 const exec = promisify(execFile);
 const directory = dirname(fileURLToPath(import.meta.url));
 export const SNAPSHOT_ROOT = resolve(directory, '../../../data/source-scan/snapshots');
@@ -147,11 +148,13 @@ export async function collectSource(connection, { signal, execute = exec } = {})
   const collector = await readFile(resolve(directory, 'sourceCollector.py'), 'utf8');
   const root = Buffer.from(connection.source_root).toString('base64');
   const compilePath=connection.analysis?.compile_database || '';
-  let binary = 'python3', args = ['-c', collector, root, compilePath];
+  const subdir = sourceSubdir(connection.source_subdir || '');
+  let binary = 'python3', args = ['-c', collector, root, compilePath, subdir];
   if (connection.kind === 'ssh') {
     const encoded = Buffer.from(collector).toString('base64');
     const compileEncoded=Buffer.from(compilePath).toString('base64');
-    const command = `python3 -c "import base64,sys;sys.argv[2]=base64.b64decode(sys.argv[2]).decode();exec(base64.b64decode('${encoded}'))" '${root}' '${compileEncoded}'`;
+    const subdirEncoded=Buffer.from(subdir).toString('base64');
+    const command = `python3 -c "import base64,sys;sys.argv[2]=base64.b64decode(sys.argv[2]).decode();sys.argv[3]=base64.b64decode(sys.argv[3]).decode();exec(base64.b64decode('${encoded}'))" '${root}' '${compileEncoded}' '${subdirEncoded}'`;
     args = ['-T', '-p', String(connection.port), '-o', 'ConnectTimeout=10', '-o', 'ConnectionAttempts=1',
       '-o', 'StrictHostKeyChecking=yes', '-o', 'ServerAliveInterval=10', '-o', 'ServerAliveCountMax=2'];
     if (connection.known_hosts_file) args.push('-o', `UserKnownHostsFile=${connection.known_hosts_file}`);
@@ -203,6 +206,7 @@ export async function createSourceSnapshot(connection, options = {}) {
     await writeFile(resolve(sourceDir,'.rt-host-compile-commands.json'),JSON.stringify(hostCompilationUnits(compilation.units,sourceDir)),{flag:'wx',mode:0o400});
   }
   const manifest = { snapshot_id: id, connection_id: connection.id, source_url: connection.source_url || null, architecture: connection.architecture,
+    source_subdir:connection.source_subdir || '',
     compilation:compilation.summary,
     created_at: new Date().toISOString(), files: documents.map(({ content, ...info }) => info), skipped: collected.skipped };
   await writeFile(resolve(root, 'manifest.json'), JSON.stringify(manifest), { flag: 'wx', mode: 0o400 });

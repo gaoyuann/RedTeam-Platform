@@ -9,6 +9,12 @@ import reportRoutes from '../src/routes/reports.js';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { runMigrations } from '../src/db/migrate.js';
+import {mkdtemp,mkdir,writeFile,rm,symlink} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {collectSource} from '../src/services/sourceSnapshot.js';
+import {resolveTaskSource} from '../src/services/sourceScanConnections.js';
+import pipelineRoutes from '../src/routes/pipelines.js';
 async function fixture(t) {
   const db=new Database(':memory:');
   await runMigrations(db, fileURLToPath(new URL('../src/db/migrations/', import.meta.url)));
@@ -18,6 +24,7 @@ async function fixture(t) {
   const app=express();
   app.use(express.json(),(req,res,next)=>{req.user={sub:req.headers['x-user']||'alice',role:'user'};next();});
   app.use('/scans',scanRoutes(db));app.use('/runs',runRoutes(db));app.use('/playbooks',playbookRoutes(db));app.use('/reports',reportRoutes(db));
+  app.use('/pipelines',pipelineRoutes(db));
   const server=app.listen(0,'127.0.0.1');
   await new Promise(r=>server.once('listening',r));
   t.after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));db.close();});
@@ -86,6 +93,65 @@ test('source directory browsing and task input support arbitrary same-origin pat
     assert.equal((await request('/scans',{target,scan_type:'source_scan',parameters:{source_url}})).status,400);
   }
   assert.deepEqual(hits,['/project/code/']);
+});
+
+test('remote folder selection browses and collects only the selected directory, rejecting traversal and symlinks',async t=>{
+  const {request}=await fixture(t);
+  const root=await mkdtemp(join(tmpdir(),'remote-source-')),file=join(root,'connections.json');
+  const previous=process.env.SOURCE_SCAN_CONNECTIONS_FILE;
+  process.env.SOURCE_SCAN_CONNECTIONS_FILE=file;
+  t.after(async()=>{
+    if(previous===undefined) delete process.env.SOURCE_SCAN_CONNECTIONS_FILE;else process.env.SOURCE_SCAN_CONNECTIONS_FILE=previous;
+    await rm(root,{recursive:true,force:true});
+  });
+  const source=join(root,'projects');await mkdir(join(source,'selected'),{recursive:true});
+  await mkdir(join(source,'other'));
+  await writeFile(join(source,'selected','main.c'),'int selected(void){return 1;}\n');
+  await writeFile(join(source,'other','private.c'),'int unrelated;\n');
+  await symlink(root,join(source,'escape'));
+  const target='http://127.0.0.1:8089/';
+  await writeFile(file,JSON.stringify([{id:'fixture',kind:'local',source_root:source,targets:[target]}]));
+  const listing=await request('/scans/source-directory',{target,connection_id:'fixture'});
+  assert.equal(listing.status,200);
+  assert.deepEqual(listing.body.data.entries.map(e=>e.name),['other','selected']);
+  const nested=await request('/scans/source-directory',{target,connection_id:'fixture',source_subdir:'selected'});
+  assert.equal(nested.body.data.parent,'');
+  assert.equal(nested.body.data.path,'selected');
+  const result=await request('/scans',{target,scan_type:'source_scan',parameters:{
+    input_kind:'remote_directory',connection_id:'fixture',source_subdir:'selected'}});
+  assert.equal(result.status,201);
+  const parameters=JSON.parse(result.body.data.parameters);
+  assert.equal(parameters.source_subdir,'selected');
+  const pipeline=await request('/pipelines',{target,config:{test_type:'program',input_kind:'remote_directory',
+    source_connection_id:'fixture',source_subdir:'selected',authorization_confirmed:true,authorization_scope:target}});
+  assert.equal(pipeline.status,201,JSON.stringify(pipeline.body));
+  assert.equal(pipeline.body.data.config.source_subdir,'selected');
+  assert.equal(pipeline.body.data.config.source_connection_id,'fixture');
+  assert.equal(pipeline.body.data.config.cscan_target,null);
+  const collected=await collectSource(await resolveTaskSource(parameters,target));
+  assert.deepEqual(collected.files.map(f=>f.path),['main.c']);
+  for(const source_subdir of ['../outside','/etc','selected/../other','escape']) {
+    assert.equal((await request('/scans/source-directory',{target,connection_id:'fixture',source_subdir})).status,400);
+    await assert.rejects(async()=>collectSource(await resolveTaskSource({...parameters,source_subdir},target)));
+  }
+  assert.equal((await request('/scans/source-directory',{target:'http://other.invalid/',connection_id:'fixture'})).status,400);
+  assert.equal((await request('/scans',{target,scan_type:'source_scan',parameters:{input_kind:'remote_directory'}})).status,400);
+});
+
+test('remote HTTP folder selection is preserved without becoming a native CScan target',async t=>{
+  const {request}=await fixture(t),target='http://127.0.0.1:8089/';
+  const result=await request('/scans',{target,scan_type:'source_scan',parameters:{
+    input_kind:'remote_directory',source_url:'/projects/demo/'}});
+  assert.equal(result.status,201);
+  const parameters=JSON.parse(result.body.data.parameters);
+  assert.equal(parameters.source_url,target+'projects/demo/');
+  assert.equal(parameters.cscan_target,undefined);
+  assert.equal(parameters.input_kind,'remote_directory');
+  for(const excludes of [[target+'projects/demo/'],[target+'projects/demo/private/']]) {
+    const pipeline=await request('/pipelines',{target,config:{input_kind:'remote_directory',
+      source_url:'/projects/demo/',task_scope:{includes:[target],excludes}}});
+    assert.equal(pipeline.status,400);
+  }
 });
 
 test('source code context and execution evidence are not exposed through other users playbooks or runs',async t=>{

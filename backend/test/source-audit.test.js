@@ -14,6 +14,7 @@ import {buildProgramContext} from '../src/services/programAgent.js';
 import {normalizeSourceFinding} from '../src/services/sourceScanFindings.js';
 import {runTargetRequest,parseTargetRequest} from '../src/tools/targetRequest.js';
 import {auditSources,recoverCscanAudits} from '../src/services/sourceAudit.js';
+import {cscanFixture} from './helpers/cscanFixture.js';
 import {parseCscanMarkdown} from '../src/services/cscanReport.js';
 import {generateSourceVerification,recordSourceVerification} from '../src/services/sourceVerification.js';
 import {parseResults} from '../src/services/scanExecutor.js';
@@ -51,6 +52,38 @@ function auditDb(t) {
 const cscanReport=(source,findings=[])=>({snapshot_id:source.snapshot_id,flow_id:'12',findings,
   coverage:{reviewed_files:source.documents.map(doc=>doc.path),omitted_files:[],complete:true}});
 const args=spec=>[JSON.stringify(spec)];
+
+test('selected target directory is collected, delivered to CScan and imported without a PentAGI service',async t=>{
+  const db=auditDb(t),hits=[];
+  const server=http.createServer((req,res)=>{
+    hits.push(req.url);
+    if(req.url==='/selected/') res.end('<a href="main.c">main.c</a><a href="../unselected/">outside</a>');
+    else if(req.url==='/selected/main.c') res.end('int main(void) { return 0; }\n');
+    else {res.writeHead(404);res.end();}
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));});
+  const target='http://127.0.0.1:'+server.address().port+'/';
+  const service=await cscanFixture(t,async({inventory,key,sources})=>{
+    assert.deepEqual(inventory.map(f=>f.path),['main.c']);
+    assert.equal(await readFile(join(sources,key,'main.c'),'utf8'),'int main(void) { return 0; }\n');
+    return [];
+  });
+  const snapshotRoot=await temp(t);
+  const result=await auditSources({scan_task_id:'directory-cscan',target},{db,
+    parameters:{input_kind:'remote_directory',source_url:target+'selected/'},
+    snapshot:(connection,options)=>createSourceSnapshot(connection,{...options,snapshotRoot}),
+    runTool:()=>assert.fail('a source-folder task must not invoke network scanning')});
+  assert.ok(result.outcomes.every(item=>item.success),JSON.stringify(result.outcomes));
+  assert.deepEqual(hits,['/selected/','/selected/main.c']);
+  assert.equal(service.counts.created,1);assert.equal(service.counts.finished,1);
+  const rows=db.prepare('SELECT result_type,result_data FROM scan_results').all();
+  assert.ok(rows.some(row=>row.result_type==='raw_output'));
+  const coverage=JSON.parse(rows.find(row=>row.result_type==='source_coverage').result_data);
+  assert.equal(coverage.cscan_complete,true);
+  assert.equal(coverage.cscan.task_progress.finished,1);
+  assert.equal(coverage.cscan.subtask_progress.finished,1);
+});
 
 test('source projects bind exact deployment endpoints and do not expose credential paths',async t=>{
   const path=await temp(t), config=join(path,'connections.json');

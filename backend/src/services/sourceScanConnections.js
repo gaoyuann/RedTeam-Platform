@@ -1,4 +1,5 @@
 import {sourceAnalysisOptions} from './sourceScanPolicy.js';
+import {sourceSubdir} from './sourceRemoteDirectory.js';
 import { readFile } from 'node:fs/promises';
 import { resolve, isAbsolute, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,7 +30,9 @@ export function httpSourceConnection(target, value) {
 }
 export async function resolveTaskSource(parameters, target) {
   if (parameters.source_url) return httpSourceConnection(target, parameters.source_url);
-  return parameters.connection_id ? resolveSourceConnection(parameters.connection_id, target) : null;
+  if (!parameters.connection_id) return null;
+  const connection = await resolveSourceConnection(parameters.connection_id, target);
+  return {...connection,source_subdir:sourceSubdir(parameters.source_subdir || '')};
 }
 export async function loadSourceConnections(filename = process.env.SOURCE_SCAN_CONNECTIONS_FILE || defaultFile) {
   let parsed;
