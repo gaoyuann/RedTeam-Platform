@@ -1,3 +1,4 @@
+import {attemptVerificationSummary} from './findingVerificationSummary.js';
 import { scanCollection } from './scanResultQuery.js';
 import { publicScanRecord, parseResultData as json, resultCategory, redactScanValue } from './scanResultCatalog.js';
 import { hash, hasStatistics, scopedFindingIdentity, identityInScope, statisticsScope, fail } from './findingInstances.js';
@@ -43,15 +44,16 @@ export function taskStatistics(db,pipeline) {
         && json(e.evidence_data)?.finding_verification?.revision===a.revision
         && json(e.evidence_data)?.finding_verification?.fingerprint===plan.fingerprint);
       const flags=eligible.map(e=>json(e.evidence_data)?.finding_verification?.tool_started);
-      const started=flags.includes(true)?true:a.stop_confirmed===1 && terminal.includes(a.state) && flags.length && flags.every(f=>f===false)?false:sourceValid && run.preflight_status==='FAILED'?false:null;
-      const review=db.prepare('SELECT * FROM finding_verification_reviews WHERE attempt_id=? ORDER BY id DESC LIMIT 1').get(a.id);
+      const stopped=a.stop_confirmed===1 && terminal.includes(a.state);
+      const started=flags.includes(true)?true:stopped && flags.length && flags.every(f=>f===false)?false:
+        stopped && sourceValid && (run.preflight_status==='FAILED' || json(run.final_summary)?.verification_dispatch_started===false)?false:null;
       const assessment=exists(db,'finding_verification_assessments')?db.prepare('SELECT * FROM finding_verification_assessments WHERE attempt_id=? ORDER BY id DESC LIMIT 1').get(a.id):null;
-      const judgement=review||assessment, ids=json(judgement?.evidence_ids);
-      const evidenceValid=sourceValid && Array.isArray(ids) && ids.every(id=>eligible.some(e=>e.id===id));
-      const conclusion=sourceValid && terminal.includes(a.state) && a.stop_confirmed===1 && judgement && evidenceValid
-        && (judgement.conclusion!=='confirmed' || a.state==='completed' && run.status==='COMPLETED' && started===true && ids.length>0) ? judgement.conclusion : 'pending';
+      const system=attemptVerificationSummary(db,{id:a.verification_id,finding_id:a.finding_id,state:a.state,revision:a.revision},a);
+      const judgement=assessment, ids=system.result.evidence_ids;
+      const evidenceValid=sourceValid && Array.isArray(ids) && ids.length>0 && ids.every(id=>eligible.some(e=>e.id===id));
+      const conclusion=system.conclusion;
       const view={id:a.id,finding_id:a.finding_id,run_id:a.run_id,revision:a.revision,state:a.state,stop_confirmed:!!a.stop_confirmed,
-        started,conclusion,method:review?'manual':assessment?'automatic':'pending',evidence_ids:evidenceValid?ids:[],
+        started,conclusion,method:system.method,result:system.result,human_opinions:system.human_opinions,evidence_ids:evidenceValid?ids:[],
         source_valid:!!sourceValid,plan:sourceValid?redactScanValue(json(plan.content)):null,
         judgement:judgement && evidenceValid?redactScanValue(judgement):null,created_at:a.created_at,completed_at:a.completed_at};
       if(!histories.has(a.finding_id))histories.set(a.finding_id,[]);histories.get(a.finding_id).push(view);
@@ -107,11 +109,11 @@ export function taskStatistics(db,pipeline) {
       && lifecycleRuns.every(r=>r.state!=='running' && !!r.completed_at && json(r.outcome)?.stopped===true)
       && allAttempts.every(a=>terminal.includes(a.state)&&a.stop_confirmed===1)
       && (!pipeline.run_id || !!db.prepare("SELECT 1 FROM execution_runs WHERE run_id=? AND status IN ('COMPLETED','FAILED','ABORTED')").get(pipeline.run_id));
-    const statistics={schema_version:1,assets:{observed:assets?.length??null,states:assets?tally(assets.map(a=>a.state)):null,covered_baseline:covered.length,coverage:baselineRatio(covered.length,content?.assets.length||0,!!content?.assets_complete),covered_ids:covered},
+    const statistics={schema_version:1,result_schema_version:1,result_policy:'system_evidence_only',assets:{observed:assets?.length??null,states:assets?tally(assets.map(a=>a.state)):null,covered_baseline:covered.length,coverage:baselineRatio(covered.length,content?.assets.length||0,!!content?.assets_complete),covered_ids:covered},
       checks:{total:checks?.length??null,states:checks?tally(checks.map(c=>c.state)):null,reason:'检查项与工具调用分别统计',tool_outcomes:{total:toolOutcomes.length,states:tally(collection.runs.map(r=>r.state)),reason_unknown:toolOutcomes.filter(o=>typeof o.timed_out!=='boolean'||typeof o.aborted!=='boolean').length,timed_out:toolOutcomes.filter(o=>o.timed_out===true).length,aborted:toolOutcomes.filter(o=>o.aborted===true).length}},
       findings:{records:candidates.length,instances:instances.length,mapped_records:mapped.size,unmapped_records:candidates.length-mapped.size,
         complete:enabled&&mapped.size===candidates.length,sync_pending:candidates.some(r=>!mapped.has(r.id)&&scopedFindingIdentity(r,pipeline)!==null),severity:tally(instances.map(i=>i.severity))},
-      verifications:{executed_instances:instances.filter(i=>i.executed).length,confirmed_instances:instances.filter(i=>i.conclusion==='confirmed').length,
+      verifications:{result_schema_version:1,system_results:tally(attemptViews.map(a=>a.result.status)),human_opinions:attemptViews.reduce((n,a)=>n+a.human_opinions.length,0),executed_instances:instances.filter(i=>i.executed).length,confirmed_instances:instances.filter(i=>i.conclusion==='confirmed').length,
         conclusions:tally(instances.map(i=>i.conclusion)),attempts:attemptViews.length,started:attemptViews.filter(a=>a.started===true).length,
         not_started:attemptViews.filter(a=>a.started===false).length,start_unknown:attemptViews.filter(a=>a.started===null).length,
         unmapped_attempts:attemptViews.filter(a=>!mapped.has(a.finding_id)).length},
@@ -120,7 +122,7 @@ export function taskStatistics(db,pipeline) {
         discovery:baselineRatio(matched.filter(m=>m.instance_ids.length).length,matched.length,content.vulnerabilities_complete),
         confirmed:matched.filter(m=>m.instance_ids.some(id=>instances.some(i=>i.instance_id===id&&i.conclusion==='confirmed'))).length}:null,
       completeness:{migration_available:enabled,scope_available:!!scope,scope_reason:scope?null:'历史目标缺少可解析的授权范围，保留记录且不自动归并',unmapped_reason:mapped.size<candidates.length?'候选未同步或缺少可靠归并身份':null},report_ready:ready};
-    const source_fingerprint=hash({pipeline,lifecycleScans,lifecycleRuns,verificationRuns,scans:collection.scans,records:collection.rows,runs:collection.runs,maps,allAttempts,attempts:attemptViews,checks,assets,services,baseline,steps,calls,evidence:executionRows('evidence_records'),
+    const source_fingerprint=hash({result_schema_version:1,result_policy:'system_evidence_only',pipeline,lifecycleScans,lifecycleRuns,verificationRuns,scans:collection.scans,records:collection.rows,runs:collection.runs,maps,allAttempts,attempts:attemptViews,checks,assets,services,baseline,steps,calls,evidence:executionRows('evidence_records'),
       verification_sources:exists(db,'finding_verifications')?db.prepare('SELECT * FROM finding_verifications WHERE pipeline_id=? ORDER BY id').all(pipeline.pipeline_id):[],
       plan_history:db.prepare('SELECT * FROM task_plan_history WHERE pipeline_id=? ORDER BY id').all(pipeline.pipeline_id),
       run_sources:ids.map(id=>db.prepare('SELECT * FROM execution_runs WHERE run_id=?').get(id)),

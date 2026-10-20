@@ -71,7 +71,8 @@ test('F08 tool success leaves conclusion pending; reviews require evidence of th
     }
     f.db.prepare('UPDATE evidence_records SET evidence_data=? WHERE id=?').run(original,evidence);
     reviewVerification(f.db,f.pipeline,actor,f.item.id,{attempt_id:a.id,conclusion:'not_verified',evidence_ids:[evidence],note:'Expected evidence absent'});
-    assert.equal(verificationDetail(f.db,f.pipeline,f.item.id).summary.conclusion,'not_verified');
+    assert.equal(verificationDetail(f.db,f.pipeline,f.item.id).summary.conclusion,'pending');
+    assert.equal(verificationDetail(f.db,f.pipeline,f.item.id).summary.human_opinions[0].conclusion,'not_verified');
     const b=createVerificationAttempt(f.db,f.pipeline,actor,f.item.id,{...request,request_id:'retry-2'});await launchVerification(f.db,b,actor,{engine});
     assert.throws(()=>reviewVerification(f.db,f.pipeline,actor,f.item.id,{attempt_id:b.id,conclusion:'confirmed',evidence_ids:[evidence],note:'Wrong attempt'}),/证据不属于/);
     assert.throws(()=>createVerificationAttempt(f.db,f.pipeline,actor,f.item.id,{...request,request_id:'retry-3'}),/上限/);
@@ -140,7 +141,7 @@ test('F08 generated payload is frozen, consumed by the real engine and linked to
     const detail=verificationDetail(f.db,f.pipeline,f.item.id);
     assert.equal(detail.attempts[0].state,'completed',JSON.stringify(detail.attempts[0]));
     assert.equal(detail.attempts[0].stop_confirmed,1);
-    assert.equal(detail.summary.conclusion,'pending');
+    assert.equal(detail.summary.result.status,'inconclusive');assert.equal(detail.summary.result.reason_code,'unsupported_criterion');
     const evidence=detail.attempts[0].evidence[0].evidence_data;
     assert.equal(evidence.payload_id,payload.id);
     assert.equal(evidence.finding_verification.payload_version,version);

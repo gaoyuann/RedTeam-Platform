@@ -2,7 +2,7 @@ import { assessVerificationAttempt } from './findingVerificationAssessment.js';
 import { taskDisplayValue } from './taskExecution.js';
 import { checkVerificationPlan, json } from './findingVerification.js';
 import { currentActor } from '../middleware/recordAccess.js';
-import { getWsManager } from './wsManager.js';
+import { broadcastTaskEvent } from './taskActivity.js';
 
 // One server process owns an attempt. Unknown attempts are never replayed after restart.
 const workers = new Map();
@@ -51,13 +51,15 @@ export function launchVerification(db, attempt, actor, dependencies = {}) {
       const state=!stopped ? 'unknown' : run?.status==='ABORTED' ? 'aborted' : run?.status==='COMPLETED' && successful ? 'completed' : 'failed';
       const reason=!stopped ? '实际调用停止尚未确认，禁止重试和恢复环境' : taskDisplayValue(result?.error || (state==='failed' ? '步骤异常、未执行或预检失败；请查看证据' : null));
       db.transaction(()=>{
+        if(!enteredEngine)db.prepare('UPDATE execution_runs SET final_summary=? WHERE run_id=?')
+          .run(JSON.stringify({...json(run?.final_summary),verification_dispatch_started:false}),attempt.run_id);
         db.prepare("UPDATE finding_verification_attempts SET state=?,stop_confirmed=?,reason=?,completed_at=datetime('now') WHERE id=?")
           .run(state,stopped?1:0,reason,attempt.id);
         db.prepare('UPDATE finding_verifications SET state=?,reason=? WHERE id=?').run(state,reason,attempt.verification_id);
       })();
       assessVerificationAttempt(db,attempt.id);
       workers.delete(attempt.id);
-      getWsManager()?.broadcast('pipeline:verification',{pipeline_id:attempt.pipeline_id,verification_id:attempt.verification_id,state});
+      broadcastTaskEvent(db,'pipeline:verification',{pipeline_id:attempt.pipeline_id,verification_id:attempt.verification_id,state});
     }
   };
   marker.promise=Promise.resolve().then(task);

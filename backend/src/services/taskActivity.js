@@ -1,3 +1,4 @@
+import {findingVerificationExecution} from './findingVerificationExecution.js';
 import { pipelineScans } from './scanResultQuery.js';
 import { summarizeScanRecords } from './scanResultCatalog.js';
 import { getWsManager } from './wsManager.js';
@@ -57,5 +58,5 @@ export function taskSummary(db, pipeline) {
   const plan = db.prepare('SELECT state, revision FROM task_plans WHERE pipeline_id = ?').get(pipeline.pipeline_id);
   return { scan_task_ids: scanIds, scan_findings: scanFindings, scan_record_counts:counts, candidate_risks: candidateRisks,
     evidence_records: countForRun('evidence_records'), reports: countForRun('test_reports'),
-    execution: run || null, plan: plan || null };
+    execution: run || null, finding_verifications:findingVerificationExecution(db,pipeline,{summaryOnly:true}), plan: plan || null };
 }

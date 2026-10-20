@@ -48,7 +48,7 @@ int main(int argc,char **argv) {
   auto &dialog=*owned;dialog.show();
   auto wait=[&](std::function<bool()> condition){for(int i=0;i<100;i++){if(condition())return true;QTest::qWait(20);}return false;};
   if(!wait([&]{return dialog.m_revision==1;}))return 2;
-  if(dialog.m_items->item(0,2)->text()!="待判定"||dialog.m_target->text()!="http://fixture.invalid/item")return 3;
+  if(dialog.m_items->item(0,2)->text()!="证据不足（旧版接口）"||dialog.m_target->text()!="http://fixture.invalid/item")return 3;
 
   dialog.m_timer->stop();
   if(!wait([&]{return !dialog.m_loading;}))return 20;

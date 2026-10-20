@@ -35,6 +35,7 @@ signals:
   void playbookNavigateRequested(const QString &playbookId, const QString &target = "");
   /// 从扫描结果漏洞一键发起攻击（演示动线：扫描 → 漏洞列表 → 攻击）
   void attackRequested(const QString &target, const QString &vulnText, const QString &resultType);
+  void findingVerificationChanged(const QString &pipelineId);
 
 public slots:
   void onRefreshTasks();

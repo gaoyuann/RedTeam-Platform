@@ -1,9 +1,10 @@
+import {buildVerificationContract,normalizeVerificationObjectiveDraft} from './findingVerificationResult.js';
 import { verificationObservation } from './findingVerificationEvidence.js';
 import { findingSources,findingTemplate,planFingerprint,sourceMetadata } from './findingVerificationSources.js';
-import { findingRule } from './findingVerificationRules.js';
+import { findingRule,directoryEvidenceCriteria } from './findingVerificationRules.js';
 import { verificationPayloadCatalog,validateBoundPayload } from './findingVerificationPayloads.js';
 import { findingVerificationEntry } from './findingVerificationEntry.js';
-import { verificationSummary } from './findingVerificationSummary.js';
+import { verificationSummary,attemptVerificationSummary } from './findingVerificationSummary.js';
 import { randomUUID, createHash } from 'node:crypto';
 import { pipelineScans } from './scanResultQuery.js';
 import { publicScanRecord, resultCategory } from './scanResultCatalog.js';
@@ -34,6 +35,20 @@ export function taskFinding(db, pipeline, id, {requireVulnerability=true} = {}) 
   return row;
 }
 function dbSafe(db, sql, ...args) { return db.prepare(sql).get(...args); }
+function readablePlanContent(value) {
+  const parsed=json(value,null);
+  const content=parsed && typeof parsed==='object' && !Array.isArray(parsed)?parsed:{};
+  const valid=typeof content.target==='string' && Array.isArray(content.steps) && content.steps.length>0
+    && content.steps.every(step=>step && typeof step==='object' && !Array.isArray(step)
+      && typeof step.tool_id==='string' && typeof step.args_template==='string'
+      && Array.isArray(json(step.args_template,null)) && json(step.args_template,null).every(arg=>typeof arg==='string')
+      && (step.payload_variables===undefined || json(step.payload_variables,null)
+        && typeof json(step.payload_variables,null)==='object' && !Array.isArray(json(step.payload_variables,null))))
+    && [content.missing_conditions,content.blockers].every(list=>list===undefined || Array.isArray(list) && list.every(reason=>typeof reason==='string'));
+  // Read compatibility only: never repair or replace the frozen database snapshot.
+  return {...content,...(!valid?{steps:[],read_error:'历史方案结构无效，保留原记录；请保存新版本后再执行'}:{}),
+    provenance:content.provenance || {kind:'legacy',label:'历史来源未记录'}};
+}
 export function verification(db, pipeline, id, options) {
   const row = dbSafe(db, 'SELECT * FROM finding_verifications WHERE id=? AND pipeline_id=?', id, pipeline.pipeline_id);
   if (!row) fail(404, '验证项不存在');
@@ -50,14 +65,20 @@ export function verificationDetail(db, pipeline, id) {
   const item = verification(db, pipeline, id, {requireVulnerability:false});
   const row = taskFinding(db, pipeline, item.finding_id, {requireVulnerability:false});
   const plans = db.prepare('SELECT * FROM finding_verification_plans WHERE verification_id=? ORDER BY revision DESC').all(id)
-    .map(p => ({...p, content:{...json(p.content),provenance:json(p.content).provenance || {kind:'legacy',label:'历史来源未记录'}}}));
-  const attempts = db.prepare('SELECT * FROM finding_verification_attempts WHERE verification_id=? ORDER BY rowid DESC').all(id).map(a => ({...a,
+    .map(p => ({...p, content:readablePlanContent(p.content)}));
+  const attempts = db.prepare('SELECT * FROM finding_verification_attempts WHERE verification_id=? ORDER BY rowid DESC').all(id).map(a => {
+    const frozen=plans.find(p=>p.revision===a.revision);
+    const rulePlan={...frozen?.content,finding_id:item.finding_id};
+    const summary=attemptVerificationSummary(db,item,a);
+    return {...a,summary,human_opinions:summary.human_opinions,
     assessments:db.prepare('SELECT * FROM finding_verification_assessments WHERE attempt_id=? ORDER BY id').all(a.id).map(r=>({...r,evidence_ids:json(r.evidence_ids,[])})),
     reviews:db.prepare('SELECT * FROM finding_verification_reviews WHERE attempt_id=? ORDER BY id DESC').all(a.id).map(r => ({...r,evidence_ids:json(r.evidence_ids, [])})),
     evidence:db.prepare('SELECT id,step_index,tool_id,evidence_type,evidence_data,raw_stdout,raw_stderr,attempt_id FROM evidence_records WHERE run_id=? ORDER BY id').all(a.run_id)
-      .map(e => ({...e, evidence_data:json(e.evidence_data), observation:verificationObservation(e), raw_stdout:e.tool_id==='target-request' ? '' :/credential|password|session|cookie/i.test(e.evidence_type || '') ? '[凭据证据已隐藏]' : e.raw_stdout})),
+      .map(e => ({...e, evidence_data:json(e.evidence_data), observation:verificationObservation(e),
+        criteria:directoryEvidenceCriteria(rulePlan.assessment_rule,e,{...a,fingerprint:frozen?.fingerprint},rulePlan),
+        raw_stdout:e.tool_id==='target-request' ? '' :/credential|password|session|cookie/i.test(e.evidence_type || '') ? '[凭据证据已隐藏]' : e.raw_stdout})),
     steps:db.prepare('SELECT step_index,tool_id,success,exit_code,notes FROM execution_steps WHERE run_id=? ORDER BY id').all(a.run_id)
-  }));
+  };});
   const entry=findingVerificationEntry(db,pipeline,row);
   const detail=taskDisplayValue({ ...item, eligible:resultCategory(row)==='vulnerability',
     ineligibility_reason:resultCategory(row)==='vulnerability' ? null : '此记录现归为信息或非漏洞记录，仅保留历史与停止操作，不能新建验证。', default_target:entry.target,entry_context:entry, finding:publicScanRecord(row), plans, attempts,
@@ -80,8 +101,11 @@ export function selectVerificationTemplate(db,pipeline,actor,id,input) {
 }
 export function verificationReadiness(db,pipeline,item,record) {
   if(!record)return {ready:false,reasons:['请先选择或生成攻击测试方案']};
-  const content=json(record.content),reasons=[...scopeConditions(taskScope(pipeline)),...(content.missing_conditions || []),...(content.blockers || [])];
+  const content=readablePlanContent(record.content);
+  if(content.read_error)return {ready:false,reasons:[content.read_error],revision:record.revision,fingerprint:record.fingerprint};
+  const reasons=[...scopeConditions(taskScope(pipeline)),...(content.missing_conditions || []),...(content.blockers || [])];
   if(resultCategory(taskFinding(db,pipeline,item.finding_id,{requireVulnerability:false}))!=='vulnerability')reasons.push('此记录仅保留历史，不可新建验证');
+  if(content.verification_contract?.schema_version!==1)reasons.push('旧方案需保存新版本并重新确认');
   if(!content.success_criteria)reasons.push('缺少成功判据');if(!content.cleanup)reasons.push('缺少清理说明');
   const compiled=compilePlaybook({db,target:content.target,steps:content.steps || []});
   if(!compiled.ok)reasons.push(...compiled.errors);
@@ -90,7 +114,7 @@ export function verificationReadiness(db,pipeline,item,record) {
   if(['queued','running','cancelling','unknown'].includes(item.state))reasons.push('当前验证仍有活动调用或停止未确认');
   const count=db.prepare('SELECT count(*) n FROM finding_verification_attempts WHERE verification_id=?').get(item.id).n;
   if(count>=content.max_attempts)reasons.push('已达到此漏洞尝试上限；已有执行记录仍可查看和人工复核');
-  return {ready:reasons.length===0,reasons:[...new Set(reasons)],revision:record.revision,fingerprint:record.fingerprint};
+  return {ready:reasons.length===0,reasons:[...new Set(reasons)],revision:record.revision,fingerprint:record.fingerprint,attempts_used:count,max_attempts:content.max_attempts};
 }
 function normalizePlan(db,pipeline,item,input,actor,{allowBlocked=false}={}) {
   const target=text(input.target,'验证目标',256), scope=taskScope(pipeline);
@@ -129,6 +153,8 @@ function normalizePlan(db,pipeline,item,input,actor,{allowBlocked=false}={}) {
     prerequisites:list(input.prerequisites || [],'前置条件'),missing_conditions:list(input.missing_conditions || [],'缺失条件'),
     success_criteria:typeof input.success_criteria==='string'?input.success_criteria.trim().slice(0,4000):'',cleanup:typeof input.cleanup==='string'?input.cleanup.trim().slice(0,4000):'',
     max_attempts:maxAttempts,duration_ms:duration,steps};
+  const objectiveDraft=normalizeVerificationObjectiveDraft(input.objective_draft);
+  if(objectiveDraft)plan.objective_draft=objectiveDraft;
   // Plans never persist inline secrets; authentication must be supplied by the configured provider.
   if(JSON.stringify(taskDisplayValue(plan))!==JSON.stringify(plan)) fail(400,'计划含敏感值、过深或过量内容，请使用配置引用并缩小计划');
   const compiled=compilePlaybook({steps,target,db});
@@ -168,6 +194,7 @@ export function saveVerificationPlan(db,pipeline,actor,id,input,{provenance,allo
     const candidate=entry.target===content.target?findingRule(finding,content.target):null;
     const compatible=compiledRuleStep(db,content,candidate);
     if(compatible)content.assessment_rule=compatible;
+    content.verification_contract=buildVerificationContract(content,item.finding_id);
     const blockers=[...(content.blockers || [])];
     if(!content.success_criteria)blockers.push('缺少成功判据');if(!content.cleanup)blockers.push('缺少清理说明');
     content.steps.forEach((step,i)=>{if(!step.expected_evidence)blockers.push(`步骤 ${i+1} 缺少预期证据`);});
@@ -186,6 +213,8 @@ export function checkVerificationPlan(db,pipeline,actor,id,revision) {
   const record=dbSafe(db,'SELECT * FROM finding_verification_plans WHERE verification_id=? AND revision=?',id,revision);
   if(!record) fail(409,'尚未保存计划');
   const content=json(record.content);
+  if(content.verification_contract?.schema_version!==1)fail(409,'旧方案缺少验证目标契约，请保存新版本并重新确认');
+  if(JSON.stringify(content.verification_contract)!==JSON.stringify(buildVerificationContract(content,item.finding_id)))fail(409,'验证目标契约不一致，请保存新版本并重新确认');
   if(fingerprint(content)!==record.fingerprint) fail(409,'计划快照不一致');
   if(JSON.stringify(content.scope)!==JSON.stringify(taskScope(pipeline))) fail(409,'任务范围已变化，请创建新计划');
   const missing=[...scopeConditions(content.scope),...content.missing_conditions,...(content.blockers || [])];

@@ -544,6 +544,15 @@ void FlowPage::setupWorkbenchView()
   });
   connect(m_scanTab, &ScanPage::sourceGenerationStatus, m_planTab, &TaskPlanPage::showGenerationStatus);
   connect(m_scanTab, &ScanPage::sourcePlaybookGenerated, m_planTab, &TaskPlanPage::useSourcePlaybook);
+  const auto refreshFindingVerifications = [this](const QString &pipelineId) {
+    if(pipelineId!=m_selectedPipelineId || m_stack->currentIndex()!=1)return;
+    m_lastDisplayedDetail={};
+    loadFlowDetail(pipelineId);
+    m_execTab->refreshTaskRecords();
+    m_evalTab->retryRun(m_workbenchRunId);
+  };
+  connect(m_scanTab, &ScanPage::findingVerificationChanged, this, refreshFindingVerifications);
+  connect(m_execTab, &ExecutionPage::findingVerificationChanged, this, refreshFindingVerifications);
   const auto selectSource = [this]() {
     m_scanTab->beginSourceVerification();
   };
@@ -774,6 +783,7 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     else m_scanTab->setPipelineScope(pipelineId, scopedScanIds, status);
     m_scanTab->setTarget(target);
     m_execTab->setPipelineContext(pipelineId, status, p["run_id"].toString(), target);
+    m_execTab->refreshTaskRecords();
     m_evalTab->setPipelineContext(pipelineId, p["run_id"].toString(), target);
     m_execTab->setTarget(target);
     m_evalTab->setTarget(target);
@@ -911,6 +921,14 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
       if (ps.phaseType == "execute" && status == "awaiting_approval") {
         ps.status = "pending";
         ps.summary = QStringLiteral("等待预案批准后执行");
+      }
+      if(i==4) {
+        const auto verifications=p["summary"].toObject()["finding_verifications"].toObject();
+        if(verifications["total"].toInt()>0) {
+          const QString parent=ps.summary.isEmpty()?QStringLiteral("主预案待执行"):ps.summary;
+          ps.summary=QStringLiteral("逐漏洞已完成 %1 次 · 活动 %2；%3")
+              .arg(verifications["completed"].toInt()).arg(verifications["active"].toInt()).arg(parent);
+        }
       }
       phaseSteps.append(ps);
     }

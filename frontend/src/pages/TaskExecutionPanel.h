@@ -25,6 +25,7 @@ public slots:
 signals:
   void runSelected(const QString &runId);
   void runCompleted(const QString &runId);
+  void findingVerificationChanged(const QString &pipelineId);
 
 protected:
   void showEvent(QShowEvent *event) override;
@@ -32,6 +33,7 @@ protected:
 private:
   void render();
   void renderDetail();
+  void openVerificationHistory(int row);
   bool validSnapshot(const QJsonObject &snapshot) const;
   ApiClient *m_api;
   QString m_role;
@@ -58,6 +60,7 @@ private:
   QTableWidget *m_attempts;
   QTableWidget *m_evidence;
   QTableWidget *m_preflight;
+  QTableWidget *m_verifications;
   QTextEdit *m_detail;
   QTimer *m_timer;
 };

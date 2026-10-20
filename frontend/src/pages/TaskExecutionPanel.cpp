@@ -1,4 +1,5 @@
 #include "TaskExecutionPanel.h"
+#include "FindingVerificationDialog.h"
 #include "../ApiClient.h"
 #include "../Theme.h"
 #include "../UiUtil.h"
@@ -13,6 +14,7 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QShowEvent>
+#include <QSignalBlocker>
 #include <QScrollBar>
 #include <QSet>
 #include <QSplitter>
@@ -30,8 +32,17 @@ QString stateText(const QString &state)
     {"NOT_RECORDED", "未记录结果"}, {"PASSED", "通过"}, {"SKIPPED", "已跳过"},
     {"draft", "草稿"}, {"submitted", "待审批"}, {"rejected", "已退回"}, {"approved", "已批准"},
     {"created", "已创建"}, {"running", "运行中"}, {"awaiting_approval", "待审批"}, {"paused", "已暂停"},
-    {"completed", "已完成"}, {"failed", "失败"}, {"cancelled", "已取消"}};
+    {"completed", "执行结束"}, {"failed", "执行失败"}, {"cancelled", "已取消"},
+    {"queued", "排队中"}, {"cancelling", "取消中"}, {"aborted", "已中止"}, {"unknown", "停止未确认"}};
   return labels.value(state, QStringLiteral("未知 / 未记录"));
+}
+
+QString verificationResultText(const QJsonObject &result)
+{
+  if(result.value("schema_version").toInt()!=1)return QStringLiteral("证据不足（旧版结果）");
+  const QMap<QString,QString> labels{{"achieved","目标已达成"},{"not_achieved","目标未达成"},
+    {"inconclusive","证据不足"},{"not_performed","未开展适用验证"},{"pending","等待结果"}};
+  return labels.value(result.value("status").toString(),QStringLiteral("证据不足（未知状态）"));
 }
 
 QString sourceText(const QString &source)
@@ -96,7 +107,7 @@ TaskExecutionPanel::TaskExecutionPanel(ApiClient *api, const QString &role, cons
   outer->setContentsMargins(8, 8, 8, 8);
   auto *heading = new QHBoxLayout;
   m_title = label(this);
-  m_title->setText(QStringLiteral("受控执行监控"));
+  m_title->setText(QStringLiteral("执行记录：主预案与逐漏洞"));
   m_title->setStyleSheet(Theme::SectionStyle);
   heading->addWidget(m_title, 1);
   m_refresh = new QPushButton(QStringLiteral("刷新记录"), this);
@@ -108,7 +119,7 @@ TaskExecutionPanel::TaskExecutionPanel(ApiClient *api, const QString &role, cons
   outer->addWidget(m_state);
   outer->addWidget(m_identity);
   auto *metrics = new QHBoxLayout;
-  const QStringList titles{QStringLiteral("Run 状态"), QStringLiteral("已返回 / 已知步骤"), QStringLiteral("执行尝试"), QStringLiteral("证据记录")};
+  const QStringList titles{QStringLiteral("主预案 Run 状态"), QStringLiteral("主预案已返回 / 步骤"), QStringLiteral("主预案工具调用"), QStringLiteral("主预案证据")};
   for (int index = 0; index < 4; ++index) {
     m_metrics[index] = new MetricCard(titles[index], Theme::Primary, this);
     m_metrics[index]->setObjectName("executionMetric" + QString::number(index));
@@ -141,7 +152,11 @@ TaskExecutionPanel::TaskExecutionPanel(ApiClient *api, const QString &role, cons
     connect(table, &QTableWidget::itemSelectionChanged, this, &TaskExecutionPanel::renderDetail);
     return table;
   };
-  m_steps = makeTable("步骤结果", {"步骤", "工具", "结果", "来源", "尝试编号", "退出码", "记录时间"}, "暂无关联步骤结果；不会推断当前工具正在运行");
+  m_verifications = makeTable("逐漏洞执行记录", {"漏洞", "方案", "版本", "执行状态", "系统结果", "执行时间", "目标", "调用 / 证据"}, "暂无逐漏洞执行记录；查看历史不要求填写人工意见");
+  m_verifications->setObjectName("findingVerificationRuns");
+  m_verifications->setToolTip("双击打开已保存的同次历史与证据，不会重新执行。");
+  connect(m_verifications,&QTableWidget::cellDoubleClicked,this,[this](int row,int){openVerificationHistory(row);});
+  m_steps = makeTable("主预案步骤", {"步骤", "工具", "结果", "来源", "尝试编号", "退出码", "记录时间"}, "暂无主预案步骤结果；逐漏洞记录在单独页签展示");
   m_attempts = makeTable("执行尝试", {"尝试编号", "步骤", "工具", "结果", "执行模式", "耗时(ms)", "完成时间"}, "暂无执行尝试记录");
   m_evidence = makeTable("证据来源", {"证据编号", "步骤", "工具", "尝试编号", "类型", "来源校验", "采集时间"}, "暂无本任务证据记录");
   m_preflight = makeTable("执行预检", {"检查项", "结果", "说明"}, "预检尚无记录；不表示已通过");
@@ -152,6 +167,13 @@ TaskExecutionPanel::TaskExecutionPanel(ApiClient *api, const QString &role, cons
   m_evidence->setColumnWidth(2, 160);
   m_evidence->setColumnWidth(4, 130);
   m_evidence->setColumnWidth(5, 200);
+  m_verifications->setColumnWidth(0,140);
+  m_verifications->setColumnWidth(1,110);
+  m_verifications->setColumnWidth(2,45);
+  m_verifications->setColumnWidth(3,75);
+  m_verifications->setColumnWidth(4,125);
+  m_verifications->setColumnWidth(5,185);
+  m_verifications->setColumnWidth(6,190);
   auto *detailCard = new QFrame(splitter);
   detailCard->setProperty("softCard", true);
   auto *detailLayout = new QVBoxLayout(detailCard);
@@ -178,7 +200,8 @@ TaskExecutionPanel::TaskExecutionPanel(ApiClient *api, const QString &role, cons
   m_timer->setInterval(2000);
   connect(m_timer, &QTimer::timeout, this, [this]() {
     const QString state = m_snapshot.value("run").toObject().value("status").toString();
-    if (isVisible() && (state.isEmpty() || state == "RUNNING" || state == "PENDING")) refresh();
+    if (isVisible() && (state.isEmpty() || state == "RUNNING" || state == "PENDING"
+        || m_snapshot.value("verification_runs").toObject().value("active").toInt()>0)) refresh();
   });
   connect(m_refresh, &QPushButton::clicked, this, &TaskExecutionPanel::refresh);
   connect(m_tabs, &QTabWidget::currentChanged, this, &TaskExecutionPanel::renderDetail);
@@ -214,7 +237,7 @@ void TaskExecutionPanel::clearTaskContext()
   m_busy = false;
   m_timer->stop();
   m_refresh->setEnabled(false);
-  for (auto *table : {m_steps, m_attempts, m_evidence, m_preflight}) table->setRowCount(0);
+  for (auto *table : {m_steps, m_attempts, m_evidence, m_preflight, m_verifications}) table->setRowCount(0);
   for (auto *metric : m_metrics) metric->setValue(QStringLiteral("—"));
   m_state->setText(QStringLiteral("选择任务后查看执行监控"));
   m_state->setStyleSheet(Theme::StatusInfoStyle);
@@ -233,6 +256,28 @@ bool TaskExecutionPanel::validSnapshot(const QJsonObject &snapshot) const
       || (!m_expectedTarget.isEmpty() && snapshot.value("target").toString() != m_expectedTarget)) return false;
   for (const QString key : {"steps", "attempts", "evidence", "preflight"})
     if (!snapshot.value(key).isArray() || snapshot.value(key).toArray().size() > (key == "preflight" ? 50 : 200)) return false;
+  if(snapshot.contains("verification_runs")) {
+    const auto child=snapshot.value("verification_runs").toObject();
+    if(child.value("schema_version").toInt()!=1 || !child.value("items").isArray()
+        || child.value("items").toArray().size()>200 || !child.value("has_more").isBool())return false;
+    for(const QString key:{"total","returned","active","completed","failed","aborted","unknown","invalid_source_count"}) {
+      const auto value=child.value(key);
+      if(!value.isDouble() || value.toDouble(-1)<0 || value.toDouble()>9007199254740991.0
+          || value.toDouble()!=value.toVariant().toLongLong())return false;
+    }
+    if(child.value("returned").toInt()!=child.value("items").toArray().size()
+        || child.value("total").toDouble()<child.value("returned").toDouble())return false;
+    QSet<QString> seen;
+    for(const auto &value:child.value("items").toArray()) {
+      const auto row=value.toObject();
+      const auto id=row.value("attempt_id").toString();
+      if(!value.isObject() || id.isEmpty() || seen.contains(id) || row.value("verification_id").toString().isEmpty()
+          || row.value("run_id").toString().isEmpty() || !safeId(row.value("finding_id")) || !safeId(row.value("revision"))
+          || !QStringList{"queued","running","cancelling","completed","failed","aborted","unknown"}.contains(row.value("state").toString())
+          || !row.value("stop_confirmed").isBool() || !row.value("result").isObject())return false;
+      seen.insert(id);
+    }
+  }
   const auto runValue = snapshot.value("run");
   if (runValue.isNull()) return m_expectedRunId.isEmpty() && snapshot.value("steps").toArray().isEmpty()
       && snapshot.value("attempts").toArray().isEmpty() && snapshot.value("evidence").toArray().isEmpty();
@@ -297,10 +342,12 @@ void TaskExecutionPanel::refresh()
         emit guard->runSelected(runId);
       }
       if (!guard || context != guard->m_contextVersion || pipelineId != guard->m_pipelineId) return;
-      if (runId.isEmpty() && QStringList{"completed", "failed", "cancelled"}.contains(snapshot.value("pipeline_status").toString()))
+      const bool childActive=snapshot.value("verification_runs").toObject().value("active").toInt()>0;
+      if(childActive)guard->m_timer->start();
+      if (!childActive && runId.isEmpty() && QStringList{"completed", "failed", "cancelled"}.contains(snapshot.value("pipeline_status").toString()))
         guard->m_timer->stop();
       if (!runId.isEmpty() && QStringList{"COMPLETED", "FAILED", "ABORTED"}.contains(run.value("status").toString())) {
-        guard->m_timer->stop();
+        if(!childActive)guard->m_timer->stop();
         if (guard->m_completedRunId != runId) {
           guard->m_completedRunId = runId;
           emit guard->runCompleted(runId);
@@ -324,7 +371,8 @@ void TaskExecutionPanel::render()
   m_identity->setText(QStringLiteral("任务：%1  ·  目标：%2  ·  创建人：%3\nRun：%4  ·  预案：%5  ·  引擎：%6")
       .arg(m_pipelineId, m_snapshot.value("target").toString(), m_snapshot.value("owner").toString(),
         runId.isEmpty() ? QStringLiteral("尚未生成") : runId, run.value("playbook_name").toString(), run.value("engine_type").toString()));
-  QString status = runId.isEmpty() ? QStringLiteral("暂无执行记录 · 任务%1").arg(stateText(m_snapshot.value("pipeline_status").toString()))
+  const auto verifications=m_snapshot.value("verification_runs").toObject();
+  QString status = runId.isEmpty() ? QStringLiteral("主预案尚未执行 · 任务%1").arg(stateText(m_snapshot.value("pipeline_status").toString()))
     : QStringLiteral("%1 · 工具成功 %2，失败 %3，待返回 %4。")
       .arg(stateText(run.value("status").toString()), numberText(counts.value("succeeded")),
         numberText(counts.value("failed")), numberText(counts.value("pending")));
@@ -333,6 +381,12 @@ void TaskExecutionPanel::render()
   else if (counts.value("requires_attention").toBool())
     status += QStringLiteral("\n统计校验：存在重复或缺失的步骤结果，请查看执行尝试。");
   if (!run.value("stop_reason").toString().isEmpty()) status += "\n停止/失败原因：" + run.value("stop_reason").toString();
+  if(verifications.value("schema_version").toInt()==1) {
+    status+=QStringLiteral("\n逐漏洞执行 %1 次：执行结束 %2 · 失败 %3 · 中止 %4 · 活动 %5 · 停止未确认 %6。人工意见可选。")
+      .arg(verifications.value("total").toInt()).arg(verifications.value("completed").toInt()).arg(verifications.value("failed").toInt())
+      .arg(verifications.value("aborted").toInt()).arg(verifications.value("active").toInt()).arg(verifications.value("unknown").toInt());
+    if(verifications.value("invalid_source_count").toInt()>0)status+=QStringLiteral("\n另有 %1 条记录来源不匹配，未展示内容。请核对来源。").arg(verifications.value("invalid_source_count").toInt());
+  } else status+=QStringLiteral("\n当前接口未提供逐漏洞执行列表，请使用配套后端版本查看。");
   m_state->setText(status);
   m_state->setStyleSheet(run.value("status").toString() == "FAILED" ? Theme::StatusErrorStyle
     : counts.value("failed").toInt() > 0 ? Theme::StatusWarningStyle : Theme::StatusInfoStyle);
@@ -378,6 +432,23 @@ void TaskExecutionPanel::render()
   }
   m_updated->setText(QStringLiteral("快照时间：%1 · 步骤展示前 200 项，尝试/证据展示最新 200 项（当前 %2 / %3 条）；文本最多 2000 字符并脱敏，可能省略内容，不作为完整原始证据。")
       .arg(timeText(m_snapshot.value("captured_at").toString())).arg(m_attempts->rowCount()).arg(m_evidence->rowCount()));
+  const auto childRows=verifications.value("items").toArray();
+  const auto *selected=m_verifications->item(m_verifications->currentRow(),0);
+  const QString selectedId=selected?selected->data(Qt::UserRole).toJsonObject().value("attempt_id").toString():QString();
+  {const QSignalBlocker block(m_verifications);m_verifications->setRowCount(childRows.size());int selectedRow=-1;
+    for(int index=0;index<childRows.size();++index) {
+      const auto row=childRows[index].toObject();const auto result=row.value("result").toObject();
+      const QString target=result.value("object").toObject().value("target").toString();
+      setRow(m_verifications,index,{row.value("finding_name").toString(),row.value("plan_name").toString(),
+        "r"+numberText(row.value("revision")),stateText(row.value("state").toString()),verificationResultText(result),
+        timeText(row.value("created_at").toString()),target,numberText(row.value("tool_calls"))+" / "+numberText(row.value("evidence_count"))},row);
+      if(row.value("attempt_id").toString()==selectedId)selectedRow=index;
+    }
+    if(selectedRow>=0)m_verifications->selectRow(selectedRow);
+    else {m_verifications->clearSelection();m_verifications->setCurrentCell(-1,-1);}
+  }
+  if(verifications.value("schema_version").toInt()==1)m_updated->setText(m_updated->text()+QStringLiteral("\n逐漏洞记录：显示最新 %1 / %2 次%3；双击只查看历史，不重新执行。")
+    .arg(verifications.value("returned").toInt()).arg(verifications.value("total").toInt()).arg(verifications.value("has_more").toBool()?QStringLiteral("（较早记录可从扫描发现打开）"):QString()));
   renderDetail();
 }
 
@@ -391,8 +462,17 @@ void TaskExecutionPanel::renderDetail()
     return;
   }
   const auto row = item->data(Qt::UserRole).toJsonObject();
-  QStringList lines{QStringLiteral("任务：%1\nRun：%2").arg(m_pipelineId, m_snapshot.value("run").toObject().value("run_id").toString())};
-  if (table == m_steps) {
+  QStringList lines{QStringLiteral("任务：%1\nRun：%2").arg(m_pipelineId, table==m_verifications?row.value("run_id").toString():m_snapshot.value("run").toObject().value("run_id").toString())};
+  if(table==m_verifications) {
+    const auto result=row.value("result").toObject();
+    lines<<QStringLiteral("漏洞：%1\n方案：%2 · r%3\n执行状态：%4\n系统结果：%5\n目标：%6")
+      .arg(row.value("finding_name").toString(),row.value("plan_name").toString(),numberText(row.value("revision")),
+        stateText(row.value("state").toString()),verificationResultText(result),result.value("objective").toObject().value("label").toString())
+      <<QStringLiteral("尝试：%1\n创建时间：%2\n完成时间：%3\n停止确认：%4\n工具调用：%5 · 证据：%6")
+        .arg(row.value("attempt_id").toString(),timeText(row.value("created_at").toString()),timeText(row.value("completed_at").toString()),
+          row.value("stop_confirmed").toBool()?QStringLiteral("已确认"):QStringLiteral("未确认"),numberText(row.value("tool_calls")),numberText(row.value("evidence_count")))
+      <<"系统依据："+result.value("reason").toString()<<QStringLiteral("双击记录查看该次历史与证据；人工意见为可选补充，不改变系统结果。");
+  } else if (table == m_steps) {
     lines << QStringLiteral("步骤索引：%1（数据库原始索引）\n名称：%2\n工具：%3\n结果：%4\n来源：%5\n尝试编号：%6\n退出码：%7")
       .arg(numberText(row.value("step_index")), row.value("name").toString(), row.value("tool_id").toString(), stateText(row.value("state").toString()),
         sourceText(row.value("source").toString()), numberText(row.value("attempt_id")), numberText(row.value("exit_code")));
@@ -415,7 +495,7 @@ void TaskExecutionPanel::renderDetail()
       << "MITRE 标签（不是验证结论）：\n" + row.value("mitre_hits").toString()
       << "规则匹配：\n" + row.value("rule_matches").toString() << "建议：\n" + row.value("recommendations").toString();
   } else lines << "检查项：" + row.value("name").toString() << "结果：" + stateText(row.value("state").toString()) << row.value("message").toString();
-  const QString identityKey = table == m_steps ? "step_index" : table == m_preflight ? "name" : "id";
+  const QString identityKey = table == m_steps ? "step_index" : table == m_preflight ? "name" : table==m_verifications?"attempt_id":"id";
   const QString detailKey = QString::number(m_tabs->currentIndex()) + ":" + row.value(identityKey).toVariant().toString();
   const int scroll = detailKey == m_detailKey ? m_detail->verticalScrollBar()->value() : 0;
   m_detailKey = detailKey;
@@ -424,4 +504,22 @@ void TaskExecutionPanel::renderDetail()
     m_detail->setPlainText(detail);
     m_detail->verticalScrollBar()->setValue(scroll);
   }
+}
+
+void TaskExecutionPanel::openVerificationHistory(int index)
+{
+  const auto *item=m_verifications->item(index,0);
+  if(!item || m_pipelineId.isEmpty())return;
+  const auto row=item->data(Qt::UserRole).toJsonObject();
+  const auto pipeline=m_pipelineId;
+  const int context=m_contextVersion;
+  auto *dialog=new FindingVerificationDialog(m_api,pipeline,{row.value("finding_id").toVariant().toLongLong()},this,
+      row.value("verification_id").toString(),row.value("attempt_id").toString());
+  connect(dialog,&QDialog::finished,this,[this,pipeline,context](){
+    if(pipeline!=m_pipelineId || context!=m_contextVersion)return;
+    refresh();
+    emit findingVerificationChanged(pipeline);
+  });
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  dialog->show();
 }

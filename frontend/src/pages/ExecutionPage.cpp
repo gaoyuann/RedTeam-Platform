@@ -52,6 +52,7 @@ ExecutionPage::ExecutionPage(ApiClient *api, const QString &role, const QString 
   m_taskMonitor->hide();
   connect(m_taskMonitor, &TaskExecutionPanel::runSelected, this, &ExecutionPage::runSelected);
   connect(m_taskMonitor, &TaskExecutionPanel::runCompleted, this, &ExecutionPage::runCompleted);
+  connect(m_taskMonitor, &TaskExecutionPanel::findingVerificationChanged, this, &ExecutionPage::findingVerificationChanged);
   loadPlaybooks();
 
   // Poll timer for real-time execution updates
@@ -507,6 +508,10 @@ void ExecutionPage::onAttackCategoryChanged(int id) {
 }
 
 // A pipeline owns its execution; independent runs remain in the standalone view.
+void ExecutionPage::refreshTaskRecords() {
+  if (!m_pipelineId.isEmpty()) m_taskMonitor->refresh();
+}
+
 void ExecutionPage::setPipelineContext(const QString &pipelineId, const QString &status, const QString &runId, const QString &target) {
   const bool changed = pipelineId != m_pipelineId || runId != m_pipelineRunId;
   m_pipelineId = pipelineId;
@@ -523,9 +528,9 @@ void ExecutionPage::setPipelineContext(const QString &pipelineId, const QString 
   m_execBtn->setEnabled(!scoped);
   m_execBtn->setText(QStringLiteral("执行"));
   m_pipelineHint->setText(status == "awaiting_approval"
-      ? QStringLiteral("当前任务待确认。请使用顶部“确认预案并执行”；本页展示执行过程与结果。")
-      : runId.isEmpty() ? QStringLiteral("当前任务尚无执行记录，请查看顶部任务进度。")
-      : QStringLiteral("仅显示当前任务关联的执行记录。点击记录可查看执行步骤与证据。"));
+      ? QStringLiteral("主预案待确认；逐漏洞执行记录在下方独立展示。主预案执行使用顶部“确认预案并执行”。")
+      : runId.isEmpty() ? QStringLiteral("主预案尚未执行；逐漏洞执行记录在下方单独展示。")
+      : QStringLiteral("当前任务的主预案与逐漏洞执行分别展示；双击逐漏洞记录可查看历史。"));
   if (changed) {
     ++m_contextRevision;
     ++m_runSelectionRevision;

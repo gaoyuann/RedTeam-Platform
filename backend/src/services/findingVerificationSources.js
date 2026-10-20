@@ -52,6 +52,7 @@ export function findingSources(db,pipeline,actor,row,target,query={}) {
     items.push({playbook_id:pb.playbook_id,name:pb.name,description:pb.description || '',source:sourceMetadata(pb),
       status:conditions.length?'needs_conditions':status,match_basis:directional?'当前发现类型对应平台定向检查判据':matched?.match_reason || '可访问的其他方案；尚无此发现的适用性证据',
       missing_conditions:[...new Set(conditions)],step_count:steps.length,
+      verification_capability:{automatic:!!directional,category:directional?'configuration_exposure':'unclassified',reason:directional?'仅支持所列配置或暴露事实':'尚无适用的自动效果判据，不能将模板名称当成能力证明'},
       steps:steps.map(s=>({name:s.name,tool_id:s.tool_id,description:s.description || ''})),rank:directional?10000:matched?.match_score || 0});
   }
   items.sort((a,b)=>b.rank-a.rank||a.playbook_id.localeCompare(b.playbook_id));

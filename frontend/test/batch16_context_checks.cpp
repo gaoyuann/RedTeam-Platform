@@ -1,6 +1,7 @@
 #include <QtWidgets>
 #include <QtNetwork>
 #include <QtTest/QTest>
+#include <QtTest/QSignalSpy>
 #include <functional>
 #include <iostream>
 
@@ -112,6 +113,23 @@ static QJsonObject reportMetadata(const QString &taskId)
           {"review", QJsonObject{{"available", true}, {"state", "draft"}, {"revision", 0},
                                   {"source_fingerprint", QString(64, '1')}, {"history", QJsonArray()},
                                   {"history_total", 0}, {"history_limit", 20}}}};
+}
+
+static QJsonObject findingExecutionRecord(const QString &taskId, bool mainRun = false)
+{
+  auto record=executionRecord(taskId);
+  if(!mainRun)record["run"]=QJsonValue::Null;
+  record["pipeline_status"]="awaiting_approval";
+  const QJsonObject result{{"schema_version",1},{"status","achieved"},{"reason","同次完整证据满足平台判据"},
+    {"objective",QJsonObject{{"label","确认指定目录索引暴露"}}},{"object",QJsonObject{{"target",taskId+".invalid/docs/"}}}};
+  const QJsonObject row{{"attempt_id","fva-"+taskId},{"verification_id","fv-"+taskId},{"finding_id",1231},
+    {"run_id","child-"+taskId},{"revision",2},{"state","completed"},{"stop_confirmed",true},
+    {"created_at","2026-10-20T10:00:00Z"},{"completed_at","2026-10-20T10:00:01Z"},
+    {"finding_name","Directory indexing "+taskId},{"plan_name","目录检查"},{"objective",result["objective"]},
+    {"result",result},{"tool_calls",1},{"evidence_count",1}};
+  record["verification_runs"]=QJsonObject{{"schema_version",1},{"total",1},{"returned",1},{"has_more",false},
+    {"active",0},{"completed",1},{"failed",0},{"aborted",0},{"unknown",0},{"invalid_source_count",0},{"items",QJsonArray{row}}};
+  return record;
 }
 
 static QJsonObject resultsRecord(const QString &taskId)
@@ -252,7 +270,14 @@ int main(int argc, char **argv)
     auto dialogs=aggregate.findChildren<FindingVerificationDialog*>();
     verify(dialogs.size()==1,"double click opens finding verification directly");
     verify(awaitCondition([&]{return aggregateServer.requests.value("POST /api/pipelines/A/verifications")==1;}),"double click prepares exactly the clicked finding");
-    delete dialogs.first();
+    QSignalSpy closedRefresh(&aggregate,&ScanPage::findingVerificationChanged);
+    dialogs.first()->reject();
+    verify(awaitCondition([&]{return closedRefresh.count()==1 && aggregate.m_aggregateRecords.size()==100 && !aggregate.m_scanPageBusy;}),
+      "closing finding history refreshes its unchanged task context");
+    verify(aggregate.m_resultTree->topLevelItem(0)->child(0)->checkState(0)==Qt::Checked
+      && aggregate.m_resultTree->topLevelItem(0)->child(1)->checkState(0)==Qt::Checked,
+      "selected findings survive asynchronous history-close refresh");
+    QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
     aggregate.findChild<QPushButton*>("openCheckedFindings")->click();
     dialogs=aggregate.findChildren<FindingVerificationDialog*>();
     verify(dialogs.size()==1,"checked findings open a single verification window");
@@ -273,8 +298,72 @@ int main(int argc, char **argv)
     aggregate.m_resultCategory->setCurrentIndex(0);
     verify(awaitCondition([&]() { return aggregate.m_aggregateRecords.size() == 100; }), "clearing filter restarts a bounded page");
     if (!capture.isEmpty()) aggregate.grab().save(capture + "/scan-results-unified.png");
+    aggregate.openFindingVerification({1});
+    verify(awaitCondition([&]{return !aggregate.findChildren<FindingVerificationDialog*>().isEmpty();}),"old task finding window exists before switching scope");
+    auto *oldDialog=aggregate.findChildren<FindingVerificationDialog*>().first();
+    aggregate.setPipelineScope("C",{});
+    oldDialog->reject();
+    verify(closedRefresh.count()==1,"closing old scanning context does not emit a new-task refresh");
     aggregate.clearTaskScope();
     verify(aggregate.m_resultTree->topLevelItemCount() == 0 && aggregate.m_pipelineId.isEmpty(), "leaving aggregate clears all visible records and identity");
+  }
+
+  {
+    MockServer historyServer;
+    bool delayedA=false;
+    historyServer.handler=[&](const QString &,const QString &requestPath)->MockReply {
+      const QString path=QUrl(requestPath).path(),task=path.split('/').value(3);
+      if(path.endsWith("/execution"))return {success(findingExecutionRecord(task,task=="both")),delayedA&&task=="A"?250:0};
+      if(path.endsWith("/verifications/fv-"+task)) {
+        const auto execution=findingExecutionRecord(task),row=execution["verification_runs"].toObject()["items"].toArray()[0].toObject();
+        const QJsonObject attempt{{"id",row["attempt_id"]},{"state","completed"},{"revision",2},{"stop_confirmed",1},
+          {"created_at",row["created_at"]},{"summary",QJsonObject{{"result",row["result"]}}},{"evidence",QJsonArray()},{"reviews",QJsonArray()}};
+        return {success(QJsonObject{{"id","fv-"+task},{"finding_id",1231},{"state","completed"},{"revision",2},
+          {"finding",QJsonObject{{"result_data","{\"finding\":\"Directory indexing\"}"}}},
+          {"summary",QJsonObject{{"result",row["result"]}}},{"plans",QJsonArray()},{"attempts",QJsonArray{attempt}}})};
+      }
+      return {success(QJsonArray())};
+    };
+    ApiClient historyApi(QStringLiteral("http://127.0.0.1:%1").arg(historyServer.serverPort()));
+    TaskExecutionPanel monitor(&historyApi,"user","fixture-user");monitor.resize(1360,860);monitor.show();
+    QSignalSpy selected(&monitor,&TaskExecutionPanel::runSelected),completed(&monitor,&TaskExecutionPanel::runCompleted);
+    QSignalSpy refreshed(&monitor,&TaskExecutionPanel::findingVerificationChanged);
+    monitor.setTaskContext("A",{},"A.invalid");
+    verify(awaitCondition([&]{return monitor.m_verifications->rowCount()==1;}),"child execution is visible without a parent run");
+    verify(monitor.m_state->text().contains("主预案尚未执行")&&monitor.m_state->text().contains("逐漏洞执行 1 次")
+        &&monitor.m_verifications->item(0,4)->text()=="目标已达成","parent absence never hides completed finding execution or system result");
+    verify(selected.count()==0&&completed.count()==0,"finding child runs never emit parent run selection or completion");
+    monitor.m_verifications->selectRow(0);monitor.renderDetail();
+    verify(monitor.m_detail->toPlainText().contains("child-A")&&!monitor.m_detail->toPlainText().contains("Run：run-A"),"finding detail uses its own run identity");
+    emit monitor.m_verifications->cellDoubleClicked(0,0);
+    verify(awaitCondition([&]{return historyServer.requests.value("GET /api/pipelines/A/verifications/fv-A")>0;}),"double click opens existing finding history with GET only");
+    auto histories=monitor.findChildren<FindingVerificationDialog*>();
+    verify(histories.size()==1&&awaitCondition([&]{return histories.first()->m_attempts->currentData()=="fva-A";}),"history opens the exact existing attempt");
+    const int beforeClose=historyServer.requests.value("GET /api/pipelines/A/execution");
+    histories.first()->reject();
+    verify(awaitCondition([&]{return historyServer.requests.value("GET /api/pipelines/A/execution")>beforeClose;})&&refreshed.count()==1,"closing execution history refreshes only its bound task");
+    QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
+    monitor.setTaskContext("both","run-both","both.invalid");
+    verify(awaitCondition([&]{return monitor.m_snapshot["pipeline_id"]=="both";}),"parent and child execution records coexist");
+    verify(monitor.m_expectedRunId=="run-both"&&monitor.m_snapshot["run"].toObject()["run_id"]=="run-both"
+        &&monitor.m_verifications->item(0,0)->text().contains("both"),"child listing never replaces parent run identity");
+    monitor.setTaskContext("A",{},"A.invalid");
+    verify(awaitCondition([&]{return monitor.m_snapshot["pipeline_id"]=="A";}),"finding history task can reopen");
+    emit monitor.m_verifications->cellDoubleClicked(0,0);
+    histories=monitor.findChildren<FindingVerificationDialog*>();
+    monitor.setTaskContext("B",{},"B.invalid");
+    verify(awaitCondition([&]{return monitor.m_snapshot["pipeline_id"]=="B";}),"task switch clears and loads child history for B");
+    const int refreshCount=refreshed.count(),beforeB=historyServer.requests.value("GET /api/pipelines/B/execution");
+    histories.first()->reject();QTest::qWait(30);
+    verify(refreshed.count()==refreshCount&&historyServer.requests.value("GET /api/pipelines/B/execution")==beforeB,"closing an old task history cannot refresh the new task");
+    delayedA=true;monitor.setTaskContext("A",{},"A.invalid");monitor.setTaskContext("B",{},"B.invalid");
+    verify(awaitCondition([&]{return monitor.m_snapshot["pipeline_id"]=="B";}),"fresh B child snapshot loads while A is delayed");
+    QTest::qWait(300);
+    verify(monitor.m_verifications->item(0,0)->text().contains("B")&&monitor.m_snapshot["pipeline_id"]=="B","late A child execution snapshot cannot overwrite B");
+    bool historyReadOnly=true;for(auto it=historyServer.requests.cbegin();it!=historyServer.requests.cend();++it)historyReadOnly=historyReadOnly&&it.key().startsWith("GET ");
+    verify(historyReadOnly,"execution history open and close never send writes or start requests");
+    const QString capture=qEnvironmentVariable("F08_MAIN_SCREENSHOT_DIR");
+    if(!capture.isEmpty()){QDir().mkpath(capture);monitor.grab().save(capture+"/finding-execution-1360.png");monitor.resize(1024,600);QTest::qWait(30);monitor.grab().save(capture+"/finding-execution-1024.png");}
   }
 
   {
@@ -305,6 +394,7 @@ int main(int argc, char **argv)
     return record;
   };
   bool failedTask = false;
+  bool showFindingExecutions = false;
   server.handler = [&](const QString &, const QString &requestPath) -> MockReply {
     const QString path = QUrl(requestPath).path();
     if (sourceOnly && path == "/api/scan-tasks") return {success(QJsonArray{sourceRecord()})};
@@ -327,7 +417,14 @@ int main(int argc, char **argv)
     if (path == "/api/pipelines/" + taskId) {
       if (failedTask && taskId == "A")
         return {{{"status", "error"}, {"error", QJsonObject{{"message", "fixture task load failed"}}}}};
-      return {success(taskRecord(taskId)), delayedTask && taskId == "A" ? 250 : 0};
+      auto record=taskRecord(taskId);
+      if(showFindingExecutions) {
+        record["status"]="awaiting_approval";
+        auto summary=record["summary"].toObject();
+        summary["finding_verifications"]=QJsonObject{{"total",2},{"completed",1},{"active",1},{"failed",0},{"aborted",0},{"unknown",0}};
+        record["summary"]=summary;
+      }
+      return {success(record), delayedTask && taskId == "A" ? 250 : 0};
     }
     if (path.endsWith("/execution")) return {success(executionRecord(taskId))};
     if (path.endsWith("/results")) return {success(resultsRecord(taskId))};
@@ -358,6 +455,16 @@ int main(int argc, char **argv)
   }
   verify(awaitCondition([&]() { return flow.m_execTab->m_taskMonitor->m_snapshot.value("pipeline_id").toString() == "A"; }), "execution snapshot remains task-bound");
   verify(awaitCondition([&]() { return flow.m_evalTab->m_taskResults->m_snapshot.value("pipeline_id").toString() == "A"; }), "results snapshot remains task-bound");
+  showFindingExecutions=true;flow.loadFlowDetail("A");
+  verify(awaitCondition([&]{return flow.m_stepIndicator->phases()[4].summary.contains("逐漏洞已完成 1 次")&&flow.m_stepIndicator->phases()[4].summary.contains("活动 1");}),"main phase shows finding execution activity beside the parent stage");
+  verify(flow.m_stepIndicator->phases()[4].status=="pending"&&flow.m_lastDisplayedDetail["status"]=="awaiting_approval","finding activity never falsely completes the parent task or phase");
+  const int beforeFindingRefresh=server.requests.value("GET /api/pipelines/A");
+  emit flow.m_scanTab->findingVerificationChanged("A");
+  verify(awaitCondition([&]{return server.requests.value("GET /api/pipelines/A")>beforeFindingRefresh;}),"finding-window close signal refreshes parent task detail");
+  const int afterFindingRefresh=server.requests.value("GET /api/pipelines/A");
+  emit flow.m_scanTab->findingVerificationChanged("foreign");QTest::qWait(30);
+  verify(server.requests.value("GET /api/pipelines/A")==afterFindingRefresh,"foreign finding-window notification cannot refresh selected task");
+  showFindingExecutions=false;
 
   delayedTask = true;
   flow.loadFlowDetail("A");
@@ -794,6 +901,18 @@ int main(int argc, char **argv)
     content["schema_version"]=2;content["provenance"]=provenance;content["results"]=current;metadata["content"]=content;document["report"]=metadata;
     verify(panel.validReport(document,metadata.value("report_id").toString(),true),"v2 frozen report accepts null main Run with matching task identity");
     document["pipeline_id"]="foreign";verify(!panel.validReport(document,metadata.value("report_id").toString(),true),"v2 report rejects foreign task identity");
+  }
+  {
+    TaskResultsPanel panel(&api,"user","fixture-user");panel.m_timer->stop();panel.m_pipelineId="result-status";
+    auto snapshot=resultsRecord("result-status");QJsonArray findings;
+    const QList<QPair<QString,QString>> states{{"achieved","目标已达成"},{"not_achieved","目标未达成"},{"inconclusive","证据不足"},{"not_performed","未开展适用验证"},{"pending","等待结果"}};
+    for(const auto &entry:states)findings.append(QJsonObject{{"id",entry.first},{"category","scan_candidate"},{"state","unreviewed"},{"name",entry.first},{"source","structured_scan"},{"verification",QJsonObject{{"result",QJsonObject{{"schema_version",1},{"status",entry.first}}},{"manual",QJsonObject{{"conclusion","confirmed"}}}}}});
+    findings.append(QJsonObject{{"id","legacy"},{"name","legacy"},{"verification",QJsonObject{{"conclusion","confirmed"},{"method","manual"}}}});
+    findings.append(QJsonObject{{"id","unexecuted"},{"name","unexecuted"}});
+    snapshot["findings"]=findings;panel.m_snapshot=snapshot;panel.render();
+    for(int row=0;row<states.size();++row)verify(panel.m_findings->item(row,3)->text()==states[row].second,"task result candidate displays its system outcome, independent of manual opinion");
+    verify(panel.m_findings->item(5,3)->text()=="证据不足（旧版接口）","task result does not promote legacy manual confirmation");
+    verify(panel.m_findings->item(6,3)->text()=="未开展适用验证","task result distinguishes an unexecuted finding");
   }
   chooseFinding.stop();
   {
