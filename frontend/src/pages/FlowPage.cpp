@@ -1029,9 +1029,9 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget)
   auto *programKind = new QComboBox(&dlg);
   programKind->addItem("选择目标主机的源码文件夹", "remote_directory");
   programKind->addItem("程序运行入口", "runtime");
-  programKind->addItem("直接交给 CScan（高级）", "agent");
+  programKind->addItem("源码路径／地址（CScan 自行读取）", "agent");
   programKind->setObjectName("taskProgramInputKind");
-  programKind->setCurrentIndex(0);
+  programKind->setCurrentIndex(programKind->findData("agent"));
   auto *programKindLabel = new QLabel("输入类型",&dlg);
   form->addRow(programKindLabel,programKind);
   auto *sourcePicker=new RemoteSourcePicker(m_api,&dlg);

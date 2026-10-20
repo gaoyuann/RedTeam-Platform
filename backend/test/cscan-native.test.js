@@ -61,11 +61,12 @@ async function protocol(t,markdown=report) {
 
 test('native source scan passes the service path and requirements, consumes tasks.result without collecting source or reading shared files',async t=>{
   const {calls,config}=await protocol(t);
-  const result=await scanCscanTarget('/src/project',{notes:'重点检查输入长度',config,llm:()=>assert.fail('explicit report fields need no second model')});
+  const result=await scanCscanTarget('/src/project',{notes:'重点检查输入长度',sourceLocation:'所选远端目录 /opt/example',config,llm:()=>assert.fail('explicit report fields need no second model')});
   assert.equal(result.report_source,'task_result');assert.equal(result.flow_id,'91');assert.equal(result.findings.length,1);
   const input=calls[0].variables.input;
-  assert.match(input,/\/src\/project/);assert.match(input,/重点检查输入长度/);assert.match(input,/没有上传文件/);
+  assert.match(input,/\/src\/project/);assert.match(input,/重点检查输入长度/);assert.match(input,/API 仅提交路径/);
   assert.doesNotMatch(input,/findings\.json|snapshot_id|SHA256/);
+  assert.match(input,/所选远端目录 \/opt\/example/);
   assert.ok(calls.some(c=>c.query.includes('CScanReport')));assert.ok(calls.at(-1).query.includes('finishFlow'));
 });
 

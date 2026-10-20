@@ -578,15 +578,17 @@ int main(int argc, char **argv)
   verify(flow.m_scanTab->m_currentTarget.isEmpty() && flow.m_scanTab->m_resultTree->topLevelItemCount() == 0, "late scan detail cannot restore old target or results");
   sourceOnly = true;
   ScanPage sourcePage(&api, "user", "fixture-user");
-  verify(sourcePage.m_programInputKind->currentData().toString() == "remote_directory",
-      "source scanning defaults to selecting a target host folder");
+  verify(sourcePage.m_programInputKind->currentData().toString() == "agent",
+      "source scanning defaults to passing a path or address to CScan");
   {
     MockServer nativeServer;
     nativeServer.listen(QHostAddress::LocalHost,0);
     nativeServer.handler=[](const QString &method,const QString &path)->MockReply {
+      if(method=="GET" && path=="/api/scan-tasks/source-connections")
+        return {success(QJsonArray{QJsonObject{{"id","ssh-project"},{"name","Project"},{"kind","ssh"},{"targets",QJsonArray{"http://192.0.2.40:8089/"}}}})};
       if(method=="POST" && path=="/api/scan-tasks/source-directory")
-        return {success(QJsonObject{{"url","http://192.0.2.40:8089/project/"},{"parent","http://192.0.2.40:8089/"},
-          {"entries",QJsonArray{QJsonObject{{"name","src/"},{"directory",true},{"url","http://192.0.2.40:8089/project/src/"}}}}})};
+        return {success(QJsonObject{{"path","project"},{"parent",""},
+          {"entries",QJsonArray{QJsonObject{{"name","src"},{"directory",true},{"path","project/src"}}}}})};
       if(method=="POST" && path=="/api/scan-tasks")
         return {QJsonObject{{"status","error"},{"error",QJsonObject{{"message","fixture: creation captured without execution"}}}}};
       return {success(QJsonArray())};
@@ -612,7 +614,9 @@ int main(int argc, char **argv)
     picker->findChild<QPushButton*>("remoteSourceBrowse")->click();
     auto *directoryDialog=picker->findChild<QDialog*>("remoteSourceDirectoryDialog");
     verify(directoryDialog!=nullptr,"remote directory picker opens instead of a local file dialog");
-    directoryDialog->findChild<QLineEdit*>("remoteSourceDirectoryPath")->setText("/project/");
+    verify(awaitCondition([&]{return directoryDialog->findChild<QComboBox*>()->currentData().toString()=="ssh-project";}),
+      "directory browsing prefers the configured SSH connection");
+    directoryDialog->findChild<QLineEdit*>("remoteSourceDirectoryPath")->setText("project");
     directoryDialog->findChild<QPushButton*>("remoteSourceLoad")->click();
     auto *selectDirectory=directoryDialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok);
     verify(awaitCondition([&]{return selectDirectory->isEnabled();}),"server directory response enables selecting the folder");
@@ -625,8 +629,8 @@ int main(int argc, char **argv)
     const auto folderParameters=QJsonDocument::fromJson(nativeServer.requestBodies.value("POST /api/scan-tasks"))
       .object()["parameters"].toObject();
     verify(folderParameters["input_kind"].toString()=="remote_directory"
-      && folderParameters["source_url"].toString()=="http://192.0.2.40:8089/project/"
-      && !folderParameters.contains("cscan_target"),"folder selection uses source delivery instead of a prompt-only target");
+      && folderParameters["connection_id"].toString()=="ssh-project" && folderParameters["source_subdir"].toString()=="project"
+      && !folderParameters.contains("cscan_target"),"folder selection retains the remote location for direct CScan submission");
     nativePage.m_sourceTargetInput->setText("http://192.0.2.41:8089/");
     verify(!picker->hasSelection(),"changing target discards the previous host's folder");
   }
@@ -1039,7 +1043,7 @@ int main(int argc, char **argv)
       auto *type=dialog->findChild<QComboBox*>("taskTestTypeInput");
       type->setCurrentIndex(type->findData("program"));
       auto *inputKind=dialog->findChild<QComboBox*>("taskProgramInputKind");
-      verify(inputKind->currentData().toString()=="remote_directory",
+      verify(inputKind->currentData().toString()=="agent",
         "CScan task defaults to selecting the target folder");
       inputKind->setCurrentIndex(inputKind->findData("agent"));
       dialog->findChild<QLineEdit*>("taskTargetInput")->setText(observedService);

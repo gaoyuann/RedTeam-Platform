@@ -5,11 +5,11 @@ import {callLlm} from './llmClient.js';
 
 // Match PentagiService::fetchFlowReport: consume the service's task results,
 // without a platform source collector, local worker mount or report filesystem.
-export async function scanCscanTarget(target, {notes='',scope=null,signal,onProgress,config=cscanConfig(),client,llm=callLlm}={}) {
+export async function scanCscanTarget(target, {notes='',sourceLocation='',scope=null,signal,onProgress,config=cscanConfig(),client,llm=callLlm}={}) {
   target=cscanTarget(target);notes=cscanNotes(notes);
   client ||= await createCscanClient(config);
   let rawReport='';
-  const report=await runCscan({service_target:target,notes,scope,documents:[]},{config,client,signal,onProgress,
+  const report=await runCscan({service_target:target,notes,source_location:sourceLocation,scope,documents:[]},{config,client,signal,onProgress,
     stage:async()=>({containerPath:target,key:null}),
     readReport:async(_,id,source,options)=>{
       rawReport=await client.report(id,{signal:options.signal});
