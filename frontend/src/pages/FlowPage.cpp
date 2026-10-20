@@ -924,12 +924,19 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
         ps.summary = QStringLiteral("等待预案批准后执行");
       }
       if(i==4) {
+        // UI activity projection only: never mutate the parent task, Run or historical steps.
         const auto verifications=p["summary"].toObject()["finding_verifications"].toObject();
-        if(verifications["total"].toInt()>0) {
-          const QString parent=ps.summary.isEmpty()?QStringLiteral("主预案待执行"):ps.summary;
-          ps.summary=QStringLiteral("逐漏洞已完成 %1 次 · 活动 %2；%3")
-              .arg(verifications["completed"].toInt()).arg(verifications["active"].toInt()).arg(parent);
-        }
+        const int total=verifications["total"].toInt()+(runId.isEmpty()?0:1);
+        const int active=verifications["active"].toInt();
+        const QString parentState=p["summary"].toObject()["execution"].toObject()["status"].toString();
+        const bool parentActive=!runId.isEmpty() && (parentState=="RUNNING" || parentState=="PENDING"
+          || (parentState.isEmpty() && ps.status=="running"));
+        ps.status=active>0 || parentActive ? "running" : total>0 ? "info" : "pending";
+        ps.statusText=active>0 ? QStringLiteral("逐漏洞测试进行中")
+          : parentActive ? QStringLiteral("主预案执行中")
+          : total>0 ? QStringLiteral("已有 %1 次测试记录").arg(total) : QStringLiteral("待执行验证");
+        ps.summary=active>0 ? QStringLiteral("活动 %1 次 · 已有 %2 次记录").arg(active).arg(total)
+          : total>0 ? QStringLiteral("记录不代表任务完成或目标全部达成") : QStringLiteral("可直接从漏洞列表开始");
       }
       phaseSteps.append(ps);
     }

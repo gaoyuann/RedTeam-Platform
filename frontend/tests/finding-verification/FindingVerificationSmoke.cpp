@@ -53,7 +53,7 @@ int main(int argc,char **argv) {
   if(dialog.m_planSummary->toPlainText().contains("判断方式：人工")||!dialog.m_planSummary->toPlainText().contains("人工意见：可选补充"))return 24;
   dialog.m_criteria->setPlainText("修改后的判据");if(dialog.m_start->isEnabled()||dialog.m_confirmButton->isEnabled()||dialog.m_startSimple->isEnabled()||dialog.m_confirmSimple->isEnabled())return 4;
   dialog.load(true);if(!wait([&]{return !dialog.m_dirty;}))return 5;
-  QTimer::singleShot(0,[]{auto *box=qobject_cast<QMessageBox*>(QApplication::activeModalWidget());if(box)box->button(QMessageBox::Yes)->click();});QTest::mouseClick(dialog.m_start,Qt::LeftButton);
+  QTimer::singleShot(0,[]{auto *box=QApplication::activeModalWidget();if(box)if(auto *yes=box->findChild<QPushButton*>("confirmFindingExecution"))yes->click();});QTest::mouseClick(dialog.m_start,Qt::LeftButton);
   if(!wait([&]{return state=="running"&&!dialog.m_busy;}))return 6;
   dialog.load(false);if(!wait([&]{return !dialog.m_start->isEnabled();}))return 7;
   const auto execute=bodies.value("POST /api/pipelines/p/verifications/v1/start");

@@ -35,6 +35,7 @@ private:
   void updateQueue();
   void startChecked();
   QString confirmationText(const QJsonObject &detail) const;
+  bool confirmExecution(const QString &title, const QString &text);
   void renderAttempt(int index);
   void renderEvidence(int row);
   void setStatus(const QString &text);

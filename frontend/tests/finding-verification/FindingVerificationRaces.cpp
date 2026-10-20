@@ -123,7 +123,7 @@ int main(int argc,char **argv) {
     if(mode=="dirty-revision" && dialog.m_criteria->toPlainText()!="local unsaved criteria")return 24;
     dialog.load(true);if(!wait([&]{return !dialog.m_loading&&!dialog.m_stale&&dialog.m_revision==2;}))return 25;
     if(dialog.m_target->text()!=plan["target"].toString())return 26;
-    QTimer::singleShot(0,[]{auto *box=qobject_cast<QMessageBox*>(QApplication::activeModalWidget());if(box)box->button(QMessageBox::Yes)->click();});
+    QTimer::singleShot(0,[]{auto *box=QApplication::activeModalWidget();if(box)if(auto *yes=box->findChild<QPushButton*>("confirmFindingExecution"))yes->click();});
     dialog.m_startSimple->click();
     if(!wait([&]{return requests.value(executeKey)==1;}))return 27;
     const auto sent=bodies.value(executeKey);
@@ -140,7 +140,7 @@ int main(int argc,char **argv) {
   }
   if(mode.startsWith("single-")) {
     executeDelay=350;
-    QTimer::singleShot(0,[]{auto *box=qobject_cast<QMessageBox*>(QApplication::activeModalWidget());if(box)box->button(QMessageBox::Yes)->click();});QTest::mouseClick(dialog.m_start,Qt::LeftButton);
+    QTimer::singleShot(0,[]{auto *box=QApplication::activeModalWidget();if(box)if(auto *yes=box->findChild<QPushButton*>("confirmFindingExecution"))yes->click();});QTest::mouseClick(dialog.m_start,Qt::LeftButton);
     if(!wait([&]{return requests.value(executeKey)==1;}))return 40;
     const bool cancel=mode!="single-close-running";
     if(cancel)clickCancel();

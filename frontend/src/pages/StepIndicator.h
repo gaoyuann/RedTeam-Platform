@@ -12,6 +12,7 @@ struct PhaseStep {
   QString phaseId;     // phase_xxx
   QString status;      // pending / running / completed / skipped / failed / cancelled
   QString summary;     // 可选：节点名下方一行补充说明（空则不绘制）
+  QString statusText;  // 可选的展示文案，不改变持久化状态
 };
 
 class StepIndicator : public QWidget {
