@@ -7,6 +7,7 @@ import {fileURLToPath} from 'node:url';
 import {getEngine} from '../src/tools/containerEngine.js';
 import {cscanConfig,createCscanClient} from '../src/services/cscanClient.js';
 import {IMAGE_MAP} from '../src/tools/toolRunner.js';
+import {cscanSourcePath} from '../src/services/cscanTarget.js';
 
 // Read-only preflight. --api additionally authenticates to CScan without creating a Flow.
 // Never pull/build images, contact a target/model, or modify runtime data.
@@ -17,11 +18,13 @@ function option(name,fallback) {
   if(!args[index+1] || args[index+1].startsWith('--')) throw new Error(name+' requires a value');
   return args[index+1];
 }
-const sourceKind=option('--source-kind','http');
-if(!['http','local','ssh'].includes(sourceKind)) throw new Error('--source-kind must be http, local, or ssh');
+const sourceKind=option('--source-kind','service');
+if(!['service','http','local','ssh'].includes(sourceKind)) throw new Error('--source-kind must be service, http, local, or ssh');
 const projectRoot=fileURLToPath(new URL('../../',import.meta.url));
 const engine=args.includes('--all-images') ? await getEngine() : null,architecture={x64:'amd64',arm64:'arm64'}[process.arch] || process.arch;
-const report={checked_at:new Date().toISOString(),scope:'CScan source input and report directories; --api checks authentication without submitting a scan',
+const report={checked_at:new Date().toISOString(),scope:sourceKind==='service'
+  ? 'Direct CScan API and credentials; --api checks authentication without submitting a scan'
+  : 'Legacy source collection and shared directories; --api checks authentication without submitting a scan',
   node:process.version,engine,architecture,source_kind:sourceKind,checks:[],optional_images:[],missing:[]};
 async function command(binary,argv) {
   try {const result=await execute(binary,argv,{timeout:30000,maxBuffer:65536});return {passed:true,output:(result.stdout || result.stderr).trim().slice(0,250)};}
@@ -36,7 +39,7 @@ if(sourceKind==='ssh') {
   const result=await command('ssh',['-V']);check('ssh',result.passed,result.passed?result.output:'SSH source collection requires an SSH client');
   report.ssh_source_host_requirement='Read-only source account, verified host key, Python 3 on the source host; password-file authentication additionally needs sshpass';
 }
-for(const directory of ['data','data/output','data/source-scan/snapshots']) {
+for(const directory of sourceKind==='service'?['data']:['data','data/output','data/source-scan/snapshots']) {
   let path=resolve(projectRoot,directory);
   try {
     // Collection creates missing descendants. Check their nearest existing
@@ -50,7 +53,11 @@ for(const directory of ['data','data/output','data/source-scan/snapshots']) {
 }
 try {
   const config=cscanConfig();
-  for(const [name,path,permissions] of [['cscan_sources',config.sourcesDir,constants.W_OK | constants.X_OK],
+  if(args.includes('--source-path')) {
+    const target=cscanSourcePath(option('--source-path'));
+    check('cscan_source_path',true,target+' syntax valid; access is checked by CScan during scanning, not by the platform host');
+  }
+  for(const [name,path,permissions] of sourceKind==='service'?[]:[['cscan_sources',config.sourcesDir,constants.W_OK | constants.X_OK],
     ['cscan_reports',config.workDir,constants.R_OK | constants.X_OK]]) {
     try {await access(path,permissions);check(name,(await stat(path)).isDirectory(),name+' accessible');}
     catch {check(name,false,name+' inaccessible; configure the shared CScan workspace for the backend account');}

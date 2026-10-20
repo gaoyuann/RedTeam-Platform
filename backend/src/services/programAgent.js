@@ -19,6 +19,7 @@ export function buildProgramContext(rows) {
         evidence_ids:data.evidence_ids,tool_result:data.tool_result,demonstration:data.demonstration,runtime_verified:false}};
     if(row.result_type==='source_finding') return {scan_result_id:row.id,type:row.result_type,
       data:{file:data.file,start_line:data.start_line,end_line:data.end_line,snapshot_id:data.snapshot_id,source_sha256:data.source_sha256,
+        evidence_origin:data.evidence_origin,source_location_verified:data.source_location_verified,source_version_verified:data.source_version_verified,
         title:clipped(data.title,200),code:clipped(data.code,4000),reason:clipped(data.reason,1500),
         trace:(data.trace || []).slice(0,8).map(item=>({...item,code:clipped(item.code,1500),note:clipped(item.note,800)})),
          analyses:(data.analyses || []).slice(0,6).map(item=>({tool:item.tool,reason:clipped(item.reason,1000),preconditions:clipped(item.preconditions,800)})),

@@ -35,7 +35,7 @@ test('structured scope bounds hosts, URLs, CIDRs and exclusions', () => {
 test('single IPv4 topology discovery has a separate scope and preserves host exclusions', () => {
   for (const target of ['192.0.2.2', 'http://192.0.2.2:8080/app/', 'tcp://192.0.2.2:8091']) {
     const scope = normalizeTaskScope({task_scope:{excludes:[
-      '192.0.2.3', '192.0.2.16/28', 'http://192.0.2.4:8080/private/', 'tcp://192.0.2.3:22',
+      '192.0.2.3', '192.0.2.16/28', 'http://192.0.2.4:8080/private/', 'tcp://192.0.2.3:22', '/src/fixture/private',
     ]}}, target);
     const before = JSON.stringify(scope);
     const discovery = topologyDiscoveryScope(scope, target, '192.0.2.0/26');
@@ -51,7 +51,7 @@ test('single IPv4 topology discovery has a separate scope and preserves host exc
 });
 
 test('topology discovery keeps legacy and explicit CIDR scopes without expanding other targets', () => {
-  for (const target of ['example.invalid', 'https://example.invalid/', '2001:db8::2', '192.0.2.0/28']) {
+  for (const target of ['example.invalid', 'https://example.invalid/', '2001:db8::2', '192.0.2.0/28', '/src/fixture']) {
     const scope = normalizeTaskScope({}, target);
     assert.equal(topologyDiscoveryScope(scope, target, '192.0.2.0/24'), null);
   }

@@ -7,6 +7,11 @@ import {promisify} from 'node:util';
 import {createSourceSnapshot} from '../src/services/sourceSnapshot.js';
 import {scoreSourceBenchmark} from '../src/services/sourceBenchmark.js';
 import {parseSourceDiagnostics} from '../src/services/sourceDiagnostics.js';
+import {cscanSourcePath} from '../src/services/cscanTarget.js';
+
+const sourceIndex=process.argv.indexOf('--source-path');
+if(sourceIndex<0 || !process.argv[sourceIndex+1]) throw new Error('请通过 --source-path /src/benchmark 指定已在 CScan 挂载的六样例目录；平台不上传源码');
+const sourcePath=cscanSourcePath(process.argv[sourceIndex+1]);
 
 const directory=fileURLToPath(new URL('../test/fixtures/source/',import.meta.url));
 const cases=JSON.parse(await readFile(join(directory,'benchmark.json'),'utf8'));
@@ -14,21 +19,29 @@ const temporary=await mkdtemp(join(tmpdir(),'rt-benchmark-')),execute=promisify(
 const report={created_at:new Date().toISOString(),scope:'三个已知缺陷与三个修复对照，不代表真实项目精度',cscan_evaluated:false,
   tools:{},diagnostics:[],errors:[]};
 try {
-  const snapshot=await createSourceSnapshot({id:'benchmark',kind:'local',source_root:directory,architecture:process.arch},{snapshotRoot:temporary});
-  report.source_versions=snapshot.files;
-  // Use exactly the CScan-only production scanner with an isolated database.
+  // Source preparation belongs to CScan. Local fixture snapshots below are
+  // only for an explicitly requested ASan/UBSan comparison, never submission.
+  report.source_target=sourcePath;report.source_version_verified=false;
+  let snapshot;
+  if(process.argv.includes('--diagnostics')) {
+    snapshot=await createSourceSnapshot({id:'benchmark',kind:'local',source_root:directory,architecture:process.arch},{snapshotRoot:temporary});
+    report.local_diagnostic_versions=snapshot.files;
+  }
   const {getDb,closeDb}=await import('../src/db/connection.js');
   const {auditSources}=await import('../src/services/sourceAudit.js');
   const db=getDb(':memory:');
   try {
-    db.exec('CREATE TABLE scan_results(id INTEGER PRIMARY KEY,scan_task_id TEXT,result_type TEXT,result_data TEXT,severity TEXT,source_tool TEXT,captured_at TEXT); CREATE TABLE source_audits(scan_task_id TEXT PRIMARY KEY,snapshot_id TEXT,connection_id TEXT,manifest TEXT,analysis TEXT,created_at TEXT);');
-    await auditSources({scan_task_id:'benchmark',target:'http://127.0.0.1:9/'},{db,
-      parameters:{source_url:'/fixture/',input_kind:'source'},snapshot:async()=>snapshot,
+    db.exec('CREATE TABLE system_config(category TEXT,config_key TEXT,config_value TEXT);CREATE TABLE scan_results(id INTEGER PRIMARY KEY,scan_task_id TEXT,result_type TEXT,result_data TEXT,severity TEXT,source_tool TEXT,captured_at TEXT); CREATE TABLE source_audits(scan_task_id TEXT PRIMARY KEY,snapshot_id TEXT,connection_id TEXT,manifest TEXT,analysis TEXT,created_at TEXT);');
+    await auditSources({scan_task_id:'benchmark',target:sourcePath},{db,
+      parameters:{source_path:sourcePath,input_kind:'source',source_notes:'审计目录下的 vulnerable 与 fixed 六个受控对照样例，保留文件路径、行号、分类和依据；明确未能读取或分析的样例'},
       runTool:()=>{throw new Error('CScan benchmark does not use local scan tools');}});
     const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
-    const findings=db.prepare("SELECT result_data FROM scan_results WHERE result_type='source_finding'").all().map(row=>JSON.parse(row.result_data));
+    const findings=db.prepare("SELECT result_data FROM scan_results WHERE result_type='source_finding'").all().map(row=>{
+      const finding=JSON.parse(row.result_data);
+      return {...finding,file:finding.file.startsWith(sourcePath+'/')?finding.file.slice(sourcePath.length+1):finding.file};
+    });
     report.cscan={score:scoreSourceBenchmark(findings,cases),coverage,
-      conclusion:'CScan 候选筛选指标，不代表运行时已验证漏洞或真实项目检出率'};
+      conclusion:'CScan 报告候选筛选指标；需另行核实服务端样例版本与逐文件覆盖，不代表运行验证或真实项目检出率'};
     report.cscan_evaluated=coverage.cscan_complete;
     if(!coverage.cscan_complete) report.errors.push({tool:'cscan',error:'CScan 分析未完整完成，指标不能用作完整测评'});
   } finally {closeDb();}
