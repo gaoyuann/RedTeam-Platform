@@ -16,7 +16,13 @@ int main(int argc,char **argv) {
  QJsonObject plan{{"name","Web 防护响应头检查"},{"target","http://fixture.invalid/item"},{"source_playbook_id","headers"},
    {"provenance",QJsonObject{{"kind","builtin"},{"label","内置定向方案"}}},{"prerequisites",QJsonArray{"明确授权当前入口"}},
    {"success_criteria","完整 HTML 缺少防护响应头"},{"cleanup","只读检查，无需清理"},{"max_attempts",2},{"duration_ms",300000},
-   {"missing_conditions",QJsonArray{}},{"assessment_rule",QJsonObject{{"id","headers-v1"}}}};
+   {"missing_conditions",QJsonArray{}},{"assessment_rule",QJsonObject{{"id","f08-web-headers-v1"},{"version",1},{"kind","headers"},{"attribute","nosniff"},{"target","http://fixture.invalid/item"},{"step_id","finding_step_0"}}},
+   {"verification_contract",QJsonObject{{"schema_version",1},{"object",QJsonObject{{"finding_id",123},{"target","http://fixture.invalid/item"}}},
+     {"objective",QJsonObject{{"id","f08-web-headers-v1"},{"category","configuration_exposure"},{"label","确认指定防护响应头配置缺陷"}}},
+     {"operations",QJsonArray{QJsonObject{{"step_id","finding_step_0"},{"step_index",0},{"tool_id","target-request"},{"name","检查防护响应头"}}}},
+     {"capability",QJsonObject{{"automatic",true},{"reason",QJsonValue::Null}}},
+     {"criterion",QJsonObject{{"id","f08-web-headers-v1"},{"version",1},{"step_id","finding_step_0"},{"required_evidence",QJsonArray{"same_attempt","same_entry","complete_response"}},{"supports_negative",true}}},
+     {"limitations","仅确认本次入口响应的指定配置缺陷"}}}};
  auto detail=[&] {
   auto s=step;if(bound){s["consumption"]="independent";s["payload_id"]="generated-header";s["payload_version"]="hash-1";s["payload_snapshot"]=QJsonObject{{"name","响应头检查输入"}};}
   auto p=plan;p["steps"]=QJsonArray{s};
@@ -67,11 +73,17 @@ int main(int argc,char **argv) {
  if(!dialog.m_payloadPreview->toPlainText().contains("GET"))return 10;
  dialog.m_bindPayload->click();if(!wait([&]{return dialog.m_revision==2&&!dialog.m_loading&&!dialog.m_busy;}))return 11;
  if(!dialog.m_payloadPreview->toPlainText().contains("已绑定"))return 12;
+ const auto summary=dialog.confirmationText(dialog.m_detail);
+ if(!summary.startsWith("本次测试摘要\n测什么：") || !summary.contains("做哪些操作：")
+   || !summary.contains("使用载荷：已绑定 响应头检查输入") || !summary.contains("如何判断：")
+   || summary.contains("判据缺口：") || !summary.contains("X-Content-Type-Options") || !summary.contains("hash-1"))return 21;
+ QTimer::singleShot(0,[]{auto *box=QApplication::activeModalWidget();if(box)if(auto *cancel=box->findChild<QPushButton*>("cancelFindingExecution"))cancel->click();});dialog.m_startSimple->click();
+ if(requests.value("POST /api/pipelines/p/verifications/v/start"))return 22;
  dialog.grab().save("workflow-selected.png");
  const auto scroll=dialog.m_tabs->widget(0)->findChild<QScrollArea*>();scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());QTest::qWait(40);dialog.grab().save("workflow-payload.png");
  scroll->verticalScrollBar()->setValue(0);
  dialog.resize(1024,600);QTest::qWait(40);if(dialog.size()!=QSize(1024,600))return 19;dialog.grab().save("workflow-narrow.png");
- QTimer::singleShot(0,[]{auto *box=qobject_cast<QMessageBox*>(QApplication::activeModalWidget());if(box)box->button(QMessageBox::Yes)->click();});dialog.m_startSimple->click();
+ QTimer::singleShot(0,[]{auto *box=QApplication::activeModalWidget();if(box)if(auto *yes=box->findChild<QPushButton*>("confirmFindingExecution"))yes->click();});dialog.m_startSimple->click();
  if(!wait([&]{return dialog.m_detail["summary"].toObject()["conclusion"]=="confirmed"&&!dialog.m_loading;}))return 13;
  const auto started=bodies.value("/api/pipelines/p/verifications/v/start");if(started["fingerprint"]!="fp2"||!started["confirmed"].toBool())return 14;
  dialog.m_tabs->setCurrentIndex(1);if(!dialog.m_evidence->toPlainText().contains("已保存自动判断")||!dialog.m_evidence->toPlainText().contains("实际消费载荷"))return 15;

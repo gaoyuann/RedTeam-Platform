@@ -20,6 +20,7 @@
 #include <QUuid>
 #include <QJsonDocument>
 #include <QMessageBox>
+#include <QDialogButtonBox>
 #include <QMap>
 #include <QScrollArea>
 #include <QSignalBlocker>
@@ -186,6 +187,49 @@ QString stepInputSummary(const QJsonObject &step,const QString &target) {
   }
   QStringList parts;for(const auto &arg:array){auto text=readable(arg);if(!text.isEmpty())parts<<text.replace("<target>",target);}return parts.join(" ");
 }
+QString payloadSummary(const QJsonObject &step) {
+  const QString mode=step["consumption"].toString(), id=step["payload_id"].toString();
+  if(mode=="independent" && !id.isEmpty()) {
+    const auto name=step["payload_snapshot"].toObject()["name"];
+    const QString label=name.isObject()?name.toObject()["zh"].toString(id):name.toString(id);
+    return QString("已绑定 %1（%2，版本 %3）").arg(label,id,readable(step["payload_version"]));
+  }
+  if(mode=="pending" || mode=="independent")return "缺口：尚未手动绑定所需载荷";
+  if(mode=="internal")return "工具内部输入";
+  if(mode=="none")return "无需独立载荷";
+  return "载荷方式未记录，请核对方案";
+}
+QString frozenCriterionText(const QJsonObject &plan) {
+  const auto contract=plan["verification_contract"].toObject();
+  const auto criterion=contract["criterion"].toObject(),rule=plan["assessment_rule"].toObject();
+  const QString id=rule["id"].toString(),kind=rule["kind"].toString(),stepId=rule["step_id"].toString();
+  const int version=rule["version"].toInt(-1);
+  if(contract["schema_version"].toInt()!=1 || !contract["capability"].toObject()["automatic"].toBool()
+      || id.isEmpty() || stepId.isEmpty() || criterion["id"].toString()!=id
+      || criterion["version"].toInt(-1)!=version || criterion["step_id"].toString()!=stepId
+      || plan["target"].toString().isEmpty() || rule["target"]!=plan["target"])return {};
+  bool hasStep=false;
+  for(const auto &value:plan["steps"].toArray()) {
+    const auto step=value.toObject();
+    if(step["step_id"].toString()==stepId && step["tool_id"]=="target-request")hasStep=true;
+  }
+  if(!hasStep)return {};
+  QString text;
+  const QString attribute=rule["attribute"].toString();
+  if(id=="f08-directory-index-v1" && kind=="directory" && (version==1 || version==2)) {
+    text="成功且完整的 HTML 同时满足对应目录标题、父目录导航及同目录条目；HTTP 200 单独不能确认目录索引暴露。";
+    text+=version==1 ? "标题路径严格匹配。" : "标题路径接受末尾一个斜杠的等价差异，排除歧义编码。";
+  } else if(id=="f08-web-headers-v1" && kind=="headers" && version==1) {
+    if(attribute=="nosniff")text="成功且完整的 HTML 缺少 X-Content-Type-Options 才确认该配置缺陷；有效 nosniff 表示本次未确认缺陷，其他值为证据不足。";
+    else if(attribute=="frame")text="成功且完整的 HTML 同时缺少 X-Frame-Options 与受支持的 CSP frame-ancestors 防护才确认；DENY、SAMEORIGIN 或 frame-ancestors 'self' / 'none' 为有效防护，模糊策略为证据不足。";
+  } else if(id=="f08-cookie-flags-v1" && kind=="cookie" && version==1
+      && !rule["cookie_name"].toString().isEmpty() && (attribute=="httponly" || attribute=="secure")
+      && (attribute!="secure" || plan["target"].toString().startsWith("https:"))) {
+    text=QString("本次成功且完整响应设置同名 Cookie %1，且一致缺少 %2 属性才确认该配置缺陷；属性已设置则本次未确认，未设置同名 Cookie、采集不全或属性不一致为证据不足。")
+      .arg(rule["cookie_name"].toString(),attribute=="httponly"?"HttpOnly":"Secure");
+  }
+  return text.isEmpty()?QString():QString("系统冻结判据（规则版本 %1）：%2").arg(version).arg(text);
+}
 QString cell(QTableWidget *table,int row,int col) {return table->item(row,col)?table->item(row,col)->text():QString();}
 }
 FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QString &pipeline,const QList<qint64> &findings,QWidget *parent,
@@ -195,7 +239,8 @@ FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QStrin
   const auto *screen=parent?parent->screen():QGuiApplication::primaryScreen();
   resize(QSize(1360,860).boundedTo(screen?screen->availableGeometry().size():QSize(1360,860)));
   auto *layout=new QVBoxLayout(this);
-  layout->addWidget(new QLabel("针对勾选的漏洞选择方案和载荷，统一确认后测试。执行结果与漏洞结论分别记录。"));
+  auto *intro=new QLabel("逐漏洞测试无需先生成、审批或执行全局预案；仍需核对授权范围并确认本次执行。");
+  intro->setWordWrap(true);layout->addWidget(intro);
   auto *split=new QSplitter(this);layout->addWidget(split,1);
   m_items=new QTableWidget(0,6);m_items->setHorizontalHeaderLabels({"选择","执行状态","最新系统结果","漏洞名称","位置","严重程度"});
   m_items->setMinimumWidth(0);
@@ -209,7 +254,10 @@ FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QStrin
   auto *mainHost=new QWidget;auto *hostLayout=new QVBoxLayout(mainHost);hostLayout->setContentsMargins(0,0,0,0);hostLayout->addWidget(scroll,1);tabs->addTab(mainHost,"攻击测试方案");
   auto section=[mainLayout](const QString &title){auto *box=new QGroupBox(title);auto *content=new QVBoxLayout(box);mainLayout->addWidget(box);return content;};
   auto *findingSection=section("当前漏洞");m_context=new QPlainTextEdit;m_context->setReadOnly(true);m_context->setMaximumHeight(80);findingSection->addWidget(m_context);
-  auto *sourceSection=section("1. 选择攻击测试方案");
+  auto *sourceSection=section("1. 攻击测试方案与本次摘要");
+  auto *planHelp=new QLabel("方案用于组织本次目标、步骤、载荷绑定和结果判据；已有适用方案可直接复用。");
+  planHelp->setWordWrap(true);sourceSection->addWidget(planHelp);
+  m_planSummary=new QPlainTextEdit;m_planSummary->setReadOnly(true);m_planSummary->setMinimumHeight(130);m_planSummary->setMaximumHeight(130);sourceSection->addWidget(m_planSummary);
   m_sourceChooser=new QGroupBox("查看推荐方案 / 更换方案");m_sourceChooser->setCheckable(true);m_sourceChooser->setChecked(true);
   auto *chooserLayout=new QVBoxLayout(m_sourceChooser);auto *candidateBody=new QWidget;auto *candidateLayout=new QVBoxLayout(candidateBody);candidateLayout->setContentsMargins(0,0,0,0);chooserLayout->addWidget(candidateBody);sourceSection->addWidget(m_sourceChooser);
   connect(m_sourceChooser,&QGroupBox::toggled,candidateBody,&QWidget::setVisible);
@@ -219,7 +267,6 @@ FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QStrin
   candidateLayout->addWidget(m_useSource);sourceActions->addWidget(m_prepareSimple);sourceActions->addWidget(m_adjustAI);sourceSection->addLayout(sourceActions);
   auto *browse=new QHBoxLayout;m_sourceSearch=new QLineEdit;m_sourceSearch->setPlaceholderText("无合适候选？搜索其他方案");auto *search=new QPushButton("浏览其他方案");
   m_sourcesPrevious=new QPushButton("上一页");m_sourcesNext=new QPushButton("下一页");browse->addWidget(m_sourceSearch,1);browse->addWidget(search);browse->addWidget(m_sourcesPrevious);browse->addWidget(m_sourcesNext);candidateLayout->addLayout(browse);
-  m_planSummary=new QPlainTextEdit;m_planSummary->setReadOnly(true);m_planSummary->setMinimumHeight(130);m_planSummary->setMaximumHeight(130);sourceSection->addWidget(m_planSummary);
   auto *editBox=new QGroupBox("调整当前草稿（按需展开）");editBox->setCheckable(true);editBox->setChecked(false);auto *editLayout=new QVBoxLayout(editBox);auto *editBody=new QWidget;auto *p=new QVBoxLayout(editBody);editLayout->addWidget(editBody);editBody->hide();connect(editBox,&QGroupBox::toggled,editBody,&QWidget::setVisible);sourceSection->addWidget(editBox);
   auto *form=new QFormLayout;m_name=new QLineEdit;m_target=new QLineEdit;m_objective=new QLineEdit;m_objective->setMaxLength(200);m_objective->setPlaceholderText("说明本次要确认的具体目标；填写目标不代表具备自动判据");
   m_objectiveCategory=new QComboBox;m_objectiveCategory->addItem("效果验证","effect");m_objectiveCategory->addItem("可访问性检查","accessibility");m_objectiveCategory->addItem("配置／暴露事实","configuration_exposure");
@@ -228,7 +275,10 @@ FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QStrin
   field("前置条件",m_conditions);field("缺失条件",m_missing);
   m_steps=new QTableWidget(0,3);m_steps->setHorizontalHeaderLabels({"步骤名称","工具","预期证据"});m_steps->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);m_steps->setMinimumHeight(100);p->addWidget(m_steps);
   field("成功判据与限制",m_criteria);field("清理说明",m_cleanup);m_save=new QPushButton("保存方案调整");p->addWidget(m_save);
-  auto *payloadSection=section("2. 本次载荷与步骤关联");m_payloads=new QComboBox;payloadSection->addWidget(m_payloads);
+  auto *payloadSection=section("2. 本次载荷与步骤关联");
+  auto *payloadHelp=new QLabel("载荷是步骤使用的具体输入；匹配或生成只准备候选，须手动绑定。无需独立载荷的步骤可直接使用工具输入。");
+  payloadHelp->setWordWrap(true);payloadSection->addWidget(payloadHelp);
+  m_payloads=new QComboBox;payloadSection->addWidget(m_payloads);
   m_payloadPreview=new QPlainTextEdit;m_payloadPreview->setReadOnly(true);m_payloadPreview->setMinimumHeight(120);payloadSection->addWidget(m_payloadPreview);
   auto *binding=new QHBoxLayout;m_bindStep=new QComboBox;comboPlaceholder(m_bindStep,"请手动选择目标步骤");binding->addWidget(m_bindStep,1);
   m_bindPayload=new QPushButton("绑定到此步骤");m_unbindPayload=new QPushButton("解除绑定");binding->addWidget(m_bindPayload);binding->addWidget(m_unbindPayload);payloadSection->addLayout(binding);
@@ -427,22 +477,15 @@ void FindingVerificationDialog::load(bool editor) {
     if(self->m_detail["eligible"]==false) overview<<"\n"+self->m_detail["ineligibility_reason"].toString();
     else if(savedPlans.isEmpty()) overview<<"\n下一步：选择已有方案并点击“使用此方案”，或明确点击“AI 生成新方案”。保存草稿不会执行目标请求。";
     else {
-      const auto saved=savedPlans.first().toObject();const auto plan=saved["content"].toObject();
-      overview<<"当前方案："+plan["name"].toString()<<"目标："+plan["target"].toString()<<"来源："+plan["provenance"].toObject()["label"].toString("历史来源未记录")
-        <<QString("保存版本：%1%2").arg(saved["revision"].toInt()).arg(saved["confirmed_at"].toString().isEmpty()?" · 待确认":" · 已确认")
-        <<"\n前置条件：\n"+join(plan["prerequisites"].toArray());
-      int number=0;overview<<"\n计划步骤：";
-      for(const auto &v:plan["steps"].toArray()){const auto step=v.toObject();overview<<QString("%1. %2\n   预期证据：%3").arg(++number).arg(step["name"].toString(),step["expected_evidence"].toString());overview<<"   实际输入："+stepInputSummary(step,plan["target"].toString());}
-      overview<<"\n判断方式："+(plan["verification_contract"].toObject()["capability"].toObject()["automatic"].toBool()?QString("平台适用判据与同次操作证据决定系统结果"):QString("尚无受支持的自动判据，不能确认目标达成"))<<"人工意见：可选补充，不替代系统验证结论"
-        <<"\n成功判据与限制：\n"+plan["success_criteria"].toString()<<"\n清理说明：\n"+plan["cleanup"].toString();
-      if(!plan["missing_conditions"].toArray().isEmpty())overview<<"\n尚缺条件：\n"+join(plan["missing_conditions"].toArray());
+      const auto saved=savedPlans.first().toObject();
+      overview<<self->confirmationText(self->m_detail)
+        <<QString("保存版本：%1%2").arg(saved["revision"].toInt()).arg(saved["confirmed_at"].toString().isEmpty()?" · 开始前待确认":" · 已确认");
     }
     if(self->m_stale)overview<<"\n版本发生变化：请刷新后重新核对，当前禁止执行。";
     if(self->m_dirty)overview<<"\n方案调整中有未保存修改：请先保存，当前禁止执行。";
     if(!self->m_detail["reason"].toString().isEmpty())overview<<"\n需要处理："+self->m_detail["reason"].toString();
     const auto readiness=self->m_detail["readiness"].toObject();
     overview<<"\n执行前检查："+(readiness["ready"].toBool()?QString("已就绪，开始前统一确认"):join(readiness["reasons"].toArray()));
-    if(!savedPlans.isEmpty()) {const auto contract=savedPlans.first().toObject()["content"].toObject()["verification_contract"].toObject();overview.prepend("验证目标："+contract["objective"].toObject()["label"].toString("旧方案目标未明确，请保存新版本"));if(!contract["capability"].toObject()["automatic"].toBool())overview.prepend("尚无适用的验证方案或自动效果判据；已有步骤不代表效果已证实。");}
     self->m_planSummary->setPlainText(overview.join('\n'));
     const QString selected=self->m_attempts->currentData().toString();
     const auto attempts=self->m_detail["attempts"].toArray();int startedIndex=-1,existingIndex=-1;
@@ -542,7 +585,7 @@ void FindingVerificationDialog::startCurrent() {
   if(QStringList{"queued","running","cancelling","unknown"}.contains(m_detail["state"].toString())) return;
   if(!m_detail["readiness"].toObject()["ready"].toBool())return;
   const auto shown=m_detail;const int shownRevision=m_revision;
-  if(QMessageBox::question(this,"确认并开始攻击测试",confirmationText(shown),QMessageBox::Yes|QMessageBox::Cancel,QMessageBox::Cancel)!=QMessageBox::Yes)return;
+  if(!confirmExecution("确认并开始攻击测试",confirmationText(shown)))return;
   if(m_dirty || m_stale || m_revision!=shownRevision || currentId()!=shown["id"].toString() || m_detail["plans"].toArray().isEmpty() || m_detail["plans"].toArray().first().toObject()["fingerprint"]!=shown["plans"].toArray().first().toObject()["fingerprint"])return;
   ++m_queueGeneration;m_queue.clear();m_queuePlans.clear();
   m_queuePlans[currentId()]=shown["plans"].toArray().first().toObject();
@@ -708,10 +751,66 @@ void FindingVerificationDialog::showPayloadPreview() {
 QString FindingVerificationDialog::confirmationText(const QJsonObject &detail) const {
   const auto plans=detail["plans"].toArray();if(plans.isEmpty())return "暂无方案";
   const auto plan=plans.first().toObject()["content"].toObject();
-  QStringList text{plan["name"].toString(),"来源："+plan["provenance"].toObject()["label"].toString("历史来源未记录"),"目标："+plan["target"].toString(),"本次验证目标："+plan["verification_contract"].toObject()["objective"].toObject()["label"].toString("目标未明确，请先保存新版本"),"前提："+join(plan["prerequisites"].toArray())};
-  for(const auto &v:plan["steps"].toArray()){const auto s=v.toObject();text<<s["name"].toString()+" · "+s["tool_id"].toString()+" · "+(s["payload_id"].toString().isEmpty()?"无独立载荷":s["payload_id"].toString())<<stepInputSummary(s,plan["target"].toString());}
-  text<<"判据："+plan["success_criteria"].toString()<<"清理："+plan["cleanup"].toString()<<QString("最多 %1 次尝试，每次 %2 秒").arg(plan["max_attempts"].toInt()).arg(plan["duration_ms"].toInt()/1000)<<"确认后将执行以上步骤。";
+  const auto contract=plan["verification_contract"].toObject();
+  QStringList operations, payloads;
+  for(const auto &value:plan["steps"].toArray()) {
+    const auto step=value.toObject();
+    operations<<step["name"].toString(step["tool_id"].toString());
+    payloads<<payloadSummary(step);
+  }
+  QString criteria=plan["success_criteria"].toString().trimmed();
+  if(criteria.isEmpty())criteria="尚缺结果判据";
+  const QString systemCriterion=frozenCriterionText(plan);
+  QStringList text{"本次测试摘要", "测什么："+contract["objective"].toObject()["label"].toString("目标未明确，请先保存新版本"),
+    "做哪些操作："+operations.join("；"), "使用哪些载荷："+payloads.join("；"),
+    "如何判断："+(systemCriterion.isEmpty()?QString("当前不能确认系统自动判断方式"):systemCriterion)};
+  if(systemCriterion.isEmpty())text<<"判据缺口："+contract["capability"].toObject()["reason"].toString("冻结契约或规则缺失、不匹配或版本不受支持，不能自动确认目标达成");
+  else text<<"系统证据要求：同一入口、同一尝试及冻结版本的完整证据与已保存自动判断一致；执行异常或证据不完整时不能确认目标达成。";
+  text<<"方案填写的判据（不改变系统规则）："+criteria;
+  if(!contract["limitations"].toString().isEmpty())text<<"系统判据限制："+contract["limitations"].toString();
+  text<<"\n测试入口："+plan["target"].toString()<<"步骤与输入详情：";
+  int index=0;
+  for(const auto &v:plan["steps"].toArray()) {
+    const auto step=v.toObject();
+    text<<QString("%1. %2 · %3").arg(++index).arg(step["name"].toString(),step["tool_id"].toString())
+      <<"   实际输入："+stepInputSummary(step,plan["target"].toString())
+      <<"   使用载荷："+payloadSummary(step)<<"   预期证据："+step["expected_evidence"].toString("未记录");
+  }
+  text<<"人工意见：可选补充，不替代系统验证结果。"
+    <<"方案："+plan["name"].toString()<<"来源："+plan["provenance"].toObject()["label"].toString("历史来源未记录")
+    <<"前提与范围："+join(plan["prerequisites"].toArray());
+  if(!plan["missing_conditions"].toArray().isEmpty())text<<"尚缺条件："+join(plan["missing_conditions"].toArray());
+  text<<"清理："+plan["cleanup"].toString()<<QString("最多 %1 次尝试，每次 %2 秒").arg(plan["max_attempts"].toInt()).arg(plan["duration_ms"].toInt()/1000)
+    <<"仅在确认开始后执行以上步骤。";
   return text.join('\n');
+}
+bool FindingVerificationDialog::confirmExecution(const QString &title,const QString &text) {
+  QDialog dialog(this);
+  dialog.setObjectName("findingExecutionConfirmation");
+  dialog.setWindowTitle(title);
+  dialog.setSizeGripEnabled(true);
+  auto *layout=new QVBoxLayout(&dialog);
+  auto *hint=new QLabel("核对本次目标、操作、载荷与系统判据；确认后才会执行。",&dialog);
+  hint->setWordWrap(true);layout->addWidget(hint);
+  auto *body=new QPlainTextEdit(&dialog);
+  body->setObjectName("findingConfirmationText");
+  body->setReadOnly(true);body->setMinimumSize(0,0);body->setPlainText(text);
+  layout->addWidget(body,1);
+  auto *buttons=new QDialogButtonBox(QDialogButtonBox::Yes|QDialogButtonBox::Cancel,&dialog);
+  auto *confirm=buttons->button(QDialogButtonBox::Yes),*cancel=buttons->button(QDialogButtonBox::Cancel);
+  confirm->setObjectName("confirmFindingExecution");confirm->setText("确认并开始测试");confirm->setAutoDefault(false);
+  cancel->setObjectName("cancelFindingExecution");cancel->setText("取消");cancel->setDefault(true);
+  layout->addWidget(buttons);
+  connect(confirm,&QPushButton::clicked,&dialog,&QDialog::accept);
+  connect(cancel,&QPushButton::clicked,&dialog,&QDialog::reject);
+  connect(this,&QDialog::finished,&dialog,&QDialog::reject);
+  const QRect available=screen()?screen()->availableGeometry():QRect(0,0,800,600);
+  const QSize limit=(available.size()-QSize(32,64)).expandedTo(QSize(1,1));
+  dialog.setMaximumSize(limit);
+  dialog.resize(QSize(900,620).boundedTo(limit));
+  dialog.move(available.center()-QPoint(dialog.width()/2,dialog.height()/2));
+  cancel->setFocus();
+  return dialog.exec()==QDialog::Accepted && !m_finished;
 }
 void FindingVerificationDialog::updateQueue() {
   int selected=0,ready=0;QStringList missing;
@@ -738,6 +837,6 @@ void FindingVerificationDialog::startChecked() {
     selected<<id;plans[id]=detail["plans"].toArray().first().toObject();summary<<confirmationText(detail);
   }
   if(selected.isEmpty())return;
-  if(QMessageBox::question(this,"确认批量攻击测试",summary.join("\n────────\n"),QMessageBox::Yes|QMessageBox::Cancel,QMessageBox::Cancel)!=QMessageBox::Yes)return;
+  if(!confirmExecution("确认批量攻击测试",summary.join("\n────────\n")))return;
   ++m_queueGeneration;m_queueCancelled=std::make_shared<bool>(false);m_queuePlans=plans;m_queue=selected;executeNext();
 }

@@ -331,9 +331,29 @@ int main(int argc, char **argv)
     QSignalSpy refreshed(&monitor,&TaskExecutionPanel::findingVerificationChanged);
     monitor.setTaskContext("A",{},"A.invalid");
     verify(awaitCondition([&]{return monitor.m_verifications->rowCount()==1;}),"child execution is visible without a parent run");
-    verify(monitor.m_state->text().contains("主预案尚未执行")&&monitor.m_state->text().contains("逐漏洞执行 1 次")
+    verify(!monitor.m_state->text().contains("主预案尚未执行")&&monitor.m_state->text().contains("已有 1 次逐漏洞测试记录")
         &&monitor.m_verifications->item(0,4)->text()=="目标已达成","parent absence never hides completed finding execution or system result");
     verify(selected.count()==0&&completed.count()==0,"finding child runs never emit parent run selection or completion");
+    verify(!monitor.m_parentDetails->isChecked() && monitor.m_parentState->text().contains("主预案尚未执行")
+      && monitor.m_tabs->currentWidget()==monitor.m_verifications,"optional parent status stays in collapsed detail while child records are primary");
+    const auto originalSnapshot=monitor.m_snapshot;
+    for(const QString state : {"queued","running","cancelling","completed","failed","aborted","unknown"}) {
+      auto children=originalSnapshot["verification_runs"].toObject();
+      const bool active=QStringList{"queued","running","cancelling"}.contains(state);
+      children["active"]=active?1:0;children["completed"]=state=="completed"?1:0;
+      children["failed"]=state=="failed"?1:0;children["aborted"]=state=="aborted"?1:0;children["unknown"]=state=="unknown"?1:0;
+      auto row=children["items"].toArray()[0].toObject();row["state"]=state;children["items"]=QJsonArray{row};
+      monitor.m_snapshot["verification_runs"]=children;monitor.render();
+      verify(monitor.m_state->text().startsWith(active?"逐漏洞测试进行中":"已有 1 次逐漏洞测试记录"),"activity display follows queued/running/cancelling and terminal states");
+      verify(monitor.m_verifications->item(0,3)->text()!=(QStringLiteral("未知 / 未记录")),"child lifecycle states remain individually readable");
+      verify(monitor.m_snapshot["run"]==originalSnapshot["run"] && monitor.m_snapshot["pipeline_status"]==originalSnapshot["pipeline_status"],"render never mutates parent state");
+    }
+    monitor.m_snapshot=originalSnapshot;monitor.render();
+    monitor.m_verifications->selectRow(0);monitor.m_parentDetails->setChecked(true);monitor.resize(1024,600);QTest::qWait(20);
+    verify(monitor.size()==QSize(1024,600) && monitor.m_parentState->isVisible(),"optional parent detail remains reachable at narrow size");
+    monitor.m_parentDetails->setChecked(false);monitor.render();
+    verify(monitor.m_verifications->currentRow()==0,"parent detail toggle and refresh retain selected child history");
+    monitor.resize(1360,860);
     monitor.m_verifications->selectRow(0);monitor.renderDetail();
     verify(monitor.m_detail->toPlainText().contains("child-A")&&!monitor.m_detail->toPlainText().contains("Run：run-A"),"finding detail uses its own run identity");
     emit monitor.m_verifications->cellDoubleClicked(0,0);
@@ -396,6 +416,9 @@ int main(int argc, char **argv)
   };
   bool failedTask = false;
   bool showFindingExecutions = false;
+  int findingActive=1, findingTotal=2;
+  bool findingParent=false;
+  QString findingParentState="FAILED";
   server.handler = [&](const QString &, const QString &requestPath) -> MockReply {
     const QString path = QUrl(requestPath).path();
     if (sourceOnly && path == "/api/scan-tasks") return {success(QJsonArray{sourceRecord()})};
@@ -421,8 +444,10 @@ int main(int argc, char **argv)
       auto record=taskRecord(taskId);
       if(showFindingExecutions) {
         record["status"]="awaiting_approval";
+        if(!findingParent)record["run_id"]=QJsonValue::Null;
         auto summary=record["summary"].toObject();
-        summary["finding_verifications"]=QJsonObject{{"total",2},{"completed",1},{"active",1},{"failed",0},{"aborted",0},{"unknown",0}};
+        if(findingParent)summary["execution"]=QJsonObject{{"run_id","run-"+taskId},{"status",findingParentState}};
+        summary["finding_verifications"]=QJsonObject{{"total",findingTotal},{"completed",1},{"active",findingActive},{"failed",0},{"aborted",0},{"unknown",0}};
         record["summary"]=summary;
       }
       return {success(record), delayedTask && taskId == "A" ? 250 : 0};
@@ -456,15 +481,31 @@ int main(int argc, char **argv)
   }
   verify(awaitCondition([&]() { return flow.m_execTab->m_taskMonitor->m_snapshot.value("pipeline_id").toString() == "A"; }), "execution snapshot remains task-bound");
   verify(awaitCondition([&]() { return flow.m_evalTab->m_taskResults->m_snapshot.value("pipeline_id").toString() == "A"; }), "results snapshot remains task-bound");
+  const QString activityCapture=qEnvironmentVariable("F08_MAIN_SCREENSHOT_DIR");
   showFindingExecutions=true;flow.loadFlowDetail("A");
-  verify(awaitCondition([&]{return flow.m_stepIndicator->phases()[4].summary.contains("逐漏洞已完成 1 次")&&flow.m_stepIndicator->phases()[4].summary.contains("活动 1");}),"main phase shows finding execution activity beside the parent stage");
-  verify(flow.m_stepIndicator->phases()[4].status=="pending"&&flow.m_lastDisplayedDetail["status"]=="awaiting_approval","finding activity never falsely completes the parent task or phase");
+  verify(awaitCondition([&]{return flow.m_stepIndicator->phases()[4].statusText=="逐漏洞测试进行中"&&flow.m_stepIndicator->phases()[4].summary.contains("活动 1");}),"main phase shows finding execution activity beside the parent stage");
+  verify(flow.m_stepIndicator->phases()[4].status=="running"&&flow.m_lastDisplayedDetail["status"]=="awaiting_approval","finding activity never falsely completes the parent task or phase");
+  if(!activityCapture.isEmpty())flow.m_stepIndicator->grab().save(activityCapture+"/execution-node-active.png");
   const int beforeFindingRefresh=server.requests.value("GET /api/pipelines/A");
   emit flow.m_scanTab->findingVerificationChanged("A");
   verify(awaitCondition([&]{return server.requests.value("GET /api/pipelines/A")>beforeFindingRefresh;}),"finding-window close signal refreshes parent task detail");
   const int afterFindingRefresh=server.requests.value("GET /api/pipelines/A");
   emit flow.m_scanTab->findingVerificationChanged("foreign");QTest::qWait(30);
   verify(server.requests.value("GET /api/pipelines/A")==afterFindingRefresh,"foreign finding-window notification cannot refresh selected task");
+  findingActive=0;flow.loadFlowDetail("A");
+  verify(awaitCondition([&]{return flow.m_stepIndicator->phases()[4].statusText=="已有 2 次测试记录";}),"terminal finding records use neutral record count");
+  verify(flow.m_stepIndicator->phases()[4].status=="info" && flow.m_lastDisplayedDetail["status"]=="awaiting_approval","records never mark parent complete or achieved");
+  if(!activityCapture.isEmpty()){flow.m_stepIndicator->grab().save(activityCapture+"/execution-node-records.png");}
+  findingTotal=0;flow.loadFlowDetail("A");
+  verify(awaitCondition([&]{return flow.m_stepIndicator->phases()[4].statusText=="待执行验证" && flow.m_stepIndicator->phases()[4].status=="pending";}),"no parent or child execution shows grey pending verification");
+  if(!activityCapture.isEmpty())flow.m_stepIndicator->grab().save(activityCapture+"/execution-node-pending.png");
+  findingParent=true;findingTotal=2;flow.loadFlowDetail("A");
+  verify(awaitCondition([&]{return flow.m_stepIndicator->phases()[4].statusText=="已有 3 次测试记录";}),"parent Run and child attempts count independently without replacing identities");
+  findingParentState="RUNNING";flow.loadFlowDetail("A");
+  verify(awaitCondition([&]{return flow.m_stepIndicator->phases()[4].statusText=="主预案执行中";}),"active parent comes from its own Run status when no child is active");
+  findingActive=1;flow.loadFlowDetail("A");
+  verify(awaitCondition([&]{return flow.m_stepIndicator->phases()[4].statusText=="逐漏洞测试进行中";}),"child activity takes display priority while parent Run remains independently active");
+  verify(flow.m_lastDisplayedDetail["summary"].toObject()["execution"].toObject()["status"]=="RUNNING","child display never overwrites parent Run status");
   showFindingExecutions=false;
 
   delayedTask = true;

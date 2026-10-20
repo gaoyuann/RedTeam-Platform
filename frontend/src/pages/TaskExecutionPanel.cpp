@@ -10,6 +10,7 @@
 #include <QHBoxLayout>
 #include <QJsonArray>
 #include <QLabel>
+#include <QGroupBox>
 #include <QMap>
 #include <QPointer>
 #include <QPushButton>
@@ -117,7 +118,20 @@ TaskExecutionPanel::TaskExecutionPanel(ApiClient *api, const QString &role, cons
   m_identity = label(this);
   m_gate = label(this);
   outer->addWidget(m_state);
-  outer->addWidget(m_identity);
+  m_parentDetails = new QGroupBox(QStringLiteral("主预案详情（可选批量编排，展开查看）"), this);
+  m_parentDetails->setCheckable(true);
+  m_parentDetails->setChecked(false);
+  auto *parentLayout = new QVBoxLayout(m_parentDetails);
+  auto *parentBody = new QWidget(m_parentDetails);
+  auto *parentContent = new QVBoxLayout(parentBody);
+  parentContent->setContentsMargins(0, 0, 0, 0);
+  m_parentState = label(parentBody);
+  parentContent->addWidget(m_parentState);
+  parentContent->addWidget(m_identity);
+  parentLayout->addWidget(parentBody);
+  parentBody->hide();
+  connect(m_parentDetails, &QGroupBox::toggled, parentBody, &QWidget::setVisible);
+  outer->addWidget(m_parentDetails);
   auto *metrics = new QHBoxLayout;
   const QStringList titles{QStringLiteral("主预案 Run 状态"), QStringLiteral("主预案已返回 / 步骤"), QStringLiteral("主预案工具调用"), QStringLiteral("主预案证据")};
   for (int index = 0; index < 4; ++index) {
@@ -125,9 +139,9 @@ TaskExecutionPanel::TaskExecutionPanel(ApiClient *api, const QString &role, cons
     m_metrics[index]->setObjectName("executionMetric" + QString::number(index));
     metrics->addWidget(m_metrics[index]);
   }
-  outer->addLayout(metrics);
+  parentContent->addLayout(metrics);
   m_gate->setStyleSheet("color:#475569;padding:4px 0;");
-  outer->addWidget(m_gate);
+  parentContent->addWidget(m_gate);
   auto *notice = label(this);
   notice->setText(QStringLiteral("只读监控；取消任务请使用工作台顶部按钮。后端暂无可靠的暂停/恢复/手动重试接口，本页不提供这些操作。工具成功、规则命中和 MITRE 标签不等于漏洞已验证；模拟模式必须另行核验。"));
   notice->setStyleSheet("color:#64748b;font-size:12px;");
@@ -242,6 +256,9 @@ void TaskExecutionPanel::clearTaskContext()
   m_state->setText(QStringLiteral("选择任务后查看执行监控"));
   m_state->setStyleSheet(Theme::StatusInfoStyle);
   m_identity->clear();
+  m_parentState->clear();
+  m_parentDetails->setChecked(false);
+  m_tabs->setCurrentWidget(m_verifications);
   m_gate->clear();
   m_updated->clear();
   m_detail->setPlainText(QStringLiteral("选择步骤、尝试、证据或预检项查看来源与详情。"));
@@ -381,15 +398,22 @@ void TaskExecutionPanel::render()
   else if (counts.value("requires_attention").toBool())
     status += QStringLiteral("\n统计校验：存在重复或缺失的步骤结果，请查看执行尝试。");
   if (!run.value("stop_reason").toString().isEmpty()) status += "\n停止/失败原因：" + run.value("stop_reason").toString();
-  if(verifications.value("schema_version").toInt()==1) {
-    status+=QStringLiteral("\n逐漏洞执行 %1 次：执行结束 %2 · 失败 %3 · 中止 %4 · 活动 %5 · 停止未确认 %6。人工意见可选。")
-      .arg(verifications.value("total").toInt()).arg(verifications.value("completed").toInt()).arg(verifications.value("failed").toInt())
-      .arg(verifications.value("aborted").toInt()).arg(verifications.value("active").toInt()).arg(verifications.value("unknown").toInt());
-    if(verifications.value("invalid_source_count").toInt()>0)status+=QStringLiteral("\n另有 %1 条记录来源不匹配，未展示内容。请核对来源。").arg(verifications.value("invalid_source_count").toInt());
-  } else status+=QStringLiteral("\n当前接口未提供逐漏洞执行列表，请使用配套后端版本查看。");
-  m_state->setText(status);
-  m_state->setStyleSheet(run.value("status").toString() == "FAILED" ? Theme::StatusErrorStyle
+  m_parentState->setText(status);
+  m_parentState->setStyleSheet(run.value("status").toString() == "FAILED" ? Theme::StatusErrorStyle
     : counts.value("failed").toInt() > 0 ? Theme::StatusWarningStyle : Theme::StatusInfoStyle);
+  if(verifications.value("schema_version").toInt()==1) {
+    const int total=verifications.value("total").toInt(), active=verifications.value("active").toInt();
+    status=active>0 ? QStringLiteral("逐漏洞测试进行中 · %1 次活动测试").arg(active)
+      : total>0 ? QStringLiteral("已有 %1 次逐漏洞测试记录").arg(total)
+      : runId.isEmpty() ? QStringLiteral("待执行验证；可从漏洞列表开始逐漏洞测试。")
+      : QStringLiteral("已有主预案执行记录；展开主预案详情查看状态及步骤。");
+    if(total>0) status+=QStringLiteral("\n执行结束 %1 · 失败 %2 · 中止 %3 · 停止未确认 %4。已有记录不表示任务完成或全部目标达成。")
+      .arg(verifications.value("completed").toInt()).arg(verifications.value("failed").toInt())
+      .arg(verifications.value("aborted").toInt()).arg(verifications.value("unknown").toInt());
+    if(verifications.value("invalid_source_count").toInt()>0)status+=QStringLiteral("\n另有 %1 条记录来源不匹配，未展示内容。请核对来源。").arg(verifications.value("invalid_source_count").toInt());
+  } else status=QStringLiteral("当前接口未提供逐漏洞执行列表，请使用配套后端版本查看；主预案状态见详情。");
+  m_state->setText(status);
+  m_state->setStyleSheet(Theme::StatusInfoStyle);
   m_metrics[0]->setValue(runId.isEmpty() ? QStringLiteral("—") : stateText(run.value("status").toString()));
   m_metrics[1]->setValue(runId.isEmpty() ? QStringLiteral("—") : numberText(counts.value("returned")) + " / " + numberText(counts.value("steps")));
   m_metrics[2]->setValue(runId.isEmpty() ? QStringLiteral("—") : numberText(counts.value("attempts")));

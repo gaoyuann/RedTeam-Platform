@@ -5,6 +5,7 @@
 
 class ApiClient;
 class QLabel;
+class QGroupBox;
 class QPushButton;
 class QTableWidget;
 class QTabWidget;
@@ -50,6 +51,8 @@ private:
   bool m_busy = false;
   QLabel *m_title;
   QLabel *m_state;
+  QLabel *m_parentState;
+  QGroupBox *m_parentDetails;
   QLabel *m_identity;
   QLabel *m_gate;
   QLabel *m_updated;

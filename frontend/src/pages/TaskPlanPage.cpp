@@ -85,6 +85,11 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   m_refresh->setObjectName(QStringLiteral("planRefreshButton"));
   header->addWidget(m_refresh);
   layout->addLayout(header);
+  auto *optional = new QLabel(QStringLiteral("可选，用于批量编排；逐漏洞测试可直接从漏洞列表开始。"), this);
+  optional->setObjectName("optionalPlanHint");
+  optional->setWordWrap(true);
+  optional->setStyleSheet(Theme::StatusInfoStyle);
+  layout->addWidget(optional);
   m_status = new QLabel(this);
   m_status->setObjectName(QStringLiteral("planStatusLabel"));
   m_status->setTextFormat(Qt::PlainText);

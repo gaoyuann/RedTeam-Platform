@@ -14,7 +14,7 @@
 static QColor colorForStatus(const QString &status)
 {
   if (status == "awaiting_approval") return QColor(Theme::Warning);
-  if (status == "running")    return QColor(Theme::Primary);
+  if (status == "running" || status == "info") return QColor(Theme::Primary);
   if (status == "completed")  return QColor(Theme::Success);
   if (status == "skipped")    return QColor(Theme::Warning);
   if (status == "failed")     return QColor(Theme::Error);
@@ -25,6 +25,7 @@ static QColor colorForStatus(const QString &status)
 static QString labelForStatus(const QString &status)
 {
   if (status == "running") return QStringLiteral("进行中");
+  if (status == "info") return QStringLiteral("已有记录");
   if (status == "awaiting_approval") return QStringLiteral("待确认");
   if (status == "completed") return QStringLiteral("已完成");
   if (status == "failed") return QStringLiteral("失败");
@@ -159,8 +160,10 @@ void StepIndicator::paintEvent(QPaintEvent *)
                QFontMetrics(label).elidedText(phase.displayName, Qt::ElideRight, int(title.width())));
     label.setPixelSize(11); label.setBold(false); p.setFont(label);
     p.setPen(color);
-    p.drawText(QRectF(card.left()+textLeft, card.top()+32, qMax(0.0,card.width()-textLeft-8), 17),
-               Qt::AlignLeft|Qt::AlignVCenter, labelForStatus(phase.status));
+    const QRectF statusRect(card.left()+(compact ? 10 : 12), card.top()+32, qMax(0.0,card.width()-22), 17);
+    const QString statusText=phase.statusText.isEmpty()?labelForStatus(phase.status):phase.statusText;
+    p.drawText(statusRect, Qt::AlignLeft|Qt::AlignVCenter,
+               QFontMetrics(label).elidedText(statusText, Qt::ElideRight, int(statusRect.width())));
 
     const QString summary = phase.summary.isEmpty()
         ? (active ? QStringLiteral("正在处理，请稍候") : labelForStatus(phase.status))
@@ -193,7 +196,7 @@ bool StepIndicator::event(QEvent *event)
     const int index = nodeAtPos(help->pos());
     if (index >= 0) {
       const auto &phase = m_phases[index];
-      QToolTip::showText(help->globalPos(), phase.displayName + " · " + labelForStatus(phase.status)
+      QToolTip::showText(help->globalPos(), phase.displayName + " · " + (phase.statusText.isEmpty()?labelForStatus(phase.status):phase.statusText)
                         + "\n" + phase.summary, this);
       return true;
     }

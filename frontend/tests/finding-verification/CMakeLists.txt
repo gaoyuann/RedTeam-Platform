@@ -22,6 +22,16 @@ foreach(scenario revision dirty-revision reload-in-flight cancel-details close-d
   set_tests_properties(finding-verification-${scenario} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endforeach()
 
+add_executable(finding-execution-confirmation FindingExecutionConfirmation.cpp
+  ../../src/pages/FindingVerificationDialog.cpp ../../src/pages/FindingVerificationDialog.h
+  ../../src/ApiClient.cpp ../../src/ApiClient.h)
+target_include_directories(finding-execution-confirmation PRIVATE ../../src)
+target_link_libraries(finding-execution-confirmation Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Network Qt5::Test)
+foreach(scenario layout controls criteria)
+  add_test(NAME finding-confirmation-${scenario} COMMAND finding-execution-confirmation ${scenario})
+  set_tests_properties(finding-confirmation-${scenario} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 20)
+endforeach()
+
 add_executable(finding-workflow FindingWorkflow.cpp
   ../../src/pages/FindingVerificationDialog.cpp ../../src/pages/FindingVerificationDialog.h
   ../../src/ApiClient.cpp ../../src/ApiClient.h)

@@ -527,10 +527,7 @@ void ExecutionPage::setPipelineContext(const QString &pipelineId, const QString 
   m_pipelineHint->setVisible(scoped);
   m_execBtn->setEnabled(!scoped);
   m_execBtn->setText(QStringLiteral("执行"));
-  m_pipelineHint->setText(status == "awaiting_approval"
-      ? QStringLiteral("主预案待确认；逐漏洞执行记录在下方独立展示。主预案执行使用顶部“确认预案并执行”。")
-      : runId.isEmpty() ? QStringLiteral("主预案尚未执行；逐漏洞执行记录在下方单独展示。")
-      : QStringLiteral("当前任务的主预案与逐漏洞执行分别展示；双击逐漏洞记录可查看历史。"));
+  m_pipelineHint->setText(QStringLiteral("逐漏洞测试可从漏洞列表直接开始；双击下方记录查看历史。全局预案为可选批量编排，状态见主预案详情。"));
   if (changed) {
     ++m_contextRevision;
     ++m_runSelectionRevision;
@@ -557,9 +554,7 @@ void ExecutionPage::setPipelineContext(const QString &pipelineId, const QString 
     onRefreshRuns();
   }
   if (scoped && runId.isEmpty()) {
-    m_statusLabel->setText(status == "awaiting_approval"
-        ? QStringLiteral("当前任务尚未确认执行。使用顶部“确认预案并执行”审阅预案；此处仅显示本任务关联的执行记录。")
-        : QStringLiteral("当前任务尚无关联执行记录，请查看上方任务进度。"));
+    m_statusLabel->setText(QStringLiteral("查看本任务的执行记录；逐漏洞测试不要求先执行全局预案。"));
     m_statusLabel->setStyleSheet(Theme::StatusInfoStyle);
   }
 }
