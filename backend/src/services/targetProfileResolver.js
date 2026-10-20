@@ -60,6 +60,7 @@ export function resolveTargetProfile(target, hints = {}) {
 
   const raw = target.trim();
   const preferredClass = hints.preferredTargetClass || null;
+  if(raw.startsWith('/src/')) return {target_class:'source_tree',host:'',port:null,is_dvwa:false,raw};
   if (/^tcp:\/\//i.test(raw)) {
     try {
       const url = new URL(raw);

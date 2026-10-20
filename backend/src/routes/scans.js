@@ -16,6 +16,7 @@ import { browseHttpSourceDirectory } from '../services/sourceSnapshot.js';
 import { recordSourceVerification } from '../services/sourceVerification.js';
 import {isProgramScan, isProgramFinding, loadProgramProjects, publicProgramProject} from '../services/programScan.js';
 import {appendTaskLog} from '../services/taskActivity.js';
+import {cscanSourcePath,cscanNotes} from '../services/cscanTarget.js';
 
 export default function (db) {
   const router = Router();
@@ -96,6 +97,14 @@ export default function (db) {
     if (!target || !scan_type) return res.status(400).json({ status: 'error', error: { message: 'target, scan_type are required' } });
     if (isProgramScan(scan_type)) {
       try {
+        if(parameters?.source_path || (parameters?.input_kind==='source' && String(target).startsWith('/src/'))) {
+          const source=cscanSourcePath(parameters?.source_path || target);
+          const runtime=parameters?.runtime_target ? sourceTarget(parameters.runtime_target)
+            : parameters?.input_kind==='runtime' ? sourceTarget(target) : null;
+          parameters={source_path:source,source_notes:cscanNotes(parameters?.source_notes),input_kind:'source',runtime_target:runtime};
+          target=runtime || source;
+          scan_type='source_scan';
+        } else {
         target=sourceTarget(target);
         const inputKind=parameters?.input_kind || 'runtime';
         if(!['source','runtime'].includes(inputKind)) throw new Error('请选择源码目录或程序运行入口');
@@ -110,6 +119,7 @@ export default function (db) {
         parameters={connection_id:matched?.id || null,source_url:suppliedSource?.source_url || null,
           input_kind:inputKind,runtime_target:runtimeTarget};
         if(inputKind==='source' && runtimeTarget) target=runtimeTarget;
+        }
       } catch(error) {return res.status(400).json({status:'error',error:{message:error.message}});}
     }
     if (scan_type === 'topology_scan') {

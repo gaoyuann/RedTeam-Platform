@@ -20,7 +20,7 @@ async function fixture(t) {
   const content = 'void copy(char *input) {\n char buffer[8]; strcpy(buffer,input);\n}\n';
   const document = {path:'lib/input.c',content,start_line:1,end_line:4,sha256:createHash('sha256').update(content).digest('hex')};
   const source = {snapshot_id:'fixture-version',documents:[document],files:[{...document,content:undefined}],skipped:[]};
-  return {source,config:{...cscanConfig({}),sourcesDir,workDir,pollMs:10,timeoutMs:1000,requestTimeoutMs:200,token:'fixture-token'}};
+  return {source,config:{...cscanConfig({}),sourcesDir,workDir,pollMs:10,timeoutMs:1000,requestTimeoutMs:200,createTimeoutMs:200,token:'fixture-token'}};
 }
 
 async function server(t,handler) {
@@ -129,7 +129,7 @@ test('CScan validates source hashes and paths, report version, symlinks and size
 });
 
 test('CScan request timeout and missing credentials fail explicitly',async t=>{
-  const {config}=await fixture(t);config.requestTimeoutMs=25;
+  const {config}=await fixture(t);config.requestTimeoutMs=25;config.createTimeoutMs=25;
   await assert.rejects(createCscanClient({...config,token:'',tokenFile:''}),/凭据|配置/);
   config.apiUrl=await server(t,()=>{});
   const client=await createCscanClient(config);

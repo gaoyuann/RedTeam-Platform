@@ -10,6 +10,7 @@ export async function cscanFixture(t, findings = []) {
   const sources = join(root,'sources'),work = join(root,'work');
   await mkdir(sources);await mkdir(work);
   const counts = {created:0,stopped:0,finished:0};
+  const reports=new Map();
   const server = http.createServer(async(req,res)=>{
     try {
       if(req.headers.authorization !== 'Bearer fixture-only-cscan') {res.writeHead(401);res.end();return;}
@@ -18,6 +19,15 @@ export async function cscanFixture(t, findings = []) {
       if(body.query.includes('createFlow')) {
         counts.created++;
         const id = String(counts.created),input = body.variables.input;
+        if(!input.includes('"snapshot_id":')) {
+          const accepted=typeof findings==='function'?await findings({input}):findings;
+          const markdown=accepted.length?accepted.map(f=>[
+            '## '+f.title,'File: '+f.file,'Line: '+f.start_line,'Severity: '+f.severity,
+            'CWE: '+(f.cwe || ''),'Evidence: '+f.reason,
+          ].join('\n')).join('\n\n'):'No findings in the fixture report.';
+          reports.set(id,markdown);
+          res.end(JSON.stringify({data:{createFlow:{id,status:'running'}}}));return;
+        }
         const snapshotId = JSON.parse(input.match(/"snapshot_id":("(?:[^"\\]|\\.)*")/)[1]);
         const key = input.match(/\/src\/(rt-[\w-]+)/)[1];
         const inventory = JSON.parse(input.split('\n').at(-1));
@@ -30,6 +40,8 @@ export async function cscanFixture(t, findings = []) {
       } else if(body.query.includes('stopFlow')) {counts.stopped++;res.end(JSON.stringify({data:{stopFlow:'success'}}));}
       else if(body.query.includes('finishFlow')) {counts.finished++;res.end(JSON.stringify({data:{finishFlow:'success'}}));}
       else if(body.query.includes('CScanHealth')) res.end(JSON.stringify({data:{flows:[]}}));
+      else if(body.query.includes('CScanReport')) res.end(JSON.stringify({data:{tasks:[{id:'1',flowId:body.variables.id,
+        status:'finished',result:reports.get(body.variables.id) || '',subtasks:[]}]}}));
       // Mirrors upstream task.SetStatus: finished tasks leave Flow=waiting.
       else res.end(JSON.stringify({data:{flow:{id:body.variables.id,status:'waiting'},
         tasks:[{id:'1',flowId:body.variables.id,status:'finished',subtasks:[{id:'1',status:'finished'}]}]}}));

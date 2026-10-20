@@ -162,9 +162,10 @@ test('benchmark uses the CScan protocol and isolated database without local scan
   const fixture=await cscanFixture(t,[['bounds.c',4,'CWE-120'],['null.c',3,'CWE-476'],['lifetime.cpp',4,'CWE-416']].map(([name,line,cwe])=>({
     file:'vulnerable/'+name,start_line:line,title:'Controlled fixture candidate',reason:'Test-owned diagnostic site',severity:'high',cwe})));
   const output=join(directory,'report.json');
-  await promisify(execFile)(process.execPath,[fileURLToPath(new URL('../scripts/source-benchmark.js',import.meta.url)),'--output',output],
+  await promisify(execFile)(process.execPath,[fileURLToPath(new URL('../scripts/source-benchmark.js',import.meta.url)),'--source-path','/src/benchmark','--output',output],
     {timeout:30000,maxBuffer:2*1024*1024,env:{...process.env,...fixture.env,LLM_API_KEY:''}});
   const report=JSON.parse(await readFile(output,'utf8'));
   assert.equal(report.cscan_evaluated,true);assert.equal(report.cscan.score.true_positive,3);assert.equal(report.cscan.score.false_positive,0);
   assert.equal(fixture.counts.created,1);assert.equal(report.cscan.coverage.engine,'cscan');assert.equal(report.errors.length,0);
+  assert.equal(report.cscan.coverage.input_mode,'service_path');assert.equal(report.source_version_verified,false);
 });
