@@ -20,8 +20,6 @@ class FindingVerificationDialog : public QDialog {
   Q_OBJECT
 public:
   FindingVerificationDialog(ApiClient *api, const QString &pipeline, const QList<qint64> &findings, QWidget *parent=nullptr);
-signals:
-  void verificationChanged();
 protected:
   void done(int result) override;
 private:
@@ -65,7 +63,7 @@ private:
   QComboBox *m_bindStep;
   QPushButton *m_useSource, *m_adjustAI, *m_bindPayload, *m_unbindPayload, *m_resolvePayload, *m_queueButton, *m_sourcesNext, *m_sourcesPrevious;
   QLineEdit *m_sourceSearch;
-  QLabel *m_queueLabel, *m_payloadOrigin;
+  QLabel *m_queueLabel;
   QMap<QString,QJsonObject> m_details;
   QMap<QString,QJsonObject> m_queuePlans;
   bool m_browseSources=false;
