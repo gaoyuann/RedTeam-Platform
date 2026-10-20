@@ -9,6 +9,7 @@
 #include "WsClient.h"
 #include "AppStyle.h"
 #include "widgets/ScanResultOverview.h"
+#include "widgets/RemoteSourcePicker.h"
 #define private public
 #include "MainWindow.h"
 #include "pages/FlowPage.h"
@@ -429,18 +430,22 @@ int main(int argc, char **argv)
   verify(flow.m_scanTab->m_currentTarget.isEmpty() && flow.m_scanTab->m_resultTree->topLevelItemCount() == 0, "late scan detail cannot restore old target or results");
   sourceOnly = true;
   ScanPage sourcePage(&api, "user", "fixture-user");
-  verify(sourcePage.m_programInputKind->currentData().toString() == "agent",
-      "source scanning defaults to the remote CScan target input");
+  verify(sourcePage.m_programInputKind->currentData().toString() == "remote_directory",
+      "source scanning defaults to selecting a target host folder");
   {
     MockServer nativeServer;
     nativeServer.listen(QHostAddress::LocalHost,0);
     nativeServer.handler=[](const QString &method,const QString &path)->MockReply {
+      if(method=="POST" && path=="/api/scan-tasks/source-directory")
+        return {success(QJsonObject{{"url","http://192.0.2.40:8089/project/"},{"parent","http://192.0.2.40:8089/"},
+          {"entries",QJsonArray{QJsonObject{{"name","src/"},{"directory",true},{"url","http://192.0.2.40:8089/project/src/"}}}}})};
       if(method=="POST" && path=="/api/scan-tasks")
         return {QJsonObject{{"status","error"},{"error",QJsonObject{{"message","fixture: creation captured without execution"}}}}};
       return {success(QJsonArray())};
     };
     ApiClient nativeApi(QStringLiteral("http://127.0.0.1:%1").arg(nativeServer.serverPort()));
     ScanPage nativePage(&nativeApi,"user","fixture-user");
+    nativePage.m_programInputKind->setCurrentIndex(nativePage.m_programInputKind->findData("agent"));
     nativePage.m_scanTypeTabs->setCurrentIndex(4);
     nativePage.m_sourceTargetInput->setText("http://192.0.2.40:8089/");
     nativePage.m_sourceNotesInput->setText("check fixture input bounds");
@@ -454,6 +459,28 @@ int main(int argc, char **argv)
         && nativeParameters["input_kind"].toString()=="agent"
         && !nativeParameters.contains("source_path") && !nativeParameters.contains("source_url"),
         "source request forwards the remote target and audit requirements without a local or mounted path");
+    nativePage.m_programInputKind->setCurrentIndex(nativePage.m_programInputKind->findData("remote_directory"));
+    auto *picker=nativePage.m_remoteSourcePicker;
+    picker->findChild<QPushButton*>("remoteSourceBrowse")->click();
+    auto *directoryDialog=picker->findChild<QDialog*>("remoteSourceDirectoryDialog");
+    verify(directoryDialog!=nullptr,"remote directory picker opens instead of a local file dialog");
+    directoryDialog->findChild<QLineEdit*>("remoteSourceDirectoryPath")->setText("/project/");
+    directoryDialog->findChild<QPushButton*>("remoteSourceLoad")->click();
+    auto *selectDirectory=directoryDialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok);
+    verify(awaitCondition([&]{return selectDirectory->isEnabled();}),"server directory response enables selecting the folder");
+    selectDirectory->click();
+    verify(picker->hasSelection(),"confirmed target folder is retained");
+    const int oldRequests=nativeServer.requests.value("POST /api/scan-tasks");
+    nativePage.onCreateScan();
+    verify(awaitCondition([&]{return nativeServer.requests.value("POST /api/scan-tasks")>oldRequests;}),
+      "selected target folder is submitted through the scan form");
+    const auto folderParameters=QJsonDocument::fromJson(nativeServer.requestBodies.value("POST /api/scan-tasks"))
+      .object()["parameters"].toObject();
+    verify(folderParameters["input_kind"].toString()=="remote_directory"
+      && folderParameters["source_url"].toString()=="http://192.0.2.40:8089/project/"
+      && !folderParameters.contains("cscan_target"),"folder selection uses source delivery instead of a prompt-only target");
+    nativePage.m_sourceTargetInput->setText("http://192.0.2.41:8089/");
+    verify(!picker->hasSelection(),"changing target discards the previous host's folder");
   }
   sourcePage.setTaskScope({"scan-source"});
   verify(awaitCondition([&]() { return sourcePage.m_selectedTaskId == "scan-source" && sourcePage.m_sourceDemoBtn->isEnabled(); }), "source task loads in scoped workbench with demonstration selector");
@@ -851,8 +878,10 @@ int main(int argc, char **argv)
       if(!dialog) {verify(false,"remote CScan task form is visible");return;}
       auto *type=dialog->findChild<QComboBox*>("taskTestTypeInput");
       type->setCurrentIndex(type->findData("program"));
-      verify(dialog->findChild<QComboBox*>("taskProgramInputKind")->currentData().toString()=="agent",
-        "CScan task defaults to remote execution instead of a mounted source path");
+      auto *inputKind=dialog->findChild<QComboBox*>("taskProgramInputKind");
+      verify(inputKind->currentData().toString()=="remote_directory",
+        "CScan task defaults to selecting the target folder");
+      inputKind->setCurrentIndex(inputKind->findData("agent"));
       dialog->findChild<QLineEdit*>("taskTargetInput")->setText(observedService);
       dialog->findChild<QLineEdit*>("taskSourceNotesInput")->setText("Source is on the target in /var/www/project");
       bool localPicker=false;

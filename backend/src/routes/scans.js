@@ -13,6 +13,7 @@ import { requireActor, recordParam } from '../middleware/recordAccess.js';
 
 import { loadSourceConnections, publicSourceConnection, resolveSourceConnection, resolveSourceConnectionForTarget, sourceTarget, httpSourceConnection } from '../services/sourceScanConnections.js';
 import { browseHttpSourceDirectory } from '../services/sourceSnapshot.js';
+import {browseRemoteSourceDirectory,sourceSubdir} from '../services/sourceRemoteDirectory.js';
 import { recordSourceVerification } from '../services/sourceVerification.js';
 import {isProgramScan, isProgramFinding, loadProgramProjects, publicProgramProject} from '../services/programScan.js';
 import {appendTaskLog} from '../services/taskActivity.js';
@@ -32,7 +33,12 @@ export default function (db) {
     catch(error) {res.status(400).json({status:'error',error:{message:error.message}});}
   });
   router.post('/source-directory', async (req, res) => {
-    try { res.json({status:'ok',data:await browseHttpSourceDirectory(req.body.target, req.body.source_url)}); }
+    try {
+      const data=req.body.connection_id
+        ? await browseRemoteSourceDirectory(await resolveSourceConnection(req.body.connection_id,req.body.target),req.body.source_subdir || '')
+        : await browseHttpSourceDirectory(req.body.target, req.body.source_url);
+      res.json({status:'ok',data});
+    }
     catch (error) { res.status(400).json({status:'error',error:{message:error.message}}); }
   });
   router.param('scanTaskId', (req,res,next,scanTaskId)=>{
@@ -97,7 +103,17 @@ export default function (db) {
     if (!target || !scan_type) return res.status(400).json({ status: 'error', error: { message: 'target, scan_type are required' } });
     if (isProgramScan(scan_type)) {
       try {
-        if(parameters?.cscan_target || parameters?.input_kind==='agent') {
+        if(parameters?.input_kind==='remote_directory') {
+          target=sourceTarget(target);
+          if(parameters.source_url && parameters.connection_id) throw new Error('请选择一种源码目录来源');
+          const source=parameters.source_url ? httpSourceConnection(target,parameters.source_url) : null;
+          const connection=source ? null : await resolveSourceConnection(parameters.connection_id,target);
+          const subdir=sourceSubdir(parameters.source_subdir || '');
+          if(connection && !['ssh','local'].includes(connection.kind)) throw new Error('请选择文件系统连接');
+          parameters={input_kind:'remote_directory',source_url:source?.source_url || null,
+            connection_id:connection?.id || null,source_subdir:subdir,source_notes:cscanNotes(parameters.source_notes)};
+          scan_type='source_scan';
+        } else if(parameters?.cscan_target || parameters?.input_kind==='agent') {
           const remote=cscanTarget(parameters?.cscan_target || target);
           const runtime=parameters?.runtime_target?sourceTarget(parameters.runtime_target):null;
           parameters={cscan_target:remote,source_notes:cscanNotes(parameters?.source_notes),input_kind:'agent',runtime_target:runtime};

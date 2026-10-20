@@ -1,6 +1,7 @@
 #include "FindingVerificationDialog.h"
 #include "../widgets/WorkbenchTabs.h"
 #include "ScanPage.h"
+#include "../widgets/RemoteSourcePicker.h"
 #include "../ApiClient.h"
 #include "../Theme.h"
 #include "../UiUtil.h"
@@ -299,10 +300,14 @@ QString ScanPage::formatResultData(const QString &json, const QString &resultTyp
           {"running","扫描中"},{"waiting","等待输入"},{"finished","扫描结束"},{"error","扫描失败"},
           {"report_error","报告导入失败"},{"timed_out","扫描超时"},{"cancelled","已取消"},{"interrupted","服务重启中断"}};
         QStringList errors;for(const auto &error:obj["source_errors"].toArray()) errors.append(error.toString());
+        const auto tasks=flow["task_progress"].toObject(),subtasks=flow["subtask_progress"].toObject();
+        const QString progress=tasks.isEmpty()?QString():QString("\n任务完成 %1/%2；子任务完成 %3/%4，失败 %5。")
+          .arg(tasks["finished"].toInt()).arg(tasks["total"].toInt())
+          .arg(subtasks["finished"].toInt()).arg(subtasks["total"].toInt()).arg(subtasks["failed"].toInt());
         return QString("CScan 扫描：%1；Flow %2；已采集 %3 个源码文件，服务报告已审阅 %4 个。%5\n%6\n%7")
           .arg(states.value(flow["state"].toString(),flow["state"].toString()), flow["flow_id"].toString()).arg(obj["files"].toInt())
           .arg(obj["reviewed_files"].toArray().size())
-          .arg(obj["cscan_complete"].toBool() ? "快照分析完成。" : "分析未完成或存在覆盖缺口。", obj["note"].toString(),errors.join("；"));
+          .arg(obj["cscan_complete"].toBool() ? "快照分析完成。" : "分析未完成或存在覆盖缺口。", obj["note"].toString(),errors.join("；"))+progress;
       }
       if (!obj["source_read"].toBool()) {
         QStringList errors;for(const auto &error:obj["source_errors"].toArray()) errors.append(error.toString());
@@ -1029,7 +1034,7 @@ void ScanPage::setupUI() {
     auto *h = new QGridLayout;
     h->addWidget(new QLabel("程序 / 源码地址:"), 0, 0);
     m_sourceTargetInput = new QLineEdit;
-    m_sourceTargetInput->setPlaceholderText("靶机 IP:端口、HTTP/TCP 地址或远端源码路径");
+    m_sourceTargetInput->setPlaceholderText("目标主机地址，例如 http://主机:端口/");
     m_sourceTargetInput->clear();
     m_sourceTargetInput->setMinimumWidth(150);
     auto *completer = new QCompleter(history, this);
@@ -1037,10 +1042,17 @@ void ScanPage::setupUI() {
     m_sourceTargetInput->setCompleter(completer);
     h->addWidget(m_sourceTargetInput, 0, 1);
     m_programInputKind = new QComboBox;
-    m_programInputKind->addItem("远端 CScan（靶机 / 源码路径）", "agent");
+    m_programInputKind->addItem("选择目标主机的源码文件夹", "remote_directory");
     m_programInputKind->addItem("程序运行入口", "runtime");
+    m_programInputKind->addItem("直接交给 CScan（高级）", "agent");
     m_programInputKind->setCurrentIndex(0);
     h->addWidget(m_programInputKind, 0, 2);
+    m_remoteSourcePicker=new RemoteSourcePicker(m_api,this);
+    h->addWidget(m_remoteSourcePicker,2,0,1,3);
+    connect(m_sourceTargetInput,&QLineEdit::textChanged,m_remoteSourcePicker,&RemoteSourcePicker::setTarget);
+    connect(m_programInputKind,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int){
+      m_remoteSourcePicker->setVisible(m_programInputKind->currentData().toString()=="remote_directory");
+    });
     m_programRuntimeInput = new QLineEdit;
     m_programRuntimeInput->setPlaceholderText("可选：对应程序的 HTTP/TCP 运行入口；只有文件也能扫描");
     h->addWidget(new QLabel("攻击测试运行入口:"), 8, 0);
@@ -1061,12 +1073,12 @@ void ScanPage::setupUI() {
     h->addWidget(new QLabel("审计说明:"), 4, 0);h->addWidget(m_sourceNotesInput, 4, 1, 1, 2);
     connect(m_programInputKind,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int) {
       m_sourceTargetInput->setPlaceholderText(m_programInputKind->currentData().toString()=="agent"
-        ? "靶机 IP:端口、HTTP/TCP 地址或远端源码路径" : "程序运行入口：http://主机:端口/ 或 tcp://主机:端口");
+        ? "靶机 IP:端口、HTTP/TCP 地址或远端源码路径" : "目标主机地址：http://主机:端口/ 或 tcp://主机:端口");
     });
     m_sourceAdaptiveCheck = new QCheckBox("生成预案时允许 Agent 根据执行证据补充验证请求");
     m_sourceAdaptiveCheck->setChecked(true);
     h->addWidget(m_sourceAdaptiveCheck, 5, 1, 1, 2);
-    auto *hint = new QLabel("填写靶机目标和审计要求，由远端 CScan 建立 Flow、使用已有授权访问条件获取源码并返回报告。可在说明中填写靶机源码位置及已有连接；无法取得源码时明确显示缺失条件。文件路径属于远端执行环境，攻击验证另需真实运行入口。");
+    auto *hint = new QLabel("先填写目标主机地址，再浏览并选择该主机的源码文件夹。支持网站公开的目录索引和已配置的 SSH 连接。平台将所选目录的 C/C++ 源码交付给 CScan，无需填写扫描容器路径。");
     hint->setWordWrap(true);
     hint->setStyleSheet("color:#64748b; font-size:12px;");
     h->addWidget(hint, 6, 0, 1, 3);
@@ -1908,6 +1920,12 @@ void ScanPage::onCreateScan() {
     }
   }
   if (isProgramScan(scanType)) {
+    if(m_programInputKind->currentData().toString()=="remote_directory") {
+      if(!m_remoteSourcePicker->hasSelection()) {
+        m_statusLabel->setText("请先浏览并选择目标主机的源码文件夹。");return;
+      }
+      parameters=m_remoteSourcePicker->selection();
+    }
     if(m_programInputKind->currentData().toString()=="agent") parameters["cscan_target"]=target;
     parameters["source_notes"]=m_sourceNotesInput->text().trimmed();
     parameters["input_kind"] = m_programInputKind->currentData().toString();
@@ -2680,7 +2698,8 @@ void ScanPage::onPollStatus() {
     m_runningTaskIds = stillRunning;
     startPollingIfNeeded();
 
-    if (selectedTaskFinished && !m_selectedTaskId.isEmpty()) {
+    const bool selectedSourceRunning=stillRunning.contains(m_selectedTaskId) && m_scanTypeTabs->currentIndex()==4;
+    if ((selectedTaskFinished || selectedSourceRunning) && !m_selectedTaskId.isEmpty()) {
       // Re-trigger task click to load full details
       bool found = false;
       for (auto *table : {m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable, m_sourceScanTable}) {
