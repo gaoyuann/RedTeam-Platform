@@ -4,6 +4,7 @@
 #include <QWidget>
 
 class ApiClient;
+class TaskStatisticsPanel;
 class ScanPage;
 class QLabel;
 class QPushButton;
@@ -69,6 +70,7 @@ private:
   MetricCard *m_metrics[4];
   QTabWidget *m_tabs;
   ScanPage *m_scanRecords;
+  TaskStatisticsPanel *m_statistics;
   QTableWidget *m_findings;
   QTableWidget *m_steps;
   QTableWidget *m_evidence;

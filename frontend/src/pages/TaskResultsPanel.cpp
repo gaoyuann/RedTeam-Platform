@@ -1,3 +1,4 @@
+#include "TaskStatisticsPanel.h"
 #include "ScanPage.h"
 #include "TaskResultsPanel.h"
 #include "../ApiClient.h"
@@ -109,6 +110,9 @@ TaskResultsPanel::TaskResultsPanel(ApiClient *api, const QString &role, const QS
   outer->addWidget(m_assessment);
   auto *splitter = new QSplitter(Qt::Horizontal, this);
   m_tabs = new WorkbenchTabs(splitter);
+  m_statistics = new TaskStatisticsPanel(api, m_tabs);
+  m_statistics->changed = [this]{ refresh(); };
+  m_tabs->addTab(m_statistics, QStringLiteral("统一统计"));
   auto makeTable = [this](const QString &title, const QStringList &headers, const QString &hint) {
     auto *table = new QTableWidget(0, headers.size(), m_tabs);
     table->setHorizontalHeaderLabels(headers);
@@ -211,7 +215,8 @@ void TaskResultsPanel::clearTaskContext()
   ++m_selectionVersion;
   m_pipelineId.clear(); m_expectedRunId.clear(); m_target.clear();
   m_selectedReportId.clear(); m_pendingReportId.clear();
-  m_snapshot = {}; m_report = {}; m_reportMetadata = {};
+  m_snapshot = {};
+  m_statistics->setSnapshot({}); m_report = {}; m_reportMetadata = {};
   m_linkedReportMetadata = {}; m_linkedBusy = false;
   m_busy = false; m_fresh = false; m_generating = false; m_exporting = false;
   m_timer->stop(); m_refresh->setEnabled(false);
@@ -291,12 +296,12 @@ bool TaskResultsPanel::validReport(const QJsonObject &document, const QString &r
   const auto content = report.value("content").toObject();
   const auto source = content.value("provenance").toObject();
   const auto results = content.value("results").toObject();
-  return report.value("kind").toString() == "trace_snapshot" && content.value("schema_version").toInt() == 1
+  return report.value("kind").toString() == "trace_snapshot" && QList<int>{1,2}.contains(content.value("schema_version").toInt())
     && content.value("type").toString() == "task_result_report"
     && source.value("pipeline_id").toString() == m_pipelineId && source.value("owner") == m_snapshot.value("owner")
     && source.value("target") == m_snapshot.value("target") && source.value("run_id") == report.value("run_id")
     && results.value("pipeline_id").toString() == m_pipelineId && results.value("owner") == m_snapshot.value("owner")
-    && results.value("target") == m_snapshot.value("target") && results.value("execution").toObject().value("run").toObject().value("run_id") == report.value("run_id")
+    && results.value("target") == m_snapshot.value("target") && results.value("execution").toObject().value("run").toObject().value("run_id").toString() == report.value("run_id").toString()
     && results.value("source_fingerprint") == source.value("source_fingerprint")
     && QRegularExpression("^[a-f0-9]{64}$").match(source.value("source_fingerprint").toString()).hasMatch()
     && source.value("source_fingerprint") == report.value("source_fingerprint")
@@ -315,7 +320,7 @@ void TaskResultsPanel::refresh()
     guard->m_busy = false;
     const auto snapshot = response.value("data").toObject();
     if (response.value("status").toString() != "ok" || !guard->validSnapshot(snapshot)) {
-      guard->m_fresh = false;
+      guard->m_fresh = false; guard->m_statistics->invalidate();
       const QString error = response.value("error").toObject().value("message").toString();
       guard->m_state->setText(QStringLiteral("读取失败，保留旧快照并禁用生成/导出：") + (error.isEmpty() ? QStringLiteral("响应来源或格式不匹配") : error));
       guard->m_state->setStyleSheet(Theme::StatusErrorStyle);
@@ -363,6 +368,7 @@ void TaskResultsPanel::loadLinkedReport()
 
 void TaskResultsPanel::render()
 {
+  m_statistics->setSnapshot(m_snapshot);
   QStringList scanIds;
   for (const auto &value : m_snapshot.value("trace").toObject().value("scan_sources").toArray())
     scanIds.append(value.toObject().value("scan_task_id").toString());
@@ -487,7 +493,7 @@ void TaskResultsPanel::renderDetail()
           .arg(report.value("run_id").toString(), state(run.value("status").toString()), number(results.value("finding_count")),
             number(counts.value("returned")), number(counts.value("steps")), number(counts.value("evidence")), content.value("notice").toString());
         detail += pretty(QJsonObject{{"provenance", content.value("provenance")}, {"trace", results.value("trace")},
-          {"assessment", results.value("assessment")}, {"limits", results.value("limits")}});
+          {"assessment", results.value("assessment")}, {"statistics", results.value("statistics")}, {"limits", results.value("limits")}});
       } else detail += content.value("notice").toString() + "\n\n" + pretty(content);
     }
     if (m_detail->toPlainText() != detail) m_detail->setPlainText(detail);
@@ -505,7 +511,7 @@ void TaskResultsPanel::renderDetail()
 void TaskResultsPanel::updateButtons()
 {
   const QString runState = m_snapshot.value("execution").toObject().value("run").toObject().value("status").toString();
-  m_generate->setEnabled(m_fresh && !m_busy && !m_generating && QStringList{"COMPLETED", "FAILED", "ABORTED"}.contains(runState));
+  m_generate->setEnabled(m_fresh && !m_busy && !m_generating && (m_snapshot.contains("statistics") ? m_snapshot.value("statistics").toObject().value("report_ready").toBool() : QStringList{"COMPLETED", "FAILED", "ABORTED"}.contains(runState)));
   m_generate->setText(m_generating ? QStringLiteral("生成报告中…") : QStringLiteral("生成报告"));
   const bool canExport = m_fresh && !m_exporting && m_tabs->currentWidget() == m_reports
       && !m_report.isEmpty() && m_report.value("report").toObject().value("kind").toString() == "trace_snapshot";

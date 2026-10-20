@@ -1,3 +1,4 @@
+import { hasStatistics } from '../services/findingInstances.js';
 import findingVerificationRoutes from './findingVerifications.js';
 import {isProgramMode} from '../services/programScan.js';
 import { Router } from 'express';
@@ -373,6 +374,10 @@ export default function (db) {
       return res.status(400).json({ status: 'error', error: { message: '运行中或待确认的流水线不能删除，请先取消' } });
     }
 
+    if(hasStatistics(db) && db.prepare(`SELECT 1 FROM finding_instances WHERE pipeline_id=?
+      UNION ALL SELECT 1 FROM task_baselines WHERE pipeline_id=?
+      UNION ALL SELECT 1 FROM test_reports WHERE pipeline_id=? LIMIT 1`).get(req.params.id,req.params.id,req.params.id))
+      return res.status(409).json({status:'error',error:{message:'任务存在漏洞实例、基准或冻结报告引用，须保留统计来源'}});
     db.prepare('DELETE FROM pipelines WHERE pipeline_id = ?').run(req.params.id);
     auditLog(db, 'pipeline_delete', req.params.id, req.user.role, pipeline.target, {});
     res.json({ status: 'ok', data: { deleted: true } });

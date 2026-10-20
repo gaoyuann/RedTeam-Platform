@@ -754,6 +754,21 @@ int main(int argc, char **argv)
   verify(server.requests.value("POST /api/pipelines/source/plan") == previousDrafts
       && flow.m_planTab->m_steps->rowCount() == 0 && flow.m_selectedPipelineId.isEmpty(),
       "late generation cannot create a draft or restore content after leaving the task");
+  // A v2 report belongs to its task even when there is no main execution Run.
+  {
+    TaskResultsPanel panel(&api, "user", "fixture-user");
+    auto current=resultsRecord("scan-only");
+    auto execution=current.value("execution").toObject();execution["run"]=QJsonValue(QJsonValue::Null);
+    execution["steps"]=QJsonArray{};execution["evidence"]=QJsonArray{};execution["attempts"]=QJsonArray{};
+    current["execution"]=execution;current["statistics"]=QJsonObject{{"report_ready",true}};
+    panel.m_pipelineId="scan-only";panel.m_target="scan-only.invalid";panel.m_snapshot=current;panel.m_fresh=true;
+    panel.updateButtons();verify(panel.m_generate->isEnabled(),"pure scan task enables report generation when server confirms stopped");
+    auto document=reportRecord("scan-only");auto metadata=document.value("report").toObject();metadata["run_id"]=QJsonValue(QJsonValue::Null);
+    auto content=metadata.value("content").toObject();auto provenance=content.value("provenance").toObject();provenance["run_id"]=QJsonValue(QJsonValue::Null);
+    content["schema_version"]=2;content["provenance"]=provenance;content["results"]=current;metadata["content"]=content;document["report"]=metadata;
+    verify(panel.validReport(document,metadata.value("report_id").toString(),true),"v2 frozen report accepts null main Run with matching task identity");
+    document["pipeline_id"]="foreign";verify(!panel.validReport(document,metadata.value("report_id").toString(),true),"v2 report rejects foreign task identity");
+  }
   chooseFinding.stop();
   std::cout << "TOTAL " << checks << " checks passed" << std::endl;
   return 0;

@@ -1,5 +1,6 @@
 # ── Build artifacts ──────────────────────────
 build/
+build-f09/
 cmake-build-*/
 .client-update/
 dist/

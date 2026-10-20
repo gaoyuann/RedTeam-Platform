@@ -1,3 +1,6 @@
+import { taskStatistics } from '../services/taskStatistics.js';
+import { syncInstances, fail } from '../services/findingInstances.js';
+import { baselineVersions, importBaseline } from '../services/taskBaselines.js';
 import { scanPage, scanCollection, pipelineScans } from '../services/scanResultQuery.js';
 import { publicScanRecord, parseResultData, redactScanValue } from '../services/scanResultCatalog.js';
 import { Router } from 'express';
@@ -18,6 +21,35 @@ export default function (db) {
     next();
   });
   router.get('/', (req, res) => res.json({ status: 'ok', data: req.query.view==='scans' ? scanPage(db,req.taskPipeline,req.query) : {...taskResultsSnapshot(db, req.taskPipeline),...scanPage(db,req.taskPipeline,req.query)} }));
+  const current=req=>{
+    const value=taskStatistics(db,req.taskPipeline);
+    const expected=req.query.source_fingerprint || req.body?.source_fingerprint;
+    if(expected!==undefined && expected!==value.source_fingerprint)fail(409,'来源已变化，请刷新');
+    return value;
+  };
+  router.post('/instances/sync',(req,res)=>res.json({status:'ok',data:db.transaction(()=>{
+    if(!/^[a-f0-9]{64}$/.test(req.body?.source_fingerprint || ''))fail(400,'缺少来源指纹');
+    current(req);syncInstances(db,req.taskPipeline);return current({...req,body:{},query:{}});
+  })()}));
+  router.get('/instances',(req,res)=>{
+    const data=current(req), {conclusion='all',severity='all',after='',limit='100'}=req.query;
+    if(!['all','pending','confirmed','not_verified','inconclusive','false_positive','conflict'].includes(conclusion)
+      || !['all','unknown','info','low','medium','high','critical'].includes(severity)
+      || !/^\d+$/.test(String(limit)) || Number(limit)<1 || Number(limit)>500 || typeof after!=='string' || after && !/^fi_[a-f0-9]{32}$/.test(after))fail(400,'实例分页或筛选无效');
+    const filtered=data.instances.filter(i=>(conclusion==='all'||i.conclusion===conclusion)&&(severity==='all'||i.severity===severity));
+    const remaining=filtered.filter(i=>i.instance_id>after),rows=remaining.slice(0,Number(limit));
+    res.json({status:'ok',data:{source_fingerprint:data.source_fingerprint,rows,page:{total:filtered.length,has_more:remaining.length>rows.length,next_after:rows.at(-1)?.instance_id || after}}});
+  });
+  router.get('/instances/:instanceId',(req,res)=>{
+    const data=current(req),instance=data.instances.find(i=>i.instance_id===req.params.instanceId);
+    if(!instance)fail(404,'实例不存在或不属于此任务');
+    res.json({status:'ok',data:{source_fingerprint:data.source_fingerprint,instance,records:data.records.filter(r=>instance.record_ids.includes(r.id))}});
+  });
+  router.get('/baselines',(req,res)=>res.json({status:'ok',data:baselineVersions(db,req.taskPipeline)}));
+  router.post('/baselines',(req,res)=>res.json({status:'ok',data:db.transaction(()=>{
+    if(!/^[a-f0-9]{64}$/.test(req.body?.source_fingerprint || ''))fail(400,'缺少来源指纹');
+    current(req);return importBaseline(db,req.taskPipeline,req.user,req.body.content,{preview:req.body.preview===true});
+  })()}));
   router.get('/coverage', (req,res) => res.json({status:'ok',data:scanCoveragePage(db,req.taskPipeline.pipeline_id,req.query)}));
   const taskFinding = (req) => {
     if (!/^[1-9]\d*$/.test(req.params.recordId))
