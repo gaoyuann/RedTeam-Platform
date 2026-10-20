@@ -383,8 +383,8 @@ int main(int argc, char **argv)
   verify(flow.m_scanTab->m_currentTarget.isEmpty() && flow.m_scanTab->m_resultTree->topLevelItemCount() == 0, "late scan detail cannot restore old target or results");
   sourceOnly = true;
   ScanPage sourcePage(&api, "user", "fixture-user");
-  verify(sourcePage.m_programInputKind->currentData().toString() == "source",
-      "source scanning defaults to the CScan service path input");
+  verify(sourcePage.m_programInputKind->currentData().toString() == "agent",
+      "source scanning defaults to the remote CScan target input");
   {
     MockServer nativeServer;
     nativeServer.listen(QHostAddress::LocalHost,0);
@@ -396,17 +396,18 @@ int main(int argc, char **argv)
     ApiClient nativeApi(QStringLiteral("http://127.0.0.1:%1").arg(nativeServer.serverPort()));
     ScanPage nativePage(&nativeApi,"user","fixture-user");
     nativePage.m_scanTypeTabs->setCurrentIndex(4);
-    nativePage.m_sourceTargetInput->setText("/src/fixture-project");
+    nativePage.m_sourceTargetInput->setText("http://192.0.2.40:8089/");
     nativePage.m_sourceNotesInput->setText("check fixture input bounds");
     nativePage.onCreateScan();
     verify(awaitCondition([&]() {return nativeServer.requestBodies.contains("POST /api/scan-tasks");}),
         "source creation submits an actual request to the platform adapter");
     const auto nativeBody=QJsonDocument::fromJson(nativeServer.requestBodies.value("POST /api/scan-tasks")).object();
     const auto nativeParameters=nativeBody["parameters"].toObject();
-    verify(nativeParameters["source_path"].toString()=="/src/fixture-project"
+    verify(nativeParameters["cscan_target"].toString()=="http://192.0.2.40:8089/"
         && nativeParameters["source_notes"].toString()=="check fixture input bounds"
-        && !nativeParameters.contains("source_url"),
-        "source request forwards the service path and audit requirements without a collection URL");
+        && nativeParameters["input_kind"].toString()=="agent"
+        && !nativeParameters.contains("source_path") && !nativeParameters.contains("source_url"),
+        "source request forwards the remote target and audit requirements without a local or mounted path");
   }
   sourcePage.setTaskScope({"scan-source"});
   verify(awaitCondition([&]() { return sourcePage.m_selectedTaskId == "scan-source" && sourcePage.m_sourceDemoBtn->isEnabled(); }), "source task loads in scoped workbench with demonstration selector");
@@ -749,6 +750,86 @@ int main(int argc, char **argv)
     document["pipeline_id"]="foreign";verify(!panel.validReport(document,metadata.value("report_id").toString(),true),"v2 report rejects foreign task identity");
   }
   chooseFinding.stop();
+  {
+    MockServer nodeServer;nodeServer.listen(QHostAddress::LocalHost,0);
+    nodeServer.handler=[](const QString &method,const QString &requestPath)->MockReply {
+      const QString path=QUrl(requestPath).path();
+      if(method=="POST" && path=="/api/pipelines")return {success(QJsonObject{{"pipeline_id","node-followup"}})};
+      if(path=="/api/pipelines/node-followup/start")return {success(QJsonObject{})};
+      if(path=="/api/pipelines")return {success(QJsonArray{taskRecord("node-followup")})};
+      if(path=="/api/pipelines/node-followup")return {success(taskRecord("node-followup"))};
+      if(path.endsWith("/execution"))return {success(executionRecord("node-followup"))};
+      if(path.endsWith("/results"))return {success(resultsRecord("node-followup"))};
+      if(path.endsWith("/plan"))return {success(QJsonValue::Null)};
+      return {success(QJsonArray{})};
+    };
+    ApiClient nodeApi(QStringLiteral("http://127.0.0.1:%1").arg(nodeServer.serverPort()));
+    FlowPage nodeFlow(&nodeApi,"user","fixture-user");
+    const QString observedService="http://192.0.2.40:8089/";
+    QTimer::singleShot(0,&nodeFlow,[&]() {
+      auto *dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      verify(dialog && dialog->objectName()=="topologyTargetTaskDialog","node action opens an explicit target confirmation form");
+      if(dialog) {
+        verify(dialog->findChild<QLineEdit*>("taskTargetInput")->text()==observedService,"node task preserves the exact discovered service URL");
+        verify(!dialog->findChild<QCheckBox*>("taskAuthorizationCheck")->isChecked(),"node task requires fresh explicit authorization");
+        verify(!dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->isEnabled(),"node scan cannot start before target authorization");
+        dialog->reject();
+      }
+    });
+    emit nodeFlow.m_topoTab->testTargetRequested(observedService);
+    verify(nodeServer.requests.value("POST /api/pipelines")==0,"cancelling target confirmation creates no task or scan");
+    QTimer::singleShot(0,&nodeFlow,[&]() {
+      auto *dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      if(!dialog) {verify(false,"second node confirmation is visible");return;}
+      dialog->findChild<QCheckBox*>("taskAuthorizationCheck")->setChecked(true);
+      dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    });
+    emit nodeFlow.m_topoTab->testTargetRequested(observedService);
+    verify(awaitCondition([&]() {return nodeServer.requests.value("POST /api/pipelines/node-followup/start")==1
+      && nodeFlow.m_selectedPipelineId=="node-followup";}),"confirmed node target creates and starts exactly one task then opens its workbench");
+    const auto body=QJsonDocument::fromJson(nodeServer.requestBodies.value("POST /api/pipelines")).object();
+    const auto config=body["config"].toObject();
+    verify(body["target"].toString()==observedService && config["test_type"].toString()=="web"
+      && config["task_scope"].toObject()["includes"].toArray()==QJsonArray{observedService},
+      "new node task is scoped to the chosen Web service rather than the whole subnet");
+    verify(nodeServer.requests.value("POST /api/pipelines")==1,"node confirmation submits one task creation request");
+    const auto previous=nodeServer.requests.value("POST /api/pipelines/node-followup/verifications");
+    emit nodeFlow.m_topoTab->nodeFindingsRequested("foreign-task",{41});
+    verify(nodeFlow.findChildren<FindingVerificationDialog*>().isEmpty(),"late node finding actions cannot open another task's verification");
+    emit nodeFlow.m_topoTab->nodeFindingsRequested("node-followup",{41,42});
+    verify(awaitCondition([&](){return nodeServer.requests.value("POST /api/pipelines/node-followup/verifications")>previous;}),
+      "node findings open the existing per-finding preparation workflow");
+    for(auto *dialog:nodeFlow.findChildren<FindingVerificationDialog*>())delete dialog;
+    QTimer::singleShot(0,&nodeFlow,[&]() {
+      auto *dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      if(!dialog) {verify(false,"remote CScan task form is visible");return;}
+      auto *type=dialog->findChild<QComboBox*>("taskTestTypeInput");
+      type->setCurrentIndex(type->findData("program"));
+      verify(dialog->findChild<QComboBox*>("taskProgramInputKind")->currentData().toString()=="agent",
+        "CScan task defaults to remote execution instead of a mounted source path");
+      dialog->findChild<QLineEdit*>("taskTargetInput")->setText(observedService);
+      dialog->findChild<QLineEdit*>("taskSourceNotesInput")->setText("Source is on the target in /var/www/project");
+      bool localPicker=false;
+      for(auto *button:dialog->findChildren<QPushButton*>())
+        if(button->text().contains("选择文件")) localPicker=true;
+      verify(!localPicker,"remote CScan form has no local source file picker");
+      dialog->findChild<QCheckBox*>("taskAuthorizationCheck")->setChecked(true);
+      dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    });
+    nodeFlow.createFlow(true);
+    verify(awaitCondition([&]() {return nodeServer.requests.value("POST /api/pipelines")==2;}),
+      "remote CScan task submits a normal pipeline request");
+    const auto remoteBody=QJsonDocument::fromJson(nodeServer.requestBodies.value("POST /api/pipelines")).object();
+    const auto remoteConfig=remoteBody["config"].toObject();
+    verify(remoteConfig["cscan_target"].toString()==observedService
+      && remoteConfig["source_notes"].toString().contains("/var/www/project")
+      && !remoteConfig.contains("source_path") && !remoteConfig.contains("source_url"),
+      "target and audit requirements are sent to the remote Flow without requiring a local or /src directory");
+    bool noExecution=true;
+    for(auto it=nodeServer.requests.cbegin();it!=nodeServer.requests.cend();++it)
+      if(it.key().contains("/attempts") || it.key().startsWith("POST /api/runs"))noExecution=false;
+    verify(noExecution,"opening a node's findings never executes an attack");
+  }
   std::cout << "TOTAL " << checks << " checks passed" << std::endl;
   return 0;
 }

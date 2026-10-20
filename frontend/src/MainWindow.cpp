@@ -160,7 +160,13 @@ void MainWindow::setupUI()
     m_stackWidget->addWidget(m_flowPage);
 
     // Page 2: assets and topology
-    m_stackWidget->addWidget(new TopologyPage(m_api, m_role, m_username, this));
+    auto *assetTopology=new TopologyPage(m_api,m_role,m_username,this);
+    m_stackWidget->addWidget(assetTopology);
+    connect(assetTopology,&TopologyPage::testTargetRequested,this,[this](const QString &target) {
+        if(m_dongleLocked) return;
+        switchToPage(1);
+        m_flowPage->createTestForTarget(target);
+    });
 
     m_analysisPage = new AnalysisHubPage(m_api, m_role, m_username, this);
     m_stackWidget->addWidget(m_analysisPage);

@@ -19,7 +19,7 @@ HTTP/TCP请求只能访问给定运行入口的同协议、主机和端口；源
 export async function scanProgramAgent(task, context, {llm=callLlm} = {}) {
   const {db,parameters={},signal} = context;
   // Source scanning, including its agent, belongs entirely to CScan.
-  if(parameters.source_path || parameters.source_url || parameters.connection_id) return auditSources(task,context);
+  if(parameters.cscan_target || parameters.source_path || parameters.source_url || parameters.connection_id) return auditSources(task,context);
   const started=Date.now(), done=new Set(), history=[];
   const outcomes=[];
   let count=0,finished=false;

@@ -9,7 +9,7 @@ export function findingVerificationEntry(db, pipeline, finding) {
   const scope=taskScope(pipeline);
   const scan=db.prepare('SELECT target,parameters FROM scan_tasks WHERE scan_task_id=?').get(finding.scan_task_id);
   const parameters=parseResultData(scan?.parameters) || {};
-  if(parameters.source_path && !parameters.runtime_target)
+  if((parameters.source_path || parameters.cscan_target?.startsWith('/')) && !parameters.runtime_target)
     return {target:null,source:'source_only',missing_conditions:['本项来自 CScan 源码报告，请先提供对应部署程序的真实运行入口和版本。']};
   const parse=value=>{
     if(typeof value!=='string' || !/^https?:\/\//i.test(value) || !isTargetInScope(scope,value))return null;

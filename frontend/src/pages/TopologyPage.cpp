@@ -34,6 +34,7 @@
 #include <QGraphicsView>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QHostAddress>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -1405,6 +1406,31 @@ void TopologyPage::setupUI() {
     titleRow->addWidget(m_canvasTitleLabel, 1);
     titleRow->addWidget(m_statsLabel);
     canvasLayout->addLayout(titleRow);
+    auto *nodeActions = new QHBoxLayout;
+    m_nodeTestTargetCombo = new QComboBox(canvasPanel);
+    m_nodeTestTargetCombo->setObjectName("topologyNodeTestTarget");
+    m_nodeTestTargetCombo->setMinimumContentsLength(18);
+    m_nodeTestTargetCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_nodeTestTargetCombo->setEnabled(false);
+    m_nodeTestButton = new QPushButton(QStringLiteral("对所选目标建立测试任务"), canvasPanel);
+    m_nodeTestButton->setProperty("primary",true);
+    m_nodeTestButton->setObjectName("testSelectedTopologyNode");
+    m_nodeTestButton->setEnabled(false);
+    m_nodeVerifyButton = new QPushButton(QStringLiteral("验证此节点漏洞"), canvasPanel);
+    m_nodeVerifyButton->setObjectName("verifySelectedTopologyNode");
+    m_nodeVerifyButton->setEnabled(false);
+    nodeActions->addWidget(m_nodeTestTargetCombo,1);
+    nodeActions->addWidget(m_nodeTestButton);
+    nodeActions->addWidget(m_nodeVerifyButton);
+    canvasLayout->addLayout(nodeActions);
+    m_nodeActionHint = new QLabel(QStringLiteral("下一步：点击主机，选择已发现的服务建立测试任务；已有漏洞的节点可直接进入验证。"),canvasPanel);
+    m_nodeActionHint->setWordWrap(true);
+    canvasLayout->addWidget(m_nodeActionHint);
+    connect(m_nodeTestButton,&QPushButton::clicked,this,&TopologyPage::onTestSelectedNode);
+    connect(m_nodeVerifyButton,&QPushButton::clicked,this,&TopologyPage::onVerifySelectedNode);
+    connect(m_nodeTestTargetCombo,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int) {
+        m_nodeTestTargetCombo->setToolTip(m_nodeTestTargetCombo->currentData().toString());
+    });
     m_graphScene = new QGraphicsScene(this);
     m_graphView = new TopologyGraphicsView(this);
     m_graphView->setObjectName("topologyCanvas");
@@ -2079,6 +2105,26 @@ void TopologyPage::onScanSelectedNode() {
         });
 }
 
+void TopologyPage::onTestSelectedNode() {
+    const auto *node=currentSelectedNode();
+    if(!node || node->deviceType=="network_segment" || !m_nodeTestButton->isEnabled()) return;
+    const QString target=m_nodeTestTargetCombo->currentData().toString();
+    if(target.isEmpty()) return;
+    emit testTargetRequested(target);
+}
+
+void TopologyPage::onVerifySelectedNode() {
+    const auto *node=currentSelectedNode();
+    if(!node || m_pipelineId.isEmpty()) return;
+    QList<qint64> ids;
+    for(const auto &value:node->findings) {
+        const auto id=static_cast<qint64>(value.toObject().value("findingId").toDouble());
+        if(id>0 && !ids.contains(id)) ids.append(id);
+    }
+    if(ids.isEmpty()) return;
+    emit nodeFindingsRequested(m_pipelineId,ids);
+}
+
 // ── Document Population ──────────────────────────────────────────────────
 
 void TopologyPage::populateTopologyDocument() {
@@ -2529,6 +2575,52 @@ void TopologyPage::showNodeDetail(const TopologyNodeRecord &node) {
     m_nodeScanButton->setEnabled(canScan);
     m_nodeScanButton->setToolTip(canScan ? QStringLiteral("在当前任务范围内新建关联扫描")
         : node.scan.value(QStringLiteral("reason")).toString());
+    const QString host=node.ip.isEmpty()?node.hostName:node.ip;
+    QHostAddress hostAddress;
+    const bool validHost=node.deviceType!="network_segment" && (hostAddress.setAddress(host)
+        || QRegularExpression(QStringLiteral("^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$")).match(host).hasMatch());
+    m_nodeTestTargetCombo->clear();
+    if(validHost) {
+        m_nodeTestTargetCombo->addItem(QStringLiteral("主机：%1").arg(host),host);
+        auto addUrl=[this,&host](const QString &value) {
+            const QUrl url(value);
+            if(!url.isValid() || !QStringList{"http","https"}.contains(url.scheme())
+                || !url.userName().isEmpty() || !url.password().isEmpty() || !url.fragment().isEmpty()
+                || url.host().compare(host,Qt::CaseInsensitive)!=0) return;
+            const QString target=url.toString();
+            if(m_nodeTestTargetCombo->findData(target)<0) {
+                const QString label=QStringLiteral("%1 %2 · %3%4").arg(url.scheme().toUpper())
+                    .arg(url.port(url.scheme()=="https"?443:80)).arg(url.host(),url.path()=="/"?QString():url.path());
+                m_nodeTestTargetCombo->addItem(label,target);
+                m_nodeTestTargetCombo->setItemData(m_nodeTestTargetCombo->count()-1,target,Qt::ToolTipRole);
+            }
+        };
+        for(const auto &value:node.entries) {
+            const auto entry=value.toObject();
+            if(entry["state"].toString()!="out_of_scope" && entry["kind"].toString()=="web_url") addUrl(entry["value"].toString());
+        }
+        for(const auto &service:node.services) {
+            bool ok=false;const int port=service.port.toInt(&ok);
+            if(!ok || port<1 || port>65535 || service.protocol!="tcp" || service.state!="open"
+                || !service.service.contains("http",Qt::CaseInsensitive)) continue;
+            QUrl url;url.setScheme(service.service.contains("https",Qt::CaseInsensitive)
+                || service.service.contains("ssl/http",Qt::CaseInsensitive)?"https":"http");
+            url.setHost(host);url.setPort(port);url.setPath("/");addUrl(url.toString());
+        }
+        if(m_nodeTestTargetCombo->count()>1) m_nodeTestTargetCombo->setCurrentIndex(1);
+    }
+    m_nodeTestTargetCombo->setEnabled(validHost);
+    m_nodeTestButton->setEnabled(validHost);
+    m_nodeTestButton->setToolTip(QStringLiteral("打开目标已填写的任务表单；核对目标与授权后才开始服务和漏洞检查"));
+    const int findingCount=node.findings.size();
+    m_nodeVerifyButton->setText(QStringLiteral("验证此节点漏洞（%1）").arg(findingCount));
+    m_nodeVerifyButton->setEnabled(validHost && !m_pipelineId.isEmpty() && findingCount>0);
+    m_nodeVerifyButton->setToolTip(m_pipelineId.isEmpty()?QStringLiteral("独立拓扑仅提供资产发现，请先对所选目标建立测试任务")
+        : findingCount?QStringLiteral("打开本节点已有漏洞的方案、载荷、执行证据与复核窗口")
+        : QStringLiteral("尚无本节点的漏洞候选；先检查主机服务或对所选 Web 服务建立测试任务"));
+    m_nodeActionHint->setText(!validHost?QStringLiteral("请选择具体主机；逻辑网段节点不能作为单个漏洞测试对象。")
+        : findingCount && !m_pipelineId.isEmpty()?QStringLiteral("本节点已有漏洞候选，可直接验证；也可选择具体服务开始一项新的测试任务。")
+        : QStringLiteral("当前是资产发现结果。选择服务后点击“对所选目标建立测试任务”，扫描出漏洞后再选择方案、载荷并验证。"));
     m_detailHintLabel->setText(QStringLiteral("正在编辑：%1").arg(nodeDisplayTitle(node)));
     m_editorDirty = false;
     m_syncingSelection = false;
@@ -2536,6 +2628,9 @@ void TopologyPage::showNodeDetail(const TopologyNodeRecord &node) {
 }
 
 void TopologyPage::showEdgeDetail(const TopologyEdgeRecord &edge) {
+    m_nodeTestTargetCombo->clear();m_nodeTestTargetCombo->setEnabled(false);
+    m_nodeTestButton->setEnabled(false);m_nodeVerifyButton->setEnabled(false);
+    m_nodeActionHint->setText(QStringLiteral("已选择连接。请选择具体主机，再检查服务或验证已有漏洞。"));
     m_syncingSelection = true;
     refreshEdgeNodeOptions();
     m_detailStack->setCurrentIndex(2);
@@ -2575,6 +2670,10 @@ void TopologyPage::showOverviewDetail() {
     m_nodeEvidenceView->clear();
     m_edgeEvidenceView->clear();
     m_nodeScanButton->setEnabled(false);
+    m_nodeTestTargetCombo->clear();m_nodeTestTargetCombo->setEnabled(false);
+    m_nodeTestButton->setEnabled(false);m_nodeVerifyButton->setEnabled(false);
+    m_nodeVerifyButton->setText(QStringLiteral("验证此节点漏洞"));
+    m_nodeActionHint->setText(QStringLiteral("下一步：点击主机，选择已发现的服务建立测试任务；已有漏洞的节点可直接进入验证。"));
     m_edgeLabelEdit->clear();
     m_edgeTypeCombo->setCurrentIndex(0);
     m_edgeNoteEdit->clear();

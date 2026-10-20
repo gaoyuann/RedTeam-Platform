@@ -3,7 +3,7 @@ export { parseResults } from './scanResultParsers.js';
 import { beginToolRun, finishToolRun, hasScanIntegrity } from './scanResultStore.js';
 import { parseNmapResults, parseNmapInterfaces, topologyScanArgs, selectLanDiscoveryScope } from './nmapTopology.js';
 import { getDb } from '../db/connection.js';
-import { isTargetInScope, scopeBlockReason, taskScope } from './taskScope.js';
+import { isTargetInScope, scopeBlockReason, taskScope, topologyDiscoveryScope } from './taskScope.js';
 import { runTool } from '../tools/toolRunner.js';
 import { getWsManager } from './wsManager.js';
 import { normalizeTarget, probeTarget, buildDiscoveredProfile } from './targetDiscovery.js';
@@ -278,7 +278,7 @@ export async function executeScan(scanTaskId) {
   const blocked=scope ? scopeBlockReason(scope,scopedTarget,task.scan_type) : null;
   if(blocked) return rejectScope(blocked);
   let nativeSource;
-  try {nativeSource=JSON.parse(task.parameters || '{}').source_path;} catch {}
+  try {const params=JSON.parse(task.parameters || '{}');nativeSource=params.cscan_target || params.source_path;} catch {}
   if(scope && nativeSource) {
     const reason=scopeBlockReason(scope,nativeSource,'source_scan');
     if(reason) return rejectScope('CScan 源码路径：'+reason);
@@ -506,27 +506,31 @@ export async function executeScan(scanTaskId) {
     if (networkContext) {
       const targetHosts = db.prepare("SELECT result_data FROM scan_results WHERE scan_task_id = ? AND result_type = 'host_discovery'")
         .all(scanTaskId).map(row => JSON.parse(row.result_data)).filter(data => !data.traceTarget).map(data => data.host);
-      const scope = selectLanDiscoveryScope(task.target, networkContext, targetHosts);
+      const lanScope = selectLanDiscoveryScope(task.target, networkContext, targetHosts);
+      const discoveryScope = lanScope.cidr ? topologyDiscoveryScope(scope, scopedTarget, lanScope.cidr) : null;
       let lanToolRunId=null,lanRecordIndex=0;
       const storeLanResult = (type, data) => {
         const saved=insertResult.run(scanTaskId, type, JSON.stringify(data), 'info', null, null, 'nmap', new Date().toISOString());
         linkAuxiliaryResult(saved.lastInsertRowid,lanToolRunId,lanRecordIndex++);
         contextResults++;
       };
-      if (!scope.cidr) storeLanResult('scan_warning', { phase: 'lan-discovery', message: scope.reason });
-      else if (parentConfig.task_scope && !isTargetInScope(taskScope(parent),scope.cidr))
+      if (!lanScope.cidr) storeLanResult('scan_warning', { phase: 'lan-discovery', message: lanScope.reason });
+      else if (!discoveryScope)
         storeLanResult('scan_warning',{phase:'lan-discovery',message:'局域网发现范围超出任务范围或命中排除项，未执行'});
       else {
-        const args = ['-sn', '-n', '--reason', '-e', scope.device, '--max-retries', '1', scope.cidr];
+        const args = ['-sn', '-n', '--reason', '-e', lanScope.device, '--max-retries', '1',
+          ...(discoveryScope.excludes.length ? ['--exclude', discoveryScope.excludes.join(',')] : []), lanScope.cidr];
         try {
           const discovery = await runAbortableTool('nmap', args, { timeout: Math.min(timeoutMs, 120000) });
           lanToolRunId=discovery.toolRunId;
-          storeLanResult('scan_evidence', { phase: 'lan-discovery', args, output: discovery.stdout || '',
+          storeLanResult('scan_evidence', { phase: 'lan-discovery', purpose: 'topology_only', args, output: discovery.stdout || '',
             error: discovery.stderr || discovery.error || '', executionMode: discovery.executionMode });
-          const hosts = parseNmapResults(discovery.stdout || '').filter(row => row.result_type === 'host_discovery' && row.result_data.status === 'up');
-          for (const host of hosts) storeLanResult('lan_host_discovery', { ...host.result_data, scope: scope.cidr });
+          const hosts = parseNmapResults(discovery.stdout || '').filter(row => row.result_type === 'host_discovery'
+            && row.result_data.status === 'up' && isTargetInScope(discoveryScope, row.result_data.host));
+          for (const host of hosts) storeLanResult('lan_host_discovery', { ...host.result_data, scope: lanScope.cidr });
           if (discovery.aborted || discovery.executionMode==='aborted' || scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');
-          storeLanResult('lan_scope', { ...scope, complete: discovery.success === true && !discovery.timedOut });
+          storeLanResult('lan_scope', { ...lanScope, purpose: 'topology_only', excludes: discoveryScope.excludes,
+            complete: discovery.success === true && !discovery.timedOut });
           if (!discovery.success || discovery.timedOut) storeLanResult('scan_warning', { phase: 'lan-discovery',
             message: '局域网发现未完成，仅展示已响应主机；' + (discovery.error || discovery.stderr || '探测超时或失败') });
         } catch (error) {

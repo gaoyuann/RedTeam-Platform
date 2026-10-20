@@ -13,7 +13,7 @@ export function auditSources(task, context) {
   let pending = active.get(context.db);
   if (!pending) {pending = new Map();active.set(context.db,pending);}
   if (pending.has(task.scan_task_id)) return pending.get(task.scan_task_id);
-  const promise = (context.parameters?.source_path ? auditCscanNative(task,context) : audit(task,context))
+  const promise = (context.parameters?.cscan_target || context.parameters?.source_path ? auditCscanNative(task,context) : audit(task,context))
     .finally(()=>pending.delete(task.scan_task_id));
   pending.set(task.scan_task_id,promise);
   return promise;
