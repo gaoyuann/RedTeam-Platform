@@ -52,6 +52,7 @@ public:
   void openTaskReport(const QString &pipelineId, const QString &reportId);
   void openTaskAnalysis(const QString &pipelineId);
   void setReturnPage(int page, const QString &title);
+  void createTestForTarget(const QString &target);
 
 signals:
   void returnPageRequested(int page);
@@ -72,7 +73,7 @@ private slots:
   void onCancelFlow();
   void onDeleteFlow();
   void onApproveFlow();
-  void createFlow(bool quickMode);
+  void createFlow(bool quickMode, const QString &initialTarget = {});
   void onStartFlow();
   void onBackToList();
   void onFilterChanged(int index);

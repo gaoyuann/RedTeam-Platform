@@ -726,6 +726,61 @@ int main(int argc, char **argv)
     document["pipeline_id"]="foreign";verify(!panel.validReport(document,metadata.value("report_id").toString(),true),"v2 report rejects foreign task identity");
   }
   chooseFinding.stop();
+  {
+    MockServer nodeServer;nodeServer.listen(QHostAddress::LocalHost,0);
+    nodeServer.handler=[](const QString &method,const QString &requestPath)->MockReply {
+      const QString path=QUrl(requestPath).path();
+      if(method=="POST" && path=="/api/pipelines")return {success(QJsonObject{{"pipeline_id","node-followup"}})};
+      if(path=="/api/pipelines/node-followup/start")return {success(QJsonObject{})};
+      if(path=="/api/pipelines")return {success(QJsonArray{taskRecord("node-followup")})};
+      if(path=="/api/pipelines/node-followup")return {success(taskRecord("node-followup"))};
+      if(path.endsWith("/execution"))return {success(executionRecord("node-followup"))};
+      if(path.endsWith("/results"))return {success(resultsRecord("node-followup"))};
+      if(path.endsWith("/plan"))return {success(QJsonValue::Null)};
+      return {success(QJsonArray{})};
+    };
+    ApiClient nodeApi(QStringLiteral("http://127.0.0.1:%1").arg(nodeServer.serverPort()));
+    FlowPage nodeFlow(&nodeApi,"user","fixture-user");
+    const QString observedService="http://192.0.2.40:8089/";
+    QTimer::singleShot(0,&nodeFlow,[&]() {
+      auto *dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      verify(dialog && dialog->objectName()=="topologyTargetTaskDialog","node action opens an explicit target confirmation form");
+      if(dialog) {
+        verify(dialog->findChild<QLineEdit*>("taskTargetInput")->text()==observedService,"node task preserves the exact discovered service URL");
+        verify(!dialog->findChild<QCheckBox*>("taskAuthorizationCheck")->isChecked(),"node task requires fresh explicit authorization");
+        verify(!dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->isEnabled(),"node scan cannot start before target authorization");
+        dialog->reject();
+      }
+    });
+    emit nodeFlow.m_topoTab->testTargetRequested(observedService);
+    verify(nodeServer.requests.value("POST /api/pipelines")==0,"cancelling target confirmation creates no task or scan");
+    QTimer::singleShot(0,&nodeFlow,[&]() {
+      auto *dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      if(!dialog) {verify(false,"second node confirmation is visible");return;}
+      dialog->findChild<QCheckBox*>("taskAuthorizationCheck")->setChecked(true);
+      dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    });
+    emit nodeFlow.m_topoTab->testTargetRequested(observedService);
+    verify(awaitCondition([&]() {return nodeServer.requests.value("POST /api/pipelines/node-followup/start")==1
+      && nodeFlow.m_selectedPipelineId=="node-followup";}),"confirmed node target creates and starts exactly one task then opens its workbench");
+    const auto body=QJsonDocument::fromJson(nodeServer.requestBodies.value("POST /api/pipelines")).object();
+    const auto config=body["config"].toObject();
+    verify(body["target"].toString()==observedService && config["test_type"].toString()=="web"
+      && config["task_scope"].toObject()["includes"].toArray()==QJsonArray{observedService},
+      "new node task is scoped to the chosen Web service rather than the whole subnet");
+    verify(nodeServer.requests.value("POST /api/pipelines")==1,"node confirmation submits one task creation request");
+    const auto previous=nodeServer.requests.value("POST /api/pipelines/node-followup/verifications");
+    emit nodeFlow.m_topoTab->nodeFindingsRequested("foreign-task",{41});
+    verify(nodeFlow.findChildren<FindingVerificationDialog*>().isEmpty(),"late node finding actions cannot open another task's verification");
+    emit nodeFlow.m_topoTab->nodeFindingsRequested("node-followup",{41,42});
+    verify(awaitCondition([&](){return nodeServer.requests.value("POST /api/pipelines/node-followup/verifications")>previous;}),
+      "node findings open the existing per-finding preparation workflow");
+    for(auto *dialog:nodeFlow.findChildren<FindingVerificationDialog*>())delete dialog;
+    bool noExecution=true;
+    for(auto it=nodeServer.requests.cbegin();it!=nodeServer.requests.cend();++it)
+      if(it.key().contains("/attempts") || it.key().startsWith("POST /api/runs"))noExecution=false;
+    verify(noExecution,"opening a node's findings never executes an attack");
+  }
   std::cout << "TOTAL " << checks << " checks passed" << std::endl;
   return 0;
 }

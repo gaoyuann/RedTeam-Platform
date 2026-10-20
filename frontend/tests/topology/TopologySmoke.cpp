@@ -387,5 +387,43 @@ int main(int argc, char **argv) {
         || page.m_detailStack->currentIndex() != 1
         || page.m_nodeIpEdit->text() != "192.168.1.111") return 48;
     page.m_api = &api;
+    // Discovery is actionable in both standalone and task-bound topology.
+    TopologyDocument actions;
+    TopologyNodeRecord host;
+    host.id="action-host";host.ip="192.0.2.40";host.deviceType="host";
+    TopologyServiceRecord web;web.port="8089";web.protocol="tcp";web.service="http";web.state="open";
+    host.services.append(web);
+    auto closed=web;closed.port="9999";closed.state="closed";host.services.append(closed);
+    host.entries=QJsonArray{QJsonObject{{"kind","web_url"},{"state","observed"},{"value","http://192.0.2.40:8089/"}},
+        QJsonObject{{"kind","web_url"},{"state","observed"},{"value","http://other.invalid:8089/"}}};
+    host.findings=QJsonArray{QJsonObject{{"findingId",41}},QJsonObject{{"findingId",42}}};
+    actions.nodes.append(host);
+    page.m_topologyDocument=actions;page.m_pipelineId="action-task";page.m_selectedNodeId=host.id;
+    int createSignals=0,verifySignals=0;QString selectedTarget,selectedTask;QList<qint64> selectedFindings;
+    QObject::connect(&page,&TopologyPage::testTargetRequested,&app,[&](const QString &target){createSignals++;selectedTarget=target;});
+    QObject::connect(&page,&TopologyPage::nodeFindingsRequested,&app,[&](const QString &task,const QList<qint64> &ids){
+        verifySignals++;selectedTask=task;selectedFindings=ids;
+    });
+    page.showNodeDetail(host);
+    if(createSignals || verifySignals || !page.m_nodeTestButton->isEnabled() || !page.m_nodeVerifyButton->isEnabled())return 52;
+    if(page.m_nodeTestTargetCombo->count()!=2 || page.m_nodeTestTargetCombo->currentData().toString()!="http://192.0.2.40:8089/")return 53;
+    if(argc>1) {
+        page.populateTopologyDocument();page.onResetView();app.processEvents();
+        if(!page.grab().save(QString::fromLocal8Bit(argv[1])+".node-actions.png"))return 61;
+    }
+    page.m_nodeTestButton->click();
+    if(createSignals!=1 || selectedTarget!="http://192.0.2.40:8089/")return 54;
+    page.m_nodeVerifyButton->click();
+    if(verifySignals!=1 || selectedTask!="action-task" || selectedFindings!=QList<qint64>{41,42})return 55;
+    page.m_pipelineId.clear();page.showNodeDetail(host);
+    if(!page.m_nodeTestButton->isEnabled() || page.m_nodeVerifyButton->isEnabled())return 56;
+    page.m_nodeTestTargetCombo->setCurrentIndex(0);page.m_nodeTestButton->click();
+    if(createSignals!=2 || selectedTarget!="192.0.2.40")return 57;
+    auto segment=host;segment.deviceType="network_segment";page.showNodeDetail(segment);
+    if(page.m_nodeTestButton->isEnabled() || page.m_nodeTestTargetCombo->count())return 58;
+    page.m_pipelineId="action-task";host.findings={};page.showNodeDetail(host);
+    if(page.m_nodeVerifyButton->isEnabled())return 59;
+    page.showOverviewDetail();
+    if(page.m_nodeTestButton->isEnabled() || page.m_nodeVerifyButton->isEnabled())return 60;
     return 0;
 }

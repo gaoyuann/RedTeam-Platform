@@ -40,6 +40,10 @@ public:
     void setPipelineContext(const QString &pipelineId, const QString &target,
                             const QStringList &scanIds, bool scanFinished);
 
+signals:
+    void testTargetRequested(const QString &target);
+    void nodeFindingsRequested(const QString &pipelineId, const QList<qint64> &findingIds);
+
 public slots:
     void onScanStarted(const QJsonObject &data);
     void onScanCompleted(const QJsonObject &data);
@@ -62,6 +66,8 @@ private slots:
     void onApplyDetailEdits();
     void onRemoveSelectedRecord();
     void onScanSelectedNode();
+    void onTestSelectedNode();
+    void onVerifySelectedNode();
 
 private:
     void setupUI();
@@ -194,6 +200,10 @@ private:
     QPlainTextEdit *m_nodeEvidenceView;
     QComboBox *m_nodeScanTypeCombo;
     QPushButton *m_nodeScanButton;
+    QComboBox *m_nodeTestTargetCombo;
+    QPushButton *m_nodeTestButton;
+    QPushButton *m_nodeVerifyButton;
+    QLabel *m_nodeActionHint;
     QComboBox *m_edgeSourceCombo;
     QComboBox *m_edgeTargetCombo;
     QLineEdit *m_edgeLabelEdit;

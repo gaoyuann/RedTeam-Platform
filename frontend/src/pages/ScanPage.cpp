@@ -2673,7 +2673,9 @@ void ScanPage::onPollStatus() {
 }
 
 void ScanPage::loadSourceConnections() {
-  m_api->get("/api/scan-tasks/source-connections", 5000, [this](const QJsonObject &res) {
+  const QPointer<ScanPage> guard(this);
+  m_api->get("/api/scan-tasks/source-connections", 5000, [this,guard](const QJsonObject &res) {
+    if(!guard) return;
     if(res["status"].toString()!="ok") {
       m_statusLabel->setText("源码项目配置未就绪，仍可选择远程测试：" + res["error"].toObject()["message"].toString());
       return;

@@ -7,6 +7,7 @@
 #include "StepIndicator.h"
 #include "TopologyPage.h"
 #include "ScanPage.h"
+#include "FindingVerificationDialog.h"
 #include "ExecutionPage.h"
 #include "EvaluatePage.h"
 #include "../ApiClient.h"
@@ -435,6 +436,12 @@ void FlowPage::setupWorkbenchView()
   // Task workbench tabs preserve the selected pipeline context.
   m_stageTabs = new WorkbenchTabs(m_workbenchView, false);
   m_topoTab = new TopologyPage(m_api, m_role, m_username, m_stageTabs);
+  connect(m_topoTab,&TopologyPage::testTargetRequested,this,&FlowPage::createTestForTarget);
+  connect(m_topoTab,&TopologyPage::nodeFindingsRequested,this,[this](const QString &pipelineId,const QList<qint64> &ids) {
+    if(pipelineId!=m_selectedPipelineId || ids.isEmpty()) return;
+    auto *dialog=new FindingVerificationDialog(m_api,pipelineId,ids,this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);dialog->show();
+  });
   m_scanTab = new ScanPage(m_api, m_role, m_username, m_stageTabs);
   m_scanTab->setTaskScope({});
   // 攻击 Tab：快速执行（原"多阶段战役"子 Tab 已移除）
@@ -946,9 +953,16 @@ void FlowPage::onCreateFlow()
   createFlow(false);
 }
 
-void FlowPage::createFlow(bool quickMode)
+void FlowPage::createTestForTarget(const QString &target)
+{
+  if(target.trimmed().isEmpty()) return;
+  createFlow(false,target);
+}
+
+void FlowPage::createFlow(bool quickMode, const QString &initialTarget)
 {
   QDialog dlg(this);
+  if(!initialTarget.isEmpty()) dlg.setObjectName("topologyTargetTaskDialog");
   dlg.setWindowTitle(QStringLiteral("新建测试任务"));
   dlg.setMinimumWidth(quickMode ? 480 : 560);
   auto *l = new QVBoxLayout(&dlg);
@@ -967,11 +981,14 @@ void FlowPage::createFlow(bool quickMode)
   if (!quickMode) {
     nameInput = new QLineEdit(&dlg);
     nameInput->setPlaceholderText(QStringLiteral("例如：本地测试环境安全验证"));
+    if(!initialTarget.isEmpty()) nameInput->setText(QStringLiteral("%1 服务与漏洞检查").arg(initialTarget));
     form->addRow(QStringLiteral("任务名称"), nameInput);
   }
 
   auto *targetInput = new QLineEdit(&dlg);
   targetInput->setPlaceholderText(QStringLiteral("例: 192.168.1.0/24 或 http://172.17.0.2"));
+  targetInput->setObjectName("taskTargetInput");
+  targetInput->setText(initialTarget);
   form->addRow(QStringLiteral("测试目标"), targetInput);
 
   auto *testType = new QComboBox(&dlg);
@@ -980,6 +997,7 @@ void FlowPage::createFlow(bool quickMode)
   testType->addItem(QStringLiteral("主机安全测试"), QStringLiteral("host"));
   testType->addItem(QStringLiteral("内网渗透测试"), QStringLiteral("internal"));
   testType->addItem(QStringLiteral("程序漏洞测试（智能体）"), QStringLiteral("program"));
+  if(initialTarget.startsWith("http://") || initialTarget.startsWith("https://")) testType->setCurrentIndex(testType->findData("web"));
   form->addRow(QStringLiteral("任务类型"), testType);
   auto *programKind = new QComboBox(&dlg);
   programKind->addItem("静态源码目录", "source");
@@ -1031,6 +1049,8 @@ void FlowPage::createFlow(bool quickMode)
   if (!quickMode) {
     scopeInput = new QLineEdit(&dlg);
     scopeInput->setPlaceholderText(QStringLiteral("仅填写已获得授权的目标或范围"));
+    scopeInput->setObjectName("taskAuthorizationScopeInput");
+    scopeInput->setText(initialTarget);
     form->addRow(QStringLiteral("授权范围"), scopeInput);
     additionalTargets = new QLineEdit(&dlg);
     additionalTargets->setPlaceholderText(QStringLiteral("可选；多个 IP、CIDR 或 URL 用半角逗号分隔"));
@@ -1057,6 +1077,7 @@ void FlowPage::createFlow(bool quickMode)
   l->addLayout(form);
 
   auto *authorizationCheck = new QCheckBox(QStringLiteral("我确认已获得对上述目标开展测试的授权"), &dlg);
+  authorizationCheck->setObjectName("taskAuthorizationCheck");
   authorizationCheck->setChecked(false);
   l->addWidget(authorizationCheck);
 
@@ -1069,7 +1090,7 @@ void FlowPage::createFlow(bool quickMode)
 
   UiUtil::styleDialogButtons(btns);
   auto *confirmButton = btns->button(QDialogButtonBox::Ok);
-  confirmButton->setText(quickMode ? QStringLiteral("授权并开始快速测试")
+  confirmButton->setText(!initialTarget.isEmpty()?QStringLiteral("确认目标并开始扫描"):quickMode ? QStringLiteral("授权并开始快速测试")
                                    : QStringLiteral("创建任务"));
   confirmButton->setEnabled(false);
   connect(authorizationCheck, &QCheckBox::toggled, confirmButton, &QPushButton::setEnabled);
@@ -1131,7 +1152,10 @@ void FlowPage::createFlow(bool quickMode)
   m_newBtn->setEnabled(false);
   m_quickBtn->setEnabled(false);
 
-  m_api->post("/api/pipelines", body, 10000, [this, quickMode](const QJsonObject &res) {
+  const bool startAfterCreate=quickMode || !initialTarget.isEmpty();
+  const QPointer<FlowPage> guard(this);
+  m_api->post("/api/pipelines", body, 10000, [this,guard,startAfterCreate](const QJsonObject &res) {
+    if(!guard) return;
     m_newBtn->setEnabled(true);
     m_quickBtn->setEnabled(true);
     if (res["status"].toString() != "ok") {
@@ -1142,22 +1166,18 @@ void FlowPage::createFlow(bool quickMode)
 
     QString pipelineId = res["data"].toObject()["pipeline_id"].toString();
     refreshFlows();
-    if (!quickMode) return;
+    if (!startAfterCreate) return;
     m_api->post(QStringLiteral("/api/pipelines/%1/start").arg(pipelineId),
-                QJsonObject{}, 10000, [this, pipelineId](const QJsonObject &startResponse) {
+                QJsonObject{}, 10000, [this,guard,pipelineId](const QJsonObject &startResponse) {
+      if(!guard) return;
       if (startResponse["status"].toString() != "ok") {
         QMessageBox::warning(this, QStringLiteral("任务已创建"),
             QStringLiteral("任务已保存，但启动失败：%1")
                 .arg(startResponse["error"].toObject()["message"].toString()));
       }
       refreshFlows();
-      const int row = [&]() {
-        for (int index = 0; index < m_flowTable->rowCount(); ++index) {
-          if (flowIdAtRow(index) == pipelineId) return index;
-        }
-        return -1;
-      }();
-      if (row >= 0) onFlowDoubleClicked(row);
+      openTaskAnalysis(pipelineId);
+      m_stageTabs->setCurrentWidget(m_scanTab);
     });
   });
 }
