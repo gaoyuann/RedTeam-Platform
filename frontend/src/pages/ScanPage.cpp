@@ -39,6 +39,15 @@
 static bool isProgramScan(const QString &type) { return type == "program_scan" || type == "source_scan"; }
 static bool isProgramFinding(const QString &type) { return type == "program_finding" || type == "source_finding"; }
 
+static QString programFindingLabel(const QJsonObject &record) {
+  const auto data=QJsonDocument::fromJson(record["result_data"].toString().toUtf8()).object();
+  const QString title=data["title"].toString(data["name"].toString(data["finding"].toString("程序漏洞候选")));
+  QString location=data["file"].toString();
+  if(!location.isEmpty() && data["start_line"].toInt()>0) location+=":"+QString::number(data["start_line"].toInt());
+  if(location.isEmpty()) location=data["url"].toString(data["location"].toString());
+  return title+(location.isEmpty()?QString():" · "+location)+(data["cwe"].toString().isEmpty()?QString():" ["+data["cwe"].toString()+"]");
+}
+
 static bool isVerificationRecord(const QJsonObject &row) {
   if(row.contains("category"))return row["category"].toString()=="vulnerability";
   const QStringList types{"vulnerability","web_vuln","sql_injection","misconfiguration","auth_finding","source_vuln","source_finding","program_finding"};
@@ -55,6 +64,13 @@ static void showPayloadSummary(QTreeWidgetItem *item, const QJsonObject &record,
     : state == "stale" ? QStringLiteral("需重新确认：") + match["name"].toString()
     : state == "candidate" ? QStringLiteral("候选：") + match["name"].toString() : QStringLiteral("暂无匹配"));
   item->setToolTip(3, match["match_basis"].toString());
+  const QHash<QString,QString> labels{{"queued","排队中"},{"running","执行中"},{"cancelling","停止中"},
+    {"unknown","停止未确认"},{"completed","执行完成"},{"failed","执行失败"},{"aborted","已停止"},
+    {"draft","方案草稿"},{"ready","待执行"},{"needs_conditions","待补条件"},
+    {"pending","待判定"},{"confirmed","验证成立"},{"not_verified","本次未验证成立"},
+    {"inconclusive","条件不足"},{"false_positive","误报"}};
+  item->setText(4, verification.isEmpty() ? QStringLiteral("未准备") : labels.value(verification["state"].toString(),QStringLiteral("待准备")));
+  item->setText(5, labels.value(verification["conclusion"].toString(),QStringLiteral("待验证")));
 }
 
 // ── Translate nikto finding text to Chinese ───────────────────────────
@@ -495,15 +511,28 @@ void ScanPage::setTarget(const QString &target)
   m_sourceTargetInput->setText(target);
 }
 
-void ScanPage::setPipelineScope(const QString &pipelineId, const QStringList &taskIds, const QString &state)
+void ScanPage::setPipelineScope(const QString &pipelineId, const QStringList &taskIds, const QString &state, bool findingWorkflow)
 {
+  const bool leavingFindingWorkflow=m_findingWorkflow && !findingWorkflow;
   if(m_pipelineId!=pipelineId)m_checkedFindings.clear();
-  if (m_pipelineId == pipelineId && m_scopeTaskIds == taskIds) {
+  if (m_pipelineId == pipelineId && m_scopeTaskIds == taskIds && m_findingWorkflow==findingWorkflow) {
     if (m_pipelineScanState != state && m_allScanResults) { m_pipelineScanState = state; loadPipelineResults(); }
     return;
   }
   setTaskScope(taskIds);
   m_pipelineId = pipelineId; m_pipelineScanState = state;
+  m_findingWorkflow = findingWorkflow;
+  m_findingStats->setStatistics({});
+  m_findingStats->setVisible(findingWorkflow);
+  m_resultOverview->setVisible(!findingWorkflow);
+  m_completeFindings->setVisible(findingWorkflow);
+  m_detailTabs->setTabEnabled(1, !findingWorkflow);
+  m_detailTabs->setCurrentIndex(0);
+  if(auto *tasks=findChild<QWidget*>("scanTasksPanel")) tasks->setVisible(!findingWorkflow);
+  m_resultCategory->blockSignals(true);
+  if(findingWorkflow) m_resultCategory->setCurrentIndex(1);
+  else if(leavingFindingWorkflow) m_resultCategory->setCurrentIndex(0);
+  m_resultCategory->blockSignals(false);
   m_resultSource->blockSignals(true); m_resultSource->clear(); m_resultSource->addItem(QStringLiteral("全部来源"), QString()); m_resultSource->blockSignals(false);
   m_allScanResults = true;
   m_selectInitialScopeTask = false;
@@ -543,6 +572,17 @@ void ScanPage::loadPipelineResults(bool append)
     m_resultHint->setText(QStringLiteral("当前筛选已加载 %1 / %2 条记录 · 未去重 · 双击查看脱敏记录与来源")
         .arg(m_aggregateRecords.size()).arg(page["total"].toInt()));
     const auto summary = data["scan_summary"].toObject();
+    m_verificationStatistics = data["verification_statistics"].toObject();
+    if(m_findingWorkflow) {
+      const auto stats=m_verificationStatistics;
+      m_findingStats->setStatistics(stats);
+      if(stats["candidate_records"].toInt()==0)
+        m_resultHint->setText(m_pipelineScanState=="running" ? QStringLiteral("扫描进行中，漏洞候选将在此展示…")
+          : QStringLiteral("本次没有有效漏洞候选。请查看工具错误 / 警告与扫描覆盖；没有发现不能证明目标安全。"));
+      else m_resultHint->setText(QStringLiteral("双击漏洞准备方案、载荷并查看演示结果；勾选多条可统一打开。"));
+      m_completeFindings->setEnabled(m_pipelineScanState=="awaiting_approval"
+          && !stats["active_attempts"].toInt() && !stats["unknown_attempts"].toInt());
+    }
     QStringList states;
     bool active = false;
     const QString selected = m_resultSource->currentData().toString();
@@ -557,7 +597,7 @@ void ScanPage::loadPipelineResults(bool append)
     }
     const bool unresolvedCalls = !summary["active_calls"].toArray().isEmpty();
     if (unresolvedCalls) states << QStringLiteral("工具调用尚未结束或停止状态未确认，请勿据此恢复环境");
-    if (active || unresolvedCalls) m_pollTimer->start(2000); else m_pollTimer->stop();
+    if (active || unresolvedCalls || m_verificationStatistics["active_attempts"].toInt()) m_pollTimer->start(2000); else m_pollTimer->stop();
     m_resultSource->setCurrentIndex(qMax(0, m_resultSource->findData(selected))); m_resultSource->blockSignals(false);
     for (const auto &value : summary["unexecuted_checks"].toArray()) states << formatScanType(value.toString()) + "：未执行";
     const int unfinishedChecks = summary.value("unfinished_check_count").toInt();
@@ -571,6 +611,7 @@ void ScanPage::loadPipelineResults(bool append)
         .arg(summary["record_count"].toInt()).arg(states.join("；")));
     m_statusLabel->setToolTip(QString::fromUtf8(QJsonDocument(data["scan_runs"].toArray()).toJson(QJsonDocument::Indented)));
     renderCoverage(data["scan_coverage"].toObject());
+    if(m_findingWorkflow) m_coverageTree->hide();
   });
 }
 
@@ -646,6 +687,12 @@ void ScanPage::clearTaskScope()
 {
   ++m_scopeRevision;
   ++m_scanPageRequest; m_scanPageBusy = false; m_pipelineId.clear(); m_allScanResults = false;
+  m_findingWorkflow=false; m_verificationStatistics={};
+  if(m_findingStats) m_findingStats->hide();
+  if(m_resultOverview) m_resultOverview->show();
+  if(m_completeFindings) m_completeFindings->hide();
+  if(m_detailTabs) m_detailTabs->setTabEnabled(1,true);
+  if(auto *tasks=findChild<QWidget*>("scanTasksPanel")) tasks->show();
   if (m_aggregateControls) m_aggregateControls->hide();
   m_scopedTasks = true;
   m_scopeTaskIds.clear();
@@ -1184,6 +1231,27 @@ void ScanPage::setupUI() {
   m_statusLabel->setStyleSheet(Theme::StatusInfoStyle);
   m_statusLabel->setWordWrap(true);
   detailLayout->addWidget(m_statusLabel);
+  m_findingStats=new FindingStatisticsPanel;
+  m_findingStats->setObjectName("findingWorkflowStatistics");
+  m_findingStats->hide();
+  detailLayout->addWidget(m_findingStats);
+  m_completeFindings=new QPushButton(QStringLiteral("结束本轮演示并汇总"));
+  m_completeFindings->setObjectName("completeFindingWorkflow");
+  m_completeFindings->hide();
+  detailLayout->addWidget(m_completeFindings);
+  connect(m_completeFindings,&QPushButton::clicked,this,[this] {
+    if(m_pipelineId.isEmpty() || m_pipelineScanState!="awaiting_approval")return;
+    const QString pipeline=m_pipelineId;
+    if(QMessageBox::question(this,"汇总本轮测试",QString("当前仍有 %1 条候选未实际测试、%2 条待复核。结束后保留已有证据；继续测试需要新建任务。是否结束？")
+      .arg(m_verificationStatistics["untested_records"].toInt()).arg(m_verificationStatistics["unreviewed_records"].toInt()))!=QMessageBox::Yes)return;
+    m_completeFindings->setEnabled(false);
+    QPointer<ScanPage> guard(this);
+    m_api->post("/api/pipelines/"+pipeline+"/complete-verifications",{{"confirmed",true}},10000,[guard,pipeline](const QJsonObject &r) {
+      if(!guard || guard->m_pipelineId!=pipeline)return;
+      if(r["status"]!="ok") {guard->m_statusLabel->setText(r["error"].toObject()["message"].toString());guard->m_completeFindings->setEnabled(true);return;}
+      guard->m_pipelineScanState="completed";guard->loadPipelineResults();emit guard->workflowCompleted();
+    });
+  });
 
   // ── Re-execute button (hidden by default) ─────────────────────────
   auto *reexecH = new QHBoxLayout;
@@ -1254,7 +1322,7 @@ void ScanPage::setupUI() {
     layout->addWidget(text); dialog->show();
   });
   UiUtil::EmptyHint::attach(m_resultTree, QStringLiteral("扫描完成后在此展示结果"));
-  m_resultTree->setHeaderLabels({"严重度", "数据", "工具", "匹配载荷"});
+  m_resultTree->setHeaderLabels({"严重度", "漏洞 / 发现与位置", "来源工具", "对应载荷", "测试状态", "漏洞结论"});
   m_resultTree->setAlternatingRowColors(true);
   m_resultTree->setSelectionMode(QAbstractItemView::ExtendedSelection);
   auto *verifySelected = new QPushButton("打开勾选的漏洞");
@@ -1295,8 +1363,7 @@ void ScanPage::setupUI() {
     if (!m_pipelineId.isEmpty() && item->data(0,Qt::UserRole+1).toLongLong()>0
         && item->data(0,Qt::UserRole+2).toString()=="vulnerability")
       menu.addAction("准备此漏洞验证 / 查看历史", [this,item]() {
-        auto *dialog=new FindingVerificationDialog(m_api,m_pipelineId,{item->data(0,Qt::UserRole+1).toLongLong()},this);
-        dialog->setAttribute(Qt::WA_DeleteOnClose);dialog->show();
+        openFindingVerification({item->data(0,Qt::UserRole+1).toLongLong()});
       });
     // 演示动线：漏洞结果一键发起攻击
     const QString resultType = item->data(0, Qt::UserRole).toString();
@@ -1554,6 +1621,8 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
   m_resultOverview->setResults(results);
   m_resultTree->clear();
   m_resultTree->setColumnHidden(3, !m_allScanResults);
+  m_resultTree->setColumnHidden(4, !m_allScanResults);
+  m_resultTree->setColumnHidden(5, !m_allScanResults);
   m_coverageTree->clear();
   m_coverageTree->hide();
 
@@ -1600,7 +1669,7 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
       child->setForeground(0, severityColor(sev));
       child->setData(0, Qt::UserRole+1, obj["id"].toVariant().toLongLong());
       child->setData(0, Qt::UserRole, resultType);  // 供右键"发起攻击"判断类型
-      child->setText(1, formatResultData(rawData, resultType));
+      child->setText(1, m_findingWorkflow && isProgramFinding(resultType) ? programFindingLabel(obj) : formatResultData(rawData, resultType));
       child->setToolTip(1, rawData);
       child->setText(2, tool + (m_allScanResults ? " · " + obj["scan_task_id"].toString() + " #" + QString::number(obj["id"].toVariant().toLongLong()) : QString()));
       showPayloadSummary(child, obj, m_allScanResults);
@@ -1652,7 +1721,7 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
       child->setForeground(0, severityColor(sev));
       child->setData(0, Qt::UserRole+1, obj["id"].toVariant().toLongLong());
       child->setData(0, Qt::UserRole, resultType);  // 供右键"发起攻击"判断类型
-      child->setText(1, formatResultData(rawData, resultType));
+      child->setText(1, m_findingWorkflow && isProgramFinding(resultType) ? programFindingLabel(obj) : formatResultData(rawData, resultType));
       child->setToolTip(1, rawData);
       child->setText(2, tool + (m_allScanResults ? " · " + obj["scan_task_id"].toString() + " #" + QString::number(obj["id"].toVariant().toLongLong()) : QString()));
       showPayloadSummary(child, obj, m_allScanResults);
@@ -1664,7 +1733,7 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
     groupItem->setExpanded(true);
   }
 
-  m_resultTree->setColumnWidth(0, m_allScanResults ? 110 : 90);
+  m_resultTree->setColumnWidth(0, m_findingWorkflow ? 140 : m_allScanResults ? 110 : 90);
   m_resultTree->setColumnWidth(2, m_allScanResults ? 260 : 80);
   m_resultTree->setColumnWidth(3, m_allScanResults ? 180 : 90);
 }
@@ -2980,5 +3049,8 @@ void ScanPage::reviewSourceFinding(int findingId) {
 void ScanPage::openFindingVerification(const QList<qint64> &ids) {
   if(m_pipelineId.isEmpty() || ids.isEmpty())return;
   auto *dialog=new FindingVerificationDialog(m_api,m_pipelineId,ids,this);
+  connect(dialog,&FindingVerificationDialog::verificationChanged,this,[this] {
+    if(!m_pipelineId.isEmpty() && !m_scanPageBusy) loadPipelineResults();
+  });
   dialog->setAttribute(Qt::WA_DeleteOnClose);dialog->show();
 }

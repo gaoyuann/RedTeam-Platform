@@ -43,6 +43,7 @@
 #include <QDateTime>
 #include <QTimer>
 #include <QPointer>
+#include <QSettings>
 #include <cmath>
 
 // ── Step metadata ──────────────────────────────────────────────────────
@@ -372,6 +373,10 @@ void FlowPage::setupWorkbenchView()
   m_resultBtn->hide();
   topLayout->addWidget(m_resultBtn);
   connect(m_resultBtn, &QPushButton::clicked, this, [this]() {
+    if (parseJsonObject(m_lastDisplayedDetail["config"])["workflow"].toString()=="per_finding") {
+      m_stageTabs->setCurrentWidget(m_scanTab);
+      return;
+    }
     m_stageTabs->setCurrentWidget(m_evalTab);
     if (!m_lastLoadedRunId.isEmpty()) m_evalTab->showRun(m_lastLoadedRunId);
   });
@@ -459,6 +464,10 @@ void FlowPage::setupWorkbenchView()
     m_evalTab->clearRun();
   });
   connect(m_execTab, &ExecutionPage::runCompleted, this, &FlowPage::onRunCompleted);
+  connect(m_scanTab, &ScanPage::workflowCompleted, this, [this] {
+    if(!m_selectedPipelineId.isEmpty()) loadFlowDetail(m_selectedPipelineId);
+    refreshFlows();
+  });
   connect(m_stageTabs, &QTabWidget::currentChanged, this, [this](int index) {
     if (m_stageTabs->widget(index) == m_evalTab && m_stack->currentIndex() == 1 && !m_lastLoadedEvalRunId.isEmpty())
       m_evalTab->retryRun(m_lastLoadedEvalRunId);
@@ -762,9 +771,12 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     m_topoTab->setPipelineContext(pipelineId, target, scopedScanIds, scanFinished);
     const auto scanConfig = p.value("config").toObject();
     const QString scanMode = scanConfig.value("scan_mode").toString();
-    if (scanMode == "program_dynamic" || scanMode == "source_assisted" || target.startsWith("tcp://"))
+    const bool findingWorkflow = scanConfig.value("workflow").toString()=="per_finding";
+    if (!findingWorkflow && (scanMode == "program_dynamic" || scanMode == "source_assisted" || target.startsWith("tcp://")))
       m_scanTab->setTaskScope(scopedScanIds);
-    else m_scanTab->setPipelineScope(pipelineId, scopedScanIds, status);
+    else m_scanTab->setPipelineScope(pipelineId, scopedScanIds, status, findingWorkflow);
+    for (auto *page : QList<QWidget*>{m_analysisTab,m_planTab,m_execTab,m_evalTab})
+      m_stageTabs->setTabEnabled(m_stageTabs->indexOf(page), !findingWorkflow);
     m_scanTab->setTarget(target);
     m_execTab->setPipelineContext(pipelineId, status, p["run_id"].toString(), target);
     m_evalTab->setPipelineContext(pipelineId, p["run_id"].toString(), target);
@@ -778,7 +790,13 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     const bool selectingSource = status == "awaiting_approval" && p["generated_playbook_id"].toString().isEmpty()
         && p["summary"].toObject()["plan"].toObject().isEmpty()
         && QStringList{"source_selection","program_selection"}.contains(parseJsonObject(p["result"])["paused_at"].toString());
-    m_statusLabel->setText(QStringLiteral("%1  %2").arg(statusIcon(status), selectingSource ? QStringLiteral("待生成攻击测试预案") : statusText(status)));
+    m_statusLabel->setText(QStringLiteral("%1  %2").arg(statusIcon(status), findingWorkflow && status=="awaiting_approval"
+        ? QStringLiteral("待逐漏洞测试") : selectingSource ? QStringLiteral("待生成攻击测试预案") : statusText(status)));
+    const QString findingPhase = findingWorkflow ? pipelineId + ":" + status : QString();
+    if (findingWorkflow && findingPhase!=property("findingPhase").toString()
+        && (status=="running" || status=="awaiting_approval" || status=="completed"))
+      m_stageTabs->setCurrentWidget(m_scanTab);
+    setProperty("findingPhase", findingPhase);
     m_statusLabel->setStyleSheet(statusBadgeStyle(status));
 
     // 从 pipeline 数据提取 run_id 和 playbook_id，自动加载到攻击 Tab.
@@ -905,6 +923,16 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
         ps.status = "pending";
         ps.summary = QStringLiteral("等待预案批准后执行");
       }
+      if(findingWorkflow) {
+        const QStringList findingNames{"任务准备","扫描发现","漏洞列表","方案与载荷","攻击演示","统计结论"};
+        ps.displayName=findingNames[i];
+        const auto stats=summary["verification_statistics"].toObject();
+        if(i==2) {ps.status=scanFinished?"completed":"pending";ps.summary=QString("%1 条漏洞候选").arg(stats["candidate_records"].toInt());}
+        if(i==3) {ps.status=status=="completed"?"completed":"pending";ps.summary="在漏洞表中选择方案与载荷";}
+        if(i==4) {ps.status=stats["active_attempts"].toInt()?"running":status=="completed"?"completed":"pending";
+          ps.summary=QString("实际测试 %1 条，验证成立 %2 条").arg(stats["tested_records"].toInt()).arg(stats["confirmed_records"].toInt());}
+        if(i==5) {ps.status=status=="completed"?"completed":"pending";ps.summary=stats["conclusion"].toString();}
+      }
       phaseSteps.append(ps);
     }
     m_stepIndicator->setPhases(phaseSteps);
@@ -929,8 +957,9 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     bool isActive = (status == "running" || status == "awaiting_approval");
     bool isDeletable = !isActive;  // backend refuses delete on running/awaiting
     m_startBtn->setVisible(status == "created");
-    m_approveBtn->setVisible(isAwaiting);
-    m_resultBtn->setVisible((status == "completed" || status == "failed") && !runId.isEmpty());
+    m_approveBtn->setVisible(isAwaiting && !findingWorkflow);
+    m_resultBtn->setText(findingWorkflow ? QStringLiteral("查看漏洞与统计") : QStringLiteral("查看结果"));
+    m_resultBtn->setVisible(findingWorkflow ? scanFinished : (status == "completed" || status == "failed") && !runId.isEmpty());
     m_cancelAction->setVisible(isActive);
     m_deleteAction->setVisible(isDeletable);
     m_reportAction->setVisible((status == "completed" || status == "failed") && !runId.isEmpty());
@@ -981,6 +1010,13 @@ void FlowPage::createFlow(bool quickMode)
   testType->addItem(QStringLiteral("内网渗透测试"), QStringLiteral("internal"));
   testType->addItem(QStringLiteral("程序漏洞测试（智能体）"), QStringLiteral("program"));
   form->addRow(QStringLiteral("任务类型"), testType);
+  auto *workflowChoice = new QComboBox(&dlg);
+  workflowChoice->setObjectName("taskWorkflowChoice");
+  workflowChoice->addItem(QStringLiteral("逐漏洞攻击演示（推荐）"), "per_finding");
+  workflowChoice->addItem(QStringLiteral("整任务预案（原流程）"), "legacy");
+  workflowChoice->setCurrentIndex(QSettings().value("tasks/workflow", "per_finding").toString()=="legacy" ? 1 : 0);
+  workflowChoice->setToolTip(QStringLiteral("只影响本次新任务；已有任务继续按创建时的方式运行"));
+  form->addRow(QStringLiteral("测试方式"), workflowChoice);
   auto *programKind = new QComboBox(&dlg);
   programKind->addItem("静态源码目录", "source");
   programKind->addItem("程序运行入口", "runtime");
@@ -1096,6 +1132,8 @@ void FlowPage::createFlow(bool quickMode)
   }
 
   QJsonObject config;
+  config["workflow"] = workflowChoice->currentData().toString();
+  QSettings().setValue("tasks/workflow", workflowChoice->currentData().toString());
   config["require_approval"] = approvalCheck->isChecked();
   config["auto_execute"] = true;
   config["task_name"] = taskName;
@@ -1362,6 +1400,8 @@ EvaluatePage *FlowPage::evalTab() const
 
 void FlowPage::clearRunContext()
 {
+  for(int i=0;i<m_stageTabs->count();++i) m_stageTabs->setTabEnabled(i,true);
+  setProperty("findingPhase",QString());
   m_returnPage = -1;
   m_backBtn->setText(QStringLiteral("← 返回列表"));
   m_backBtn->setToolTip(QStringLiteral("返回任务列表，不取消后台任务。"));
