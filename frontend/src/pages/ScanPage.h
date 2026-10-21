@@ -57,6 +57,12 @@ private:
   void setupUI();
   void openFindingVerification(const QList<qint64> &ids);
   QSet<qint64> m_checkedFindings;
+  QList<QTreeWidgetItem*> selectableFindingItems() const;
+  void updateFindingSelection();
+  void setCurrentFindingsChecked(bool checked);
+  QCheckBox *m_selectAllFindings = nullptr;
+  QLabel *m_findingSelectionCount = nullptr;
+  QPushButton *m_openCheckedFindings = nullptr;
   void loadPipelineResults(bool append = false);
   void renderCoverage(const QJsonObject &coverage);
   QString m_pipelineId;
