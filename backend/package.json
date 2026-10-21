@@ -8,7 +8,7 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "test": "node --experimental-test-module-mocks --test test/*.test.js",
-    "test:source": "node --experimental-test-module-mocks --test test/cscan-client.test.js test/cscan-native.test.js test/source-audit.test.js test/source-api.test.js test/program-agent.test.js test/program-scan-agent.test.js test/source-quality.test.js test/source-enhancement.test.js test/source-workflow.test.js test/source-offline-workflow.test.js",
+    "test:source": "node --experimental-test-module-mocks --test test/cscan-client.test.js test/cscan-native.test.js test/cscan-report-retry.test.js test/source-audit.test.js test/source-api.test.js test/program-agent.test.js test/program-scan-agent.test.js test/source-quality.test.js test/source-enhancement.test.js test/source-workflow.test.js test/source-offline-workflow.test.js",
     "benchmark:source": "node scripts/source-benchmark.js",
     "check:source-env": "node scripts/check-source-environment.js",
     "test:topology": "node --test test/topology.test.js test/topology-api.test.js",

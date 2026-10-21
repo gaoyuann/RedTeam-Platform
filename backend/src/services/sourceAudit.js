@@ -4,7 +4,7 @@ import {normalizeSourceFinding} from './sourceScanFindings.js';
 import {sourceRuntimeMapping} from './sourceRuntimeMapping.js';
 import {programExecutionTarget} from './programScan.js';
 import {runCscan, relativeCscanPath, createCscanClient} from './cscanClient.js';
-import {auditCscanNative} from './sourceAuditNative.js';
+import {auditCscanNative,retainedCscanReport} from './sourceAuditNative.js';
 import {posix} from 'node:path';
 
 const active = new WeakMap();
@@ -14,7 +14,7 @@ export function auditSources(task, context) {
   let pending = active.get(context.db);
   if (!pending) {pending = new Map();active.set(context.db,pending);}
   if (pending.has(task.scan_task_id)) return pending.get(task.scan_task_id);
-  const operation = context.parameters?.input_kind==='remote_directory'
+  const operation = context.reportOnly ? auditCscanNative(task,context) : context.parameters?.input_kind==='remote_directory'
     ? auditSelectedDirectory(task,context)
     : context.parameters?.cscan_target || context.parameters?.source_path ? auditCscanNative(task,context) : audit(task,context);
   const promise = operation
@@ -195,6 +195,7 @@ export async function recoverCscanAudits(db, {connect = createCscanClient} = {})
       coverage.cscan_complete=false;coverage.ai_complete=false;
       const reason = remote.flow_id && !stopped && !alreadyFinished ? '服务重启，CScan 远端停止尚未确认，请核对原 Flow；不会自动重复提交'
         : remote.submission_uncertain ? '服务重启，CScan 提交结果不确定，请核对服务端 Flow；不会自动重复提交'
+        : retainedCscanReport(db,id) ? '服务重启，报告处理已中断，可使用已保存完整报告重新解析；不会重复扫描'
         : '服务重启前 CScan 扫描未完成，请新建任务';
       coverage.source_errors=[...new Set([...(coverage.source_errors || []),reason])].slice(-20);
       db.transaction(()=>{

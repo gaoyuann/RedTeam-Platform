@@ -311,13 +311,18 @@ QString ScanPage::formatResultData(const QString &json, const QString &resultTyp
     if (resultType == "source_coverage") {
       if (obj["engine"].toString() == "cscan" && (obj["input_mode"].toString()=="service_path" || obj["input_mode"].toString()=="remote_agent")) {
         const auto flow=obj["cscan"].toObject();
+        const QMap<QString,QString> states={{"preparing","准备扫描"},{"submitting","正在提交"},{"created","已创建"},
+          {"running","扫描中"},{"waiting","核对任务状态"},{"report_ready","报告已收齐"},{"parsing","正在解析报告"},
+          {"importing","正在导入漏洞"},{"finished","报告处理完成"},{"report_error","报告解析存在缺口"},
+          {"import_error","报告导入失败"},{"error","扫描失败"},{"timed_out","扫描超时"},{"cancelled","已取消"},
+          {"interrupted","服务重启中断"},{"source_unavailable","未取得源码"}};
         QStringList errors;for(const auto &v:obj["source_errors"].toArray()) errors.append(v.toString());
         for(const auto &v:obj["parse_errors"].toArray()) errors.append(v.toString());
         const auto tasks=flow["task_progress"].toObject(),subs=flow["subtask_progress"].toObject();
         const QString progress=tasks.isEmpty()?QString():QString("\n任务完成 %1/%2；子任务完成 %3/%4")
           .arg(tasks["finished"].toInt()).arg(tasks["total"].toInt()).arg(subs["finished"].toInt()).arg(subs["total"].toInt());
         return QString("CScan 审计目标：%1；Flow %2；状态：%3\n%4\n%5")
-          .arg(obj["source_target"].toString(),flow["flow_id"].toString(),flow["state"].toString(),obj["note"].toString(),errors.join("；"))+progress;
+          .arg(obj["source_target"].toString(),flow["flow_id"].toString(),states.value(flow["state"].toString(),flow["state"].toString()),obj["note"].toString(),errors.join("；"))+progress;
       }
       if (obj["engine"].toString() == "cscan" && obj["source_read"].toBool()) {
         const auto flow = obj["cscan"].toObject();
@@ -1593,6 +1598,10 @@ void ScanPage::updateStatusLabel(const QJsonObject &d) {
   auto arr = d["results"].toArray();
   bool structured = hasStructuredResults(arr);
   const bool sourceTask = isProgramScan(m_currentScanType);
+  m_canReparseReport = d["can_reparse_report"].toBool();
+  m_reexecBtn->setText(sourceTask ? "重新解析报告" : "重新执行");
+  m_reexecBtn->setEnabled(!sourceTask || m_canReparseReport);
+  m_reexecBtn->setToolTip(sourceTask ? "使用已保存的完整报告重试解析和导入；扫描未完成时请新建任务" : "");
   const bool finished = status == "COMPLETED" || status == "PARTIAL";
   bool sourceFindings = false;
   for (const auto &result : arr) {
@@ -1612,6 +1621,17 @@ void ScanPage::updateStatusLabel(const QJsonObject &d) {
     parts << "⏳ " + formatStatus(status, structured);
   else
     parts << "状态: " + formatStatus(status, structured);
+  if (sourceTask && status == "RUNNING") {
+    for (const auto &result : arr) {
+      const auto row = result.toObject();
+      if (row["result_type"].toString() != "source_coverage") continue;
+      const auto coverage = QJsonDocument::fromJson(row["result_data"].toString().toUtf8()).object();
+      const auto phase = coverage["cscan"].toObject()["state"].toString();
+      if (phase == "parsing") parts << "正在解析报告";
+      else if (phase == "importing") parts << "正在导入漏洞";
+      else if (phase == "report_ready") parts << "报告已收齐，准备解析";
+    }
+  }
   QString dur = formatDuration(d["started_at"].toString(), d["completed_at"].toString());
   if (!dur.isEmpty()) parts << dur;
 
@@ -2638,6 +2658,29 @@ void ScanPage::onReexecScan() {
   const QString originalId = m_selectedTaskId;
   const int revision = m_scopeRevision;
   QPointer<ScanPage> guard(this);
+  if (isProgramScan(m_currentScanType)) {
+    if (!m_canReparseReport) return;
+    const QString scanType = m_currentScanType;
+    clearDetailPanel();
+    m_reexecBtn->hide();
+    m_statusLabel->setText("正在重新解析已保存报告...");
+    m_api->post("/api/scan-tasks/" + originalId + "/reparse", QJsonObject(), 5000,
+      [this, guard, originalId, revision, scanType](const QJsonObject &res) {
+        if (!guard || revision != m_scopeRevision || m_selectedTaskId != originalId) return;
+        if (res["status"].toString() == "ok") {
+          if (!m_runningTaskIds.contains(originalId)) m_runningTaskIds << originalId;
+          startPollingIfNeeded();
+          onRefreshTasks();
+        } else {
+          m_currentScanType = scanType;
+          m_canReparseReport = true;
+          m_statusLabel->setText("报告重试失败：" + res["error"].toObject()["message"].toString());
+          m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
+          m_reexecBtn->show();
+        }
+      });
+    return;
+  }
   m_reexecBtn->setVisible(false);
   clearDetailPanel();
   m_statusLabel->setText("创建关联扫描中...");
@@ -2732,6 +2775,7 @@ void ScanPage::clearDetailPanel() {
   m_currentTarget.clear();
   m_currentTaskTarget.clear();
   m_currentScanType.clear();
+  m_canReparseReport = false;
   enableCurrentTabDelBtn(false);
 }
 

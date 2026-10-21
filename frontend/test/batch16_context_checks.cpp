@@ -675,6 +675,45 @@ int main(int argc, char **argv)
   flow.onBackToList();
   QTest::qWait(350);
   verify(flow.m_scanTab->m_currentTarget.isEmpty() && flow.m_scanTab->m_resultTree->topLevelItemCount() == 0, "late scan detail cannot restore old target or results");
+  {
+    MockServer reportServer;
+    auto record=QJsonObject{{"scan_task_id","report-retry"},{"scan_type","source_scan"},{"target","/src/project"},
+      {"status","PARTIAL"},{"can_reparse_report",true},{"results",QJsonArray{}}};
+    bool retryFailed=true;
+    reportServer.handler=[&](const QString &method,const QString &path)->MockReply {
+      if(method=="POST" && path=="/api/scan-tasks/report-retry/reparse") {
+        if(retryFailed) return {QJsonObject{{"status","error"},{"error",QJsonObject{{"message","fixture retry failure"}}}}};
+        return {success(QJsonObject{{"scan_task_id","report-retry"}})};
+      }
+      if(path=="/api/scan-tasks") return {success(QJsonArray{record})};
+      if(path=="/api/scan-tasks/report-retry") return {success(record)};
+      return {success(QJsonArray{})};
+    };
+    ApiClient reportApi(QStringLiteral("http://127.0.0.1:%1").arg(reportServer.serverPort()));
+    ScanPage reportPage(&reportApi,"user","fixture-user");
+    reportPage.m_selectedTaskId="report-retry";
+    auto running=record;running["status"]="RUNNING";running["can_reparse_report"]=false;
+    const auto phaseResult=[](const QString &phase) {
+      return QJsonObject{{"result_type","source_coverage"},{"result_data",QString::fromUtf8(QJsonDocument(QJsonObject{
+        {"engine","cscan"},{"input_mode","service_path"},{"cscan",QJsonObject{{"state",phase}}}}).toJson(QJsonDocument::Compact))}};
+    };
+    running["results"]=QJsonArray{phaseResult("parsing")};reportPage.updateStatusLabel(running);
+    verify(reportPage.m_statusLabel->text().contains("正在解析报告") && !reportPage.m_sourceDemoBtn->isEnabled(),
+      "source report parsing is visible and cannot open finding selection");
+    running["results"]=QJsonArray{phaseResult("importing")};reportPage.updateStatusLabel(running);
+    verify(reportPage.m_statusLabel->text().contains("正在导入漏洞"),"source report import has a distinct phase");
+    reportPage.updateStatusLabel(record);
+    verify(reportPage.m_reexecBtn->text()=="重新解析报告" && reportPage.m_reexecBtn->isEnabled(),
+      "retained source report enables report retry");
+    reportPage.onReexecScan();
+    verify(awaitCondition([&]{return reportPage.m_statusLabel->text().contains("fixture retry failure");}),
+      "source report retry displays the actual API failure");
+    retryFailed=false;reportPage.onReexecScan();
+    verify(awaitCondition([&]{return reportServer.requests.value("POST /api/scan-tasks/report-retry/reparse")==2;}),
+      "failed report retry can be repeated against the same task");
+    verify(reportServer.requests.value("POST /api/scan-tasks/report-retry/retry")==0,
+      "source report retry never requests a new scan");
+  }
   sourceOnly = true;
   ScanPage sourcePage(&api, "user", "fixture-user");
   verify(sourcePage.m_programInputKind->currentData().toString() == "agent",

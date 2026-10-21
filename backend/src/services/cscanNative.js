@@ -5,46 +5,58 @@ import {callLlm} from './llmClient.js';
 
 // Match PentagiService::fetchFlowReport: consume the service's task results,
 // without a platform source collector, local worker mount or report filesystem.
-export async function scanCscanTarget(target, {notes='',sourceLocation='',scope=null,signal,onProgress,onFindings=async()=>{},config=cscanConfig(),client,llm=callLlm}={}) {
+export async function scanCscanTarget(target, {notes='',sourceLocation='',scope=null,signal,onProgress,onRawReport=async()=>{},config=cscanConfig(),client,llm=callLlm}={}) {
   target=cscanTarget(target);notes=cscanNotes(notes);
   client ||= await createCscanClient(config);
-  let rawReport='';
-  // Port of VulnerabilityScanPage::processIncrementalSubtasks: completed
-  // subtasks first, task result fallback, processed IDs and three attempts.
-  const processed=new Set(),attempts=Object.create(null),errors=new Map();
-  const progress=async()=>onProgress?.({incremental:{processedSubtasks:[...processed],attempts:{...attempts},errors:Object.fromEntries(errors)}});
+  let rawReport='',sourceReports=[];
+  // Polling only retains raw evidence. Parsing starts after all tasks succeed.
   const onTasks=async(tasks,options)=>{
+    sourceReports=[];
     for(const task of tasks) {
-      let fallback=!task.subtasks?.length;
-      const candidates=[];
-      for(const sub of task.subtasks || []) {
-        if(sub.status!=='finished') continue;
-        if(typeof sub.result!=='string' || !sub.result.trim()) {fallback=true;continue;}
-        if(sub.id) candidates.push({id:String(sub.id),text:sub.result});
-      }
-      if(fallback && task.status==='finished' && task.id && typeof task.result==='string' && task.result.trim())
-        candidates.push({id:task.id+':result',text:task.result});
-      for(const candidate of candidates) {
-        if(processed.has(candidate.id) || (attempts[candidate.id] || 0)>=3) continue;
-        attempts[candidate.id]=(attempts[candidate.id] || 0)+1;
-        await progress();
-        const parsed=await parseNativeReport(candidate.text,target,{llm,signal:options.signal});
-        await onFindings({...parsed,flow_id:options.flow_id,source_subtask_ids:[candidate.id],source_task_ids:[String(task.id)]});
-        if(parsed.parse_errors.length) errors.set(candidate.id,parsed.parse_errors.join('; '));
-        else {
-          processed.add(candidate.id);errors.delete(candidate.id);
-        }
-        await progress();
+      for(const item of [task,...(task.subtasks || [])]) {
+        if(typeof item.result!=='string' || !item.result.trim()) continue;
+        const raw={flow_id:options.flow_id,report:item.result,status:item.status,
+          report_source:item===task?'parent_task_result':'subtask_result',
+          source_task_ids:[String(task.id)],source_subtask_ids:item===task?[]:[String(item.id)]};
+        sourceReports.push(raw);
+        await onRawReport(raw);
       }
     }
   };
-  const report=await runCscan({service_target:target,notes,source_location:sourceLocation,scope,documents:[]},{config,client,signal,onProgress,onTasks,
+  const report=await runCscan({service_target:target,notes,source_location:sourceLocation,scope,documents:[]},{config,client,signal,
+    onProgress:state=>onProgress?.({...state,state:state.state==='finished'?'report_ready':state.state}),onTasks,
     stage:async()=>({containerPath:target,key:null}),
     readReport:async(_,id,source,options)=>{
       rawReport=await client.report(id,{signal:options.signal});
-      return {...await parseNativeReport(rawReport,target,{llm,signal:options.signal}),report_source:'task_result'};
+      const raw={flow_id:id,report:rawReport,report_source:'task_result',complete:true,source_reports:sourceReports};
+      await onRawReport(raw);
+      return {markdown:rawReport,report_source:'task_result',source_reports:sourceReports};
     }});
-  return {...report,parse_errors:[...report.parse_errors,...[...errors].map(([id,error])=>`子任务 ${id}: ${error}`)],source_target:target};
+  await onProgress?.({state:'parsing',scan_complete:true,finish_status:report.finish_status});
+  return {...report,...await parseCompletedCscanReport(report.markdown,target,{llm,signal,timeoutMs:config.timeoutMs,
+    sourceReports:report.source_reports}),source_target:target};
+}
+
+// This entry also supports retrying a retained report without a remote scan.
+export async function parseCompletedCscanReport(markdown,target,{llm=callLlm,signal,timeoutMs=cscanConfig().timeoutMs,sourceReports=[]}={}) {
+  const controller=new AbortController();
+  const cancel=()=>controller.abort();
+  signal?.addEventListener('abort',cancel,{once:true});
+  if(signal?.aborted) cancel();
+  const timer=setTimeout(cancel,timeoutMs);
+  try {
+    if(controller.signal.aborted) throw new Error('CScan 报告解析已取消');
+    const parsed=await parseNativeReport(markdown,target,{llm,signal:controller.signal});
+    if(controller.signal.aborted) throw new Error(signal?.aborted?'CScan 报告解析已取消':'CScan 报告解析超时');
+    return {...parsed,findings:parsed.findings.map(finding=>{
+      const sources=sourceReports.filter(raw=>raw.report.includes(finding.file) && raw.report.includes(finding.reason));
+      return {...finding,source_task_ids:[...new Set(sources.flatMap(raw=>raw.source_task_ids || []))],
+        source_subtask_ids:[...new Set(sources.flatMap(raw=>raw.source_subtask_ids || []))]};
+    })};
+  } catch(error) {
+    if(controller.signal.aborted) throw new Error(signal?.aborted?'CScan 报告解析已取消':'CScan 报告解析超时');
+    throw error;
+  } finally {clearTimeout(timer);signal?.removeEventListener('abort',cancel);}
 }
 
 export async function parseNativeReport(rawReport,target,{llm=callLlm,signal,split=true}={}) {
@@ -54,7 +66,7 @@ export async function parseNativeReport(rawReport,target,{llm=callLlm,signal,spl
   if(split && sections.length>1) {
     const explicit=parseCscanMarkdown(rawReport,null).findings;
     const findings=[],parse_errors=[];
-    for(const section of sections.filter(value=>value.trim())) {
+    for(const section of new Set(sections.map(value=>value.trim()).filter(Boolean))) {
       const deterministic=parseCscanMarkdown(section,null).findings;
       if(deterministic.length) findings.push(...deterministic);
       else if(!explicit.length || /[\w./-]+\.(?:c|h|cc|cpp|cxx|hpp|hxx)\b/i.test(section)) {
@@ -77,7 +89,13 @@ export async function parseNativeReport(rawReport,target,{llm=callLlm,signal,spl
       parsed=JSON.parse(String(response.content || '').trim().replace(/^```(?:json)?\s*/,'').replace(/```\s*$/,''));
       const values=parsed.findings ?? parsed.vulnerabilities;
       if(!Array.isArray(values) || values.length>1000) throw new Error('报告结构化格式无效');
-      findings=values.map(value=>({...value,title:value.title ?? value.name,reason:value.reason ?? value.evidence}));
+      findings=values.flatMap((value,index)=>{
+        if(!value || typeof value!=='object' || Array.isArray(value)) {
+          parseErrors.push(`报告发现 ${index+1} 格式无效`);
+          return [];
+        }
+        return [{...value,title:value.title ?? value.name,reason:value.reason ?? value.evidence}];
+      });
     } catch(error) {parseErrors.push(error.message);}
   }
   if(signal?.aborted) throw new Error('CScan 扫描已取消');

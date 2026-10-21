@@ -266,11 +266,16 @@ test('pagination >150, same-target isolation, legacy data and route permissions'
   assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE scan_task_id='s'").get().n,235);
   assert.equal(db.prepare('SELECT retry_of_scan_task_id FROM scan_tasks WHERE scan_task_id=?').get(child).retry_of_scan_task_id,'s');
   assert.equal(scanCollection(db,pipeline).rows.length,236,'retry is not mixed into original run');
-  behavior=async(tool,args,options)=>new Promise(resolve=>options.signal.addEventListener('abort',()=>resolve({exitCode:-1,aborted:true,stdout:finding(),stderr:''}),{once:true}));
+  let releaseCancelledTool;
+  behavior=async(tool,args,options)=>new Promise(resolve=>options.signal.addEventListener('abort',()=>{
+    releaseCancelledTool=()=>resolve({exitCode:-1,aborted:true,stdout:finding(),stderr:''});
+  },{once:true}));
   const pendingResponse=await fetch(base+'/scans/s/retry',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({request_id:'fixture-cancel'})});
   const pending=(await pendingResponse.json()).data.scan_task_id;
   assert.equal((await fetch(base+'/scans/'+pending+'/abort',{method:'POST'})).status,200);
   assert.equal((await fetch(base+'/scans/'+pending+'/retry',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({request_id:'fixture-too-early'})})).status,409);
+  assert.equal(typeof releaseCancelledTool,'function','cancel signal is delivered before the tool finishes shutting down');
+  releaseCancelledTool();
   for(let i=0;i<30 && db.prepare('SELECT state FROM scan_tool_runs WHERE scan_task_id=?').get(pending)?.state==='running';i++) await new Promise(r=>setTimeout(r,50));
   assert.equal(db.prepare('SELECT state FROM scan_tool_runs WHERE scan_task_id=?').get(pending).state,'cancelled');
   assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE scan_task_id=? AND result_type='vulnerability'").get(pending).n,1);
