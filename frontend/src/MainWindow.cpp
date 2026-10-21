@@ -68,30 +68,13 @@ void MainWindow::setupUI()
 
     auto *topBar = new QFrame(centralWidget);
     topBar->setObjectName("appTopBar");
-    auto *headerLayout = new QVBoxLayout(topBar);
-    headerLayout->setContentsMargins(20, 10, 20, 8);
-    headerLayout->setSpacing(6);
-    auto *topLayout = new QHBoxLayout;
-    headerLayout->addLayout(topLayout);
-    topLayout->setContentsMargins(0, 0, 0, 0);
-    topLayout->setSpacing(14);
-    auto *brandIcon = new QLabel(topBar);
-    brandIcon->setPixmap(QPixmap(":/images/app-icon.png").scaled(38, 38, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-    brandIcon->setFixedSize(40, 40);
-    topLayout->addWidget(brandIcon);
-    auto *brandText = new QVBoxLayout;
-    brandText->setSpacing(2);
-    auto *brandLabel = new QLabel(QStringLiteral("信息系统渗透智能化测试平台"), topBar);
-    brandLabel->setObjectName("appBrand");
-    auto *subtitle = new QLabel(QStringLiteral("Intelligent Penetration Testing Platform"), topBar);
-    subtitle->setObjectName("appSubtitle");
-    brandText->addWidget(brandLabel);
-    brandText->addWidget(subtitle);
-    topLayout->addLayout(brandText);
-    topLayout->addStretch();
+    auto *headerLayout = new QHBoxLayout(topBar);
+    headerLayout->setContentsMargins(20, 4, 20, 4);
+    headerLayout->setSpacing(14);
+    headerLayout->addStretch();
     auto *userIcon = new QLabel(topBar);
     userIcon->setPixmap(QIcon(":/icons/shell/user.svg").pixmap(24, 24));
-    topLayout->addWidget(userIcon);
+    headerLayout->addWidget(userIcon);
     auto *topUser = new QLabel(QStringLiteral("%1 (%2)")
         .arg(m_username, displayRole(m_role)), topBar);
     topUser->setTextFormat(Qt::PlainText);
@@ -100,13 +83,13 @@ void MainWindow::setupUI()
     topUser->setMaximumWidth(280);
     topUser->setToolTip(topUser->text().toHtmlEscaped());
     topUser->setStyleSheet(QStringLiteral("color:#1e3a63; font-size:13px; font-weight:600;"));
-    topLayout->addWidget(topUser);
+    headerLayout->addWidget(topUser);
     auto *collapse = new QPushButton(QStringLiteral("收起导航"), topBar);
     collapse->setObjectName("navigationToggle");
     collapse->setProperty("quiet", true);
     collapse->setCheckable(true);
     collapse->setMinimumHeight(34);
-    topLayout->addWidget(collapse);
+    headerLayout->addWidget(collapse);
     rootLayout->addWidget(topBar);
 
     // Unified horizontal module navigation within the application header.
@@ -224,7 +207,7 @@ void MainWindow::setupUI()
     m_dongleLockPage = new DongleLockPage(this);
     m_stackWidget->addWidget(m_dongleLockPage);
 
-    headerLayout->addWidget(m_navList);
+    headerLayout->insertWidget(0, m_navList, 1);
     const auto updateNavigationToggle = [this, collapse]() {
         const bool collapsed = collapse->isChecked();
         collapse->setText(collapsed
