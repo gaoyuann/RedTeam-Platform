@@ -894,9 +894,14 @@ int main(int argc, char **argv)
   verify(toggle && window.m_navList->flow() == QListView::LeftToRight, "header has horizontal collapsible navigation");
   window.resize(1024, 600);
   QTest::qWait(100);
-  verify(window.m_navList->visualItemRect(window.m_navList->item(6)).right() < window.m_navList->viewport()->width(),
-    "all seven modules fit the narrow header");
+  auto *header = window.findChild<QFrame*>("appTopBar");
+  verify(header && header->height() <= 70 && header->geometry().contains(toggle->mapTo(header, toggle->rect().center())),
+    "navigation and account controls share a compact header");
+  verify(!window.findChild<QLabel*>("appBrand") && !window.findChild<QLabel*>("appSubtitle"),
+    "compact header removes brand titles");
   for (int row = 0; row < 7; ++row) {
+    window.m_navList->scrollToItem(window.m_navList->item(row));
+    QCoreApplication::processEvents();
     QTest::mouseClick(window.m_navList->viewport(), Qt::LeftButton, Qt::NoModifier,
       window.m_navList->visualItemRect(window.m_navList->item(row)).center());
     verify(window.m_stackWidget->currentIndex() == row, "horizontal module click selects matching page");
