@@ -33,6 +33,10 @@ public:
   // File download (returns raw bytes, does not parse as JSON)
   void download(const QString &path, int timeoutMs = 30000,
                 std::function<void(bool ok, const QByteArray &data, const QString &filename)> callback = nullptr);
+  // Failed downloads return empty file data and a bounded, readable error message.
+  void downloadWithError(const QString &path, int timeoutMs = 30000,
+                std::function<void(bool ok, const QByteArray &data, const QString &filename,
+                                   const QString &errorMessage)> callback = nullptr);
 
   // Server URL management
   void setBaseUrl(const QString &url);

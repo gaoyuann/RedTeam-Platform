@@ -2,11 +2,15 @@
 #include "ScanPage.h"
 #include "TaskResultsPanel.h"
 #include "../ApiClient.h"
+#include "../ReportFileActions.h"
 #include "../Theme.h"
 #include "../UiUtil.h"
 #include "../widgets/MetricCard.h"
 #include "../widgets/WorkbenchTabs.h"
 #include <QDateTime>
+#include <QComboBox>
+#include <QCryptographicHash>
+#include <QDir>
 #include <QFileDialog>
 #include <QHeaderView>
 #include <QHBoxLayout>
@@ -22,10 +26,13 @@
 #include <QSet>
 #include <QShowEvent>
 #include <QSplitter>
+#include <QStandardPaths>
 #include <QTableWidget>
 #include <QTimer>
+#include <QTemporaryDir>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <memory>
 
 namespace {
 QString number(const QJsonValue &value)
@@ -85,6 +92,52 @@ bool identifier(const QJsonValue &value)
 {
   return value.isDouble() && value.toDouble() >= 1 && value.toDouble() <= 9007199254740991.0
       && value.toDouble() == value.toVariant().toLongLong();
+}
+
+QString presentationText(const QJsonObject &presentation)
+{
+  if (presentation.value("schema_version").toInt() != 1 || !presentation.value("title").isString()
+      || !presentation.value("sections").isArray() || presentation.value("sections").toArray().isEmpty()) return {};
+  QStringList parts{presentation.value("title").toString()};
+  for (const auto &sectionValue : presentation.value("sections").toArray()) {
+    if (!sectionValue.isObject()) return {};
+    const auto section = sectionValue.toObject();
+    if (!section.value("title").isString()) return {};
+    parts.append(section.value("title").toString());
+    if (section.contains("paragraphs")) {
+      if (!section.value("paragraphs").isArray()) return {};
+      for (const auto &paragraph : section.value("paragraphs").toArray()) {
+        if (!paragraph.isString()) return {};
+        parts.append(paragraph.toString());
+      }
+    }
+    QStringList headers;
+    if (section.contains("headers")) {
+      if (!section.value("headers").isArray()) return {};
+      for (const auto &header : section.value("headers").toArray()) {
+        if (!header.isString()) return {};
+        headers.append(header.toString());
+      }
+    }
+    if (section.contains("rows")) {
+      if (!section.value("rows").isArray() || headers.isEmpty()) return {};
+      for (const auto &rowValue : section.value("rows").toArray()) {
+        if (!rowValue.isArray() || rowValue.toArray().size() != headers.size()) return {};
+        QStringList cells;
+        for (const auto &cell : rowValue.toArray()) {
+          if (!cell.isString()) return {};
+          cells.append(cell.toString());
+        }
+        if (cells.size() == 2) parts.append(cells[0] + QStringLiteral("：") + cells[1]);
+        else {
+          QStringList record;
+          for (int index = 0; index < cells.size(); ++index) record.append(headers[index] + QStringLiteral("：") + cells[index]);
+          parts.append(record.join('\n'));
+        }
+      }
+    }
+  }
+  return parts.join(QStringLiteral("\n\n"));
 }
 }
 
@@ -179,13 +232,25 @@ TaskResultsPanel::TaskResultsPanel(ApiClient *api, const QString &role, const QS
   outer->addWidget(splitter, 1);
   auto *actions = new QHBoxLayout;
   m_generate = new QPushButton(QStringLiteral("生成报告"), this);
-  m_exportJson = new QPushButton(QStringLiteral("导出 JSON"), this);
-  m_exportHtml = new QPushButton(QStringLiteral("导出 HTML"), this);
+  m_formatCombo = new QComboBox(this);
+  m_formatCombo->setObjectName("taskReportExportFormat");
+  for (const auto &format : {QStringLiteral("docx"), QStringLiteral("pdf"), QStringLiteral("html"), QStringLiteral("json")})
+    m_formatCombo->addItem(format.toUpper() + (format == "json" ? QStringLiteral("（完整快照）") : QString()), format);
+  m_formatCombo->setToolTip(QStringLiteral("DOCX / PDF / HTML 导出攻击测试简报；JSON 保留完整保存快照"));
+  m_export = new QPushButton(QStringLiteral("导出报告"), this);
+  m_export->setObjectName("taskReportExport");
+  m_openWps = new QPushButton(QStringLiteral("在 WPS 中打开"), this);
+  m_openWps->setObjectName("taskReportOpenWps");
+  m_openWps->setToolTip(QStringLiteral("下载所选报告的攻击测试简报后打开，支持 DOCX 和 PDF"));
   actions->addWidget(m_generate);
   actions->addStretch();
-  actions->addWidget(m_exportJson);
-  actions->addWidget(m_exportHtml);
+  actions->addWidget(m_formatCombo);
+  actions->addWidget(m_export);
+  actions->addWidget(m_openWps);
   outer->addLayout(actions);
+  m_exportResult = plainLabel(this);
+  m_exportResult->setObjectName("taskReportExportResult");
+  outer->addWidget(m_exportResult);
   m_updated = plainLabel(this);
   m_updated->setStyleSheet("color:#64748b;font-size:12px;");
   outer->addWidget(m_updated);
@@ -195,8 +260,11 @@ TaskResultsPanel::TaskResultsPanel(ApiClient *api, const QString &role, const QS
   connect(m_tabs, &QTabWidget::currentChanged, this, &TaskResultsPanel::showSelection);
   connect(m_refresh, &QPushButton::clicked, this, &TaskResultsPanel::refresh);
   connect(m_generate, &QPushButton::clicked, this, &TaskResultsPanel::generateReport);
-  connect(m_exportJson, &QPushButton::clicked, this, [this]() { exportReport("json"); });
-  connect(m_exportHtml, &QPushButton::clicked, this, [this]() { exportReport("html"); });
+  connect(m_export, &QPushButton::clicked, this, [this]() { exportReport(m_formatCombo->currentData().toString()); });
+  connect(m_openWps, &QPushButton::clicked, this, &TaskResultsPanel::openInWps);
+  connect(m_formatCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() {
+    ++m_exportVersion; m_exporting = false; m_exportResult->clear(); updateButtons();
+  });
   clearTaskContext();
 }
 
@@ -223,6 +291,7 @@ void TaskResultsPanel::clearTaskContext()
   ++m_contextVersion;
   ++m_requestVersion;
   ++m_selectionVersion;
+  ++m_exportVersion;
   m_pipelineId.clear(); m_expectedRunId.clear(); m_target.clear();
   m_selectedReportId.clear(); m_pendingReportId.clear();
   m_snapshot = {};
@@ -235,6 +304,7 @@ void TaskResultsPanel::clearTaskContext()
   m_state->setText(QStringLiteral("选择任务后查看结果与报告"));
   m_state->setStyleSheet(Theme::StatusInfoStyle);
   m_identity->clear(); m_assessment->clear(); m_updated->clear(); m_trace->clear();
+  m_exportResult->clear();
   m_detail->setPlainText(QStringLiteral("发现候选、工具结果、系统验证结论与人工意见分开处理；选择记录查看来源。"));
   updateButtons();
 }
@@ -345,6 +415,7 @@ void TaskResultsPanel::showEvent(QShowEvent *event) { QWidget::showEvent(event);
 void TaskResultsPanel::showReport(const QString &reportId)
 {
   ++m_selectionVersion; m_linkedBusy = false;
+  m_exportResult->clear();
   m_linkedReportMetadata = {}; m_selectedReportId.clear(); m_report = {}; m_reportMetadata = {};
   m_pendingReportId = reportId;
   m_tabs->setCurrentWidget(m_reports);
@@ -452,6 +523,9 @@ void TaskResultsPanel::render()
 
 void TaskResultsPanel::showSelection()
 {
+  if (m_tabs->currentWidget() != m_reports && m_exporting) {
+    ++m_exportVersion; m_exporting = false;
+  }
   if (m_linkedBusy && m_tabs->currentWidget() != m_reports) {
     ++m_selectionVersion; m_linkedBusy = false; m_pendingReportId.clear();
   }
@@ -463,6 +537,7 @@ void TaskResultsPanel::showSelection()
       ++m_selectionVersion; m_linkedBusy = false; m_pendingReportId.clear();
     }
     if (reportId != m_selectedReportId || metadata != m_reportMetadata) {
+      m_exportResult->clear();
       ++m_selectionVersion; m_exporting = false; m_report = {}; m_reportMetadata = metadata; m_selectedReportId = reportId;
       if (!reportId.isEmpty()) {
         const int context = m_contextVersion; const int selection = m_selectionVersion;
@@ -487,23 +562,18 @@ void TaskResultsPanel::renderDetail()
 {
   if (m_tabs->currentWidget() == m_reports) {
     QString detail;
-    if (m_selectedReportId.isEmpty()) detail = QStringLiteral("选择报告查看保存时的来源快照；不会按当前 Run 自动重算旧报告。");
+    if (m_selectedReportId.isEmpty()) detail = QStringLiteral("选择报告查看保存时的攻击测试简报；JSON 可导出完整保存快照。");
     else if (m_report.isEmpty()) detail = QStringLiteral("正在读取所选报告…");
     else {
       const auto report = m_report.value("report").toObject();
       const auto content = report.value("content").toObject();
-      const auto results = content.value("results").toObject();
-      const auto run = results.value("execution").toObject().value("run").toObject();
-      const auto counts = run.value("counts").toObject();
-      detail = QStringLiteral("报告：%1\n编号：%2 · %3 · %4\n%5 · 以下是保存的报告来源摘要，不是当前实时结果。\n")
+      detail = QStringLiteral("报告：%1\n编号：%2 · %3 · %4\n")
         .arg(report.value("title").toString(), report.value("report_id").toString(), state(report.value("status").toString()),
-          time(report.value("created_at").toString()), kind(report.value("kind").toString()));
+          time(report.value("created_at").toString()));
       if (report.value("kind").toString() == "trace_snapshot") {
-        detail += QStringLiteral("冻结时 Run：%1 · %2\n发现候选 %3 · 已返回步骤 %4/%5 · 证据 %6 条\n%7\n\n完整展示快照请导出 JSON / HTML；不是完整原始取证材料。\n\n")
-          .arg(report.value("run_id").toString(), state(run.value("status").toString()), number(results.value("finding_count")),
-            number(counts.value("returned")), number(counts.value("steps")), number(counts.value("evidence")), content.value("notice").toString());
-        detail += pretty(QJsonObject{{"provenance", content.value("provenance")}, {"trace", results.value("trace")},
-          {"assessment", results.value("assessment")}, {"statistics", results.value("statistics")}, {"limits", results.value("limits")}});
+        const QString brief = presentationText(m_report.value("presentation").toObject());
+        detail += brief.isEmpty() ? QStringLiteral("\n详细攻击效果未提供，请刷新或更新后端。") : "\n" + brief;
+        detail += QStringLiteral("\n\nDOCX / PDF / HTML 导出简报；JSON 导出完整保存快照。");
       } else detail += content.value("notice").toString() + "\n\n" + pretty(content);
     }
     if (m_detail->toPlainText() != detail) m_detail->setPlainText(detail);
@@ -523,10 +593,17 @@ void TaskResultsPanel::updateButtons()
   const QString runState = m_snapshot.value("execution").toObject().value("run").toObject().value("status").toString();
   m_generate->setEnabled(m_fresh && !m_busy && !m_generating && (m_snapshot.contains("statistics") ? m_snapshot.value("statistics").toObject().value("report_ready").toBool() : QStringList{"COMPLETED", "FAILED", "ABORTED"}.contains(runState)));
   m_generate->setText(m_generating ? QStringLiteral("生成报告中…") : QStringLiteral("生成报告"));
-  const bool canExport = m_fresh && !m_exporting && m_tabs->currentWidget() == m_reports
+  const bool canExport = canExportReport();
+  m_formatCombo->setEnabled(m_fresh && m_tabs->currentWidget() == m_reports && !m_report.isEmpty());
+  m_export->setEnabled(canExport);
+  m_export->setText(m_exporting ? QStringLiteral("下载报告中…") : QStringLiteral("导出报告"));
+  m_openWps->setEnabled(canExport && QStringList{"docx", "pdf"}.contains(m_formatCombo->currentData().toString()));
+}
+
+bool TaskResultsPanel::canExportReport() const
+{
+  return m_fresh && !m_exporting && m_tabs->currentWidget() == m_reports && !m_selectedReportId.isEmpty()
       && !m_report.isEmpty() && m_report.value("report").toObject().value("kind").toString() == "trace_snapshot";
-  m_exportJson->setEnabled(canExport);
-  m_exportHtml->setEnabled(canExport);
 }
 
 void TaskResultsPanel::generateReport()
@@ -562,29 +639,98 @@ void TaskResultsPanel::generateReport()
 
 void TaskResultsPanel::exportReport(const QString &format)
 {
-  if (m_exporting || !m_fresh || m_report.value("report").toObject().value("kind").toString() != "trace_snapshot"
-      || !QStringList{"json", "html"}.contains(format)) return;
+  if (!canExportReport() || !QStringList{"docx", "pdf", "json", "html"}.contains(format)
+      || m_formatCombo->currentData().toString() != format) return;
+  m_exportResult->clear();
   const int context = m_contextVersion; const int selection = m_selectionVersion;
+  const int exportVersion = m_exportVersion;
   const QString reportId = m_selectedReportId;
   QString safeName = reportId; safeName.replace(QRegularExpression("[^a-zA-Z0-9_-]"), "_");
   const QString filename = "report_" + safeName + "." + format;
-  const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("导出已保存的追溯报告"), filename,
-      format == "json" ? QStringLiteral("JSON (*.json)") : QStringLiteral("HTML (*.html)"));
-  if (path.isEmpty() || context != m_contextVersion || selection != m_selectionVersion) return;
+  QPointer<TaskResultsPanel> guard(this);
+  const QString path = QFileDialog::getSaveFileName(this,
+      format == "json" ? QStringLiteral("导出完整保存快照") : QStringLiteral("导出攻击测试简报"), filename,
+      format.toUpper() + " (*." + format + ")");
+  if (!guard || path.isEmpty() || context != guard->m_contextVersion || selection != guard->m_selectionVersion
+      || exportVersion != guard->m_exportVersion || guard->m_formatCombo->currentData().toString() != format) return;
+  guard->downloadReport(format, path, false);
+}
+
+void TaskResultsPanel::openInWps()
+{
+  const QString format = m_formatCombo->currentData().toString();
+  if (!canExportReport() || !QStringList{"docx", "pdf"}.contains(format)) return;
+  downloadReport(format, {}, true);
+}
+
+void TaskResultsPanel::downloadReport(const QString &format, const QString &path, bool openWps)
+{
+  if (!canExportReport() || m_formatCombo->currentData().toString() != format
+      || !QStringList{"docx", "pdf", "json", "html"}.contains(format)
+      || (openWps && !QStringList{"docx", "pdf"}.contains(format)) || (!openWps && path.isEmpty())) return;
+  const int context = m_contextVersion; const int selection = m_selectionVersion;
+  const int exportVersion = ++m_exportVersion;
+  const QString reportId = m_selectedReportId;
+  QString safeName = reportId; safeName.replace(QRegularExpression("[^a-zA-Z0-9_-]"), "_");
+  const QString filename = "report_" + safeName + "." + format;
+  const QString fingerprint = m_report.value("report").toObject().value("source_fingerprint").toString();
+  m_exportResult->clear();
   m_exporting = true; updateButtons();
   QPointer<TaskResultsPanel> guard(this);
-  m_api->download(apiPath() + "/reports/" + QString::fromLatin1(QUrl::toPercentEncoding(reportId)) + "/export?format=" + format, 15000,
-    [guard, context, selection, reportId, format, filename, path](bool ok, const QByteArray &bytes, const QString &receivedName) {
-      if (!guard || context != guard->m_contextVersion || selection != guard->m_selectionVersion || reportId != guard->m_selectedReportId) return;
+  m_api->downloadWithError(apiPath() + "/reports/" + QString::fromLatin1(QUrl::toPercentEncoding(reportId)) + "/export?format=" + format, 30000,
+    [guard, context, selection, exportVersion, reportId, fingerprint, format, filename, path, openWps]
+    (bool ok, const QByteArray &bytes, const QString &receivedName, const QString &errorMessage) {
+      if (!guard || context != guard->m_contextVersion || selection != guard->m_selectionVersion
+          || exportVersion != guard->m_exportVersion || reportId != guard->m_selectedReportId
+          || guard->m_formatCombo->currentData().toString() != format) return;
       guard->m_exporting = false;
-      bool valid = ok && !bytes.isEmpty() && bytes.size() <= 16 * 1024 * 1024 && receivedName == filename;
+      if (!ok) {
+        guard->m_exportResult->setText(QStringLiteral("报告下载失败：")
+            + (errorMessage.isEmpty() ? QStringLiteral("请检查后端服务和网络后重试。") : errorMessage)
+            + QStringLiteral("\n未写入文件。"));
+        guard->updateButtons(); return;
+      }
+      if (bytes.size() > 16 * 1024 * 1024) {
+        guard->m_exportResult->setText(QStringLiteral("报告文件超过 16 MiB 导出上限，未写入文件；请尝试其他导出格式。"));
+        guard->updateButtons(); return;
+      }
+      bool valid = !bytes.isEmpty() && receivedName == filename;
       if (valid && format == "json") valid = guard->validReport(QJsonDocument::fromJson(bytes).object(), reportId);
-      if (!valid) guard->m_state->setText(QStringLiteral("导出失败或响应来源不匹配，未写入文件。"));
+      if (valid && format == "pdf") valid = bytes.startsWith("%PDF-");
+      if (valid && format == "docx") valid = bytes.startsWith(QByteArray::fromHex("504b0304"));
+      if (!valid) guard->m_exportResult->setText(QStringLiteral("报告文件内容或响应来源校验失败，未写入文件；请重新选择报告后重试。"));
       else {
-        QSaveFile file(path);
+        QString savePath = path;
+        std::unique_ptr<QTemporaryDir> temporary;
+        if (openWps) {
+          const QString cache = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+          const QString cacheRoot = QDir(cache).filePath("report-exports");
+          const auto identity = QJsonDocument(QJsonObject{{"owner", guard->m_snapshot.value("owner")},
+            {"pipeline_id", guard->m_pipelineId}, {"report_id", reportId}, {"format", format}, {"source_fingerprint", fingerprint}}).toJson(QJsonDocument::Compact);
+          const QString key = QString::fromLatin1(QCryptographicHash::hash(identity, QCryptographicHash::Sha256).toHex().left(20));
+          if (cache.isEmpty() || !QDir().mkpath(cacheRoot)) {
+            guard->m_exportResult->setText(QStringLiteral("无法创建报告缓存目录，请使用导出报告选择保存位置。"));
+            guard->updateButtons(); return;
+          }
+          // Each click receives a fresh copy; WPS edits never become another report's cache.
+          temporary = std::make_unique<QTemporaryDir>(QDir(cacheRoot).filePath(key + "-XXXXXX"));
+          if (!temporary->isValid()) {
+            guard->m_exportResult->setText(QStringLiteral("无法创建报告缓存目录，请使用导出报告选择保存位置。"));
+            guard->updateButtons(); return;
+          }
+          savePath = QDir(temporary->path()).filePath(filename);
+        }
+        QSaveFile file(savePath);
         if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit())
-          guard->m_state->setText(QStringLiteral("无法写入导出文件，请检查保存目录。"));
-        else guard->m_state->setText(QStringLiteral("已导出保存时的来源快照：") + path);
+          guard->m_exportResult->setText(QStringLiteral("无法写入导出文件，请检查保存目录。"));
+        else if (openWps) {
+          // Keep the file after page/client exit so the detached editor can keep reading it.
+          temporary->setAutoRemove(false);
+          const auto result = ReportFileActions::openInWps(savePath);
+          guard->m_exportResult->setText(result.status == ReportFileActions::OpenStatus::Started
+              ? QStringLiteral("已在 WPS 中打开攻击测试简报：") + savePath : result.message);
+        } else guard->m_exportResult->setText((format == "json"
+              ? QStringLiteral("已导出完整保存快照：") : QStringLiteral("已导出攻击测试简报：")) + savePath);
       }
       guard->updateButtons();
     });

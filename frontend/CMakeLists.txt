@@ -13,6 +13,7 @@ set(SOURCES
     src/MainWindow.cpp
     src/SimpleMainWindow.cpp
     src/ApiClient.cpp
+    src/ReportFileActions.cpp
     src/WsClient.cpp
     src/CortexPanel.cpp
     src/ToastOverlay.cpp
@@ -55,6 +56,7 @@ set(HEADERS
     src/MainWindow.h
     src/SimpleMainWindow.h
     src/ApiClient.h
+    src/ReportFileActions.h
     src/WsClient.h
     src/CortexPanel.h
     src/ToastOverlay.h
@@ -209,4 +211,15 @@ if(BUILD_UI_CHECKS)
   target_link_libraries(RedTeam-StatisticsChecks Qt5::Widgets Qt5::Network Qt5::Test)
   add_test(NAME ui-task-statistics COMMAND RedTeam-StatisticsChecks)
   set_tests_properties(ui-task-statistics PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+endif()
+
+if(BUILD_UI_CHECKS)
+  add_executable(RedTeam-TaskReportExportChecks
+    src/ApiClient.cpp src/ReportFileActions.cpp src/pages/TaskResultsPanel.cpp
+    src/pages/ScanPage.cpp src/pages/FindingVerificationDialog.cpp
+    test/task_report_export_checks.cpp)
+  target_include_directories(RedTeam-TaskReportExportChecks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(RedTeam-TaskReportExportChecks Qt5::Widgets Qt5::Network Qt5::Test)
+  add_test(NAME ui-task-report-export COMMAND RedTeam-TaskReportExportChecks)
+  set_tests_properties(ui-task-report-export PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 45)
 endif()

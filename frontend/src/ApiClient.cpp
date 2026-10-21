@@ -228,11 +228,21 @@ void ApiClient::del(const QString &path, int timeoutMs,
 
 void ApiClient::download(const QString &path, int timeoutMs,
                           std::function<void(bool, const QByteArray &, const QString &)> callback) {
+  downloadWithError(path, timeoutMs,
+    [callback](bool ok, const QByteArray &data, const QString &filename, const QString &) {
+      if (callback) callback(ok, data, filename);
+    });
+}
+
+void ApiClient::downloadWithError(const QString &path, int timeoutMs,
+                          std::function<void(bool, const QByteArray &, const QString &, const QString &)> callback) {
   auto req = makeRequest(path, timeoutMs);
   auto *reply = m_mgr->get(req);
 
   connect(reply, &QNetworkReply::finished, this, [this, reply, path, callback]() {
-    if (reply->error() == QNetworkReply::NoError) {
+    reply->deleteLater();
+    const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    if (reply->error() == QNetworkReply::NoError && httpStatus < 400) {
       QByteArray data = reply->readAll();
 
       // Extract filename from Content-Disposition header
@@ -247,12 +257,32 @@ void ApiClient::download(const QString &path, int timeoutMs,
         }
       }
 
-      if (callback) callback(true, data, filename);
+      if (callback) callback(true, data, filename, {});
     } else {
-      qDebug() << "[ApiClient DOWNLOAD ERROR]" << reply->url().toString() << reply->errorString();
-      emit apiError(path, reply->errorString());
-      if (callback) callback(false, QByteArray(), QString());
+      QString errorMessage;
+      if (httpStatus >= 400) {
+        constexpr qint64 maximumErrorBytes = 64 * 1024;
+        const QByteArray body = reply->read(maximumErrorBytes + 1);
+        if (body.size() <= maximumErrorBytes) {
+          const auto message = QJsonDocument::fromJson(body).object().value("error").toObject().value("message");
+          if (message.isString()) {
+            errorMessage = message.toString().left(512);
+            errorMessage.remove(QRegularExpression("[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]"));
+            errorMessage = errorMessage.trimmed();
+          }
+        }
+        if (errorMessage.isEmpty()) errorMessage = QStringLiteral("服务器返回 HTTP %1，无法下载报告。").arg(httpStatus);
+      } else if (reply->error() == QNetworkReply::TimeoutError || reply->error() == QNetworkReply::OperationCanceledError) {
+        errorMessage = QStringLiteral("下载请求超时或已取消，请重试。");
+      } else if (reply->error() == QNetworkReply::ConnectionRefusedError) {
+        errorMessage = QStringLiteral("无法连接后端服务，请检查服务地址和运行状态。");
+      } else if (reply->error() == QNetworkReply::HostNotFoundError) {
+        errorMessage = QStringLiteral("无法解析后端地址，请检查服务地址和网络。");
+      } else {
+        errorMessage = QStringLiteral("网络下载失败，请检查连接后重试（错误码 %1）。").arg(int(reply->error()));
+      }
+      emit apiError(path, errorMessage);
+      if (callback) callback(false, {}, {}, errorMessage);
     }
-    reply->deleteLater();
   });
 }

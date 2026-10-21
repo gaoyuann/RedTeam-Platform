@@ -4,7 +4,8 @@ import { baselineVersions, importBaseline } from '../services/taskBaselines.js';
 import { scanPage, scanCollection, pipelineScans } from '../services/scanResultQuery.js';
 import { publicScanRecord, parseResultData, redactScanValue } from '../services/scanResultCatalog.js';
 import { Router } from 'express';
-import { taskResultsSnapshot, createTaskReport, readTaskReport, taskReportHtml, recordTaskReportExport } from '../services/taskResults.js';
+import { taskResultsSnapshot, createTaskReport, readTaskReport, recordTaskReportExport } from '../services/taskResults.js';
+import { exportTaskReport } from '../services/taskReportExport.js';
 import { requireActor } from '../middleware/recordAccess.js';
 import { scanCoveragePage } from '../services/scanCoverage.js';
 import { bindFindingPayload, findingPayloadMatches } from '../services/findingPayloads.js';
@@ -80,17 +81,16 @@ export default function (db) {
     res.status(result.reused ? 200 : 201).json({ status: 'ok', data: result });
   });
   router.get('/reports/:reportId', (req, res) => res.json({ status: 'ok', data: readTaskReport(db, req.taskPipeline, req.params.reportId) }));
-  router.get('/reports/:reportId/export', (req, res) => {
-    const format = req.query.format || 'json';
-    if (!['json', 'html'].includes(format)) return res.status(400).json({ status: 'error', error: { message: '任务追溯报告目前仅支持 JSON 或 HTML 导出' } });
-    const document = readTaskReport(db, req.taskPipeline, req.params.reportId);
-    if (document.report.kind !== 'trace_snapshot') return res.status(409).json({ status: 'error', error: { message: '旧报告缺少完整来源，请生成新的追溯报告' } });
-    const filename = `report_${req.params.reportId.replace(/[^a-z0-9_-]/gi, '_')}.${format}`;
-    const output = format === 'json' ? JSON.stringify(document, null, 2) : taskReportHtml(document);
-    recordTaskReportExport(db, document, req.user, format);
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.type(format === 'json' ? 'application/json' : 'text/html').send(output);
+  router.get('/reports/:reportId/export', async (req, res, next) => {
+    try {
+      const format = req.query.format || 'json';
+      const document = readTaskReport(db, req.taskPipeline, req.params.reportId);
+      const output = await exportTaskReport(document, format);
+      recordTaskReportExport(db, document, req.user, format);
+      res.setHeader('Content-Disposition', `attachment; filename="${output.filename}"`);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.type(output.contentType).send(output.buffer);
+    } catch (error) { next(error); }
   });
   router.use((error, req, res, next) => {
     if (!error.status) return next(error);
