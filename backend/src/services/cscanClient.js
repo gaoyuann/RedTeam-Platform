@@ -191,7 +191,7 @@ export async function createCscanClient(config = cscanConfig(), {fetchImpl = glo
     }),
     create: (input, options) => request('mutation CreateCScan($provider:String!,$input:String!){createFlow(modelProvider:$provider,input:$input){id status}}',
       {provider:config.provider,input},{timeoutMs:config.createTimeoutMs || config.requestTimeoutMs,...options}).then(data=>data.createFlow),
-    flow: (id, options) => request('query CScanFlow($id:ID!){flow(flowId:$id){id status} tasks(flowId:$id){id flowId status subtasks{id status}}}',{id},options).then(data=>{
+    flow: (id, options) => request('query CScanFlow($id:ID!){flow(flowId:$id){id status} tasks(flowId:$id){id flowId status result subtasks{id status result}}}',{id},options).then(data=>{
       if(!Array.isArray(data.tasks) || data.tasks.some(task=>String(task.flowId)!==String(id))) throw new Error('CScan 任务响应与本次 Flow 不匹配');
       return {...data.flow,tasks:data.tasks};
     }),
@@ -217,7 +217,7 @@ export async function createCscanClient(config = cscanConfig(), {fetchImpl = glo
 }
 
 // Creation is deliberately never retried: a timed-out mutation may already have created a Flow.
-export async function runCscan(source, {signal, onProgress = ()=>{}, config = cscanConfig(), client,
+export async function runCscan(source, {signal, onProgress = ()=>{}, onTasks, config = cscanConfig(), client,
   stage = stageCscanSource, readReport = readCscanReport} = {}) {
   checkAbort(signal);
   client ||= await createCscanClient(config);
@@ -244,6 +244,7 @@ export async function runCscan(source, {signal, onProgress = ()=>{}, config = cs
       await onProgress({flow_id:flowId,state:status,source_key:staged.key,submission_uncertain:false,
         ...(tasks?{task_progress:counts(tasks),subtask_progress:counts(subtasks)}:{})});
       checkAbort(controller.signal);
+      if(tasks && onTasks) await onTasks(tasks,{flow_id:flowId,signal:controller.signal});
       if (status === 'failed') throw new Error('CScan Flow 扫描失败，请核对服务端日志');
       if (!['created','running','waiting','finished'].includes(status)) throw new Error('CScan 返回了未知 Flow 状态');
       // Upstream task.SetStatus(finished|failed) propagates Flow=waiting.

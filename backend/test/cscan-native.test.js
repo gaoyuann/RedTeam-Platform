@@ -5,7 +5,8 @@ import express from 'express';
 import Database from 'better-sqlite3';
 import {readdir} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
-import {scanCscanTarget,normalizeCscanReportedFinding} from '../src/services/cscanNative.js';
+import {scanCscanTarget,normalizeCscanReportedFinding,parseNativeReport} from '../src/services/cscanNative.js';
+import {findingVerificationEntry} from '../src/services/findingVerificationEntry.js';
 import {cscanConfig} from '../src/services/cscanClient.js';
 import {cscanSourcePath,cscanTarget} from '../src/services/cscanTarget.js';
 import {auditSources} from '../src/services/sourceAudit.js';
@@ -21,6 +22,94 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 
 const report='## Unchecked copy\nFile: src/input.c\nLine: 12\nSeverity: high\nCWE: CWE-120\nEvidence: Copy into a fixed buffer without checking capacity\nPreconditions: Input control remains unknown\nRemediation: Enforce the buffer capacity';
+
+function incrementalDb(t) {
+  const db=new Database(':memory:');t.after(()=>db.close());
+  db.exec('CREATE TABLE scan_results(id INTEGER PRIMARY KEY,scan_task_id TEXT,result_type TEXT,result_data TEXT,severity TEXT,source_tool TEXT,captured_at TEXT);CREATE TABLE source_audits(scan_task_id TEXT PRIMARY KEY,snapshot_id TEXT,connection_id TEXT,manifest TEXT,analysis TEXT,created_at TEXT)');
+  return db;
+}
+
+test('completed CScan subtasks are visible before Flow completion, merge sources and retain stable finding IDs',async t=>{
+  const db=incrementalDb(t);let polls=0,firstId;
+  const client={
+    create:async()=>({id:'91',status:'running'}),
+    flow:async()=>{
+      polls++;
+      if(polls===2) {
+        const rows=db.prepare("SELECT * FROM scan_results WHERE result_type='source_finding'").all();
+        assert.equal(rows.length,1);firstId=rows[0].id;
+        assert.deepEqual(JSON.parse(rows[0].result_data).source_subtask_ids,['sub1']);
+      }
+      const subtasks=[{id:'sub1',status:'finished',result:report},
+        {id:'sub2',status:polls<3?'running':'finished',result:polls<3?'':report.replace('Copy into a fixed buffer without checking capacity','Second path also copies without a bound')}];
+      return {id:'91',status:polls<3?'running':'waiting',tasks:[{id:'task1',flowId:'91',status:polls<3?'running':'finished',subtasks}]};
+    },
+    report:async()=> 'Source-Access: available\n'+report,
+    finish:async()=>true,stop:async()=>true,
+  };
+  const result=await auditSources({scan_task_id:'incremental',target:'/src/project'},{db,parameters:{source_path:'/src/project'},
+    nativeScan:(target,options)=>scanCscanTarget(target,{...options,client,config:{pollMs:1,timeoutMs:3000},llm:()=>assert.fail('explicit fields')})});
+  assert.ok(result.outcomes.every(item=>item.success));
+  const rows=db.prepare("SELECT * FROM scan_results WHERE result_type='source_finding'").all();
+  assert.equal(rows.length,1);assert.equal(rows[0].id,firstId);
+  const finding=JSON.parse(rows[0].result_data);
+  assert.deepEqual(finding.source_subtask_ids,['sub1','sub2']);
+  assert.equal(finding.report_evidence.length,2);assert.equal(finding.runtime_verified,false);
+  const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
+  assert.deepEqual(coverage.cscan.incremental.processedSubtasks,['sub1','sub2']);
+  assert.equal(coverage.cscan.incremental.attempts.sub1,1);
+});
+
+test('incremental parser retries at most three times and preserves raw results even when parsing fails',async t=>{
+  const db=incrementalDb(t);let polls=0,calls=0;
+  const client={create:async()=>({id:'91',status:'running'}),flow:async()=>{
+    polls++;
+    return {id:'91',status:polls<5?'running':'waiting',tasks:[{id:'t',flowId:'91',status:polls<5?'running':'finished',
+      result:'Final unreadable report',subtasks:[{id:'s',status:'finished',result:'Unreadable result'}]}]};
+  },report:async()=>'Final unreadable report',finish:async()=>true,stop:async()=>true};
+  await auditSources({scan_task_id:'retry',target:'/src/project'},{db,parameters:{source_path:'/src/project'},
+    nativeScan:(target,options)=>scanCscanTarget(target,{...options,client,config:{pollMs:1,timeoutMs:3000},llm:async()=>{calls++;return {ok:false};}})});
+  assert.equal(calls,4,'three incremental attempts plus final report reconciliation');
+  const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
+  assert.equal(coverage.cscan.incremental.attempts.s,3);assert.equal(coverage.cscan_complete,false);
+  const raw=db.prepare("SELECT result_data FROM scan_results WHERE result_type='raw_output'").all().map(row=>JSON.parse(row.result_data));
+  assert.equal(raw.length,2);assert.equal(raw[0].report,'Unreadable result');
+});
+
+test('final source-access failure withdraws incremental candidates but keeps evidence',async t=>{
+  const db=incrementalDb(t);
+  await auditSources({scan_task_id:'withdraw',target:'/src/project'},{db,parameters:{source_path:'/src/project'},nativeScan:async(_,options)=>{
+    const parsed=await parseNativeReport(report,'/src/project');
+    await options.onFindings({...parsed,flow_id:'91',source_subtask_ids:['s'],source_task_ids:['t']});
+    return {...parsed,flow_id:'91',source_access_reported:'unavailable'};
+  }});
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='source_finding'").get().n,0);
+  const withdrawn=JSON.parse(db.prepare("SELECT result_data FROM scan_results WHERE result_type='information'").get().result_data);
+  assert.equal(withdrawn.verification_status,'source_unavailable');assert.equal(withdrawn.report_evidence.length,1);
+});
+
+test('mixed explicit and prose source sections are parsed without admitting web-only findings',async()=>{
+  const prose='## Additional finding\nsrc/other.c line 8 reads freed memory.';
+  const parsed=await parseNativeReport(report+'\n\n'+prose,'/src/project',{llm:async messages=>{
+    assert.match(JSON.parse(messages[1].content).report,/Additional finding/);
+    return {ok:true,content:JSON.stringify({vulnerabilities:[{name:'Use after free',file:'src/other.c',start_line:8,evidence:'reads freed memory.'}]})};
+  }});
+  assert.equal(parsed.findings.length,2);
+  assert.equal(normalizeCscanReportedFinding(parsed.findings[1],parsed.markdown,'/src/project').title,'Use after free');
+  assert.throws(()=>normalizeCscanReportedFinding({file:'https://example.test/a.c',start_line:1,title:'Web',reason:'evidence'},'https://example.test/a.c evidence','/src/project'),/路径无效/);
+});
+
+test('source report verification requires a separate in-scope runtime target',()=>{
+  const pipeline={target:'http://192.0.2.40:8089/',config:JSON.stringify({task_scope:{}})};
+  const finding={id:1,scan_task_id:'scan',result_data:JSON.stringify({evidence_origin:'cscan_report',file:'src/input.c'})};
+  let parameters={cscan_target:'http://192.0.2.40:8089/'};
+  const db={prepare:()=>({get:()=>({target:pipeline.target,parameters:JSON.stringify(parameters)})})};
+  assert.equal(findingVerificationEntry(db,pipeline,finding).target,null);
+  parameters.runtime_target='http://192.0.2.40:8089/';
+  assert.equal(findingVerificationEntry(db,pipeline,finding).source,'declared_runtime_target');
+  parameters.runtime_target='http://192.0.2.99/';
+  assert.equal(findingVerificationEntry(db,pipeline,finding).target,null);
+});
 
 test('remote CScan targets accept hosts, ports and remote paths without a /src mount requirement',()=>{
   assert.equal(cscanTarget('192.0.2.40'),'192.0.2.40');

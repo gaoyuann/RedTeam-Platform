@@ -4,6 +4,8 @@
 
 源码扫描参考 `/home/zxf/code/pentagi-v3` 中的实际调用逻辑：在扫描弹窗指定目标、审计要求，通过 GraphQL `createFlow` 提交给服务，轮询任务和子任务，读取 `tasks.result` 报告，再解析为漏洞列表。
 
+参考客户端当前将源码和 Web 扫描放在同一业务入口。本项目只迁移其通用结果处理逻辑（`VulnerabilityScanPage::processIncrementalSubtasks`、`handleIncrementalAnalysisResult`），源码任务使用独立 CScan 的地址、认证和 Flow；不引入客户端混合扫描入口或其后续攻击实现。
+
 接口契约已对照服务部署中的 `/home/aistation/apps/cscan-agent/backend/pkg/server/docs/swagger.yaml` 和 `/home/aistation/apps/cscan-agent/backend/pkg/graph/schema.graphqls`：Swagger 明确列出 `/api/v1/graphql`；REST 对应创建接口为 `POST /flows/`（`provider`、`input`），结果为 `GET /flows/{flowID}/tasks/`、`subtasks/` 的 `result`，结束操作为 `PUT /flows/{flowID}` 的 `finish` action。这里沿用参考客户端的 GraphQL 调用，不要求另建上传接口或固定 JSON 文件。
 
 平台只提交源码位置和审计要求，不下载源码，不以平台快照或共享报告文件作为前置条件。CScan 复用 PentAGI 的执行框架但独立运行，平台不把扫描任务转交原 PentAGI 服务。
@@ -35,6 +37,18 @@ CScan 的 `waiting` 不一定是失败。平台核对扫描任务和子任务是
 若连续三次查询都返回 `waiting` 且任务列表为空，平台报告“未创建扫描任务”，并请求停止原 Flow，不再等待整个扫描超时，也不自动重提。短暂的初始空列表允许继续等待；恢复到运行状态会重新计数。此情况可能发生于 CScan 调用模型生成任务标题失败，应检查 CScan 服务端日志及模型连接。
 
 报告已有明确字段时直接提取；普通文字报告参考客户端的做法，调用平台已配置的模型整理已完成任务的结果。这个模型只接收报告，不读取或扫描源代码。解析失败时保留完整原文并标记缺口，不以本地源码扫描兜底。文件和依据必须出现在原始报告中，不接受解析模型新增的证据。
+
+### 增量结果和源码字段适配
+
+- 轮询同时读取任务和子任务的 `result`，完成的子任务立即解析并入库；没有子任务或已完成子任务结果为空时，使用已完成父任务结果兜底。未完成结果不参与解析。
+- 按 Flow 保存已处理子任务 ID、解析尝试次数和错误；每个结果最多进行三次增量解析，最终完整报告另行补全。失败原文同样保留，未解决的增量解析错误仍标记为处理缺口。
+- 保持 `source_finding` 的 `title/file/start_line/end_line/reason/severity/cwe/preconditions/suggestion` 字段不变。兼容模型返回的 `vulnerabilities[].name/evidence`，但仍要求明确源码文件、行号和报告原文依据；URL 不能充当源文件。
+- 相同文件、起始行及 CWE（缺少时使用标题）的发现更新同一数据库记录，合并 `source_task_ids`、`source_subtask_ids`、`report_evidence` 和 `analyses`。不同文件或位置不会合并，已关联的验证项保持原记录 ID。
+- 有标题分段的混合格式报告分别解析，避免一条格式规范的发现遮蔽其他段落里的源码发现。原文和结构化结果同时保留，Qt 现有轮询展示增量记录，证据详情补充 Flow 与来源子任务。
+- 若最终报告声明无法访问源码，早先增量候选改为信息记录，保留证据和历史验证引用，不能继续作为可执行漏洞候选。
+- CScan 报告发现的后续验证只使用单独声明且在范围内的 `runtime_target`。未提供时显示缺失条件，源码目录或源码 HTTP 地址不自动成为验证入口。已有快照记录继续兼容旧流程。
+
+进度持久化用于追溯，不改变平台重启恢复策略：重启仍停止未结束的远端 Flow、标记任务中断并保留已入库证据，不自动恢复扫描或重复提交。没有新增数据库迁移，新增字段存于现有 JSON 记录。
 
 平台没有读取源码，因此不会伪造源码哈希、快照、代码片段或“已校验源码行号”。发现明确记录 `evidence_origin=cscan_report`、`source_location_verified=false`、`source_version_verified=false`、`runtime_verified=false`；报告中的定位和运行效果仍需复核。`cscan_complete` 表示该次服务任务／报告处理完成，`whole_project_complete=false` 不代表整个项目都已审阅或无漏洞。
 

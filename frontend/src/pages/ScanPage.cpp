@@ -2943,6 +2943,12 @@ void ScanPage::showSourceEvidence(QTreeWidgetItem *item) {
       .arg(data["title"].toString(),data["file"].toString()).arg(data["start_line"].toInt()).arg(data["end_line"].toInt())
       .arg(data["cwe"].toString(),data["snapshot_id"].toString(),data["reason"].toString(),data["preconditions"].toString(),data["suggestion"].toString());
     const auto lines=data["code"].toString().split('\n');
+    if(data["evidence_origin"].toString()=="cscan_report") {
+      QStringList subtasks;
+      for(const auto &value:data["source_subtask_ids"].toArray()) subtasks<<value.toString();
+      text+=QString("CScan Flow：%1\n来源子任务：%2\n报告定位与源码版本待复核；尚未验证运行效果。\n")
+        .arg(data["cscan_flow_id"].toString(),subtasks.join("、"));
+    }
     for(int i=0;i<lines.size();i++) text+=QString("%1  %2\n").arg(data["start_line"].toInt()+i).arg(lines[i]);
     for(const auto &entry:data["trace"].toArray()) {
       const auto item=entry.toObject();
