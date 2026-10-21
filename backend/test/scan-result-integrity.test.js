@@ -1,3 +1,4 @@
+import {directoryProbeFixture} from './helpers/directoryProbeFixture.js';
 import test, {mock} from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
@@ -11,8 +12,10 @@ import {scanPage,scanCollection} from '../src/services/scanResultQuery.js';
 import {resultCategory,publicScanRecord} from '../src/services/scanResultCatalog.js';
 let behavior=async()=>({exitCode:0,stdout:'[a] [http] [high] http://fixture.invalid',stderr:''});
 const calls=[];
+let probeBehavior=directoryProbeFixture;
+const probeCalls=[];
 let afterAnalysis=()=>{};
-await mock.module('../src/tools/toolRunner.js',{namedExports:{runTool:async(...args)=>{calls.push(args);return behavior(...args);}}});
+await mock.module('../src/tools/toolRunner.js',{namedExports:{runTool:async(...args)=>{if(args[0]==='target-request'){probeCalls.push(args);return probeBehavior(args[1]);} calls.push(args);return behavior(...args);}}});
 await mock.module('../src/services/scanAnalyzer.js',{namedExports:{analyzeScanResults:async()=>{afterAnalysis();return {ok:true,data:{}};}}});
 const {executeScan,requestScanAbort}=await import('../src/services/scanExecutor.js');
 const {default:scanRoutes}=await import('../src/routes/scans.js');
@@ -31,6 +34,120 @@ function task(db,id,type='vuln_scan',pipeline=null) {
  db.prepare('INSERT INTO scan_tasks(scan_task_id,target,scan_type,created_by,pipeline_id) VALUES (?,?,?,?,?)').run(id,'http://fixture.invalid',type,'alice',pipeline);
 }
 const finding=(n=0)=>`[template-${n}] [http] [high] http://fixture.invalid/${n}`;
+
+test('manual API page scans retain parameter discovery but never start FFuf',async()=>{
+ const db=getDb(':memory:');schema(db);calls.length=0;probeCalls.length=0;
+ task(db,'api-page','api_fuzz');
+ db.prepare('UPDATE scan_tasks SET target=?').run('http://fixture.invalid/login.php');
+ behavior=async tool=>{assert.equal(tool,'arjun');return {success:true,exitCode:0,stdout:'[+] Parameter: id found in URL query',stderr:''};};
+ try {
+  const result=await executeScan('api-page');
+  assert.equal(result.status,'PARTIAL');
+  assert.deepEqual(calls.map(x=>x[0]),['arjun']);assert.equal(probeCalls.length,0);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='scan_error' AND source_tool='ffuf'").get().n,1);
+ } finally {closeDb();}
+});
+
+test('wildcard preflight prevents candidate flooding, retains history and does not replay completed tasks',async()=>{
+ const db=getDb(':memory:');schema(db);calls.length=0;probeCalls.length=0;
+ task(db,'wildcard','web_scan');
+ db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data,severity,source_tool) VALUES ('wildcard','web_vuln','{}','low','nikto')").run();
+ probeBehavior=()=>({success:true,stdout:JSON.stringify({complete:true,truncated:false,status_code:200,response:'same login page fixture-secret'})});
+ behavior=async()=>assert.fail('dictionary scanner must not start');
+ try {
+  const result=await executeScan('wildcard');
+  assert.equal(result.status,'PARTIAL');assert.equal(calls.length,0);assert.equal(probeCalls.length,3);
+  const records=db.prepare('SELECT * FROM scan_results').all();
+  assert.equal(records.filter(x=>x.result_type==='web_vuln').length,1);
+  assert.ok(records.some(x=>x.result_type==='scan_evidence' && JSON.parse(x.result_data).allowed===false));
+  assert.doesNotMatch(JSON.stringify(records),/fixture-secret/);
+  assert.equal((await executeScan('wildcard')).ok,false);assert.equal(probeCalls.length,3);
+ } finally {probeBehavior=directoryProbeFixture;closeDb();}
+});
+
+test('API calibration probes the actual api prefix, passes the same cookie, and honors cancellation',async()=>{
+ const db=getDb(':memory:');schema(db);calls.length=0;probeCalls.length=0;
+ task(db,'api-root','api_fuzz');
+ db.prepare('UPDATE scan_tasks SET parameters=?').run(JSON.stringify({cookie:'session=fixture-secret'}));
+ behavior=async()=>({success:true,exitCode:0,stdout:'',stderr:''});
+ try {
+  assert.equal((await executeScan('api-root')).status,'COMPLETED');
+  assert.equal(probeCalls.length,3);
+  for(const call of probeCalls) {
+    const spec=JSON.parse(call[1][0]);assert.ok(new URL(spec.url).pathname.startsWith('/api/'));
+    assert.equal(spec.headers.cookie,'session=fixture-secret');
+  }
+  const ffuf=calls.find(x=>x[0]==='ffuf')[1];
+  assert.equal(ffuf[ffuf.indexOf('-H')+1],'Cookie: session=fixture-secret');
+  assert.equal(ffuf[ffuf.indexOf('-u')+1],'http://fixture.invalid/api/FUZZ');
+  assert.doesNotMatch(JSON.stringify(db.prepare('SELECT result_data FROM scan_results').all()),/fixture-secret/);
+  calls.length=0;probeCalls.length=0;task(db,'cancel-probe','web_scan');
+  probeBehavior=()=>{requestScanAbort('cancel-probe');return {success:false,aborted:true};};
+  await executeScan('cancel-probe');
+  assert.equal(calls.length,0);assert.equal(probeCalls.length,1);
+  assert.notEqual(db.prepare("SELECT status FROM scan_tasks WHERE scan_task_id='cancel-probe'").get().status,'COMPLETED');
+ } finally {probeBehavior=directoryProbeFixture;closeDb();}
+});
+
+test('target overrides and incomplete probes never start a dictionary tool',async()=>{
+ const db=getDb(':memory:');schema(db);calls.length=0;probeCalls.length=0;
+ behavior=async()=>assert.fail('scanner must not start');
+ try {
+  for(const [id,parameters] of [['root-override',{extra_args:'-root /login.php'}],['port-override',{ports:8080}],['cookie',{cookie:'session=fixture'}]]) {
+   task(db,id,'web_scan');db.prepare('UPDATE scan_tasks SET parameters=? WHERE scan_task_id=?').run(JSON.stringify(parameters),id);
+   assert.equal((await executeScan(id)).status,'FAILED');
+  }
+  assert.equal(probeCalls.length,0);
+  for(const [id,result] of [['timeout-probe',{success:false,timedOut:true}],['bad-probe',{success:true,stdout:'not-json'}]]) {
+   task(db,id,'web_scan');probeBehavior=()=>result;
+   assert.equal((await executeScan(id)).status,'FAILED');
+  }
+  assert.equal(calls.length,0);
+ } finally {probeBehavior=directoryProbeFixture;closeDb();}
+});
+
+test('direct or legacy queued page scans never run Nikto or widen to a parent directory',async()=>{
+ for(const legacy of [false,true]) {
+  const db=getDb(':memory:');schema(db);calls.length=0;
+  const scanId=legacy?'legacy-page':'page';
+  task(db,scanId,'web_scan');
+  db.prepare('UPDATE scan_tasks SET target=? WHERE scan_task_id=?').run('http://fixture.invalid/login.php',scanId);
+  if(legacy) db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data,severity,source_tool) VALUES (?,'web_vuln',?,'low','nikto')")
+    .run(scanId,JSON.stringify({finding:'Historical candidate, kept for review'}));
+  try {
+   const result=await executeScan(scanId);
+   assert.equal(calls.length,0);
+   assert.equal(result.status,legacy?'PARTIAL':'FAILED');
+   assert.match(result.error,/页面或接口不能作为目录字典扫描入口/);
+   assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='scan_error'").get().n,1);
+   assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='web_vuln'").get().n,legacy?1:0);
+  } finally {closeDb();}
+ }
+});
+
+test('page guard preserves explicit SQL verification and bare-host root scanning',async()=>{
+ const db=getDb(':memory:');schema(db);calls.length=0;
+ task(db,'page-sql','web_scan');
+ db.prepare('UPDATE scan_tasks SET target=?,parameters=? WHERE scan_task_id=?')
+  .run('http://fixture.invalid/login.php',JSON.stringify({sqli_url:'http://fixture.invalid/item.php?id=1'}),'page-sql');
+ behavior=async tool=>{
+  assert.equal(tool,'sqlmap');
+  return {success:true,exitCode:0,stdout:'Parameter: id\nTarget is vulnerable\nback-end DBMS: fixture',stderr:''};
+ };
+ try {
+  assert.equal((await executeScan('page-sql')).status,'PARTIAL');
+  assert.deepEqual(calls.map(call=>call[0]),['sqlmap']);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='sql_injection'").get().n,1);
+  calls.length=0;task(db,'host-root','web_scan');
+  db.prepare("UPDATE scan_tasks SET target='192.0.2.2:8080' WHERE scan_task_id='host-root'").run();
+  behavior=async tool=>{
+   assert.equal(tool,'nikto');
+   return {success:true,exitCode:0,stdout:'+ The X-Frame-Options header is not present.',stderr:''};
+  };
+  assert.equal((await executeScan('host-root')).status,'COMPLETED');
+  assert.deepEqual(calls.map(call=>call[0]),['nikto']);
+ } finally {closeDb();}
+});
 
 test('parser preserves info, unknown evidence and real severity without turning errors into findings',()=>{
  const parsed=parseScanOutput('vuln_scan',finding()+'\n[info] [http] [info] http://fixture.invalid\nunknown output','connection refused');
