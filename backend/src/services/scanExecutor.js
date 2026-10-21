@@ -11,6 +11,8 @@ import { classifyToolResult, redactToolArgs } from '../tools/toolContracts.js';
 import { auditSources } from './sourceAudit.js';
 import {isProgramScan} from './programScan.js';
 import {scanProgramAgent} from './programScanAgent.js';
+import { webDirectoryScanBlockReason, directoryOptionsBlockReason } from './webScanPolicy.js';
+import { checkWebDirectory } from './webDirectoryProbe.js';
 
 
 
@@ -110,7 +112,6 @@ export function buildArgs(scanType, target, parameters = {}) {
       args.push('-h', target);
       args.push('-maxtime', '60');   // limit scan time
       if (ports) args.push('-port', String(ports));
-      if (parameters.cookie) args.push('-C', String(parameters.cookie));
       break;
 
     case 'web_scan_sqlmap': // sqlmap — SQL injection specialist
@@ -221,6 +222,7 @@ export function buildArgs(scanType, target, parameters = {}) {
       args.push('-mc', '200,201,204,301,302,307,401,403');
       args.push('-json');
       args.push('-ac');          // auto-calibrate filtering
+      if (parameters.cookie) args.push('-H', `Cookie: ${parameters.cookie}`);
       if (threads) args.push('-t', String(threads));
       break;
 
@@ -327,6 +329,27 @@ export async function executeScan(scanTaskId) {
 
     async function runAndStore(scanType, toolId, target, params, timeout, { nonFatal = false } = {}) {
       if (scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');
+      if (['web_scan_nikto','api_fuzz_ffuf'].includes(scanType)) {
+        const normalized=normalizeTarget(target).target_url || target;
+        const knownEndpoint=parent && db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_entries'").get()
+          && db.prepare("SELECT 1 FROM task_entries WHERE pipeline_id=? AND value=? AND kind IN ('form','api_path') LIMIT 1").get(parent.pipeline_id,normalized);
+        const reason=webDirectoryScanBlockReason(normalized,{endpoint:!!knownEndpoint}) || directoryOptionsBlockReason(toolId,normalized,params);
+        if(reason) {recordFailure(toolId,reason);throw new Error(reason);}
+        // Validate the actual fuzz base, not just the original website root.
+        const probeBase=toolId==='ffuf'?new URL('api/',normalized).href:normalized;
+        const gate=await checkWebDirectory(probeBase,{
+          cookie:params.cookie,allowMissingBase:toolId==='ffuf',
+          allowUrl:url=>!scope || isTargetInScope(scope,url),
+          request:spec=>runAbortableTool('target-request',[JSON.stringify(spec)],{
+            target:normalized,timeout:5000,onOutput:()=>{},
+          }),
+        });
+        insertResult.run(scanTaskId,'scan_evidence',JSON.stringify({phase:'directory_preflight',tool:toolId,
+          allowed:gate.allowed,reason:gate.reason,comparisons:gate.evidence}), 'info',null,null,toolId,new Date().toISOString());
+        if(!gate.allowed) {recordFailure(toolId,gate.reason);throw new Error(gate.reason);}
+        if(scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');
+        target=normalized;
+      }
       const args = buildArgs(scanType, target, params);
       const runId = beginToolRun(db,scanTaskId,toolId,scanType);
       const collector = createScanOutputCollector(scanType);
@@ -380,7 +403,6 @@ export async function executeScan(scanTaskId) {
       totalResults = await runAndStore('topology_scan', 'nmap', task.target, parameters, timeoutMs);
     } else if (task.scan_type === 'web_scan') {
       // ── General web scan with optional explicit injection endpoint ──
-      console.log(`[Scan] web_scan: nikto for ${task.target}`);
       try {
         totalResults += await runAndStore('web_scan_nikto', 'nikto', task.target, parameters, 120_000);
       } catch (err) {

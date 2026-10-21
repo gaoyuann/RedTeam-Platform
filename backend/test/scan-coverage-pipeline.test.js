@@ -1,3 +1,4 @@
+import {directoryProbeFixture} from './helpers/directoryProbeFixture.js';
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +10,7 @@ import { runMigrations } from '../src/db/migrate.js';
 const calls=[];
 await mock.module('../src/tools/toolRunner.js',{namedExports:{runTool:async(tool,args)=>{
   calls.push({tool,args});
+  if(tool==='target-request')return directoryProbeFixture(args);
   if(args.includes('--iflist')) return {success:false,exitCode:1,stdout:'',stderr:'fixture has no interface list'};
   if(tool==='nmap') return {success:true,exitCode:0,stdout:[
     'Nmap scan report for 192.0.2.2','Host is up.',
@@ -37,7 +39,7 @@ test('parent run plans real HTTP service, records unsupported SSH and includes e
     .run(JSON.stringify(config));
   globalThis.fetch=async url=>{
     assert.equal(String(url),'http://192.0.2.2:8080/');
-    return new Response('<title>fixture</title><a href="/help">help</a>',{status:200});
+    return new Response('<title>fixture</title><a href="/help/">help</a><a href="/login.php">login</a>',{status:200});
   };
   try {
     await runPipeline('coverage-fixture');
@@ -46,8 +48,9 @@ test('parent run plans real HTTP service, records unsupported SSH and includes e
     assert.ok(scans.some(row=>row.scan_type==='app_discovery' && row.target==='http://192.0.2.2:8080/'));
     assert.ok(scans.some(row=>row.scan_type==='web_scan'));
     assert.ok(scans.some(row=>row.scan_type==='api_fuzz'));
-    assert.ok(scans.some(row=>row.target==='http://192.0.2.2:8080/help'));
-    assert.equal(scans.filter(row=>row.target==='http://192.0.2.2:8080/help').length,1,'new entry obeys budget');
+    assert.ok(scans.some(row=>row.target==='http://192.0.2.2:8080/help/'));
+    assert.equal(scans.filter(row=>row.target==='http://192.0.2.2:8080/help/').length,1,'directory entry obeys budget');
+    assert.equal(scans.some(row=>row.target.endsWith('/login.php')),false,'page is retained without running a directory scanner');
     assert.equal(calls.some(call=>call.tool==='nikto'),true);
     const pipeline=db.prepare('SELECT * FROM pipelines WHERE pipeline_id=?').get('coverage-fixture');
     const page=scanPage(db,pipeline,{limit:500});
@@ -56,6 +59,8 @@ test('parent run plans real HTTP service, records unsupported SSH and includes e
     assert.equal(page.scan_coverage.counts.services,2);
     assert.ok(page.scan_coverage.checks.some(row=>row.state==='unsupported' && row.check_type==='service_security'));
     assert.ok(page.scan_coverage.checks.some(row=>row.state==='missing_condition' && row.check_type==='authenticated_roles'));
+    assert.ok(page.scan_coverage.entries.some(row=>row.value.endsWith('/login.php')));
+    assert.ok(page.scan_coverage.checks.some(row=>row.target?.endsWith('/login.php') && row.state==='not_checked' && /页面/.test(row.reason)));
     assert.ok(page.scan_summary.unfinished_check_count>0,'saved results must still disclose unfinished coverage');
     db.prepare('INSERT OR IGNORE INTO users(username,password,role) VALUES (?,?,?)').run('coverage-other','fixture','user');
     const app=express();
@@ -72,5 +77,31 @@ test('parent run plans real HTTP service, records unsupported SSH and includes e
       assert.equal(body.page.total,page.scan_coverage.counts.checks);
       assert.equal((await originalFetch(`${base}?kind=checks&limit=501`)).status,400);
     } finally {await new Promise(resolve=>server.close(resolve));}
+  } finally {globalThis.fetch=originalFetch;closeDb();}
+});
+
+test('root redirecting to login runs Nikto only for root while retaining the login and form coverage',async()=>{
+  const db=getDb(':memory:');const originalFetch=globalThis.fetch;calls.length=0;
+  await runMigrations(db,fileURLToPath(new URL('../src/db/migrations/',import.meta.url)));
+  db.prepare('INSERT OR IGNORE INTO users(username,password,role) VALUES (?,?,?)').run('login-fixture','fixture','user');
+  const target='http://192.0.2.2:8080/';
+  const config={task_scope:{includes:[target],excludes:[],execution_location:'scanner',discovery_budget:3}};
+  db.prepare("INSERT INTO pipelines(pipeline_id,target,status,config,created_by) VALUES ('login-fixture',?,'created',?,'login-fixture')")
+    .run(target,JSON.stringify(config));
+  globalThis.fetch=async url=>{
+    if(String(url)===target)return new Response(null,{status:302,headers:{location:'login.php'}});
+    assert.equal(String(url),target+'login.php');
+    return new Response('<title>Login</title><form action="login.php"><input type="password"></form>',{status:200});
+  };
+  try {
+    await runPipeline('login-fixture');
+    const scans=db.prepare('SELECT scan_task_id,target,scan_type FROM scan_tasks WHERE pipeline_id=?').all('login-fixture');
+    assert.deepEqual(scans.filter(row=>row.scan_type==='web_scan').map(row=>row.target),[target]);
+    assert.deepEqual(calls.filter(call=>call.tool==='nikto').map(call=>call.args[call.args.indexOf('-h')+1]),[target]);
+    const page=scanPage(db,db.prepare('SELECT * FROM pipelines WHERE pipeline_id=?').get('login-fixture'),{limit:500});
+    assert.ok(page.scan_coverage.entries.some(row=>row.kind==='form' && row.value===target+'login.php'));
+    assert.ok(page.scan_coverage.checks.some(row=>row.target===target+'login.php' && row.state==='not_checked'));
+    assert.ok(page.scan_coverage.checks.some(row=>row.check_type==='form_input_validation' && row.state==='missing_condition'));
+    assert.ok(page.scan_summary.unfinished_check_count>0);
   } finally {globalThis.fetch=originalFetch;closeDb();}
 });

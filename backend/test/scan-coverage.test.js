@@ -31,7 +31,7 @@ test('service evidence creates bounded per-service checks and explicit uncovered
   assert.ok(discovery);
   db.prepare("INSERT INTO scan_tasks VALUES ('web')").run();
   add.run('web','http_probe',JSON.stringify({url:discovery.target,status_code:200,
-    body:'<a href="/api/users">API</a><a href="/help">help</a><form action="/login"></form>'}));
+    body:'<a href="/api/users">API</a><a href="/help/">help</a><a href="/docs/">docs</a><form action="/login"></form>'}));
   add.run('web','api_endpoint',JSON.stringify({url:'http://192.0.2.2:8080/api/users?token=fixture-secret',status_code:200}));
   add.run('web','api_parameter',JSON.stringify({parameter:'id'}));
   markCheck(db,discovery.check_id,'completed',{scanTaskId:'web'});
@@ -41,6 +41,9 @@ test('service evidence creates bounded per-service checks and explicit uncovered
   assert.ok(result.checks.some(row=>row.check_type==='api_entry_discovery' && row.state==='planned'));
   assert.ok(result.checks.some(row=>row.check_type==='authenticated_roles' && row.state==='missing_condition'));
   assert.equal(result.checks.filter(row=>row.check_type==='new_entry_check' && row.state==='planned').length,1);
+  assert.ok(result.checks.some(row=>row.target==='http://192.0.2.2:8080/help/' && row.state==='planned'));
+  assert.ok(result.checks.some(row=>row.target==='http://192.0.2.2:8080/docs/' && row.state==='not_checked' && /预算/.test(row.reason)));
+  assert.ok(result.checks.some(row=>row.target==='http://192.0.2.2:8080/api/users' && row.state==='not_checked' && /接口|专项/.test(row.reason)));
   assert.ok(result.checks.some(row=>row.check_type==='new_entry_check' && row.state==='not_checked'));
   assert.ok(result.entries.some(row=>row.kind==='form'));
   assert.equal(result.checks.filter(row=>row.check_type==='new_entry_check' && row.target==='http://192.0.2.2:8080/api/users').length,1);
@@ -139,4 +142,87 @@ test('authentication responses and partial probes never schedule follow-up check
   observeWebScan(db,pipeline,{...check,scan_task_id:'auth-scan',scan_status:'COMPLETED'});
   assert.equal(scanCoverage(db,'auth').checks.find(row=>row.check_type==='web_security').state,'unreachable');
   db.close();
+});
+
+test('redirected login and duplicate form observations remain visible without consuming directory scan budget',()=>{
+  const db=new Database(':memory:');db.pragma('foreign_keys=ON');
+  db.exec(`CREATE TABLE pipelines(pipeline_id TEXT PRIMARY KEY,target TEXT,config TEXT,created_by TEXT);
+    CREATE TABLE scan_tasks(scan_task_id TEXT PRIMARY KEY);
+    CREATE TABLE scan_results(id INTEGER PRIMARY KEY,scan_task_id TEXT,result_type TEXT,result_data TEXT);`);
+  coverageMigration(db);
+  const target='http://fixture.invalid/';
+  db.prepare('INSERT INTO pipelines VALUES (?,?,?,?)').run('login',target,JSON.stringify({task_scope:{
+    includes:[target],excludes:[],execution_location:'scanner',discovery_budget:1}}),'alice');
+  db.prepare("INSERT INTO scan_tasks VALUES ('probe')").run();
+  const pipeline=db.prepare('SELECT * FROM pipelines').get();
+  const [check]=beginCoverage(db,pipeline,[{scan_type:'app_discovery',target}]);
+  const add=db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data) VALUES ('probe',?,?)");
+  add.run('http_probe',JSON.stringify({url:target,requested_url:target,status_code:302,body:''}));
+  add.run('http_probe',JSON.stringify({url:target+'login.php',requested_url:target,status_code:200,
+    body:'<input type="password"><form action="login.php"></form><a href="/help/">help</a>'
+      +'<form action="http://outside.invalid/login"></form><a href="/api/users/">API</a>'
+      +'<a href="/reports/?token=fixture-secret">report</a>'}));
+  add.run('api_endpoint',JSON.stringify({url:target+'api/users/',status:200}));
+  const observation={...check,scan_task_id:'probe',scan_status:'COMPLETED'};
+  observeWebScan(db,pipeline,observation);
+  const result=scanCoverage(db,'login');
+  assert.deepEqual(pendingChecks(db,'login').filter(row=>row.scan_type==='web_scan').map(row=>row.target).sort(),
+    [target,target+'help/'].sort());
+  for(const path of ['login.php','api/users/','reports/']) {
+    assert.ok(result.entries.some(row=>row.value===target+path));
+    assert.ok(result.checks.some(row=>row.target===target+path && row.state==='not_checked'));
+  }
+  assert.ok(result.entries.some(row=>row.kind==='form' && row.value===target+'login.php'));
+  assert.ok(result.checks.some(row=>row.check_type==='form_input_validation' && row.state==='missing_condition'));
+  assert.ok(result.checks.some(row=>row.check_type==='form_input_validation' && row.state==='out_of_scope'));
+  assert.doesNotMatch(JSON.stringify(result.entries),/fixture-secret/);
+  observeWebScan(db,pipeline,observation);
+  assert.deepEqual(scanCoverage(db,'login').counts,result.counts,'replaying evidence is idempotent');
+  db.close();
+});
+
+test('explicit page targets retain their discovery but do not schedule directory scanners',()=>{
+  const db=new Database(':memory:');
+  db.exec(`CREATE TABLE pipelines(pipeline_id TEXT PRIMARY KEY,target TEXT,config TEXT,created_by TEXT);
+    CREATE TABLE scan_tasks(scan_task_id TEXT PRIMARY KEY);
+    CREATE TABLE scan_results(id INTEGER PRIMARY KEY,scan_task_id TEXT,result_type TEXT,result_data TEXT);`);
+  coverageMigration(db);
+  const target='http://fixture.invalid/login.php';
+  db.prepare('INSERT INTO pipelines VALUES (?,?,?,?)').run('page',target,JSON.stringify({task_scope:{
+    includes:['http://fixture.invalid/'],excludes:[],execution_location:'scanner',discovery_budget:3}}),'alice');
+  db.prepare("INSERT INTO scan_tasks VALUES ('probe')").run();
+  const pipeline=db.prepare('SELECT * FROM pipelines').get();
+  const [check]=beginCoverage(db,pipeline,[{scan_type:'app_discovery',target}]);
+  db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data) VALUES ('probe','http_probe',?)")
+    .run(JSON.stringify({url:target,status_code:200,body:'<form action="login.php"></form>'}));
+  observeWebScan(db,pipeline,{...check,scan_task_id:'probe',scan_status:'COMPLETED'});
+  const checks=scanCoverage(db,'page').checks;
+  for(const type of ['web_security','api_entry_discovery'])
+    assert.ok(checks.some(row=>row.check_type===type && row.state==='not_checked' && /页面/.test(row.reason)));
+  assert.equal(pendingChecks(db,'page').some(row=>['web_scan','api_fuzz'].includes(row.scan_type)),false);
+  db.close();
+});
+
+test('initial directory-shaped forms and API endpoints receive the same policy as new entries',()=>{
+ for(const mode of ['form','empty-action','api']) {
+  const db=new Database(':memory:');
+  db.exec(`CREATE TABLE pipelines(pipeline_id TEXT PRIMARY KEY,target TEXT,config TEXT,created_by TEXT);
+    CREATE TABLE scan_tasks(scan_task_id TEXT PRIMARY KEY);
+    CREATE TABLE scan_results(id INTEGER PRIMARY KEY,scan_task_id TEXT,result_type TEXT,result_data TEXT);`);
+  coverageMigration(db);
+  const target='http://fixture.invalid/login/';
+  const pipeline={pipeline_id:'initial',target,config:JSON.stringify({task_scope:{includes:['http://fixture.invalid/'],excludes:[],execution_location:'scanner',discovery_budget:3}}),created_by:'alice'};
+  db.prepare('INSERT INTO pipelines VALUES (?,?,?,?)').run(pipeline.pipeline_id,target,pipeline.config,'alice');
+  db.prepare("INSERT INTO scan_tasks VALUES ('probe')").run();
+  const add=db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data) VALUES ('probe',?,?)");
+  add.run('http_probe',JSON.stringify({url:target,status_code:200,body:mode==='api'?'{}':mode==='form'?'<form method=post></form>':'<form action=""></form>'}));
+  if(mode==='api')add.run('api_endpoint',JSON.stringify({url:target,status:200}));
+  const [check]=beginCoverage(db,pipeline,[{scan_type:'app_discovery',target}]);
+  observeWebScan(db,pipeline,{...check,scan_task_id:'probe',scan_status:'COMPLETED'});
+  assert.equal(pendingChecks(db,'initial').some(x=>['web_scan','api_fuzz'].includes(x.scan_type)),false,mode);
+  const before=scanCoverage(db,'initial').counts;
+  observeWebScan(db,pipeline,{...check,scan_task_id:'probe',scan_status:'COMPLETED'});
+  assert.deepEqual(scanCoverage(db,'initial').counts,before);
+  db.close();
+ }
 });

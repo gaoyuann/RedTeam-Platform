@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isTargetInScope, scopeBlockReason, taskScope } from './taskScope.js';
+import { webDirectoryScanBlockReason, webPageEntries } from './webScanPolicy.js';
 
 const id = (prefix, ...parts) => `${prefix}_${createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0,24)}`;
 const json = value => { try { return JSON.parse(value || '{}'); } catch { return {}; } };
@@ -158,6 +159,36 @@ export function observeWebScan(db,pipeline,check) {
   });
   const authRequired=complete && records.some(row=>inScopeResponse(row)
     && [401,403].includes(Number(json(row.result_data).status_code)));
+  const budget=scope.discovery_budget;
+  const canSchedule=complete && (check.scan_type!=='app_discovery' || reachable);
+  const primary=new Set([safeUrl(target,target) || target]);
+  const seenUrls=new Set(db.prepare("SELECT target FROM task_checks WHERE pipeline_id=? AND check_type='new_entry_check'")
+    .all(pipeline.pipeline_id).map(row=>row.target));
+  const discovered=[];
+  const discover=(kind,value,base,sourceId)=>{
+    const url=safeUrl(value,base);
+    // Strip query values from saved identities, but retain their page semantics.
+    if(url) discovered.push({kind,url,sourceId,hasQuery:Boolean(new URL(value,base).search)});
+  };
+  for(const row of records) {
+    const data=json(row.result_data);
+    if(['http_probe','api_endpoint'].includes(row.result_type)) {
+      discover(row.result_type==='api_endpoint'?'api_path':'web_url',data.url,target,row.id);
+    }
+    if(row.result_type==='api_parameter' && data.parameter) {
+      const entry=addEntry(db,pipeline,{serviceId:check.service_id,kind:'parameter',value:`${target}#parameter:${String(data.parameter).slice(0,100)}`,
+        state:'observed',sourceId:row.id});
+      addCheck(db,pipeline,{serviceId:check.service_id,entryId:entry.entry_id,type:'parameter_validation',state:'not_checked',
+        reason:'参数已发现，缺少适用的逐参数验证条件',sourceId:row.id});
+    }
+    if(row.result_type==='http_probe' && typeof data.body==='string') {
+      for(const entry of webPageEntries(data.body,data.url || target))
+        discover(entry.kind,entry.value,data.url || target,row.id);
+    }
+  }
+  // Preserve forms/API observations even when the same URL was first observed
+  // as a redirect or link. Endpoint evidence takes precedence over URL shape.
+  const endpointUrls=new Set(discovered.filter(item=>item.hasQuery || ['form','api_path'].includes(item.kind)).map(item=>item.url));
   if(check.scan_type==='app_discovery') {
     if(responded && check.service_id) {
       db.prepare("UPDATE task_services SET state='http_observed' WHERE service_id=? AND state='unverified'").run(check.service_id);
@@ -167,55 +198,31 @@ export function observeWebScan(db,pipeline,check) {
     const reason=reachable?null:authRequired?'HTTP 入口需要认证，未提供可用角色与凭据':!complete
       ?'入口探测未完整完成，后续检查未执行':responded
         ?'HTTP 服务已响应，但入口未返回成功状态，后续检查未执行':'未取得范围内 HTTP 响应，后续检查未执行';
+    const directoryReason=webDirectoryScanBlockReason(target,{endpoint:endpointUrls.has(safeUrl(target,target))});
     for(const [type,scanType] of [['web_security','web_scan'],['api_entry_discovery','api_fuzz']]) {
       const allowed=classifyCheck(scope,target,scanType);
+      const planned=directoryReason && allowed.state==='planned'?{state:'not_checked',reason:directoryReason}:allowed;
       addCheck(db,pipeline,{serviceId:check.service_id,entryId:check.entry_id,type,scanType,target,
-        state:reachable?allowed.state:state,reason:reachable?allowed.reason:reason,sourceId:records[0]?.id || check.source_record_id});
+        state:reachable?planned.state:state,reason:reachable?planned.reason:reason,sourceId:records[0]?.id || check.source_record_id});
     }
     addCheck(db,pipeline,{serviceId:check.service_id,entryId:check.entry_id,type:'authenticated_roles',state:'missing_condition',
       reason:'认证角色和可用凭据提供方尚未配置；未进行认证检查',sourceId:records[0]?.id || check.source_record_id});
   }
-  const budget=scope.discovery_budget;
-  const canSchedule=complete && (check.scan_type!=='app_discovery' || reachable);
-  const primary=new Set([safeUrl(target,target) || target]);
-  const seenUrls=new Set(db.prepare("SELECT target FROM task_checks WHERE pipeline_id=? AND check_type='new_entry_check'")
-    .all(pipeline.pipeline_id).map(row=>row.target));
-  const discovered=[];
-  for(const row of records) {
-    const data=json(row.result_data);
-    if(['http_probe','api_endpoint'].includes(row.result_type)) {
-      const url=safeUrl(data.url,target);
-      if(url) discovered.push({kind:row.result_type==='api_endpoint'?'api_path':'web_url',url,sourceId:row.id});
-    }
-    if(row.result_type==='api_parameter' && data.parameter) {
-      const entry=addEntry(db,pipeline,{serviceId:check.service_id,kind:'parameter',value:`${target}#parameter:${String(data.parameter).slice(0,100)}`,
-        state:'observed',sourceId:row.id});
-      addCheck(db,pipeline,{serviceId:check.service_id,entryId:entry.entry_id,type:'parameter_validation',state:'not_checked',
-        reason:'参数已发现，缺少适用的逐参数验证条件',sourceId:row.id});
-    }
-    if(row.result_type==='http_probe' && typeof data.body==='string') {
-      for(const match of data.body.matchAll(/<form\b[^>]*\baction\s*=\s*["']([^"']+)["']/gi)) {
-        const url=safeUrl(match[1],data.url || target);
-        if(url) discovered.push({kind:'form',url,sourceId:row.id});
-      }
-      for(const match of data.body.matchAll(/<a\b[^>]*\bhref\s*=\s*["']([^"']+)["']/gi)) {
-        const url=safeUrl(match[1],data.url || target);
-        if(url) discovered.push({kind:'web_path',url,sourceId:row.id});
-      }
-    }
-  }
   let scheduled=db.prepare("SELECT COUNT(*) n FROM task_checks WHERE pipeline_id=? AND check_type='new_entry_check' AND state IN ('planned','running','completed','partial','failed')").get(pipeline.pipeline_id).n;
   for(const item of discovered) {
-    if(primary.has(item.url) || seenUrls.has(item.url)) continue;
-    seenUrls.add(item.url);
     const inScope=isTargetInScope(scope,item.url);
     const entry=addEntry(db,pipeline,{serviceId:check.service_id,kind:item.kind,value:item.url,state:inScope?'observed':'out_of_scope',sourceId:item.sourceId});
     if(item.kind==='form') addCheck(db,pipeline,{serviceId:check.service_id,entryId:entry.entry_id,type:'form_input_validation',
-      state:'missing_condition',reason:'尚无表单方法、字段及角色条件，未执行逐字段验证',sourceId:item.sourceId});
+      state:inScope?'missing_condition':'out_of_scope',reason:inScope?'尚无表单方法、字段及角色条件，未执行逐字段验证':'表单入口不在任务范围内',sourceId:item.sourceId});
+    if(primary.has(item.url) || seenUrls.has(item.url)) continue;
+    seenUrls.add(item.url);
     if(!inScope) {addCheck(db,pipeline,{serviceId:check.service_id,entryId:entry.entry_id,type:'new_entry_check',target:item.url,
       state:'out_of_scope',reason:'新入口不在任务范围内',sourceId:item.sourceId});continue;}
     if(!canSchedule) {addCheck(db,pipeline,{serviceId:check.service_id,entryId:entry.entry_id,type:'new_entry_check',target:item.url,
       state:'not_checked',reason:authRequired?'入口需要认证，未补充检查':'来源扫描未完整完成，未补充检查',sourceId:item.sourceId});continue;}
+    const directoryReason=webDirectoryScanBlockReason(item.url,{endpoint:endpointUrls.has(item.url)});
+    if(directoryReason) {addCheck(db,pipeline,{serviceId:check.service_id,entryId:entry.entry_id,type:'new_entry_check',target:item.url,
+      state:'not_checked',reason:directoryReason,sourceId:item.sourceId});continue;}
     if(scheduled>=budget) {addCheck(db,pipeline,{serviceId:check.service_id,entryId:entry.entry_id,type:'new_entry_check',target:item.url,
       state:'not_checked',reason:'新入口检查预算已用尽',sourceId:item.sourceId});continue;}
     const allowed=classifyCheck(scope,item.url,'web_scan');
