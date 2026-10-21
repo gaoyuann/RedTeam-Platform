@@ -29,8 +29,47 @@ export async function auditCscanNative(task,{db,parameters,signal,nativeScan=sca
     db.prepare('UPDATE scan_results SET result_data=? WHERE id=?').run(JSON.stringify(coverage),id);
   };
   const outcomes=[];
+  const imported=new Map();
+  const rawRecords=new Map();
+  const importFindings=(report)=>{
+    if(report.source_access_reported==='unavailable') return;
+    for(const [index,finding] of report.findings.entries()) {
+      let data;
+      try {
+        data=normalizeCscanReportedFinding(finding,report.markdown,source);
+      } catch(error) {
+        const rejected={index,source_subtask_ids:report.source_subtask_ids || [],reason:error.message};
+        if(!coverage.rejected_findings.some(item=>JSON.stringify(item)===JSON.stringify(rejected))) coverage.rejected_findings.push(rejected);
+        continue;
+      }
+        const key=[data.file,data.start_line,data.cwe || data.title].join('|');
+        const previous=imported.get(key);
+        const ids=[...new Set([...(previous?.data.source_subtask_ids || []),...(report.source_subtask_ids || [])])];
+        const taskIds=[...new Set([...(previous?.data.source_task_ids || []),...(report.source_task_ids || [])])];
+        const evidence=structuredClone(previous?.data.report_evidence || []);
+        const existing=evidence.find(item=>item.reason===data.reason);
+        if(existing) existing.source_subtask_ids=[...new Set([...existing.source_subtask_ids,...(report.source_subtask_ids || [])])];
+        else evidence.push({reason:data.reason,preconditions:data.preconditions,source_subtask_ids:report.source_subtask_ids || []});
+        const merged={...(previous?.data || data),cscan_flow_id:report.flow_id,source_target:source,tool:'cscan',tools:['cscan'],
+          source_subtask_ids:ids,source_task_ids:taskIds,report_evidence:evidence,
+          suggestion:previous?.data.suggestion || data.suggestion,
+          analyses:evidence.map(item=>({tool:'cscan',reason:item.reason,preconditions:item.preconditions,source_subtask_ids:item.source_subtask_ids}))};
+        if(previous) db.prepare('UPDATE scan_results SET result_data=?,severity=? WHERE id=?').run(JSON.stringify(merged),merged.severity,previous.id);
+        imported.set(key,{id:previous?.id || store('source_finding',merged,merged.severity),data:merged});
+    }
+  };
   try {
-    const report=await nativeScan(source,{notes,sourceLocation,scope,signal,llm,onProgress:state=>{
+    const report=await nativeScan(source,{notes,sourceLocation,scope,signal,llm,onFindings:report=>{
+      if(signal?.aborted) throw new Error('源码扫描已取消');
+      // Commit evidence and candidates before acknowledging a processed subtask.
+      db.transaction(()=>{
+        const key=report.source_subtask_ids.join('|');
+        const raw={flow_id:report.flow_id,report:report.markdown,report_source:'subtask_result',source_subtask_ids:report.source_subtask_ids,parse_errors:report.parse_errors};
+        if(rawRecords.has(key)) db.prepare('UPDATE scan_results SET result_data=? WHERE id=?').run(JSON.stringify(raw),rawRecords.get(key));
+        else rawRecords.set(key,store('raw_output',raw));
+        importFindings(report);persist();
+      })();
+    },onProgress:state=>{
       coverage.cscan={...coverage.cscan,...state};persist();
     }});
     if(signal?.aborted) throw new Error('源码扫描已取消');
@@ -40,24 +79,20 @@ export async function auditCscanNative(task,{db,parameters,signal,nativeScan=sca
     coverage.report_format='service_task_report';coverage.parse_errors=report.parse_errors || [];
     store('raw_output',{flow_id:report.flow_id,report:report.markdown,report_source:'task_result'});
     coverage.source_access_reported=report.source_access_reported || 'unknown';
-    if(agentMode && coverage.source_access_reported==='unavailable') {
+    if(coverage.source_access_reported==='unavailable') {
+      // Retain earlier evidence but withdraw candidates contradicted by the
+      // final source-access report, including existing verification references.
+      for(const {id,data} of imported.values()) {
+        db.prepare("UPDATE scan_results SET result_type='information',result_data=? WHERE id=?")
+          .run(JSON.stringify({...data,verification_status:'source_unavailable'}),id);
+      }
       const reason='CScan 未能取得目标源码，缺失条件见原始报告';
       coverage.source_errors.push(reason);coverage.cscan.state='source_unavailable';
       store('scan_error',{error:reason,flow_id:report.flow_id});
       outcomes.push({tool_id:'cscan-source-access',success:false,error:reason});
       persist();return {count,outcomes};
     }
-    const seen=new Set();
-    for(const [index,finding] of report.findings.entries()) {
-      try {
-        const data=normalizeCscanReportedFinding(finding,report.markdown,source);
-        const key=[data.file,data.start_line,data.cwe || data.title].join('|');
-        if(seen.has(key)) continue;
-        seen.add(key);
-        store('source_finding',{...data,cscan_flow_id:report.flow_id,source_target:source,tool:'cscan',tools:['cscan'],
-          analyses:[{tool:'cscan',reason:data.reason,preconditions:data.preconditions}]},data.severity);
-      } catch(error) {coverage.rejected_findings.push({index,reason:error.message});}
-    }
+    importFindings(report);
     coverage.cscan_complete=(!agentMode || coverage.source_access_reported==='available')
       && !coverage.parse_errors.length && !coverage.rejected_findings.length;
     coverage.ai_complete=coverage.cscan_complete;

@@ -9,6 +9,12 @@ export function findingVerificationEntry(db, pipeline, finding) {
   const scope=taskScope(pipeline);
   const scan=db.prepare('SELECT target,parameters FROM scan_tasks WHERE scan_task_id=?').get(finding.scan_task_id);
   const parameters=parseResultData(scan?.parameters) || {};
+  if(data.evidence_origin==='cscan_report') {
+    const runtime=parameters.runtime_target;
+    if(typeof runtime==='string' && /^(?:https?|tcp):\/\//i.test(runtime) && isTargetInScope(scope,runtime))
+      return {target:runtime,source:'declared_runtime_target',source_record_id:finding.id};
+    return {target:null,source:'source_only',missing_conditions:['本项来自 CScan 源码报告，请单独提供范围内的程序运行入口和版本；源码访问地址不能直接作为验证目标。']};
+  }
   if((parameters.input_kind==='remote_directory' || parameters.source_path || parameters.cscan_target?.startsWith('/')) && !parameters.runtime_target)
     return {target:null,source:'source_only',missing_conditions:['本项来自 CScan 源码报告，请先提供对应部署程序的真实运行入口和版本。']};
   const parse=value=>{

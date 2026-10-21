@@ -5,17 +5,67 @@ import {callLlm} from './llmClient.js';
 
 // Match PentagiService::fetchFlowReport: consume the service's task results,
 // without a platform source collector, local worker mount or report filesystem.
-export async function scanCscanTarget(target, {notes='',sourceLocation='',scope=null,signal,onProgress,config=cscanConfig(),client,llm=callLlm}={}) {
+export async function scanCscanTarget(target, {notes='',sourceLocation='',scope=null,signal,onProgress,onFindings=async()=>{},config=cscanConfig(),client,llm=callLlm}={}) {
   target=cscanTarget(target);notes=cscanNotes(notes);
   client ||= await createCscanClient(config);
   let rawReport='';
-  const report=await runCscan({service_target:target,notes,source_location:sourceLocation,scope,documents:[]},{config,client,signal,onProgress,
+  // Port of VulnerabilityScanPage::processIncrementalSubtasks: completed
+  // subtasks first, task result fallback, processed IDs and three attempts.
+  const processed=new Set(),attempts=Object.create(null),errors=new Map();
+  const progress=async()=>onProgress?.({incremental:{processedSubtasks:[...processed],attempts:{...attempts},errors:Object.fromEntries(errors)}});
+  const onTasks=async(tasks,options)=>{
+    for(const task of tasks) {
+      let fallback=!task.subtasks?.length;
+      const candidates=[];
+      for(const sub of task.subtasks || []) {
+        if(sub.status!=='finished') continue;
+        if(typeof sub.result!=='string' || !sub.result.trim()) {fallback=true;continue;}
+        if(sub.id) candidates.push({id:String(sub.id),text:sub.result});
+      }
+      if(fallback && task.status==='finished' && task.id && typeof task.result==='string' && task.result.trim())
+        candidates.push({id:task.id+':result',text:task.result});
+      for(const candidate of candidates) {
+        if(processed.has(candidate.id) || (attempts[candidate.id] || 0)>=3) continue;
+        attempts[candidate.id]=(attempts[candidate.id] || 0)+1;
+        await progress();
+        const parsed=await parseNativeReport(candidate.text,target,{llm,signal:options.signal});
+        await onFindings({...parsed,flow_id:options.flow_id,source_subtask_ids:[candidate.id],source_task_ids:[String(task.id)]});
+        if(parsed.parse_errors.length) errors.set(candidate.id,parsed.parse_errors.join('; '));
+        else {
+          processed.add(candidate.id);errors.delete(candidate.id);
+        }
+        await progress();
+      }
+    }
+  };
+  const report=await runCscan({service_target:target,notes,source_location:sourceLocation,scope,documents:[]},{config,client,signal,onProgress,onTasks,
     stage:async()=>({containerPath:target,key:null}),
     readReport:async(_,id,source,options)=>{
       rawReport=await client.report(id,{signal:options.signal});
-      return {...parseCscanMarkdown(rawReport,null),report_source:'task_result'};
+      return {...await parseNativeReport(rawReport,target,{llm,signal:options.signal}),report_source:'task_result'};
     }});
-  let findings=report.findings,parseErrors=[];
+  return {...report,parse_errors:[...report.parse_errors,...[...errors].map(([id,error])=>`子任务 ${id}: ${error}`)],source_target:target};
+}
+
+export async function parseNativeReport(rawReport,target,{llm=callLlm,signal,split=true}={}) {
+  // Parse sections independently so an explicit finding cannot hide a prose
+  // finding in another section of the same task/final report.
+  const sections=rawReport.split(/(?=^#{2,6}\s)/m);
+  if(split && sections.length>1) {
+    const explicit=parseCscanMarkdown(rawReport,null).findings;
+    const findings=[],parse_errors=[];
+    for(const section of sections.filter(value=>value.trim())) {
+      const deterministic=parseCscanMarkdown(section,null).findings;
+      if(deterministic.length) findings.push(...deterministic);
+      else if(!explicit.length || /[\w./-]+\.(?:c|h|cc|cpp|cxx|hpp|hxx)\b/i.test(section)) {
+        const parsed=await parseNativeReport(section,target,{llm,signal,split:false});
+        findings.push(...parsed.findings);parse_errors.push(...parsed.parse_errors);
+      }
+    }
+    if(findings.length>1000) throw new Error('CScan 报告发现数量超过限制');
+    return {markdown:rawReport,findings,parse_errors,source_access_reported:sourceAccess(rawReport)};
+  }
+  let findings=parseCscanMarkdown(rawReport,null).findings,parseErrors=[];
   // Like the reference client, use the existing report-analysis model only to
   // structure already-returned evidence; it neither receives nor scans source.
   if(!findings.length) {
@@ -25,13 +75,18 @@ export async function scanCscanTarget(target, {notes='',sourceLocation='',scope=
         {role:'user',content:JSON.stringify({target,report:rawReport})}],{signal,json:true,temperature:0,maxTokens:6000,timeoutMs:120000});
       if(!response.ok) throw new Error('报告结构化模型未完成解析');
       parsed=JSON.parse(String(response.content || '').trim().replace(/^```(?:json)?\s*/,'').replace(/```\s*$/,''));
-      if(!Array.isArray(parsed.findings) || parsed.findings.length>1000) throw new Error('报告结构化格式无效');
-      findings=parsed.findings;
+      const values=parsed.findings ?? parsed.vulnerabilities;
+      if(!Array.isArray(values) || values.length>1000) throw new Error('报告结构化格式无效');
+      findings=values.map(value=>({...value,title:value.title ?? value.name,reason:value.reason ?? value.evidence}));
     } catch(error) {parseErrors.push(error.message);}
   }
   if(signal?.aborted) throw new Error('CScan 扫描已取消');
-  const access=rawReport.match(/^\s*Source-Access:\s*(available|unavailable|unknown)\s*$/im)?.[1]?.toLowerCase() || 'unknown';
-  return {...report,findings,parse_errors:parseErrors,source_target:target,source_access_reported:access};
+  return {markdown:rawReport,findings,parse_errors:parseErrors,source_access_reported:sourceAccess(rawReport)};
+}
+
+function sourceAccess(report) {
+  const states=[...report.matchAll(/^\s*Source-Access:\s*(available|unavailable|unknown)\s*$/gim)].map(match=>match[1].toLowerCase());
+  return states.includes('unavailable')?'unavailable':states.includes('available')?'available':'unknown';
 }
 
 export function normalizeCscanReportedFinding(finding, report, target) {
@@ -40,7 +95,7 @@ export function normalizeCscanReportedFinding(finding, report, target) {
   if(!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start<1 || end<start || end-start>10000)
     throw new Error('CScan 报告行号无效');
   const file=String(finding.file || '');
-  if(file.length>1024 || /[\\\x00-\x1f]/.test(file)) throw new Error('报告文件路径无效');
+  if(file.length>1024 || /[\\\x00-\x1f]/.test(file) || /^[a-z][a-z0-9+.-]*:/i.test(file)) throw new Error('报告文件路径无效');
   if(file.startsWith('/')) {
     cscanRemotePath(file);
     if(target.startsWith('/') && file!==target && !file.startsWith(target+'/')) throw new Error('报告定位超出本次源码目标');
