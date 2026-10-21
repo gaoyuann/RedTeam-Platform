@@ -43,9 +43,9 @@ jobs:
       - name: Configure
         run: cmake -S . -B build-ci -DBUILD_UI_CHECKS=ON
       - name: Build application and checks
-        run: cmake --build build-ci --target RedTeam-Platform RedTeam-Platform-Batch16Checks RedTeam-StatisticsChecks --parallel 2
+        run: cmake --build build-ci --target RedTeam-Platform RedTeam-Platform-Batch16Checks RedTeam-StatisticsChecks RedTeam-TaskReportExportChecks --parallel 2
       - name: Run UI checks
-        run: ctest --test-dir build-ci -R '^(ui-context-|ui-task-statistics$)' --output-on-failure
+        run: ctest --test-dir build-ci -R '^(ui-context-|ui-task-statistics$|ui-task-report-export$)' --output-on-failure
       - name: Configure finding verification checks
         run: cmake -S frontend/tests/finding-verification -B build-ci/finding-verification
       - name: Build finding verification checks
