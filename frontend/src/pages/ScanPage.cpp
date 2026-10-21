@@ -37,6 +37,28 @@
 #include <QSignalBlocker>
 #include <QTreeWidgetItemIterator>
 
+// Partial selection is a display state; user activation always selects or clears all.
+class FindingSelectAllCheckBox final : public QCheckBox {
+public:
+  using QCheckBox::QCheckBox;
+protected:
+  void nextCheckState() override {
+    setCheckState(checkState() == Qt::Checked ? Qt::Unchecked : Qt::Checked);
+  }
+};
+
+static QString findingIndicatorStyle(const QString &selector) {
+  QString style;
+  const QList<QPair<QString, QString>> states{
+    {"unchecked", "off"}, {"checked", "on"}, {"indeterminate", "partial"},
+    {"unchecked:disabled", "off_disabled"}, {"checked:disabled", "on_disabled"},
+    {"indeterminate:disabled", "partial_disabled"}};
+  for (const auto &state : states)
+    style += selector + "::indicator:" + state.first
+      + " { image: url(:/icons/checkbox_" + state.second + ".png); }";
+  return style;
+}
+
 static bool isProgramScan(const QString &type) { return type == "program_scan" || type == "source_scan"; }
 static bool isProgramFinding(const QString &type) { return type == "program_finding" || type == "source_finding"; }
 
@@ -547,7 +569,9 @@ void ScanPage::setPipelineScope(const QString &pipelineId, const QStringList &ta
     if (m_pipelineScanState != state && m_allScanResults) { m_pipelineScanState = state; loadPipelineResults(); }
     return;
   }
+  const auto checkedFindings = m_checkedFindings;
   setTaskScope(taskIds);
+  m_checkedFindings = checkedFindings;
   m_pipelineId = pipelineId; m_pipelineScanState = state;
   m_resultSource->blockSignals(true); m_resultSource->clear(); m_resultSource->addItem(QStringLiteral("全部来源"), QString()); m_resultSource->blockSignals(false);
   m_allScanResults = true;
@@ -567,6 +591,7 @@ void ScanPage::loadPipelineResults(bool append)
   m_selectedTaskId.clear();
   m_reexecBtn->hide(); m_genBtn->setEnabled(false);
   m_scanPageBusy = true; m_moreResultsButton->setEnabled(false);
+  updateFindingSelection();
   QString path = "/api/pipelines/" + pipeline + "/results?view=scans&limit=100&after=" + QString::number(m_scanCursor)
       + "&category=" + m_resultCategory->currentData().toString();
   if (append) path += "&through=" + QString::number(m_scanThrough);
@@ -575,6 +600,7 @@ void ScanPage::loadPipelineResults(bool append)
   m_api->get(path, 10000, [this, guard, request, pipeline, scope](const QJsonObject &response) {
     if (!guard || request != m_scanPageRequest || pipeline != m_pipelineId || scope != m_scopeRevision || !m_allScanResults) return;
     m_scanPageBusy = false;
+    updateFindingSelection();
     if (response["status"].toString() != "ok") {
       m_statusLabel->setText(QStringLiteral("任务扫描结果加载失败，请点击全部子扫描重试")); return;
     }
@@ -690,6 +716,7 @@ void ScanPage::setTaskScope(const QStringList &taskIds)
 void ScanPage::clearTaskScope()
 {
   ++m_scopeRevision;
+  m_checkedFindings.clear();
   ++m_scanPageRequest; m_scanPageBusy = false; m_pipelineId.clear(); m_allScanResults = false;
   if (m_aggregateControls) m_aggregateControls->hide();
   m_scopedTasks = true;
@@ -1285,7 +1312,7 @@ void ScanPage::setupUI() {
     layout->addWidget(text); dialog->show();
   });
   UiUtil::EmptyHint::attach(m_resultTree, QStringLiteral("扫描完成后在此展示结果"));
-  m_resultTree->setHeaderLabels({"编号", "漏洞名称 / 记录内容", "来源工具", "载荷情况",
+  m_resultTree->setHeaderLabels({"选择 / 编号", "漏洞名称 / 记录内容", "来源工具", "载荷情况",
     "严重性", "目标与位置", "测试状态", "验证结论"});
   // Keep identity and independent status/result visible first; location and source remain horizontally reachable.
   const QList<int> visualOrder{0, 1, 4, 6, 7, 5, 3, 2};
@@ -1295,24 +1322,47 @@ void ScanPage::setupUI() {
   m_resultTree->headerItem()->setToolTip(7, "来自系统验证目标与证据；不将工具成功或人工意见替代为自动结论。");
   m_resultTree->setAlternatingRowColors(true);
   m_resultTree->setSelectionMode(QAbstractItemView::ExtendedSelection);
-  auto *verifySelected = new QPushButton("打开勾选的漏洞");
-  verifySelected->setObjectName("openCheckedFindings");
-  verifySelected->setToolTip("勾选多条漏洞后统一打开；双击某条漏洞可直接查看。打开窗口不会启动验证。");
-  right->addWidget(verifySelected);
-  connect(verifySelected, &QPushButton::clicked, this, [this]() {
-    if (m_pipelineId.isEmpty()) { QMessageBox::information(this,"需要任务归属","请从任务工作台的扫描结果进入逐漏洞验证。"); return; }
+  m_resultTree->setStyleSheet(findingIndicatorStyle("QTreeWidget#scanResultTree")
+    + "QTreeWidget#scanResultTree { color:#172033; }"
+      "QTreeWidget#scanResultTree::item:selected { color:#1e3a8a; }");
+  auto *selectionBar = new QHBoxLayout;
+  m_selectAllFindings = new FindingSelectAllCheckBox("全选当前列表");
+  m_selectAllFindings->setObjectName("selectAllCurrentFindings");
+  m_selectAllFindings->setTristate(true);
+  m_selectAllFindings->setStyleSheet(findingIndicatorStyle("QCheckBox#selectAllCurrentFindings")
+    + "QCheckBox#selectAllCurrentFindings { color:#172033; }"
+      "QCheckBox#selectAllCurrentFindings:disabled { color:#64748b; }");
+  m_selectAllFindings->setToolTip("仅选择当前筛选下已加载的漏洞，包含折叠分组；加载更多后可再次全选。");
+  m_findingSelectionCount = new QLabel;
+  m_findingSelectionCount->setObjectName("findingSelectionCount");
+  m_findingSelectionCount->setStyleSheet("QLabel#findingSelectionCount { color:#172033; }");
+  m_openCheckedFindings = new QPushButton("打开勾选的漏洞");
+  m_openCheckedFindings->setObjectName("openCheckedFindings");
+  m_openCheckedFindings->setToolTip("只打开当前列表勾选的漏洞；打开窗口不会启动验证。");
+  selectionBar->addWidget(m_selectAllFindings);
+  selectionBar->addWidget(m_findingSelectionCount);
+  selectionBar->addStretch();
+  selectionBar->addWidget(m_openCheckedFindings);
+  right->addLayout(selectionBar);
+  connect(m_selectAllFindings, &QCheckBox::clicked, this, [this]() {
+    setCurrentFindingsChecked(m_selectAllFindings->checkState() == Qt::Checked);
+  });
+  connect(m_openCheckedFindings, &QPushButton::clicked, this, [this]() {
+    if (m_pipelineId.isEmpty() || m_scanPageBusy) return;
     QList<qint64> ids;
-    for(QTreeWidgetItemIterator it(m_resultTree);*it;++it)
-      if((*it)->checkState(0)==Qt::Checked && (*it)->data(0,Qt::UserRole+1).toLongLong()>0)
-        ids.append((*it)->data(0,Qt::UserRole+1).toLongLong());
-    if(ids.isEmpty()) {QMessageBox::information(this,"请勾选漏洞","勾选需要验证的漏洞，或双击一条漏洞直接打开。");return;}
+    for (auto *item : selectableFindingItems())
+      if (item->checkState(0) == Qt::Checked)
+        ids.append(item->data(0, Qt::UserRole+1).toLongLong());
     openFindingVerification(ids);
   });
-  connect(m_resultTree,&QTreeWidget::itemChanged,this,[this](QTreeWidgetItem *item,int column){
-    const auto id=item->data(0,Qt::UserRole+1).toLongLong();
-    if(column!=0 || id<=0)return;
-    if(item->checkState(0)==Qt::Checked)m_checkedFindings.insert(id);else m_checkedFindings.remove(id);
+  connect(m_resultTree, &QTreeWidget::itemChanged, this, [this](QTreeWidgetItem *item, int column) {
+    if (column != 0 || !selectableFindingItems().contains(item)) return;
+    const auto id = item->data(0, Qt::UserRole+1).toLongLong();
+    if (item->checkState(0) == Qt::Checked) m_checkedFindings.insert(id);
+    else m_checkedFindings.remove(id);
+    updateFindingSelection();
   });
+  updateFindingSelection();
   m_resultTree->setContextMenuPolicy(Qt::CustomContextMenu);
   m_resultTree->header()->setStretchLastSection(false);
   m_resultTree->header()->setSectionResizeMode(QHeaderView::Interactive);
@@ -1648,7 +1698,7 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
       child->setText(2, tool + (m_allScanResults ? " · " + obj["scan_task_id"].toString() + " #" + QString::number(obj["id"].toVariant().toLongLong()) : QString()));
       showFindingSummary(child, obj, m_allScanResults);
       decorateResultRow(child, obj);
-      if(!m_pipelineId.isEmpty() && isVerificationRecord(obj)) {
+      if(!m_pipelineId.isEmpty() && isVerificationRecord(obj) && obj["id"].toVariant().toLongLong() > 0) {
         child->setFlags(child->flags()|Qt::ItemIsUserCheckable);
         child->setCheckState(0,m_checkedFindings.contains(obj["id"].toVariant().toLongLong())?Qt::Checked:Qt::Unchecked);
       }
@@ -1701,7 +1751,7 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
       child->setText(2, tool + (m_allScanResults ? " · " + obj["scan_task_id"].toString() + " #" + QString::number(obj["id"].toVariant().toLongLong()) : QString()));
       showFindingSummary(child, obj, m_allScanResults);
       decorateResultRow(child, obj);
-      if(!m_pipelineId.isEmpty() && isVerificationRecord(obj)) {
+      if(!m_pipelineId.isEmpty() && isVerificationRecord(obj) && obj["id"].toVariant().toLongLong() > 0) {
         child->setFlags(child->flags()|Qt::ItemIsUserCheckable);
         child->setCheckState(0,m_checkedFindings.contains(obj["id"].toVariant().toLongLong())?Qt::Checked:Qt::Unchecked);
       }
@@ -1709,8 +1759,49 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
     groupItem->setExpanded(true);
   }
 
-  const QList<int> widths{110, 220, 160, 170, 80, 220, 100, 160};
+  const QList<int> widths{140, 220, 160, 170, 80, 220, 100, 160};
   for (int column = 0; column < widths.size(); ++column) m_resultTree->setColumnWidth(column, widths[column]);
+  m_resultTree->resizeColumnToContents(0);
+  m_resultTree->setColumnWidth(0, qMax(140, m_resultTree->columnWidth(0)));
+  updateFindingSelection();
+}
+
+QList<QTreeWidgetItem*> ScanPage::selectableFindingItems() const {
+  QList<QTreeWidgetItem*> items;
+  if (m_pipelineId.isEmpty()) return items;
+  for (QTreeWidgetItemIterator it(m_resultTree); *it; ++it) {
+    auto *item = *it;
+    if (item->parent() && item->data(0, Qt::UserRole+2).toString() == "vulnerability"
+        && item->data(0, Qt::UserRole+1).toLongLong() > 0
+        && item->flags().testFlag(Qt::ItemIsEnabled)
+        && item->flags().testFlag(Qt::ItemIsUserCheckable)
+        && item->data(0, Qt::CheckStateRole).isValid()) items.append(item);
+  }
+  return items;
+}
+
+void ScanPage::updateFindingSelection() {
+  if (!m_selectAllFindings) return;
+  const auto items = selectableFindingItems();
+  int selected = 0;
+  for (auto *item : items) if (item->checkState(0) == Qt::Checked) ++selected;
+  const QSignalBlocker blocker(m_selectAllFindings);
+  m_selectAllFindings->setCheckState(selected == 0 ? Qt::Unchecked
+    : selected == items.size() ? Qt::Checked : Qt::PartiallyChecked);
+  m_selectAllFindings->setEnabled(!m_scanPageBusy && !items.isEmpty());
+  m_findingSelectionCount->setText(QString("已选 %1 / 可选 %2 条").arg(selected).arg(items.size()));
+  m_openCheckedFindings->setEnabled(!m_scanPageBusy && selected > 0);
+}
+
+void ScanPage::setCurrentFindingsChecked(bool checked) {
+  if (m_scanPageBusy) return;
+  const QSignalBlocker blocker(m_resultTree);
+  for (auto *item : selectableFindingItems()) {
+    const auto id = item->data(0, Qt::UserRole+1).toLongLong();
+    item->setCheckState(0, checked ? Qt::Checked : Qt::Unchecked);
+    if (checked) m_checkedFindings.insert(id); else m_checkedFindings.remove(id);
+  }
+  updateFindingSelection();
 }
 
 void ScanPage::decorateResultRow(QTreeWidgetItem *item, const QJsonObject &record) {
@@ -2623,6 +2714,7 @@ void ScanPage::clearDetailPanel() {
   m_statusLabel->setText("选择任务查看详情");
   m_statusLabel->setStyleSheet(Theme::StatusInfoStyle);
   m_resultTree->clear();
+  updateFindingSelection();
   m_recTable->setRowCount(0);
   m_genBtn->setEnabled(false);
   m_genBtn->setText("智能生成预案");

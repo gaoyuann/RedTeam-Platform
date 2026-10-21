@@ -9,6 +9,7 @@
 #include "UiUtil.h"
 #include "WsClient.h"
 #include "AppStyle.h"
+#include "StyleDark.h"
 #include "widgets/ScanResultOverview.h"
 #include "widgets/RemoteSourcePicker.h"
 #define private public
@@ -39,6 +40,7 @@ public:
   std::function<MockReply(const QString &, const QString &)> handler;
   QMap<QString, int> requests;
   QMap<QString, QByteArray> requestBodies;
+  QMap<QString, QList<QByteArray>> requestHistory;
 
   MockServer()
   {
@@ -61,6 +63,7 @@ public:
           const QString path = QString::fromUtf8(request.value(1));
           ++requests[method + " " + path];
           requestBodies[method + " " + path] = buffer.mid(headersEnd + 4, bodyLength);
+          requestHistory[method + " " + path].append(buffer.mid(headersEnd + 4, bodyLength));
           const auto response = handler(method, path);
           QPointer<QTcpSocket> guard(socket);
           QTimer::singleShot(response.delay, this, [guard, response]() {
@@ -181,9 +184,11 @@ int main(int argc, char **argv)
   {
     MockServer aggregateServer;
     bool delay = false;
+    bool failResults = false;
     aggregateServer.handler = [&](const QString &, const QString &requestPath) -> MockReply {
       const QUrl url(requestPath); const QUrlQuery query(url);
       if (!url.path().contains("/results")) return {success(QJsonArray())};
+      if (failResults) return {{{"status", "error"}}};
       const QString task = url.path().split('/').value(3);
       const int after = query.queryItemValue("after").toInt();
       const bool errors = query.queryItemValue("category") == "error";
@@ -202,8 +207,17 @@ int main(int argc, char **argv)
     ScanPage aggregate(&aggregateApi, "user", "fixture-user"); aggregate.resize(1360,860); aggregate.show();
     aggregate.setPipelineScope("A", {});
     verify(awaitCondition([&]() { return aggregate.m_aggregateRecords.size() == 100; }), "aggregate first page returns 100 stable records");
+    aggregate.m_selectAllFindings->click();
+    verify(aggregate.m_checkedFindings.size() == 100, "select all covers only the first loaded page");
     aggregate.m_moreResultsButton->click();
+    verify(!aggregate.m_selectAllFindings->isEnabled(), "select all disabled during page load");
     verify(awaitCondition([&]() { return aggregate.m_aggregateRecords.size() == 200; }), "aggregate second page passes former 150 limit");
+    verify(aggregate.m_selectAllFindings->checkState() == Qt::PartiallyChecked
+      && aggregate.m_checkedFindings.size() == 100, "new page remains unchecked and changes all to partial");
+    aggregate.m_selectAllFindings->click();
+    verify(aggregate.m_checkedFindings.size() == 200, "partial activation selects all loaded findings");
+    aggregate.m_selectAllFindings->click();
+    verify(aggregate.m_checkedFindings.isEmpty(), "all activation clears current findings");
     aggregate.m_moreResultsButton->click();
     verify(awaitCondition([&]() { return aggregate.m_aggregateRecords.size() == 235; }), "all 235 records are reachable without payloads");
     verify(!aggregate.m_moreResultsButton->isEnabled() && aggregate.m_resultHint->text().contains("235 / 235"), "list count and paging completion agree");
@@ -249,6 +263,66 @@ int main(int argc, char **argv)
       aggregate.resize(1024, 600); app.processEvents(); aggregate.grab().save(tableCapture + "/finding-table-1024.png");
       aggregate.resize(1360, 860);
     }
+    const QString selectionCapture = qEnvironmentVariable("FINDING_SELECTION_SCREENSHOT_DIR");
+    const QPalette originalPalette = app.palette();
+    const QString originalStyle = app.styleSheet();
+    for (bool dark : {false, true}) {
+      QPalette themePalette = originalPalette;
+      themePalette.setColor(QPalette::Window, QColor(dark ? "#1a202c" : "#ffffff"));
+      themePalette.setColor(QPalette::WindowText, QColor(dark ? "#e2e8f0" : "#172033"));
+      app.setPalette(themePalette);
+      app.setStyleSheet(dark ? QString::fromUtf8(GLOBAL_STYLE_DARK) + Theme::DarkButtonStyle + Theme::ItemViewStyle
+                            : Theme::GlobalStyle + Theme::ButtonStyle + Theme::ItemViewStyle);
+      app.processEvents();
+      verify(aggregate.m_findingSelectionCount->palette().color(QPalette::WindowText).lightness() < 128
+          && aggregate.findChild<QFrame*>("scanDetailsPanel")->palette().color(QPalette::Window).lightness() > 200,
+        "selection count remains dark on white panel with light and dark system palettes");
+      auto *tree = aggregate.m_resultTree;
+      auto *first = tree->topLevelItem(0)->child(0);
+      tree->setCurrentItem(first, 0);
+      tree->scrollToItem(first);
+      tree->setFocus();
+      app.processEvents();
+      QStyleOptionViewItem option;
+      option.initFrom(tree);
+      option.rect = tree->visualItemRect(first);
+      option.rect.setWidth(tree->columnWidth(0));
+      option.features = QStyleOptionViewItem::HasCheckIndicator | QStyleOptionViewItem::HasDisplay;
+      option.checkState = Qt::Unchecked;
+      option.text = first->text(0);
+      option.font = tree->font();
+      const QRect indicator = tree->style()->subElementRect(QStyle::SE_ItemViewItemCheckIndicator, &option, tree);
+      verify(indicator.isValid() && option.rect.contains(indicator), "checkbox hit area fits first column");
+      const auto before = aggregateServer.requests;
+      QTest::mouseClick(tree->viewport(), Qt::LeftButton, Qt::NoModifier, indicator.center());
+      verify(first->checkState(0) == Qt::Checked && aggregate.m_selectAllFindings->checkState() == Qt::PartiallyChecked,
+        "real mouse click checks finding and updates partial state under app theme");
+      QTest::keyClick(tree, Qt::Key_Space);
+      verify(first->checkState(0) == Qt::Unchecked && !aggregate.m_openCheckedFindings->isEnabled(),
+        "space unchecks finding and disables opening empty selection");
+      tree->topLevelItem(0)->setExpanded(false);
+      QTest::mouseClick(aggregate.m_selectAllFindings, Qt::LeftButton, Qt::NoModifier, QPoint(8, aggregate.m_selectAllFindings->height()/2));
+      verify(aggregate.m_checkedFindings.size() == 7 && aggregate.m_findingSelectionCount->text() == "已选 7 / 可选 7 条",
+        "all includes collapsed findings and excludes information ports and errors");
+      tree->topLevelItem(0)->setExpanded(true);
+      QTest::keyClick(tree, Qt::Key_Space);
+      verify(aggregate.m_selectAllFindings->checkState() == Qt::PartiallyChecked, "keyboard deselection updates partial state");
+      app.processEvents();
+      if (!selectionCapture.isEmpty()) {
+        aggregate.grab().save(selectionCapture + (dark ? "/dark-partial.png" : "/light-partial.png"));
+      }
+      QTest::keyClick(aggregate.m_selectAllFindings, Qt::Key_Space);
+      verify(aggregate.m_selectAllFindings->checkState() == Qt::Checked, "space on partial selects all");
+      QTest::keyClick(aggregate.m_selectAllFindings, Qt::Key_Space);
+      verify(aggregate.m_checkedFindings.isEmpty(), "space on all clears selection");
+      verify(aggregateServer.requests == before, "selection changes never make API requests");
+    }
+    app.setStyleSheet(originalStyle);
+    app.setPalette(originalPalette);
+    aggregate.renderGroupedResults({});
+    verify(!aggregate.m_selectAllFindings->isEnabled() && !aggregate.m_openCheckedFindings->isEnabled(),
+      "empty results disable selection actions");
+    aggregate.renderGroupedResults(tableRows);
     auto legacy = tableRows.first().toObject();
     legacy["verification"] = QJsonObject{{"state", "completed"}, {"conclusion", "confirmed"}};
     aggregate.renderGroupedResults(QJsonArray{legacy});
@@ -283,16 +357,40 @@ int main(int argc, char **argv)
     dialogs=aggregate.findChildren<FindingVerificationDialog*>();
     verify(dialogs.size()==1,"checked findings open a single verification window");
     verify(awaitCondition([&]{return aggregateServer.requests.value("POST /api/pipelines/A/verifications")==3;}),"checkbox batch sends exactly two selected findings");
+    QSet<qint64> openedIds;
+    const auto openedBodies = aggregateServer.requestHistory.value("POST /api/pipelines/A/verifications");
+    for (const auto &body : openedBodies.mid(1))
+      openedIds.insert(QJsonDocument::fromJson(body).object()["finding_id"].toVariant().toLongLong());
+    verify(openedIds == QSet<qint64>{1,2}, "batch opening sends exactly current checked finding IDs in task A");
     bool started=false;for(auto it=aggregateServer.requests.cbegin();it!=aggregateServer.requests.cend();++it)if(it.key().endsWith("/execute"))started=true;
     verify(!started,"opening single or checked findings never executes tools");
     delete dialogs.first();
+    aggregate.setPipelineScope("A", {"scan-A"});
+    verify(awaitCondition([&]{return !aggregate.m_scanPageBusy && aggregate.m_aggregateRecords.size()==100;}),
+      "same task child-scan scope refresh completes");
+    verify(aggregate.m_findingSelectionCount->text() == "已选 2 / 可选 100 条",
+      "same pipeline scope refresh retains selected IDs");
     aggregate.m_resultCategory->setCurrentIndex(aggregate.m_resultCategory->findData("error"));
     verify(awaitCondition([&]() { return aggregate.m_aggregateRecords.size() == 1; }), "tool errors have their own queryable category");
     verify(aggregate.m_resultTree->topLevelItem(0)->child(0)->text(1).contains("fixture timeout"), "tool error reason is visible in the result list");
+    verify(!aggregate.m_selectAllFindings->isEnabled() && !aggregate.m_openCheckedFindings->isEnabled(),
+      "error-only filter has no selectable findings");
+    aggregate.m_resultCategory->setCurrentIndex(0);
+    verify(awaitCondition([&]{return aggregate.m_aggregateRecords.size()==100;}), "returning to findings reloads results");
+    verify(aggregate.m_findingSelectionCount->text() == "已选 2 / 可选 100 条", "filter return restores checked IDs");
+    failResults = true;
+    aggregate.loadPipelineResults();
+    verify(awaitCondition([&]{return !aggregate.m_scanPageBusy;}), "failed refresh completes loading state");
+    verify(!aggregate.m_selectAllFindings->isEnabled() && !aggregate.m_openCheckedFindings->isEnabled(),
+      "failed replacement load cannot open stale findings");
+    failResults = false;
+    aggregate.m_resultCategory->setCurrentIndex(aggregate.m_resultCategory->findData("error"));
+    verify(awaitCondition([&]{return !aggregate.m_scanPageBusy;}), "restore error filter after failure");
     delay = true; aggregate.loadPipelineResults();
     aggregate.setPipelineScope("B", {});
     verify(awaitCondition([&]() { return aggregate.m_aggregateRecords.size() == 1 && aggregate.m_aggregateRecords.first().toObject()["scan_task_id"].toString() == "scan-B"; }), "task switch loads only B records");
     QTest::qWait(300);
+    verify(aggregate.m_checkedFindings.isEmpty(), "task switch clears checked finding IDs");
     verify(aggregate.m_aggregateRecords.first().toObject()["scan_task_id"].toString() == "scan-B", "late A page cannot overwrite B records");
     const QString capture = qEnvironmentVariable("F04_SCREENSHOT_DIR");
     if (!capture.isEmpty()) aggregate.grab().save(capture + "/scan-results-errors.png");
@@ -306,6 +404,7 @@ int main(int argc, char **argv)
     oldDialog->reject();
     verify(closedRefresh.count()==1,"closing old scanning context does not emit a new-task refresh");
     aggregate.clearTaskScope();
+    verify(aggregate.m_checkedFindings.isEmpty() && !aggregate.m_selectAllFindings->isEnabled(), "leaving task clears selection controls");
     verify(aggregate.m_resultTree->topLevelItemCount() == 0 && aggregate.m_pipelineId.isEmpty(), "leaving aggregate clears all visible records and identity");
   }
 
