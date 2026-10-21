@@ -1,7 +1,8 @@
 import { canAccessProgramReport } from '../services/programAccess.js';
 import { Router } from 'express';
 import { generateReport } from '../services/reportGenerator.js';
-import { readTaskReport, taskReportHtml, recordTaskReportExport } from '../services/taskResults.js';
+import { readTaskReport, recordTaskReportExport } from '../services/taskResults.js';
+import { exportTaskReport } from '../services/taskReportExport.js';
 import { requireActor, recordParam, canAccessRecord, checkRecordAccess, getRecord } from '../middleware/recordAccess.js';
 import { taskDisplayText } from '../services/taskExecution.js';
 
@@ -190,7 +191,7 @@ export default function (db) {
   });
 
   // ── Export Report ───────────────────────────────────────────────────
-  // GET /api/reports/:reportId/export?format=docx|pdf|html
+  // GET /api/reports/:reportId/export?format=docx|pdf|html|json (JSON for task snapshots)
   router.get('/:reportId/export', async (req, res) => {
     try {
       const report = db.prepare('SELECT * FROM test_reports WHERE report_id = ?').get(req.params.reportId);
@@ -199,13 +200,11 @@ export default function (db) {
 
       const format = req.query.format || 'docx';
       if (req.taskTraceDocument) {
-        if (!['json', 'html'].includes(format)) return res.status(400).json({ status: 'error', error: { message: '此追溯报告只能导出保存快照的 JSON 或 HTML，请使用任务结果页' } });
-        const filename = `report_${report.report_id.replace(/[^a-z0-9_-]/gi, '_')}.${format}`;
-        const output = format === 'json' ? JSON.stringify(req.taskTraceDocument, null, 2) : taskReportHtml(req.taskTraceDocument);
+        const output = await exportTaskReport(req.taskTraceDocument, format);
         recordTaskReportExport(db, req.taskTraceDocument, req.user, format);
-        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.setHeader('Content-Disposition', `attachment; filename="${output.filename}"`);
         res.setHeader('X-Content-Type-Options', 'nosniff');
-        return res.type(format === 'json' ? 'application/json' : 'text/html').send(output);
+        return res.type(output.contentType).send(output.buffer);
       }
 
       if (format === 'docx') {
@@ -238,7 +237,7 @@ export default function (db) {
       return res.status(400).json({ status: 'error', error: { message: 'Unsupported format. Use docx, pdf, or html.' } });
     } catch (err) {
       console.error('[reports/export] Error:', err);
-      res.status(500).json({ status: 'error', error: { message: err.message } });
+      res.status(err.status || 500).json({ status: 'error', error: { message: err.message } });
     }
   });
 

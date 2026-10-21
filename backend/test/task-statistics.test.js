@@ -3,6 +3,8 @@ import {buildVerificationContract} from '../src/services/findingVerificationResu
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
+import JSZip from 'jszip';
+import { PDFDocument } from 'pdf-lib';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { runMigrations } from '../src/db/migrate.js';
@@ -120,7 +122,9 @@ test('pure-scan report freezes full data and supports generic permissions and ex
     const snapshot=taskResultsSnapshot(db,p);assert.equal(snapshot.execution.run,null);
     const created=createTaskReport(db,p,actor,{source_fingerprint:snapshot.source_fingerprint});
     assert.equal(createTaskReport(db,p,actor,{source_fingerprint:snapshot.source_fingerprint}).reused,true);
-    const document=readTaskReport(db,p,created.report.report_id);assert.equal(document.report.content.schema_version,2);assert.match(taskReportHtml(document),/统一统计/);
+    const document=readTaskReport(db,p,created.report.report_id);assert.equal(document.report.content.schema_version,2);assert.match(taskReportHtml(document),/本次攻击测试概况/);
+    assert.equal(document.presentation.title,'任务攻击测试结果报告');
+    assert.equal(document.presentation.sections.length,3);
     add({url:'http://192.0.2.2/other'});syncInstances(db,p);
     assert.equal(readTaskReport(db,p,created.report.report_id).report.content.results.statistics.findings.instances,1);
     assert.throws(()=>createTaskReport(db,p,actor,{source_fingerprint:snapshot.source_fingerprint}),{status:409});
@@ -130,9 +134,16 @@ test('pure-scan report freezes full data and supports generic permissions and ex
     app.use((e,req,res,next)=>res.status(e.status||500).json({status:'error',error:{message:e.message}}));
     server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
     const root='http://127.0.0.1:'+server.address().port;
-    let response=await fetch(root+'/api/reports/'+created.report.report_id+'/export?format=html');assert.equal(response.status,200);assert.match(await response.text(),/统一统计/);
+    let response=await fetch(root+'/api/reports/'+created.report.report_id+'/export?format=html');assert.equal(response.status,200);assert.match(await response.text(),/本次攻击测试概况/);
     response=await fetch(root+'/api/reports/'+created.report.report_id+'/export?format=json');
     assert.deepEqual((await response.json()).report.content.results.statistics,document.report.content.results.statistics);
+    response=await fetch(root+'/api/reports/'+created.report.report_id+'/export?format=pdf');
+    assert.equal(response.status,200);assert.match(response.headers.get('content-type'),/application\/pdf/);
+    assert.ok((await PDFDocument.load(await response.arrayBuffer())).getPageCount()>0);
+    response=await fetch(root+'/api/reports/'+created.report.report_id+'/export');
+    assert.equal(response.status,200);assert.match(response.headers.get('content-type'),/wordprocessingml\.document/);
+    const docx=await JSZip.loadAsync(await response.arrayBuffer());
+    assert.match(await docx.file('word/document.xml').async('string'),/本次攻击测试概况/);
     response=await fetch(root+'/api/reports/'+created.report.report_id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:{}})});assert.equal(response.status,409);
     response=await fetch(root+'/api/reports/'+created.report.report_id,{method:'DELETE'});assert.equal(response.status,409);
     response=await fetch(root+'/api/pipelines/f09',{method:'DELETE'});assert.equal(response.status,409);

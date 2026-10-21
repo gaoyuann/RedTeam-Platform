@@ -7,6 +7,7 @@ import { createHash, randomUUID } from 'crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { taskExecutionSnapshot, taskDisplayText, taskDisplayValue } from './taskExecution.js';
 import { appendTaskLog } from './taskActivity.js';
+import { buildTaskAttackReport, taskAttackReportHtml, TASK_ATTACK_REPORT_TITLE } from './taskAttackReport.js';
 
 function json(value, fallback = null) {
   try { return typeof value === 'string' ? JSON.parse(value) : value ?? fallback; } catch { return fallback; }
@@ -188,7 +189,8 @@ export function readTaskReport(db, pipeline, reportId) {
     if(v2) {
       const content=frozenContent(v2,pipeline);
       if(!content) fail(409,'报告缺少有效任务来源，不能作为本任务追溯快照');
-      return {pipeline_id:pipeline.pipeline_id,owner:pipeline.created_by,target:taskDisplayText(pipeline.target),report:{...reportMetadata(db,v2,pipeline),content}};
+      const document = {pipeline_id:pipeline.pipeline_id,owner:pipeline.created_by,target:taskDisplayText(pipeline.target),report:{...reportMetadata(db,v2,pipeline),content}};
+      return {...document,presentation:buildTaskAttackReport(document)};
     }
   }
   const row = db.prepare(`SELECT report.* FROM test_reports AS report JOIN execution_runs AS run ON run.run_id = report.run_id
@@ -197,11 +199,12 @@ export function readTaskReport(db, pipeline, reportId) {
   if (!row) fail(404, '报告不存在或不属于此任务');
   const content = frozenContent(row, pipeline);
   if (!content && (row.run_id !== pipeline.run_id || row.template === 'task_trace_v1')) fail(409, '报告缺少有效任务来源，不能作为本任务追溯快照');
-  return { pipeline_id: pipeline.pipeline_id, owner: pipeline.created_by, target: taskDisplayText(pipeline.target),
+  const document = { pipeline_id: pipeline.pipeline_id, owner: pipeline.created_by, target: taskDisplayText(pipeline.target),
     report: { ...reportMetadata(db, row, pipeline),
       content: content || { schema_version: 0,
       notice: '旧报告只与当前 Run 关联，缺少完整任务及批准预案来源；原结论未重新验证，不支持追溯快照导出。',
       stored: taskDisplayValue(json(row.content, { notice: '原报告 JSON 不可解析' })) } } };
+  return content ? {...document,presentation:buildTaskAttackReport(document)} : document;
 }
 
 export function recordTaskReportExport(db, document, actor, format) {
@@ -212,28 +215,8 @@ export function recordTaskReportExport(db, document, actor, format) {
   appendTaskLog(db, document.pipeline_id, `请求导出已保存的报告快照 · ${report.report_id} · ${format.toUpperCase()}`);
 }
 
-function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
-}
-
 export function taskReportHtml(document) {
-  const report = document.report;
-  const content = report.content;
-  const results = content.results;
-  const table = (title, headers, rows) => `<h2>${escapeHtml(title)}</h2><table><thead><tr>${headers.map(value => `<th>${escapeHtml(value)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(value => `<td>${escapeHtml(value)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
-  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><title>${escapeHtml(report.title)}</title><style>body{font:15px sans-serif;max-width:1100px;margin:32px auto;padding:0 20px;color:#1e293b}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #dbe5f0;padding:8px;text-align:left}th{background:#eff6ff}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f8fafc;padding:16px}.notice{background:#fffbeb;padding:16px}</style></head><body>
-    <h1>${escapeHtml(report.title)}</h1><p>报告 ${escapeHtml(report.report_id)} · ${escapeHtml(report.status)} · ${escapeHtml(report.generated_by)}</p>
-    <p class="notice">${escapeHtml(content.notice)}<br>${escapeHtml(results.assessment.notice)}</p>
-    <h2>来源链</h2><pre>${escapeHtml(JSON.stringify(content.provenance, null, 2))}</pre>
-    <p>Run 状态：${escapeHtml(results.execution.run?.status || '无主执行 Run')} · 风险：${escapeHtml(results.assessment.risk_level)} · 教学得分：${escapeHtml(results.assessment.teaching_score?.percent ?? '未记录')}</p>
-    ${results.statistics ? `<h2>统一统计</h2><p>${results.statistics.result_policy==='system_evidence_only'?'系统证据口径 v1；人工意见不参与目标达成计数':'历史统计口径，仅供参考'}</p><pre>${escapeHtml(JSON.stringify(results.statistics,null,2))}</pre>${table('漏洞实例', ['实例','扫描标签','当前结论','原始记录'], results.instances.map(i=>[i.instance_id,i.severity,i.conclusion,i.record_ids.join(', ')]))}` : '<p>该历史报告未记录 F09 统计</p>'}
-    ${table('扫描全量记录（未去重）', ['记录 ID','子扫描','类别','工具','内容'], (results.scan_records || []).map(row=>[row.id,row.scan_task_id,row.category,row.source_tool,row.result_data]))}
-    <pre>${escapeHtml(JSON.stringify(results.scan_summary || {completeness:'legacy_unknown'},null,2))}</pre>
-    ${table('发现候选（未复核）', ['类别', '名称', '风险标签', '来源'], results.findings.map(row => [row.category, row.name, row.severity, row.source]))}
-    ${table('工具结果（不是漏洞验证结论）', ['步骤', '工具', '工具状态', '尝试编号', '退出码'], results.execution.steps.map(row => [row.step_index, row.tool_id, row.state, row.attempt_id, row.exit_code]))}
-    ${table('证据来源', ['证据编号', 'Run', '步骤', '工具', '尝试编号', '来源校验', '采集时间'], results.execution.evidence.map(row => [row.id, row.run_id, row.step_index, row.tool_id, row.attempt_id, row.source_state, row.recorded_at]))}
-    <h2>展示范围</h2><pre>${escapeHtml(JSON.stringify(results.limits, null, 2))}</pre>
-    <details><summary>完整展示快照（已脱敏且限长，不是原始证据）</summary><pre>${escapeHtml(JSON.stringify(content, null, 2))}</pre></details></body></html>`;
+  return taskAttackReportHtml(document);
 }
 
 function createTaskReportV2(db,pipeline,actor,body) {
@@ -252,7 +235,7 @@ function createTaskReportV2(db,pipeline,actor,body) {
       notice:'保存时的脱敏快照；统计基于全量数据，候选预览和执行明细存在展示上限。未知或未检查不代表安全。',results};
     const reportId='task_rpt_'+randomUUID(), time=new Date().toISOString();
     db.prepare(`INSERT INTO test_reports(report_id,title,run_id,pipeline_id,template,status,content,generated_by,created_at,updated_at)
-      VALUES (?,?,?,?,'task_trace_v2','draft',?,?,?,?)`).run(reportId,taskDisplayText(body.title || '任务统计报告 - '+snapshot.task_name),runId,pipeline.pipeline_id,JSON.stringify(content),actor.sub,time,time);
+      VALUES (?,?,?,?,'task_trace_v2','draft',?,?,?,?)`).run(reportId,taskDisplayText(body.title || TASK_ATTACK_REPORT_TITLE+' - '+snapshot.task_name),runId,pipeline.pipeline_id,JSON.stringify(content),actor.sub,time,time);
     db.prepare(`INSERT INTO audit_log(type,execution_id,run_id,user_role,target,reasons,timestamp) VALUES ('task_report_generate',?,?,?,?,?,?)`)
       .run(reportId,runId,actor.role,pipeline.target,JSON.stringify({pipeline_id:pipeline.pipeline_id,actor:actor.sub,source_fingerprint:snapshot.source_fingerprint}),time);
     return {pipeline_id:pipeline.pipeline_id,run_id:runId,report:reportMetadata(db,db.prepare('SELECT * FROM test_reports WHERE report_id=?').get(reportId),pipeline),reused:false};

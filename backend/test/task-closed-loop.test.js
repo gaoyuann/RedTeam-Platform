@@ -4,6 +4,7 @@ import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import BetterSqlite3 from 'better-sqlite3';
+import { PDFDocument } from 'pdf-lib';
 import { runMigrations } from '../src/db/migrate.js';
 import pipelineRoutes from '../src/routes/pipelines.js';
 import taskPlanRoutes from '../src/routes/taskPlans.js';
@@ -99,6 +100,9 @@ async function request(method, path, actor, body) {
     headers: { authorization: `Bearer ${tokens[actor]}`, 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  if (/application\/(pdf|vnd\.openxmlformats-officedocument\.wordprocessingml\.document)/.test(response.headers.get('content-type') || '')) {
+    return { response, data: Buffer.from(await response.arrayBuffer()) };
+  }
   const text = await response.text();
   let data;
   try { data = JSON.parse(text); } catch { data = text; }
@@ -264,8 +268,9 @@ test('isolated task closes the loop without crossing owner, target, or evidence 
   result = await request('GET', `/api/pipelines/${pipelineId}/results/reports/${reportId}/export?format=html`, 'alice');
   assert.equal(result.response.status, 200);
   assert.match(result.response.headers.get('content-type'), /text\/html/);
-  assert.match(result.data, /来源链/);
-  assert.match(result.data, /不等于漏洞成立/);
+  assert.match(result.data, /本次攻击测试概况/);
+  assert.match(result.data, /逐漏洞攻击效果表/);
+  assert.match(result.data, /不能.*推断利用成功/);
 
   result = await request('GET', `/api/pipelines/${pipelineId}/logs`, 'alice');
   assert.equal(result.response.status, 200);
@@ -394,7 +399,12 @@ test('isolated task closes the loop without crossing owner, target, or evidence 
     assert.equal(jsonExport.response.headers.get('x-content-type-options'), 'nosniff');
     assert.equal(jsonExport.data.report.review, undefined);
     assert.equal(jsonExport.data.report.source_fingerprint, reportFingerprint);
-    const unsupported = await request('GET', `/api/pipelines/${pipelineId}/results/reports/${reportId}/export?format=pdf`, 'alice');
+    const pdfExport = await request('GET', `/api/pipelines/${pipelineId}/results/reports/${reportId}/export?format=pdf`, 'alice');
+    assert.equal(pdfExport.response.status, 200);
+    assert.equal(pdfExport.data.subarray(0, 5).toString(), '%PDF-');
+    assert.ok((await PDFDocument.load(pdfExport.data)).getPageCount() > 0);
+    assert.equal(db.prepare('SELECT content FROM test_reports WHERE report_id = ?').get(reportId).content, beforeContent);
+    const unsupported = await request('GET', `/api/pipelines/${pipelineId}/results/reports/${reportId}/export?format=xlsx`, 'alice');
     assert.equal(unsupported.response.status, 400);
   });
   await context.test('full scan report appendix keeps over 200 records and stable source IDs',async()=>{

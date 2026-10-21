@@ -2,6 +2,7 @@
 #include "EvaluatePage.h"
 #include "TaskResultsPanel.h"
 #include "../ApiClient.h"
+#include "../ReportFileActions.h"
 #include "../Theme.h"
 #include "../UiUtil.h"
 #include "StatsSummaryCard.h"
@@ -19,7 +20,6 @@
 #include <QDateTime>
 #include <QFileDialog>
 #include <QFile>
-#include <QProcess>
 #include <QFileInfo>
 #include <QStackedWidget>
 #include <QDir>
@@ -934,63 +934,15 @@ void EvaluatePage::onOpenInWps() {
 }
 
 void EvaluatePage::openFileInWps(const QString &filePath) {
-  QString wpsPath = findWpsExecutable();
-  if (wpsPath.isEmpty()) {
-    // Fallback: in WSL2, try opening via Windows default handler (cmd.exe /c start)
-    if (QFileInfo::exists("/mnt/c/Windows/System32/cmd.exe")) {
-      // Convert WSL path to Windows path: /home/xxx → \\wsl$\Ubuntu\home\xxx
-      QString winPath = filePath;
-      if (winPath.startsWith("/")) {
-        QString distro = qgetenv("WSL_DISTRO_NAME");
-        if (distro.isEmpty()) distro = "Ubuntu";
-        winPath = "\\\\wsl$\\" + distro + filePath;
-      }
-      bool started = QProcess::startDetached("/mnt/c/Windows/System32/cmd.exe",
-        { "/c", "start", "", winPath });
-      if (started) return;
-    }
-    QMessageBox::information(this, "未找到 WPS",
-      QString("未检测到 WPS Office，请手动打开文件：\n%1\n\n"
-              "提示：可设置环境变量 WPS_PATH 指向 WPS 可执行文件路径。").arg(filePath));
-    return;
-  }
-
-  bool started = QProcess::startDetached(wpsPath, { filePath });
-  if (!started) {
-    QMessageBox::warning(this, "启动失败", QString("无法启动 WPS：%1").arg(wpsPath));
-  }
+  const auto result = ReportFileActions::openInWps(filePath);
+  if (result.status == ReportFileActions::OpenStatus::NotFound)
+    QMessageBox::information(this, result.title, result.message);
+  else if (result.status == ReportFileActions::OpenStatus::Failed)
+    QMessageBox::warning(this, result.title, result.message);
 }
 
 QString EvaluatePage::findWpsExecutable() {
-  // 1. Environment variable
-  QByteArray envPath = qgetenv("WPS_PATH");
-  if (!envPath.isEmpty() && QFileInfo::exists(QString::fromUtf8(envPath))) {
-    return QString::fromUtf8(envPath);
-  }
-
-  // 2. Common installation paths (银河麒麟/统信UOS Linux)
-  const QStringList candidates = {
-    "/usr/bin/wps-office",
-    "/opt/apps/cn.wps.wps-office-pro/files/wps-office/office6/wps",
-    "/opt/wps-office/office6/wps",
-    "/usr/local/bin/wps",
-    "/usr/bin/wps",
-  };
-  for (const auto &p : candidates) {
-    if (QFileInfo::exists(p)) return p;
-  }
-
-  // 3. which lookup
-  for (const auto &cmd : {"wps-office", "wps"}) {
-    QProcess which;
-    which.start("which", {cmd});
-    if (which.waitForFinished(2000)) {
-      QString result = QString::fromUtf8(which.readAllStandardOutput()).trimmed();
-      if (!result.isEmpty() && QFileInfo::exists(result)) return result;
-    }
-  }
-
-  return {};
+  return ReportFileActions::findWpsExecutable();
 }
 
 // ── Preview Report (HTML) ────────────────────────────────────────────
