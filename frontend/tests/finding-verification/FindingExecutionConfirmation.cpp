@@ -151,7 +151,7 @@ int main(int argc,char **argv) {
     auto *text=modal->findChild<QPlainTextEdit*>("findingConfirmationText");
     auto *yes=modal->findChild<QPushButton*>("confirmFindingExecution");
     auto *cancel=modal->findChild<QPushButton*>("cancelFindingExecution");
-    const auto available=modal->screen()->availableGeometry();
+    const auto available=modal->windowHandle()->screen()->availableGeometry();
     if(!text||!text->isReadOnly()||text->toPlainText()!=expected||text->verticalScrollBar()->maximum()<=0)
       failure="长摘要正文不完整、不可滚动或允许修改";
     if(!available.contains(modal->frameGeometry()))failure="确认窗口超出可用屏幕";
