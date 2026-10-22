@@ -184,6 +184,7 @@ private:
 
   // Right-panel: re-execute for FAILED/CANCELLED
   QPushButton *m_reexecBtn;
+  bool m_canReparseReport = false;
 
   // Polling
   QTimer *m_pollTimer;

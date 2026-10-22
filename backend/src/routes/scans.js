@@ -18,6 +18,7 @@ import { recordSourceVerification } from '../services/sourceVerification.js';
 import {isProgramScan, isProgramFinding, loadProgramProjects, publicProgramProject} from '../services/programScan.js';
 import {appendTaskLog} from '../services/taskActivity.js';
 import {cscanTarget,cscanSourcePath,cscanNotes} from '../services/cscanTarget.js';
+import {retainedCscanReport} from '../services/sourceAuditNative.js';
 
 export default function (db) {
   const router = Router();
@@ -87,6 +88,8 @@ export default function (db) {
     row.results = db.prepare('SELECT * FROM scan_results WHERE scan_task_id = ? ORDER BY captured_at,id').all(req.params.scanTaskId);
     if(!isProgramScan(row.scan_type)) row.results=row.results.map(publicScanRecord);
     row.scan_summary=summarizeScanRecords(row.results);
+    row.can_reparse_report=isProgramScan(row.scan_type) && !['PENDING','RUNNING'].includes(row.status)
+      && !isScanActive(row.scan_task_id) && Boolean(retainedCscanReport(db,row.scan_task_id));
     if(isProgramScan(row.scan_type)) {
       for(const result of row.results) {
         if(!isProgramFinding(result.result_type)) continue;
@@ -246,6 +249,20 @@ export default function (db) {
       role: req.user?.role || null,
     });
     res.status(202).json({ status: 'ok', data: { scan_task_id: req.params.scanTaskId, message: 'Scan execution started' } });
+  });
+
+  // Reprocess a complete retained report without contacting the scanner.
+  router.post('/:scanTaskId/reparse', (req,res) => {
+    const task=db.prepare('SELECT * FROM scan_tasks WHERE scan_task_id=?').get(req.params.scanTaskId);
+    if(!isProgramScan(task.scan_type) || !retainedCscanReport(db,task.scan_task_id))
+      return res.status(409).json({status:'error',error:{message:'没有可重新解析的完整 CScan 报告'}});
+    if(isScanActive(task.scan_task_id) || ['PENDING','RUNNING'].includes(task.status))
+      return res.status(409).json({status:'error',error:{message:'扫描或报告处理尚未结束'}});
+    executeScan(task.scan_task_id,{reportOnly:true}).catch(error=>console.error('[CScan report retry]',error.message));
+    getWsManager()?.broadcastProgram(task.created_by,'scan:started',{
+      scanTaskId:task.scan_task_id,target:task.target,scanType:task.scan_type,userId:task.created_by,
+    });
+    res.status(202).json({status:'ok',data:{scan_task_id:task.scan_task_id,message:'正在重新解析已保存报告'}});
   });
 
   // A retry is a new immutable scan identity, never a reset of old evidence.

@@ -4,7 +4,7 @@
 
 源码扫描参考 `/home/zxf/code/pentagi-v3` 中的实际调用逻辑：在扫描弹窗指定目标、审计要求，通过 GraphQL `createFlow` 提交给服务，轮询任务和子任务，读取 `tasks.result` 报告，再解析为漏洞列表。
 
-参考客户端当前将源码和 Web 扫描放在同一业务入口。本项目只迁移其通用结果处理逻辑（`VulnerabilityScanPage::processIncrementalSubtasks`、`handleIncrementalAnalysisResult`），源码任务使用独立 CScan 的地址、认证和 Flow；不引入客户端混合扫描入口或其后续攻击实现。
+参考客户端当前将源码和 Web 扫描放在同一业务入口。本项目源码任务使用独立 CScan 的地址、认证和 Flow；报告在全部任务成功结束后统一解析和导入，不引入客户端混合扫描入口或其后续攻击实现。
 
 接口契约已对照服务部署中的 `/home/aistation/apps/cscan-agent/backend/pkg/server/docs/swagger.yaml` 和 `/home/aistation/apps/cscan-agent/backend/pkg/graph/schema.graphqls`：Swagger 明确列出 `/api/v1/graphql`；REST 对应创建接口为 `POST /flows/`（`provider`、`input`），结果为 `GET /flows/{flowID}/tasks/`、`subtasks/` 的 `result`，结束操作为 `PUT /flows/{flowID}` 的 `finish` action。这里沿用参考客户端的 GraphQL 调用，不要求另建上传接口或固定 JSON 文件。
 
@@ -26,9 +26,10 @@
 靶机目标 / 远端源码路径 + 审计要求
   → createFlow(modelProvider, input)
   → flow + tasks/subtasks 状态
-  → tasks.result
-  → 解析报告、保存原文和发现
+  → 收齐 tasks.result 与 subtasks.result，先保存完整原文
   → finishFlow
+  → 统一解析、校验、去重，事务导入漏洞
+  → 标记平台任务完成／部分完成
   → 现有预案／逐漏洞验证
 ```
 
@@ -36,19 +37,26 @@ CScan 的 `waiting` 不一定是失败。平台核对扫描任务和子任务是
 
 若连续三次查询都返回 `waiting` 且任务列表为空，平台报告“未创建扫描任务”，并请求停止原 Flow，不再等待整个扫描超时，也不自动重提。短暂的初始空列表允许继续等待；恢复到运行状态会重新计数。此情况可能发生于 CScan 调用模型生成任务标题失败，应检查 CScan 服务端日志及模型连接。
 
-报告已有明确字段时直接提取；普通文字报告参考客户端的做法，调用平台已配置的模型整理已完成任务的结果。这个模型只接收报告，不读取或扫描源代码。解析失败时保留完整原文并标记缺口，不以本地源码扫描兜底。文件和依据必须出现在原始报告中，不接受解析模型新增的证据。
+所有扫描任务结束后，报告已有明确字段时直接提取；普通文字报告调用平台已配置的模型统一整理结果。这个模型只接收报告，不读取或扫描源代码。解析失败时保留完整原文并标记缺口，不以本地源码扫描兜底。文件和依据必须出现在原始报告中，不接受解析模型新增的证据。
 
-### 增量结果和源码字段适配
+### 统一解析、导入与源码字段适配
 
-- 轮询同时读取任务和子任务的 `result`，完成的子任务立即解析并入库；没有子任务或已完成子任务结果为空时，使用已完成父任务结果兜底。未完成结果不参与解析。
-- 按 Flow 保存已处理子任务 ID、解析尝试次数和错误；每个结果最多进行三次增量解析，最终完整报告另行补全。失败原文同样保留，未解决的增量解析错误仍标记为处理缺口。
-- 保持 `source_finding` 的 `title/file/start_line/end_line/reason/severity/cwe/preconditions/suggestion` 字段不变。兼容模型返回的 `vulnerabilities[].name/evidence`，但仍要求明确源码文件、行号和报告原文依据；URL 不能充当源文件。
-- 相同文件、起始行及 CWE（缺少时使用标题）的发现更新同一数据库记录，合并 `source_task_ids`、`source_subtask_ids`、`report_evidence` 和 `analyses`。不同文件或位置不会合并，已关联的验证项保持原记录 ID。
-- 有标题分段的混合格式报告分别解析，避免一条格式规范的发现遮蔽其他段落里的源码发现。原文和结构化结果同时保留，Qt 现有轮询展示增量记录，证据详情补充 Flow 与来源子任务。
-- 若最终报告声明无法访问源码，早先增量候选改为信息记录，保留证据和历史验证引用，不能继续作为可执行漏洞候选。
-- CScan 报告发现的后续验证只使用单独声明且在范围内的 `runtime_target`。未提供时显示缺失条件，源码目录或源码 HTTP 地址不自动成为验证入口。已有快照记录继续兼容旧流程。
+- 扫描期间持续轮询任务和子任务，保存已返回的原始报告及来源 ID，展示任务完成数量；不调用报告解析模型、不生成 `source_finding`。任务失败、取消、超时或等待人工输入时保留已收到的原文，不能把部分扫描当成完整扫描。
+- Flow 进入 `waiting` 或 `finished` 后仍须核对所有任务及子任务均为 `finished`；收齐父任务和子任务报告后先保存完整原文，再结束远端 Flow，随后统一解析。只有最终摘要而忽略子任务会丢失证据，因此两者一起处理。
+- 平台任务在解析、导入阶段保持 `RUNNING`，覆盖记录的 `cscan.state` 分别为 `parsing`、`importing`，界面显示“正在解析报告”“正在导入漏洞”。处理结束后才转为 `COMPLETED`／`PARTIAL` 并开放漏洞选择、预案生成。解析与导入缺口明确记录，原文持续保留。
+- 保持 `source_finding` 的 `title/file/start_line/end_line/reason/severity/cwe/preconditions/suggestion` 字段不变。兼容模型返回的 `vulnerabilities[].name/evidence`，仍要求明确源码文件、行号及报告原文依据；URL 不能充当源文件。
+- 有标题分段的混合报告分别解析，重复的相同分段只处理一次；字段明确时直接提取，必要时才调用平台模型整理原报告。文件和依据必须出现在报告中。
+- 模型返回数组中的个别无效项记录为解析缺口，仍保留同批有效发现。操作员取消会立即传递给报告解析器，取消后迟到的模型结果不会导入；任务仍等待正在执行的调用结束后才释放重试限制。
+- 相同文件、起始行及 CWE（缺少时使用标题）的发现合并，保留 `source_task_ids`、`source_subtask_ids`、`report_evidence` 和 `analyses`。漏洞集中在一个 SQLite 事务内导入，保存异常时整批回滚，完整报告不回滚。
+- 最终报告声明无法访问源码时，不导入源码漏洞；历史已有候选保留记录 ID 和验证引用，转为信息记录。后续验证只使用单独声明且在范围内的 `runtime_target`，源码目录或源码 HTTP 地址不自动成为验证入口。
 
-进度持久化用于追溯，不改变平台重启恢复策略：重启仍停止未结束的远端 Flow、标记任务中断并保留已入库证据，不自动恢复扫描或重复提交。没有新增数据库迁移，新增字段存于现有 JSON 记录。
+### 从已保存报告重试
+
+扫描已经成功结束但报告解析／导入失败时，详情返回 `can_reparse_report=true`，源码扫描的重试按钮显示“重新解析报告”。`POST /api/scan-tasks/:scanTaskId/reparse` 使用本任务已保存的完整报告重新解析和导入，不读取源码、不创建 Flow、不调用远端扫描 API，也不创建新的扫描任务。操作继承源码任务访问权限；没有完整报告或任务仍在运行时返回 409。
+
+重复解析按相同去重键更新已有漏洞，保留记录 ID、来源证据和验证引用，不重复插入相同漏洞。重试沿用原扫描开始时间，更新本次报告处理结束时间；旧原文和错误记录继续保留。原 Flow 的结束／停止未确认仍作为处理缺口保留，重新解析不代表已经核实远端退出。旧快照导入链路不使用此入口；原生旧任务如已保存完整 `task_result` 报告，可复用报告重试。
+
+扫描没有成功结束、仅收到部分子任务报告时，不能用重新解析代替完整扫描，需新建扫描任务。进度和原文持久化不改变重启策略：重启仍收束未结束 Flow、标记中断，不自动重扫；已保存完整报告的任务可手动重新解析。没有新增数据库迁移，阶段和报告标记使用现有 JSON 字段。
 
 平台没有读取源码，因此不会伪造源码哈希、快照、代码片段或“已校验源码行号”。发现明确记录 `evidence_origin=cscan_report`、`source_location_verified=false`、`source_version_verified=false`、`runtime_verified=false`；报告中的定位和运行效果仍需复核。`cscan_complete` 表示该次服务任务／报告处理完成，`whole_project_complete=false` 不代表整个项目都已审阅或无漏洞。
 
@@ -63,6 +71,8 @@ CSCAN_PROVIDER=custom
 ```
 
 新流程无需平台配置 `CSCAN_SOURCES_DIR`、`CSCAN_WORK_DIR`，也无需平台与 CScan 共享目录。平台提交目标与要求；源码访问使用远端已有连接和工具，不能仅凭目标地址认定已经读取源码，不新增上传接口。创建 Flow 的超时单独使用 `CSCAN_CREATE_TIMEOUT_MS`（默认五分钟），参考客户端对 worker 冷启动的等待设置；查询和停止请求沿用有界的短超时。
+
+扫描等待与后续报告解析分别受 `CSCAN_TIMEOUT_MS` 限制，默认各三十分钟；手动重新解析也使用该期限。报告收齐后先结束远端 Flow，再进入平台解析阶段。
 
 默认环境检查也直接检查凭据和 API，不再要求共享源码／报告目录、Python 或 SSH：
 

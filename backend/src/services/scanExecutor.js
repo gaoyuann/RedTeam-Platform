@@ -9,6 +9,7 @@ import { getWsManager } from './wsManager.js';
 import { normalizeTarget, probeTarget, buildDiscoveredProfile } from './targetDiscovery.js';
 import { classifyToolResult, redactToolArgs } from '../tools/toolContracts.js';
 import { auditSources } from './sourceAudit.js';
+import { retainedCscanReport } from './sourceAuditNative.js';
 import {isProgramScan} from './programScan.js';
 import {scanProgramAgent} from './programScanAgent.js';
 import { webDirectoryScanBlockReason, directoryOptionsBlockReason } from './webScanPolicy.js';
@@ -22,16 +23,24 @@ const runningScans = new Set();
 // ── Module-level abort flags ───────────────────────────────────────────
 // Allows external API (POST /api/scan-tasks/:scanTaskId/abort) to cancel a running scan.
 const scanAbortFlags = new Map();
+const scanAbortControllers = new Map();
 
 export function isScanActive(scanTaskId) { return runningScans.has(scanTaskId); }
 
 export function requestScanAbort(scanTaskId) {
   scanAbortFlags.set(scanTaskId, true);
+  for (const controller of scanAbortControllers.get(scanTaskId) || []) controller.abort();
 }
 
 // Race a tool promise against an abort signal so operator abort is honoured
 // even while a scan tool is mid-execution.
 function raceScanWithAbort(toolPromise, scanTaskId, controller) {
+  if (controller) {
+    const controllers = scanAbortControllers.get(scanTaskId) || new Set();
+    controllers.add(controller);
+    scanAbortControllers.set(scanTaskId, controllers);
+    if (scanAbortFlags.get(scanTaskId)) controller.abort();
+  }
   return new Promise((resolve) => {
     let done = false;
     const interval = setInterval(() => {
@@ -55,6 +64,10 @@ function raceScanWithAbort(toolPromise, scanTaskId, controller) {
         resolve({ success: false, exitCode: -1, stdout: err.stdout || '', stderr: err.stderr || err.message, partialResults:err.partialResults || [], timedOut:!!err.timedOut, aborted:!!err.aborted, executionMode: 'error' });
       }
     });
+  }).finally(() => {
+    const controllers = scanAbortControllers.get(scanTaskId);
+    controllers?.delete(controller);
+    if (!controllers?.size) scanAbortControllers.delete(scanTaskId);
   });
 }
 
@@ -250,7 +263,7 @@ export function buildArgs(scanType, target, parameters = {}) {
 }
 
 // ── Main entry: executeScan ───────────────────────────────────────────
-export async function executeScan(scanTaskId) {
+export async function executeScan(scanTaskId, {reportOnly=false} = {}) {
   if (runningScans.has(scanTaskId)) {
     return { ok: false, error: 'Scan is already executing' };
   }
@@ -263,9 +276,11 @@ export async function executeScan(scanTaskId) {
   if (!task) return { ok: false, error: 'Scan task not found' };
   if (task.status === 'RUNNING') return { ok: false, error: 'Scan is already running' };
 
-  if (isProgramScan(task.scan_type) && task.status !== 'PENDING') return {ok:false,error:'请新建程序测试任务以保留发现和验证证据'};
+  if(reportOnly && task.status==='PENDING') return {ok:false,error:'Scan has not completed'};
+  if(reportOnly && (!isProgramScan(task.scan_type) || !retainedCscanReport(db,scanTaskId))) return {ok:false,error:'No complete CScan report to reparse'};
+  if (!reportOnly && isProgramScan(task.scan_type) && task.status !== 'PENDING') return {ok:false,error:'请新建程序测试任务以保留发现和验证证据'};
 
-  if (task.status !== 'PENDING') return {ok:false,error:'请新建关联扫描重试，原结果保留'};
+  if (!reportOnly && task.status !== 'PENDING') return {ok:false,error:'请新建关联扫描重试，原结果保留'};
 
   const parent=task.pipeline_id ? db.prepare('SELECT * FROM pipelines WHERE pipeline_id=? AND created_by=?').get(task.pipeline_id,task.created_by) : null;
   const rejectScope = error => {
@@ -291,7 +306,8 @@ export async function executeScan(scanTaskId) {
   // Mark as RUNNING
   const now = new Date().toISOString();
   try {
-  db.prepare("UPDATE scan_tasks SET status = 'RUNNING', started_at = ?, target_profile = NULL, target_class = ? WHERE scan_task_id = ?")
+  if(reportOnly) db.prepare("UPDATE scan_tasks SET status='RUNNING',completed_at=NULL,error_message=NULL WHERE scan_task_id=?").run(scanTaskId);
+  else db.prepare("UPDATE scan_tasks SET status = 'RUNNING', started_at = ?, target_profile = NULL, target_class = ? WHERE scan_task_id = ?")
     .run(now, normalizeTarget(task.target).target_class, scanTaskId);
 
     let parameters = {};
@@ -433,8 +449,8 @@ export async function executeScan(scanTaskId) {
     } else if (isProgramScan(task.scan_type)) {
       const controller = new AbortController();
       const audit = await raceScanWithAbort((async () => {
-        const context = {db, parameters, signal:controller.signal, runTool, parseResults};
-        if (task.scan_type === 'source_scan') return auditSources(task, context);
+        const context = {db, parameters, signal:controller.signal, runTool, parseResults, reportOnly};
+        if (reportOnly || task.scan_type === 'source_scan') return auditSources(task, context);
         return scanProgramAgent(task,context);
       })(), scanTaskId, controller);
       if (!audit.outcomes) throw new Error(audit.stderr || '程序审计失败');

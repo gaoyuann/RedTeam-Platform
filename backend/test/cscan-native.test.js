@@ -9,7 +9,7 @@ import {scanCscanTarget,normalizeCscanReportedFinding,parseNativeReport} from '.
 import {findingVerificationEntry} from '../src/services/findingVerificationEntry.js';
 import {cscanConfig} from '../src/services/cscanClient.js';
 import {cscanSourcePath,cscanTarget} from '../src/services/cscanTarget.js';
-import {auditSources} from '../src/services/sourceAudit.js';
+import {auditSources,recoverCscanAudits} from '../src/services/sourceAudit.js';
 import {programExecutionTarget} from '../src/services/programScan.js';
 import {executeScan} from '../src/services/scanExecutor.js';
 import {normalizeTaskScope,isTargetInScope,scopeBlockReason} from '../src/services/taskScope.js';
@@ -23,69 +23,167 @@ import {promisify} from 'node:util';
 
 const report='## Unchecked copy\nFile: src/input.c\nLine: 12\nSeverity: high\nCWE: CWE-120\nEvidence: Copy into a fixed buffer without checking capacity\nPreconditions: Input control remains unknown\nRemediation: Enforce the buffer capacity';
 
-function incrementalDb(t) {
+function reportDb(t) {
   const db=new Database(':memory:');t.after(()=>db.close());
   db.exec('CREATE TABLE scan_results(id INTEGER PRIMARY KEY,scan_task_id TEXT,result_type TEXT,result_data TEXT,severity TEXT,source_tool TEXT,captured_at TEXT);CREATE TABLE source_audits(scan_task_id TEXT PRIMARY KEY,snapshot_id TEXT,connection_id TEXT,manifest TEXT,analysis TEXT,created_at TEXT)');
   return db;
 }
 
-test('completed CScan subtasks are visible before Flow completion, merge sources and retain stable finding IDs',async t=>{
-  const db=incrementalDb(t);let polls=0,firstId;
+test('CScan retains raw subtask progress and only imports after every task finishes',async t=>{
+  const db=reportDb(t);let polls=0,finished=false;
+  const second=report.replace('Copy into a fixed buffer without checking capacity','Second path also copies without a bound');
   const client={
     create:async()=>({id:'91',status:'running'}),
     flow:async()=>{
       polls++;
+      assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='source_finding'").get().n,0);
       if(polls===2) {
-        const rows=db.prepare("SELECT * FROM scan_results WHERE result_type='source_finding'").all();
-        assert.equal(rows.length,1);firstId=rows[0].id;
-        assert.deepEqual(JSON.parse(rows[0].result_data).source_subtask_ids,['sub1']);
+        const raw=db.prepare("SELECT result_data FROM scan_results WHERE result_type='raw_output'").all();
+        assert.ok(raw.some(row=>JSON.parse(row.result_data).report===report));
       }
       const subtasks=[{id:'sub1',status:'finished',result:report},
-        {id:'sub2',status:polls<3?'running':'finished',result:polls<3?'':report.replace('Copy into a fixed buffer without checking capacity','Second path also copies without a bound')}];
+        {id:'sub2',status:polls<3?'running':'finished',result:polls<3?'':second}];
       return {id:'91',status:polls<3?'running':'waiting',tasks:[{id:'task1',flowId:'91',status:polls<3?'running':'finished',subtasks}]};
     },
-    report:async()=> 'Source-Access: available\n'+report,
-    finish:async()=>true,stop:async()=>true,
+    report:async()=>{assert.equal(polls,3);return 'Source-Access: available\n'+report+'\n\n'+second;},
+    finish:async()=>{finished=true;return true;},stop:async()=>true,
   };
-  const result=await auditSources({scan_task_id:'incremental',target:'/src/project'},{db,parameters:{source_path:'/src/project'},
-    nativeScan:(target,options)=>scanCscanTarget(target,{...options,client,config:{pollMs:1,timeoutMs:3000},llm:()=>assert.fail('explicit fields')})});
+  const result=await auditSources({scan_task_id:'batch',target:'/src/project'},{db,parameters:{source_path:'/src/project'},
+    nativeScan:(target,options)=>scanCscanTarget(target,{...options,client,config:{pollMs:1,timeoutMs:3000},
+      onProgress:state=>{if(state.state==='parsing') assert.equal(finished,true);return options.onProgress(state);},
+      llm:()=>assert.fail('explicit fields')})});
   assert.ok(result.outcomes.every(item=>item.success));
   const rows=db.prepare("SELECT * FROM scan_results WHERE result_type='source_finding'").all();
-  assert.equal(rows.length,1);assert.equal(rows[0].id,firstId);
+  assert.equal(rows.length,1);
   const finding=JSON.parse(rows[0].result_data);
   assert.deepEqual(finding.source_subtask_ids,['sub1','sub2']);
   assert.equal(finding.report_evidence.length,2);assert.equal(finding.runtime_verified,false);
   const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
-  assert.deepEqual(coverage.cscan.incremental.processedSubtasks,['sub1','sub2']);
-  assert.equal(coverage.cscan.incremental.attempts.sub1,1);
+  assert.equal(coverage.cscan.state,'finished');assert.equal(coverage.cscan.scan_complete,true);
+  assert.equal(coverage.cscan.incremental,undefined);
 });
 
-test('incremental parser retries at most three times and preserves raw results even when parsing fails',async t=>{
-  const db=incrementalDb(t);let polls=0,calls=0;
-  const client={create:async()=>({id:'91',status:'running'}),flow:async()=>{
-    polls++;
+test('report parsing runs once after completion; retained reports support repeated retries without rescanning or duplicate IDs',async t=>{
+  const db=reportDb(t);let polls=0,calls=0,creates=0,finished=false;
+  const raw='src/input.c line 12: Copy into a fixed buffer without checking capacity';
+  const task={scan_task_id:'retry',target:'/src/project'},parameters={source_path:'/src/project'};
+  const client={create:async()=>{creates++;return {id:'91',status:'running'};},flow:async()=>{
+    polls++;assert.equal(calls,0);
     return {id:'91',status:polls<5?'running':'waiting',tasks:[{id:'t',flowId:'91',status:polls<5?'running':'finished',
-      result:'Final unreadable report',subtasks:[{id:'s',status:'finished',result:'Unreadable result'}]}]};
-  },report:async()=>'Final unreadable report',finish:async()=>true,stop:async()=>true};
-  await auditSources({scan_task_id:'retry',target:'/src/project'},{db,parameters:{source_path:'/src/project'},
-    nativeScan:(target,options)=>scanCscanTarget(target,{...options,client,config:{pollMs:1,timeoutMs:3000},llm:async()=>{calls++;return {ok:false};}})});
-  assert.equal(calls,4,'three incremental attempts plus final report reconciliation');
-  const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
-  assert.equal(coverage.cscan.incremental.attempts.s,3);assert.equal(coverage.cscan_complete,false);
-  const raw=db.prepare("SELECT result_data FROM scan_results WHERE result_type='raw_output'").all().map(row=>JSON.parse(row.result_data));
-  assert.equal(raw.length,2);assert.equal(raw[0].report,'Unreadable result');
+      result:raw,subtasks:[{id:'s',status:'finished',result:raw}]}]};
+  },report:async()=>raw,finish:async()=>{finished=true;return true;},stop:async()=>true};
+  await auditSources(task,{db,parameters,nativeScan:(target,options)=>scanCscanTarget(target,{...options,client,config:{pollMs:1,timeoutMs:3000},
+    llm:async()=>{assert.equal(finished,true);calls++;return {ok:false};}})});
+  assert.equal(calls,1);
+  let coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
+  assert.equal(coverage.cscan.state,'report_error');assert.equal(coverage.cscan_complete,false);
+  assert.ok(db.prepare("SELECT result_data FROM scan_results WHERE result_type='raw_output'").all().some(row=>{
+    const value=JSON.parse(row.result_data);return value.report===raw && value.complete;
+  }));
+  const retry={db,parameters,reportOnly:true,nativeScan:()=>assert.fail('must reuse report'),llm:async()=>({ok:true,content:JSON.stringify({findings:[
+    {file:'src/input.c',start_line:12,title:'Unchecked copy',reason:'Copy into a fixed buffer without checking capacity',cwe:'CWE-120'}]})})};
+  await auditSources(task,retry);
+  const first=db.prepare("SELECT id FROM scan_results WHERE result_type='source_finding'").get().id;
+  await auditSources(task,retry);
+  const rows=db.prepare("SELECT id FROM scan_results WHERE result_type='source_finding'").all();
+  assert.deepEqual(rows,[{id:first}]);assert.equal(creates,1);
+  coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
+  assert.equal(coverage.cscan_complete,true);assert.deepEqual(coverage.parse_errors,[]);
 });
 
-test('final source-access failure withdraws incremental candidates but keeps evidence',async t=>{
-  const db=incrementalDb(t);
-  await auditSources({scan_task_id:'withdraw',target:'/src/project'},{db,parameters:{source_path:'/src/project'},nativeScan:async(_,options)=>{
-    const parsed=await parseNativeReport(report,'/src/project');
-    await options.onFindings({...parsed,flow_id:'91',source_subtask_ids:['s'],source_task_ids:['t']});
-    return {...parsed,flow_id:'91',source_access_reported:'unavailable'};
-  }});
+test('final source-access failure preserves raw evidence and never imports candidates',async t=>{
+  const db=reportDb(t);
+  const {config}=await protocol(t,'Source-Access: unavailable\n'+report);
+  await auditSources({scan_task_id:'unavailable',target:'/src/project'},{db,parameters:{source_path:'/src/project'},
+    nativeScan:(target,options)=>scanCscanTarget(target,{...options,config,llm:()=>assert.fail('explicit fields')})});
   assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='source_finding'").get().n,0);
-  const withdrawn=JSON.parse(db.prepare("SELECT result_data FROM scan_results WHERE result_type='information'").get().result_data);
-  assert.equal(withdrawn.verification_status,'source_unavailable');assert.equal(withdrawn.report_evidence.length,1);
+  assert.ok(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='raw_output'").get().n>0);
+  const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
+  assert.equal(coverage.cscan.state,'source_unavailable');
+});
+
+test('failed or cancelled scans retain completed subtask reports without parsing or importing',async t=>{
+  for(const cancel of [false,true]) await t.test(cancel?'cancel':'failure',async t=>{
+    const db=reportDb(t),controller=new AbortController();let polls=0;
+    const client={create:async()=>({id:'91',status:'running'}),flow:async()=>{
+      polls++;
+      if(cancel && polls===2) {controller.abort();throw new Error('cancelled');}
+      return {id:'91',status:polls===1?'running':'waiting',tasks:[{id:'t',flowId:'91',status:polls===1?'running':'failed',
+        subtasks:[{id:'s',status:'finished',result:report}]}]};
+    },report:()=>assert.fail('incomplete scan'),finish:()=>assert.fail('incomplete scan'),stop:async()=>true};
+    const operation=auditSources({scan_task_id:'failed',target:'/src/project'},{db,parameters:{source_path:'/src/project'},signal:controller.signal,
+      nativeScan:(target,options)=>scanCscanTarget(target,{...options,client,config:{pollMs:1,timeoutMs:3000},llm:()=>assert.fail('incomplete scan')})});
+    if(cancel) await assert.rejects(operation,/取消/);else await operation;
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='source_finding'").get().n,0);
+    assert.ok(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='raw_output'").get().n>0);
+    await assert.rejects(auditSources({scan_task_id:'failed',target:'/src/project'},{db,parameters:{source_path:'/src/project'},reportOnly:true}),/完整 CScan 报告/);
+  });
+});
+
+test('cancellation or timeout during parsing keeps the completed report after releasing the remote worker',async t=>{
+  for(const cancel of [false,true]) await t.test(cancel?'cancel':'timeout',async t=>{
+    const db=reportDb(t),controller=new AbortController();let finished=false,creates=0;
+    const raw='src/input.c line 12: Copy into a fixed buffer without checking capacity';
+    const task={scan_task_id:'parse-interrupted',target:'/src/project'},parameters={source_path:'/src/project'};
+    const client={create:async()=>{creates++;return {id:'91',status:'running'};},
+      flow:async()=>({id:'91',status:'waiting',tasks:[{id:'t',status:'finished',subtasks:[]}]}),
+      report:async()=>raw,finish:async()=>{finished=true;return true;},stop:()=>assert.fail('worker already released')};
+    const operation=auditSources(task,{db,parameters,signal:controller.signal,
+      nativeScan:(target,options)=>scanCscanTarget(target,{...options,client,config:{pollMs:1,timeoutMs:100},
+        llm:async(_,options)=>{
+          assert.equal(finished,true);
+          return new Promise((resolve,reject)=>{
+            options.signal.addEventListener('abort',()=>reject(new Error('aborted')),{once:true});
+            if(cancel) controller.abort();
+          });
+        }})});
+    if(cancel) await assert.rejects(operation,/取消/);else await operation;
+    const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
+    assert.equal(coverage.cscan.state,cancel?'cancelled':'report_error');
+    assert.ok(coverage.source_errors.some(error=>error.includes(cancel?'取消':'超时')));
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='source_finding'").get().n,0);
+    await auditSources(task,{db,parameters,reportOnly:true,llm:async()=>({ok:true,content:'{"findings":[]}'})});
+    assert.equal(creates,1);
+    assert.equal(JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis).cscan_complete,true);
+  });
+});
+
+test('restart during report processing retains the complete report for manual retry without rescanning',async t=>{
+  const db=reportDb(t),task={scan_task_id:'restart-report',target:'/src/project'},parameters={source_path:'/src/project'};
+  await auditSources(task,{db,parameters,nativeScan:async()=>({...await parseNativeReport(report,task.target),flow_id:'91',finish_status:'acknowledged'})});
+  const first=db.prepare("SELECT id FROM scan_results WHERE result_type='source_finding'").get().id;
+  db.exec("CREATE TABLE scan_tasks(scan_task_id TEXT PRIMARY KEY,status TEXT,completed_at TEXT,error_message TEXT);INSERT INTO scan_tasks(scan_task_id,status) VALUES ('restart-report','RUNNING')");
+  const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
+  coverage.cscan.state='parsing';
+  db.prepare('UPDATE source_audits SET analysis=?').run(JSON.stringify(coverage));
+  assert.equal(await recoverCscanAudits(db,{connect:async()=>({stop:()=>assert.fail('Flow already finished')})}),1);
+  const recovered=db.prepare('SELECT * FROM scan_tasks').get();
+  assert.equal(recovered.status,'FAILED');assert.match(recovered.error_message,/重新解析/);
+  await auditSources(task,{db,parameters,reportOnly:true,nativeScan:()=>assert.fail('no new scan')});
+  assert.deepEqual(db.prepare("SELECT id FROM scan_results WHERE result_type='source_finding'").all(),[{id:first}]);
+});
+
+test('failed batch import rolls back all findings and can retry from the saved report',async t=>{
+  const db=reportDb(t),task={scan_task_id:'atomic',target:'/src/project'},parameters={source_path:'/src/project'};
+  db.exec("CREATE TRIGGER reject_second BEFORE INSERT ON scan_results WHEN NEW.result_type='source_finding' AND json_extract(NEW.result_data,'$.file')='src/other.c' BEGIN SELECT RAISE(ABORT,'fixture write failure'); END");
+  const markdown=report+'\n\n'+report.replace('src/input.c','src/other.c');
+  await auditSources(task,{db,parameters,nativeScan:async()=>({...await parseNativeReport(markdown,task.target),flow_id:'91'})});
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='source_finding'").get().n,0);
+  assert.equal(JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis).cscan.state,'import_error');
+  db.exec('DROP TRIGGER reject_second');
+  await auditSources(task,{db,parameters,reportOnly:true,llm:()=>assert.fail('explicit fields')});
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='source_finding'").get().n,2);
+});
+
+test('one malformed model finding does not discard valid findings in the completed report',async t=>{
+  const db=reportDb(t);
+  const raw='src/input.c line 12: Copy into a fixed buffer without checking capacity';
+  const {config}=await protocol(t,raw);
+  const result=await auditSources({scan_task_id:'malformed-item',target:'/src/project'},{db,parameters:{source_path:'/src/project'},
+    nativeScan:(target,options)=>scanCscanTarget(target,{...options,config,llm:async()=>({ok:true,content:JSON.stringify({findings:[
+      {file:'src/input.c',start_line:12,title:'Unchecked copy',reason:'Copy into a fixed buffer without checking capacity'},null]})})})});
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='source_finding'").get().n,1);
+  assert.equal(result.outcomes.find(item=>item.tool_id==='report-parser').success,false);
 });
 
 test('mixed explicit and prose source sections are parsed without admitting web-only findings',async()=>{
@@ -299,6 +397,46 @@ test('native report retrieval honors the overall scan deadline and retains Flow 
   }}),/超时/);
   assert.equal(reportSignal.aborted,true);assert.equal(stopped,1);
   assert.equal(progress.at(-1).flow_id,'90');assert.equal(progress.at(-1).state,'timed_out');
+});
+
+test('report retry API reuses retained evidence and finding IDs, rejects incomplete, active and foreign scans',async t=>{
+  const {env,calls}=await protocol(t);
+  const old=Object.fromEntries(Object.keys(env).map(k=>[k,process.env[k]]));Object.assign(process.env,env);
+  t.after(()=>{for(const [key,value] of Object.entries(old)) {if(value===undefined) delete process.env[key];else process.env[key]=value;}});
+  const db=getDb(':memory:');t.after(closeDb);
+  const directory=fileURLToPath(new URL('../src/db/migrations/',import.meta.url));
+  for(const name of (await readdir(directory)).sort()) {if(name.includes('import')) continue;const m=await import(directory+name);(m.default || m.up)(db);}
+  db.prepare("INSERT OR IGNORE INTO users(username,password,role) VALUES ('alice','fixture','user'),('bob','fixture','user')").run();
+  db.prepare("INSERT INTO scan_tasks(scan_task_id,target,scan_type,status,parameters,created_by,started_at,completed_at) VALUES ('report-retry','/src/project','source_scan','FAILED',?,'alice','2026-01-01T00:00:00Z','2026-01-01T00:01:00Z')")
+    .run(JSON.stringify({source_path:'/src/project'}));
+  const task=db.prepare('SELECT * FROM scan_tasks').get();
+  await auditSources(task,{db,parameters:JSON.parse(task.parameters),nativeScan:async()=>({markdown:report,findings:[],parse_errors:['fixture parse failure'],flow_id:'91'})});
+  const app=express();app.use(express.json(),(req,res,next)=>{req.user={sub:req.headers['x-user'] || 'alice',role:'user'};next();});
+  app.use('/scans',scanRoutes(db));
+  const base=await listen(t,http.createServer(app));
+  const request=async(suffix,method='POST',user='alice')=>{
+    const response=await fetch(base+'/scans/report-retry'+suffix,{method,headers:{'content-type':'application/json','x-user':user},...(method==='POST'?{body:'{}'}:{})});
+    return {status:response.status,body:await response.json()};
+  };
+  assert.equal((await request('/reparse','POST','bob')).status,403);
+  assert.equal((await request('','GET')).body.data.can_reparse_report,true);
+  db.prepare("UPDATE scan_tasks SET status='RUNNING'").run();
+  assert.equal((await request('/reparse')).status,409);
+  assert.equal((await request('/generate-playbook')).status,400);
+  db.prepare("UPDATE scan_tasks SET status='FAILED'").run();
+  for(let attempt=0;attempt<2;attempt++) {
+    assert.equal((await request('/reparse')).status,202);
+    const deadline=Date.now()+3000;
+    while(Date.now()<deadline && db.prepare('SELECT status FROM scan_tasks').get().status==='RUNNING') await new Promise(resolve=>setTimeout(resolve,10));
+    assert.equal(db.prepare('SELECT status FROM scan_tasks').get().status,'COMPLETED');
+  }
+  assert.equal(calls.length,0,'report retry must not contact CScan');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='source_finding'").get().n,1);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM source_audits').get().n,1);
+  assert.equal(db.prepare('SELECT started_at FROM scan_tasks').get().started_at,task.started_at);
+  db.prepare("DELETE FROM scan_results WHERE result_type='raw_output'").run();
+  assert.equal((await request('/reparse')).status,409);
+  assert.equal((await request('','GET')).body.data.can_reparse_report,false);
 });
 
 test('source task workbench sends one CScan Flow, no port scan; results enter F08 with missing runtime conditions',async t=>{
