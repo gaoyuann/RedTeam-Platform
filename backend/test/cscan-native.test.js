@@ -290,6 +290,8 @@ test('remote target and audit requirements go to the Flow together with the exac
   const input=calls[0].variables.input;
   assert.match(input,/http:\/\/192\.0\.2\.40:8089\//);assert.match(input,/靶机网络目标/);
   assert.match(input,/\/var\/www\/project/);assert.ok(input.includes(JSON.stringify(scope)));
+  assert.match(input,/不得用历史任务、记忆召回、旧快照目录或其他本机目录替代/);
+  assert.match(input,/必须重新核实本次源码来源/);
   assert.doesNotMatch(input,/目标是 CScan 执行环境中的文件或目录路径|先确认该路径在执行容器中/);
   assert.equal(result.findings.length,1);
 });

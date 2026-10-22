@@ -10,7 +10,9 @@
 
 目录浏览仍使用 /api/scan-tasks/source-directory。选择提交参数保持 input_kind=remote_directory 与 connection_id/source_subdir 或 source_url 兼容，执行时转换成位置说明，走原生 CScan 调用。手工输入路径或地址不要求配置目录浏览连接。
 
-参考 pentagi-v3：createFlow 接收任务文本，不包含源码上传；客户端从任务结果获取报告。CScan 当前部署已有 /src 只读挂载，这是服务端现有执行环境，平台不把它规定为所有输入的必经步骤，也不会新建挂载。
+参考 pentagi-v3：createFlow 接收任务文本，不包含源码上传；客户端从任务结果获取报告。部署侧同样不应向 worker 绑定共享源码目录；CScan 的 DOCKER_SOURCE_DIR 应为空，不要求 CSCAN_SOURCE_DIR。工作目录 /work 用于本次执行输出，继续保留。已有容器的挂载不会因修改配置自动消失，需在原任务结束后移除旧容器，后续由服务创建无源码挂载的新 worker。
+
+历史任务、记忆召回、旧快照目录或其他本机源码不能代替本次用户提交的位置。Agent 必须核实当前目标的源码来源；拿不到源码时报告缺失条件，不自动改扫旧目录。
 
 保留旧快照任务和证据的兼容代码，但新 agent/remote_directory 任务不走旧采集路径。不能用任务完成或 Agent 的报告推断整个项目全部覆盖；whole_project_complete 保持 false。
 
