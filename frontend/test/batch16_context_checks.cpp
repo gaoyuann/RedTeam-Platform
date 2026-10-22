@@ -185,6 +185,7 @@ int main(int argc, char **argv)
     MockServer aggregateServer;
     bool delay = false;
     bool failResults = false;
+    bool noCandidates = false;
     aggregateServer.handler = [&](const QString &, const QString &requestPath) -> MockReply {
       const QUrl url(requestPath); const QUrlQuery query(url);
       if (!url.path().contains("/results")) return {success(QJsonArray())};
@@ -192,7 +193,7 @@ int main(int argc, char **argv)
       const QString task = url.path().split('/').value(3);
       const int after = query.queryItemValue("after").toInt();
       const bool errors = query.queryItemValue("category") == "error";
-      const int total = errors ? 1 : 235;
+      const int total = noCandidates && query.queryItemValue("category") == "vulnerability" ? 0 : errors ? 1 : 235;
       QJsonArray rows;
       for (int i = after; i < qMin(after + 100, total); ++i) rows.append(QJsonObject{
         {"id", i + 1}, {"scan_task_id", "scan-" + task}, {"result_type", errors ? "scan_error" : "vulnerability"},
@@ -200,13 +201,49 @@ int main(int argc, char **argv)
       const QJsonObject page{{"total", total}, {"next_after", after + rows.size()}, {"through", total}, {"has_more", after + rows.size() < total}};
       const QJsonObject data{{"scan_records", rows}, {"page", page},
         {"scan_summary", QJsonObject{{"record_count",235}, {"completeness","incomplete"}, {"unexecuted_checks",QJsonArray{"web_scan"}}}},
-        {"scan_sources", QJsonArray{QJsonObject{{"scan_task_id","scan-"+task},{"scan_type","vuln_scan"},{"status","PARTIAL"},{"error_message","fixture timeout"}}}}};
+        {"scan_sources", QJsonArray{QJsonObject{{"scan_task_id","scan-"+task},{"scan_type","vuln_scan"},{"target","fixture.invalid"},{"status","PARTIAL"},{"error_message","fixture timeout"}}}}};
       return {success(data), delay && task == "A" ? 250 : 0};
     };
     ApiClient aggregateApi(QStringLiteral("http://127.0.0.1:%1").arg(aggregateServer.serverPort()));
     ScanPage aggregate(&aggregateApi, "user", "fixture-user"); aggregate.resize(1360,860); aggregate.show();
     aggregate.setPipelineScope("A", {});
     verify(awaitCondition([&]() { return aggregate.m_aggregateRecords.size() == 100; }), "aggregate first page returns 100 stable records");
+    verify(aggregate.m_resultCategory->currentData() == "vulnerability"
+      && aggregate.m_resultSource->itemText(0) == "全部扫描任务", "default filter is vulnerability with one task selector");
+    verify(aggregate.m_resultTree->rootIndex().isValid(), "candidate-only view hides redundant group header");
+    verify(aggregate.m_resultTree->isColumnHidden(2) && aggregate.m_resultTree->isColumnHidden(3)
+      && aggregate.m_resultTree->isColumnHidden(7), "source payload and separate conclusion retained in model but hidden from main table");
+    aggregate.resize(1024, 600); app.processEvents();
+    verify(aggregate.m_resultTree->width() > 900 && !aggregate.m_statusLabel->isVisible(), "full-width first screen has no task sidebar or blue status block");
+    auto *taskManager = aggregate.findChild<QDialog*>("scanAuxTasks");
+    const auto beforePanels = aggregateServer.requests;
+    aggregate.findChild<QPushButton*>("manageScanTasks")->click();
+    verify(taskManager->isVisible(), "task management remains reachable");
+    taskManager->close();
+    aggregate.findChild<QPushButton*>("scanCheckDetails")->click();
+    auto *overviewDialog = aggregate.findChild<QDialog*>("scanAuxOverview");
+    verify(overviewDialog->isVisible() && aggregate.m_statusLabel->isVisible(), "detailed scan progress remains available on demand");
+    overviewDialog->close();
+    verify(aggregateServer.requests == beforePanels, "opening auxiliary panels never starts scans or requests");
+    aggregate.resize(1360, 860); app.processEvents();
+    aggregate.m_resultSource->setCurrentIndex(1);
+    verify(awaitCondition([&]{return !aggregate.m_scanPageBusy;}), "selecting a child scan finishes filtered load");
+    bool sourceRequested = false;
+    for (auto it = aggregateServer.requests.cbegin(); it != aggregateServer.requests.cend(); ++it)
+      if (it.key().contains("scan_task_id=scan-A")) sourceRequested = true;
+    verify(sourceRequested && aggregate.m_resultSource->currentData() == "scan-A"
+      && aggregate.m_resultSource->currentText().contains("fixture.invalid"), "merged selector uses stable ID and shows target/status");
+    aggregate.m_allResultsButton->click();
+    verify(awaitCondition([&]{return !aggregate.m_scanPageBusy;} ) && aggregate.m_resultSource->currentData() == "scan-A",
+      "refresh preserves selected task");
+    aggregate.m_resultSource->setCurrentIndex(0);
+    verify(awaitCondition([&]{return !aggregate.m_scanPageBusy;}), "all scan tasks remain reachable");
+    failResults = true;
+    aggregate.m_moreResultsButton->click();
+    verify(awaitCondition([&]{return !aggregate.m_scanPageBusy;}) && aggregate.m_aggregateRecords.size() == 100
+      && aggregate.m_moreResultsButton->isEnabled() && aggregate.m_resultHint->text().contains("失败"),
+      "append failure retains loaded records and offers page retry");
+    failResults = false;
     aggregate.m_selectAllFindings->click();
     verify(aggregate.m_checkedFindings.size() == 100, "select all covers only the first loaded page");
     aggregate.m_moreResultsButton->click();
@@ -232,7 +269,7 @@ int main(int argc, char **argv)
     for (int row = 0; row < states.size(); ++row) {
       QJsonObject finding{{"id", 500 + row}, {"category", "vulnerability"}, {"result_type", "web_vuln"},
         {"severity", "high"}, {"source_tool", "fixture"},
-        {"result_data", "{\"title\":\"Fixture directory candidate\",\"url\":\"https://fixture.invalid/docs/\",\"cwe\":\"CWE-548\"}"},
+        {"result_data", "{\"title\":\"隔离夹具：目录索引已开启，未经认证可能浏览目录内容\",\"url\":\"https://fixture.invalid/docs/\",\"cwe\":\"CWE-548\"}"},
         {"verification", QJsonValue::Null}, {"payload_match", QJsonObject{{"status", "candidate"}}}};
       if (row) finding["verification"] = QJsonObject{{"state", states[row]}, {"conclusion", "confirmed"},
         {"result", QJsonObject{{"schema_version", 1}, {"status", row == 4 ? "achieved" : "inconclusive"},
@@ -258,10 +295,18 @@ int main(int argc, char **argv)
     const QString tableCapture = qEnvironmentVariable("F04_SCREENSHOT_DIR");
     if (!tableCapture.isEmpty()) {
       aggregate.m_resultHint->setText("隔离布局夹具：7 条漏洞候选、1 条信息、1 条端口、1 条工具错误；无真实扫描");
-      aggregate.m_statusLabel->setText("隔离布局夹具 · 扫描部分失败，已获得结果保留；网站检查未执行（fixture timeout）");
+      aggregate.setStatusText("本任务扫描：部分完成 · 隔离夹具\n网站检查未执行（fixture timeout）");
+      QJsonArray candidateRows;
+      for (int i = 0; i < 7; ++i) candidateRows.append(tableRows.at(i));
+      aggregate.renderGroupedResults(candidateRows);
       app.processEvents(); aggregate.grab().save(tableCapture + "/finding-table-1360.png");
       aggregate.resize(1024, 600); app.processEvents(); aggregate.grab().save(tableCapture + "/finding-table-1024.png");
       aggregate.resize(1360, 860);
+      auto *selected = aggregate.m_resultTree->topLevelItem(0)->child(0);
+      selected->setCheckState(0, Qt::Checked);
+      app.processEvents(); aggregate.grab().save(tableCapture + "/finding-selected.png");
+      selected->setCheckState(0, Qt::Unchecked);
+      aggregate.renderGroupedResults(tableRows);
     }
     const QString selectionCapture = qEnvironmentVariable("FINDING_SELECTION_SCREENSHOT_DIR");
     const QPalette originalPalette = app.palette();
@@ -341,10 +386,22 @@ int main(int argc, char **argv)
     aggregate.renderGroupedResults(aggregate.m_aggregateRecords);
     firstFinding=aggregate.m_resultTree->topLevelItem(0)->child(0);
     verify(firstFinding->checkState(0)==Qt::Checked,"checked findings survive result rerender");
-    aggregate.m_resultTree->itemDoubleClicked(firstFinding,1);
+    const auto beforeDetails = aggregateServer.requests;
+    aggregate.m_resultTree->itemClicked(firstFinding,1);
+    auto *recordDetails = aggregate.findChild<QDialog*>("scanAuxRecord");
+    verify(recordDetails && recordDetails->isVisible()
+      && aggregate.findChildren<FindingVerificationDialog*>().isEmpty()
+      && aggregateServer.requests == beforeDetails, "single click opens read-only evidence without preparing verification");
+    recordDetails->close(); QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    aggregate.m_resultTree->setCurrentItem(firstFinding, 1);
+    QTest::keyClick(aggregate.m_resultTree, Qt::Key_Return);
+    recordDetails = aggregate.findChild<QDialog*>("scanAuxRecord");
+    verify(recordDetails && recordDetails->isVisible() && aggregateServer.requests == beforeDetails,
+      "enter opens evidence without starting or preparing verification");
+    recordDetails->findChild<QPushButton*>("prepareFindingVerification")->click();
     auto dialogs=aggregate.findChildren<FindingVerificationDialog*>();
-    verify(dialogs.size()==1,"double click opens finding verification directly");
-    verify(awaitCondition([&]{return aggregateServer.requests.value("POST /api/pipelines/A/verifications")==1;}),"double click prepares exactly the clicked finding");
+    verify(dialogs.size()==1,"explicit prepare opens finding verification");
+    verify(awaitCondition([&]{return aggregateServer.requests.value("POST /api/pipelines/A/verifications")==1;}),"explicit prepare submits exactly the selected finding");
     QSignalSpy closedRefresh(&aggregate,&ScanPage::findingVerificationChanged);
     dialogs.first()->reject();
     verify(awaitCondition([&]{return closedRefresh.count()==1 && aggregate.m_aggregateRecords.size()==100 && !aggregate.m_scanPageBusy;}),
@@ -383,16 +440,19 @@ int main(int argc, char **argv)
     verify(awaitCondition([&]{return !aggregate.m_scanPageBusy;}), "failed refresh completes loading state");
     verify(!aggregate.m_selectAllFindings->isEnabled() && !aggregate.m_openCheckedFindings->isEnabled(),
       "failed replacement load cannot open stale findings");
+    if (!tableCapture.isEmpty()) aggregate.grab().save(tableCapture + "/scan-load-failed.png");
     failResults = false;
     aggregate.m_resultCategory->setCurrentIndex(aggregate.m_resultCategory->findData("error"));
     verify(awaitCondition([&]{return !aggregate.m_scanPageBusy;}), "restore error filter after failure");
     delay = true; aggregate.loadPipelineResults();
     aggregate.setPipelineScope("B", {});
-    verify(awaitCondition([&]() { return aggregate.m_aggregateRecords.size() == 1 && aggregate.m_aggregateRecords.first().toObject()["scan_task_id"].toString() == "scan-B"; }), "task switch loads only B records");
+    verify(awaitCondition([&]() { return aggregate.m_aggregateRecords.size() == 100 && aggregate.m_resultCategory->currentData() == "vulnerability" && aggregate.m_aggregateRecords.first().toObject()["scan_task_id"].toString() == "scan-B"; }), "task switch resets to candidates and loads only B records");
     QTest::qWait(300);
     verify(aggregate.m_checkedFindings.isEmpty(), "task switch clears checked finding IDs");
     verify(aggregate.m_aggregateRecords.first().toObject()["scan_task_id"].toString() == "scan-B", "late A page cannot overwrite B records");
     const QString capture = qEnvironmentVariable("F04_SCREENSHOT_DIR");
+    aggregate.m_resultCategory->setCurrentIndex(aggregate.m_resultCategory->findData("error"));
+    verify(awaitCondition([&]{return !aggregate.m_scanPageBusy && aggregate.m_aggregateRecords.size() == 1;}), "task B error category remains reachable");
     if (!capture.isEmpty()) aggregate.grab().save(capture + "/scan-results-errors.png");
     aggregate.m_resultCategory->setCurrentIndex(0);
     verify(awaitCondition([&]() { return aggregate.m_aggregateRecords.size() == 100; }), "clearing filter restarts a bounded page");
@@ -403,9 +463,22 @@ int main(int argc, char **argv)
     aggregate.setPipelineScope("C",{});
     oldDialog->reject();
     verify(closedRefresh.count()==1,"closing old scanning context does not emit a new-task refresh");
+    noCandidates = true;
+    aggregate.setPipelineScope("empty", {});
+    verify(awaitCondition([&]{return !aggregate.m_scanPageBusy;}) && aggregate.m_aggregateRecords.isEmpty()
+      && aggregate.m_listTitle->text().contains("0") && aggregate.m_showAllRecords->isVisible(),
+      "zero candidates show honest empty state and all-records navigation");
+    if (!capture.isEmpty()) aggregate.grab().save(capture + "/scan-empty-candidates.png");
+    aggregate.m_showAllRecords->click();
+    verify(awaitCondition([&]{return !aggregate.m_scanPageBusy;}) && aggregate.m_aggregateRecords.size() == 100,
+      "all records remain reachable when candidate category is empty");
+    aggregate.m_resultTree->itemClicked(aggregate.m_resultTree->topLevelItem(0)->child(0), 1);
+    taskManager->show(); overviewDialog->show();
     aggregate.clearTaskScope();
     verify(aggregate.m_checkedFindings.isEmpty() && !aggregate.m_selectAllFindings->isEnabled(), "leaving task clears selection controls");
     verify(aggregate.m_resultTree->topLevelItemCount() == 0 && aggregate.m_pipelineId.isEmpty(), "leaving aggregate clears all visible records and identity");
+    for (auto *dialog : aggregate.findChildren<QDialog*>())
+      if (dialog->objectName().startsWith("scanAux")) verify(!dialog->isVisible(), "leaving task closes auxiliary evidence and management windows");
   }
 
   {
@@ -564,6 +637,24 @@ int main(int argc, char **argv)
   verify(awaitCondition([&]() { return flow.m_flowListFresh; }), "task index loads from isolated loopback");
   flow.openTaskAnalysis("A");
   verify(awaitCondition([&]() { return flow.m_scanTab->m_allScanResults && flow.m_scanTab->m_portScanTable->rowCount() == 1; }), "network task defaults to aggregate results and scoped child list");
+  const QString scanCapture = qEnvironmentVariable("F04_SCREENSHOT_DIR");
+  if (!scanCapture.isEmpty()) {
+    flow.switchToStageTab(1);
+    flow.m_scanTab->renderGroupedResults(QJsonArray{QJsonObject{{"id", 7001}, {"category", "vulnerability"},
+      {"result_type", "web_vuln"}, {"severity", "medium"}, {"source_tool", "fixture"},
+      {"result_data", "{\"title\":\"隔离夹具：目录索引暴露，长名称用于检查换行与完整任务工作台的首屏显示\",\"url\":\"https://fixture.invalid/docs/\"}"}}});
+    flow.m_scanTab->setStatusText("本任务扫描：部分完成 · 隔离夹具\n检查详情保留未完成范围");
+    flow.m_scanTab->m_listTitle->setText("漏洞候选 · 共 1 条");
+    flow.m_scanTab->m_resultHint->setText("隔离夹具 · 已加载 1 / 1 条记录 · 未去重");
+    QTest::qWait(80);
+    flow.grab().save(scanCapture + "/flow-scan-1360.png");
+    flow.resize(1024,600); QTest::qWait(80);
+    const auto footerPosition = flow.m_scanTab->m_moreResultsButton->mapTo(&flow, QPoint(0, 0));
+    verify(flow.rect().contains(QRect(footerPosition, flow.m_scanTab->m_moreResultsButton->size())),
+      "complete narrow workbench keeps scan pagination inside viewport");
+    flow.grab().save(scanCapture + "/flow-scan-1024.png");
+    flow.resize(1360,860);
+  }
   emit flow.m_scanTab->m_portScanTable->cellClicked(0, 0);
   verify(awaitCondition([&]() { return flow.m_aiPanel->m_pipelineId == "A" && flow.m_scanTab->m_selectedTaskId == "scan-A"; }), "selected task and scan finish loading");
   verify(flow.m_selectedPipelineId == "A", "task keeps exact identity");
@@ -698,10 +789,10 @@ int main(int argc, char **argv)
         {"engine","cscan"},{"input_mode","service_path"},{"cscan",QJsonObject{{"state",phase}}}}).toJson(QJsonDocument::Compact))}};
     };
     running["results"]=QJsonArray{phaseResult("parsing")};reportPage.updateStatusLabel(running);
-    verify(reportPage.m_statusLabel->text().contains("正在解析报告") && !reportPage.m_sourceDemoBtn->isEnabled(),
+    verify(reportPage.m_statusLabel->text().contains("正在解析报告") && reportPage.m_compactStatus->text() == "正在解析报告" && !reportPage.m_sourceDemoBtn->isEnabled(),
       "source report parsing is visible and cannot open finding selection");
     running["results"]=QJsonArray{phaseResult("importing")};reportPage.updateStatusLabel(running);
-    verify(reportPage.m_statusLabel->text().contains("正在导入漏洞"),"source report import has a distinct phase");
+    verify(reportPage.m_statusLabel->text().contains("正在导入漏洞") && reportPage.m_compactStatus->text() == "正在导入漏洞","source report import has a distinct phase");
     reportPage.updateStatusLabel(record);
     verify(reportPage.m_reexecBtn->text()=="重新解析报告" && reportPage.m_reexecBtn->isEnabled(),
       "retained source report enables report retry");

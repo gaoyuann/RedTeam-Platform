@@ -115,6 +115,21 @@ static QString statusBadgeStyle(const QString &status)
 
 // ── FlowPage ───────────────────────────────────────────────────────────
 
+// Other stages have large minimum sizes; they must not push scan pagination offscreen.
+class ScanWorkspaceTabs final : public WorkbenchTabs {
+public:
+  using WorkbenchTabs::WorkbenchTabs;
+  QSize minimumSizeHint() const override {
+    if (currentWidget() && currentWidget()->objectName() == "scanPage")
+      return currentWidget()->minimumSizeHint() + QSize(4, tabBar()->sizeHint().height() + 4);
+    return WorkbenchTabs::minimumSizeHint();
+  }
+  QSize sizeHint() const override {
+    if (currentWidget() && currentWidget()->objectName() == "scanPage") return minimumSizeHint();
+    return WorkbenchTabs::sizeHint();
+  }
+};
+
 FlowPage::FlowPage(ApiClient *api, const QString &role,
                    const QString &username, QWidget *parent)
     : QWidget(parent)
@@ -435,7 +450,7 @@ void FlowPage::setupWorkbenchView()
   layout->addWidget(progressFrame);
 
   // Task workbench tabs preserve the selected pipeline context.
-  m_stageTabs = new WorkbenchTabs(m_workbenchView, false);
+  m_stageTabs = new ScanWorkspaceTabs(m_workbenchView, false);
   m_topoTab = new TopologyPage(m_api, m_role, m_username, m_stageTabs);
   connect(m_topoTab,&TopologyPage::testTargetRequested,this,&FlowPage::createTestForTarget);
   connect(m_topoTab,&TopologyPage::nodeFindingsRequested,this,[this](const QString &pipelineId,const QList<qint64> &ids) {
@@ -517,6 +532,7 @@ void FlowPage::setupWorkbenchView()
   connect(m_aiToggleBtn, &QPushButton::toggled, m_aiPanel, &QWidget::setVisible);
   connect(m_stageTabs, &QTabWidget::currentChanged, this, [this](int index) {
     m_aiPanel->setStage(m_stageTabs->tabText(index));
+    m_stageTabs->updateGeometry();
   });
   connect(m_analysisTab, &AnalysisPage::refreshRequested, this, [this]() {
     if (!m_selectedPipelineId.isEmpty()) {
