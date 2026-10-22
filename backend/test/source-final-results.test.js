@@ -6,6 +6,22 @@ import {fileURLToPath} from 'node:url';
 import {runMigrations} from '../src/db/migrate.js';
 import scanRoutes from '../src/routes/scans.js';
 import {scanPage} from '../src/services/scanResultQuery.js';
+import {sourceScanPreview} from '../src/services/sourceScanResults.js';
+
+test('scan preview exposes only explicit cited progress without publishing attackable finding IDs',()=>{
+  const task={scan_type:'source_scan',status:'RUNNING',target:'http://example.test/source/'};
+  const report='## Unchecked copy\nFile: lib/input.c\nLine: 12\nSeverity: high\nCWE: CWE-120\nEvidence: Destination capacity is not checked';
+  const raw={report,source_task_ids:['1'],source_subtask_ids:['2']};
+  const rows=[{id:1,result_type:'raw_output',result_data:JSON.stringify(raw)},
+    {id:2,result_type:'raw_output',result_data:JSON.stringify(raw)}];
+  const preview=sourceScanPreview(task,rows);
+  assert.equal(preview.findings.length,1);assert.equal(preview.findings[0].file,'lib/input.c');
+  assert.equal(preview.findings[0].preview,true);assert.equal(preview.findings[0].id,undefined);
+  assert.equal(preview.findings[0].code,'');assert.equal(preview.findings[0].source_version_verified,false);
+  assert.equal(sourceScanPreview(task,[{result_type:'raw_output',result_data:JSON.stringify({report:'Maybe there is a buffer overflow'})}]).findings.length,0);
+  assert.equal(sourceScanPreview(task,[...rows,{result_type:'raw_output',result_data:JSON.stringify({report:'Source-Access: unavailable'})}]).source_unavailable,true);
+  assert.equal(sourceScanPreview(task,[{result_type:'raw_output',result_data:JSON.stringify({report:'x'.repeat(2*1024*1024+1)})}]).truncated,true);
+});
 
 test('source detail and task collection publish findings only after scan and report processing end',async t=>{
   const db=new Database(':memory:');

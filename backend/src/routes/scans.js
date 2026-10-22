@@ -19,7 +19,7 @@ import {isProgramScan, isProgramFinding, loadProgramProjects, publicProgramProje
 import {appendTaskLog} from '../services/taskActivity.js';
 import {cscanTarget,cscanSourcePath,cscanNotes} from '../services/cscanTarget.js';
 import {retainedCscanReport} from '../services/sourceAuditNative.js';
-import {visibleSourceScanRecords,sourceScanResultState} from '../services/sourceScanResults.js';
+import {visibleSourceScanRecords,sourceScanResultState,sourceScanPreview} from '../services/sourceScanResults.js';
 
 export default function (db) {
   const router = Router();
@@ -88,6 +88,7 @@ export default function (db) {
     if (!sourceAccess(req,row)) return res.status(403).json({status:'error',error:{message:'没有权限查看源码任务'}});
     row.results = db.prepare('SELECT * FROM scan_results WHERE scan_task_id = ? ORDER BY captured_at,id').all(req.params.scanTaskId);
     row.source_scan=sourceScanResultState(row,row.results);
+    row.source_preview=sourceScanPreview(row,row.results);
     row.results=visibleSourceScanRecords(row,row.results);
     if(!isProgramScan(row.scan_type)) row.results=row.results.map(publicScanRecord);
     row.scan_summary=summarizeScanRecords(row.results);

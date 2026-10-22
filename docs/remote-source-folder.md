@@ -14,6 +14,6 @@
 
 历史任务、记忆召回、旧快照目录或其他本机源码不能代替本次用户提交的位置。Agent 必须核实当前目标的源码来源；拿不到源码时报告缺失条件，不自动改扫旧目录。
 
-保留旧快照任务和证据的兼容工具，但所有实时扫描入口（包括旧 source_url/connection_id 参数）均转换成原生位置提交，不再走旧采集路径。扫描中只显示进度，扫描及报告处理结束后统一发布一张漏洞表；过程记录可单独查看。不能用任务完成或 Agent 的报告推断整个项目全部覆盖；whole_project_complete 保持 false。
+保留旧快照任务和证据的兼容工具，但所有实时扫描入口（包括旧 source_url/connection_id 参数）均转换成原生位置提交，不再走旧采集路径。扫描中在独立三栏详情查看已返回的文件定位、审计依据和过程发现；扫描及报告处理结束后，点击“攻击测试”再展示全部已保存漏洞供选择。过程发现不分配正式漏洞 ID，不能直接执行测试。不能用任务完成或 Agent 的报告推断整个项目全部覆盖；whole_project_complete 保持 false。
 
 验证：npm run test:source；现有 CMake 编译主程序和 Batch16Checks；ctest --test-dir build -R ui-context --output-on-failure。检查包括路径和地址转发、无快照采集、无凭据转发、原生任务报告、Source-Access unavailable 错误路径及 UI 默认入口。
