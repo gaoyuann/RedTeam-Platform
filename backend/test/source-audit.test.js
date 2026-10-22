@@ -13,7 +13,7 @@ import {createSourceContextIndex,relatedSourceContext} from '../src/services/sou
 import {buildProgramContext} from '../src/services/programAgent.js';
 import {normalizeSourceFinding} from '../src/services/sourceScanFindings.js';
 import {runTargetRequest,parseTargetRequest} from '../src/tools/targetRequest.js';
-import {auditSources,recoverCscanAudits} from '../src/services/sourceAudit.js';
+import {auditSources,auditLegacySnapshot,recoverCscanAudits} from '../src/services/sourceAudit.js';
 import {cscanFixture} from './helpers/cscanFixture.js';
 import {parseCscanMarkdown} from '../src/services/cscanReport.js';
 import {generateSourceVerification,recordSourceVerification} from '../src/services/sourceVerification.js';
@@ -70,7 +70,7 @@ test('legacy HTTP snapshot remains compatible without being the new project inpu
     return [];
   });
   const snapshotRoot=await temp(t);
-  const result=await auditSources({scan_task_id:'directory-cscan',target:target+'selected/'},{db,
+  const result=await auditLegacySnapshot({scan_task_id:'directory-cscan',target:target+'selected/'},{db,
     parameters:{input_kind:'source',source_url:target+'selected/'},
     snapshot:(connection,options)=>createSourceSnapshot(connection,{...options,snapshotRoot}),
     runTool:()=>assert.fail('a source-folder task must not invoke network scanning')});
@@ -187,7 +187,7 @@ test('task-supplied HTTP directory is read by the audit without a configured sou
     res.writeHead(404);res.end();
   }));
   const db=auditDb(t), snapshotRoot=await temp(t), target=`http://127.0.0.1:${port}/app/`;
-  const result=await auditSources({scan_task_id:'custom',target},{db,
+  const result=await auditLegacySnapshot({scan_task_id:'custom',target},{db,
     parameters:{source_url:'/custom/',ai_analysis:false},cscan:async source=>cscanReport(source),
     runTool:async()=>({success:true,stdout:'{}',stderr:''}),parseResults:()=>[],
     snapshot:(connection,options)=>createSourceSnapshot(connection,{...options,snapshotRoot})});
@@ -252,10 +252,10 @@ test('transport cancels, times out and caps responses while preserving partial e
 test('remote-only audits never claim source coverage, and source failures retain the network result',async t=>{
   const db=auditDb(t);
   const run=async()=>({success:true,stdout:'{"connected":true,"response":"hello"}'});
-  await auditSources({scan_task_id:'remote',target:'tcp://127.0.0.1:8091'},{db,parameters:{},runTool:run,parseResults});
+  await auditLegacySnapshot({scan_task_id:'remote',target:'tcp://127.0.0.1:8091'},{db,parameters:{},runTool:run,parseResults});
   const coverage=JSON.parse(db.prepare("SELECT result_data FROM scan_results WHERE result_type='source_coverage'").get().result_data);
   assert.equal(coverage.source_read,false);assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='source_finding'").get().n,0);
-  const result=await auditSources({scan_task_id:'missing',target:'tcp://127.0.0.1:8091'},{db,parameters:{connection_id:'missing'},runTool:run,parseResults});
+  const result=await auditLegacySnapshot({scan_task_id:'missing',target:'tcp://127.0.0.1:8091'},{db,parameters:{connection_id:'missing'},runTool:run,parseResults});
   assert.equal(result.outcomes[0].success,true);assert.equal(result.outcomes[1].success,false);
   const failedCoverage=JSON.parse(db.prepare("SELECT result_data FROM scan_results WHERE scan_task_id='missing' AND result_type='source_coverage'").get().result_data);
   assert.equal(failedCoverage.source_read,false);assert.equal(failedCoverage.ai_complete,false);
@@ -265,7 +265,7 @@ test('remote-only audits never claim source coverage, and source failures retain
 test('CScan exceptions preserve the frozen snapshot and explicit incomplete coverage without local fallback',async t=>{
   const db=auditDb(t),document={path:'main.c',content:'int main(){return 0;}',start_line:1,end_line:1,sha256:'fixture'};
   const calls=[];
-  const result=await auditSources({scan_task_id:'exceptions',target:'http://127.0.0.1:8090/'},{db,
+  const result=await auditLegacySnapshot({scan_task_id:'exceptions',target:'http://127.0.0.1:8090/'},{db,
     parameters:{source_url:'/code/'},
     snapshot:async()=>({snapshot_id:'frozen',connection_id:'p',files:[{path:'main.c'}],skipped:[],documents:[document],sourceDir:'/fixture'}),
     runTool:async tool=>{calls.push(tool);return {success:true,stdout:'{}'};},
@@ -282,7 +282,7 @@ test('CScan exceptions preserve the frozen snapshot and explicit incomplete cove
 test('CScan accepts cited findings but rejects invented locations and marks coverage incomplete',async t=>{
   const db=auditDb(t),document={path:'a.c',content:'void f(char *s) {\n char b[8]; strcpy(b,s);\n}',start_line:1,end_line:3,sha256:'hash'};
   let calls=0;
-  const result=await auditSources({scan_task_id:'audit',target:'http://127.0.0.1:8090/'},{db,
+  const result=await auditLegacySnapshot({scan_task_id:'audit',target:'http://127.0.0.1:8090/'},{db,
     parameters:{source_url:'/code/'},
     snapshot:async()=>({snapshot_id:'version',connection_id:'p',files:[{path:'a.c'}],skipped:[],documents:[document],sourceDir:'/fixture'}),
     runTool:async()=>({success:true,stdout:'{}'}),
@@ -302,9 +302,9 @@ test('concurrent or repeated source audits never duplicate a remote CScan submis
     snapshot:async()=>({snapshot_id:'frozen',connection_id:'fixture',files:[{path:'main.c'}],skipped:[],documents:[document],sourceDir:'/fixture'}),
     runTool:()=>assert.fail('no local tool for a source-only scan'),
     cscan:async source=>{calls++;await new Promise(resolve=>setTimeout(resolve,10));return cscanReport(source);}};
-  await Promise.all([auditSources(task,context),auditSources(task,context)]);
+  await Promise.all([auditLegacySnapshot(task,context),auditLegacySnapshot(task,context)]);
   assert.equal(calls,1);
-  await assert.rejects(auditSources(task,context),/避免重复提交/);assert.equal(calls,1);
+  await assert.rejects(auditLegacySnapshot(task,context),/避免重复提交/);assert.equal(calls,1);
   const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
   assert.equal(coverage.cscan_complete,true);assert.equal(coverage.whole_project_complete,false);
 });
@@ -371,7 +371,7 @@ test('CScan preserves validated cross-file citations for downstream verification
       {file:'copy.c',start_line:2,end_line:2,role:'sink',note:'Copy has no length argument'}]};
   assert.throws(()=>normalizeSourceFinding({...finding,trace:[{...finding.trace[0],start_line:99,end_line:99}]},documents),/未读取/);
   assert.throws(()=>normalizeSourceFinding({...finding,trace:[{...finding.trace[0],role:'confirmed'}]},documents),/角色/);
-  await auditSources({scan_task_id:'trace',target:'http://127.0.0.1:8090'},{
+  await auditLegacySnapshot({scan_task_id:'trace',target:'http://127.0.0.1:8090'},{
     db,parameters:{connection_id:'p'},
     snapshot:async()=>({snapshot_id:'frozen',connection_id:'p',files:documents.map(d=>({path:d.path})),skipped:[],documents,sourceDir:path}),
     runTool:async tool=>{assert.equal(tool,'target-request');return {success:true,stdout:'{"connected":true}'};},
@@ -401,7 +401,7 @@ test('related source retrieval remains bounded for widespread symbols and large 
 test('CScan cancellation retains Flow identity and coverage without importing late findings',async t=>{
   const db=auditDb(t),controller=new AbortController();
   const document={path:'main.c',content:'int x;',start_line:1,end_line:1,sha256:'fixture'};
-  await assert.rejects(auditSources({scan_task_id:'cancel',target:'http://127.0.0.1:9/code/'},{db,
+  await assert.rejects(auditLegacySnapshot({scan_task_id:'cancel',target:'http://127.0.0.1:9/code/'},{db,
     parameters:{source_url:'/code/',input_kind:'source'},signal:controller.signal,
     snapshot:async()=>({snapshot_id:'v1',connection_id:'p',documents:[document],files:[{path:'main.c'}],skipped:[]}),
     cscan:async(source,{onProgress})=>{onProgress({flow_id:'41',state:'running'});controller.abort();return cscanReport(source);}}),/取消/);
@@ -435,7 +435,7 @@ test('startup reconciles orphaned CScan flows, preserves unknown submissions and
 test('native Markdown findings enter verification context but never claim complete source coverage',async t=>{
   const db=auditDb(t),document={path:'input.c',content:'void copy(char *s) {\n char b[8]; strcpy(b,s);\n}',
     start_line:1,end_line:3,sha256:'fixture'};
-  const result=await auditSources({scan_task_id:'markdown',target:'http://127.0.0.1:9/code/'},{db,
+  const result=await auditLegacySnapshot({scan_task_id:'markdown',target:'http://127.0.0.1:9/code/'},{db,
     parameters:{source_url:'/code/',input_kind:'source'},
     snapshot:async()=>({snapshot_id:'v1',connection_id:'p',documents:[document],files:[{path:'input.c'}],skipped:[]}),
     cscan:async source=>({...parseCscanMarkdown('## Copy input\nFile: input.c\nLine: 2\nEvidence: No capacity check\nSeverity: high',source.snapshot_id),flow_id:'42'})});

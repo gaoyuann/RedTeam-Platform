@@ -10,12 +10,12 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {getDb,closeDb} from '../src/db/connection.js';
 
-// CScan and the plan model use protocol fixtures. Collection, task APIs,
+// CScan and the plan model use protocol fixtures. Task APIs,
 // approval and HTTP/TCP execution are real. Unrelated port discovery is stubbed.
 const sourceModule=await import('../src/services/sourceSnapshot.js');
 let snapshotRoot;
 await mock.module('../src/services/sourceSnapshot.js',{namedExports:{...sourceModule,
-  createSourceSnapshot:(connection,options)=>sourceModule.createSourceSnapshot(connection,{...options,snapshotRoot})}});
+  createSourceSnapshot:()=>assert.fail('live source inputs must not create a snapshot')}});
 const toolModule=await import('../src/tools/toolRunner.js');
 await mock.module('../src/tools/toolRunner.js',{namedExports:{...toolModule,
   runTool:async(tool,args,options)=>tool==='nmap' ? {success:true,exitCode:0,stdout:'<nmaprun></nmaprun>',stderr:'',executionMode:'fixture'}
@@ -102,7 +102,8 @@ for(const [mode,protocol] of [['source_assisted','http'],['program_dynamic','tcp
     const task=db.prepare('SELECT * FROM scan_tasks').get();
     assert.equal(task.status,'COMPLETED',task.error_message);
     const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
-    assert.equal(coverage.files,1);assert.equal(coverage.ai_complete,true);
+    assert.equal(coverage.source_read,false);assert.equal(coverage.input_mode,'remote_agent');assert.equal(coverage.ai_complete,true);
+    assert.deepEqual(await readdir(cscan.sources),[],'no source staging directory is populated');
     assert.equal(coverage.engine,'cscan');assert.equal(coverage.cscan_complete,true);assert.equal(cscan.counts.created,1);
     const findings=db.prepare("SELECT id,result_data FROM scan_results WHERE result_type='source_finding'").all();assert.ok(findings.length);
     const finding=findings.find(row=>JSON.parse(row.result_data).title==='Fixture input bounds');assert.ok(finding);
@@ -130,7 +131,7 @@ for(const [mode,protocol] of [['source_assisted','http'],['program_dynamic','tcp
     assert.equal(comparison.runtime_verified,false);assert.equal(comparison.review_required,true);
     const versions=JSON.parse(evidence[1].evidence_data).source_verification.source_versions;
     assert.equal(versions[0].source_sha256,JSON.parse(finding.result_data).source_sha256);
-    assert.equal(versions[0].snapshot_id,coverage.snapshot_id);
+    assert.equal(versions[0].snapshot_id,null,'native report evidence cannot claim a source snapshot');
     const review=await request('/scans/'+task.scan_task_id+'/source-verifications',undefined,'alice','GET');
     assert.equal(review.runs[0].run_id,run.run_id);assert.equal(review.runs[0].evidence.length,2);
   });

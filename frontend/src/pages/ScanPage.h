@@ -12,11 +12,13 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QTabWidget>
+#include <QPointer>
 
 class QCheckBox;
 class ApiClient;
 class RemoteSourcePicker;
 class ScanResultOverview;
+class SourceScanDetailDialog;
 
 class ScanPage : public QWidget {
   Q_OBJECT
@@ -57,6 +59,12 @@ private:
   void setupUI();
   void setStatusText(const QString &text);
   void openRecordDetails(QTreeWidgetItem *item);
+  void openSourceScanDetails();
+  QPointer<SourceScanDetailDialog> m_sourceDetail;
+  QPushButton *m_sourceDetailButton = nullptr;
+  QStringList m_sourceTaskIds;
+  QString m_sourceViewTarget;
+  bool m_openSourceDetailsRequested = false;
   void resizeResultColumns();
   bool eventFilter(QObject *object, QEvent *event) override;
   QLabel *m_compactStatus = nullptr;
@@ -82,6 +90,11 @@ private:
   qint64 m_scanCursor = 0;
   qint64 m_scanThrough = 0;
   QJsonArray m_aggregateRecords;
+  bool m_sourceResultsView = false;
+  bool m_sourceResultsPending = false;
+  bool m_sourceRecordsMode = false;
+  QJsonArray m_sourceRecords;
+  QString m_sourceProgressText;
   QWidget *m_aggregateControls;
   QPushButton *m_allResultsButton;
   QPushButton *m_moreResultsButton;

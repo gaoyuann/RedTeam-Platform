@@ -13,7 +13,7 @@ export function retainedCscanReport(db,scanTaskId) {
   return raw ? {coverage,raw} : null;
 }
 
-export async function auditCscanNative(task,{db,parameters,signal,nativeScan=scanCscanTarget,llm,sourceLocation='',reportOnly=false}) {
+export async function auditCscanNative(task,{db,parameters,signal,nativeScan=scanCscanTarget,llm,sourceLocation='',reportOnly=false,runtimeTarget=null,runTool}) {
   const retained=reportOnly?retainedCscanReport(db,task.scan_task_id):null;
   if(reportOnly && !retained) throw new Error('没有可重新解析的完整 CScan 报告');
   if(retained) {
@@ -37,6 +37,7 @@ export async function auditCscanNative(task,{db,parameters,signal,nativeScan=sca
   const coverage=retained?structuredClone(retained.coverage):{engine:'cscan',input_mode:agentMode?'remote_agent':'service_path',source_target:source,source_location:sourceLocation,source_read:false,
     source_version_verified:false,whole_project_complete:false,cscan_complete:false,
     cscan:{state:'preparing'},source_errors:[],parse_errors:[],rejected_findings:[],
+    runtime_target:parameters.runtime_target || null,
     note:'源码读取和扫描由 CScan 完成。平台接收任务报告，不采集源码；报告定位和版本尚需复核。'};
   if(!retained) db.prepare('INSERT INTO source_audits(scan_task_id,snapshot_id,connection_id,manifest,analysis,created_at) VALUES (?,?,?,?,?,?)')
     .run(task.scan_task_id,'cscan-report:'+task.scan_task_id,'cscan',JSON.stringify({kind:'service_report',source_target:source,source_location:sourceLocation,files:[]}),JSON.stringify(coverage),new Date().toISOString());
@@ -89,6 +90,16 @@ export async function auditCscanNative(task,{db,parameters,signal,nativeScan=sca
     }
   };
   try {
+    if(!reportOnly && runtimeTarget && runTool) {
+      let response;
+      try {response=await runTool('target-request',[JSON.stringify({url:runtimeTarget})],{signal,timeout:15000,target:runtimeTarget});}
+      catch(error) {response={success:false,error:error.message};}
+      if(signal?.aborted) throw new Error('源码扫描已取消');
+      let observation={};try {observation=JSON.parse(response.stdout || '{}');} catch {}
+      store('application_observation',{...observation,response:String(observation.response || '').slice(0,8000),
+        error:response.error || null,note:'单独声明的运行入口响应，不代表源码与部署版本一致或漏洞验证成功。'});
+      outcomes.push({tool_id:'target-request',success:response.success,error:response.error || null});
+    }
     const onProgress=state=>{
       coverage.cscan={...coverage.cscan,...state};persist();
     };

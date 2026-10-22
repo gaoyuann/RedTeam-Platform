@@ -22,10 +22,9 @@ test('explicit source input delegates exclusively to CScan without the former sc
   const db=database(t),parameters={input_kind:'source',source_url:'http://127.0.0.1:18090/code/'};
   const task={scan_task_id:'source',target:parameters.source_url,parameters:JSON.stringify(parameters)};let calls=0;
   const result=await scanProgramAgent(task,{db,parameters,
-    snapshot:async()=>({snapshot_id:'fixture',connection_id:'task-http-source',files:[{path:'main.c'}],skipped:[],
-      documents:[{path:'main.c',content:'int main(){return 0;}',start_line:1,end_line:1,sha256:'fixture'}],sourceDir:'/fixture'}),
-    cscan:async source=>{calls++;return {snapshot_id:source.snapshot_id,flow_id:'1',findings:[],
-      coverage:{reviewed_files:['main.c'],omitted_files:[],complete:true}};},
+    snapshot:()=>assert.fail('must not collect source'),cscan:()=>assert.fail('must not stage source'),
+    nativeScan:async source=>{calls++;assert.equal(source,parameters.source_url);return {flow_id:'1',findings:[],
+      markdown:'Source-Access: available\nFixture report',source_access_reported:'available'};},
     runTool:()=>assert.fail('must not use local scan tools')},
     {llm:()=>assert.fail('must not use local scan model')});
   assert.equal(calls,1);assert.equal(result.outcomes.every(outcome=>outcome.success),true);
@@ -39,10 +38,9 @@ test('CScan source input retains its separately declared CGI runtime observation
   const target='http://127.0.0.1:'+port+'/',parameters={input_kind:'source',source_url:target+'source/'};
   const result=await scanProgramAgent({scan_task_id:'cgi',target,parameters:JSON.stringify(parameters)},
     {db,parameters,
-      snapshot:async()=>({snapshot_id:'fixture',connection_id:'task-http-source',files:[{path:'handler.c'}],skipped:[],
-        documents:[{path:'handler.c',content:'void handler(void) {}',start_line:1,end_line:1,sha256:'fixture'}],sourceDir:'/fixture'}),
-      cscan:async source=>({snapshot_id:source.snapshot_id,flow_id:'2',findings:[],
-        coverage:{reviewed_files:['handler.c'],omitted_files:[],complete:true}}),
+      snapshot:()=>assert.fail('must not collect source'),cscan:()=>assert.fail('must not stage source'),
+      nativeScan:async source=>{assert.equal(source,parameters.source_url);return {flow_id:'2',findings:[],
+        markdown:'Source-Access: available\nFixture report',source_access_reported:'available'};},
       runTool:async(tool,args,options)=>{assert.equal(tool,'target-request');return runTargetRequest(args,options);}},
     {llm:()=>assert.fail('CScan source scanning must not call the platform scan model')});
   assert.deepEqual(visits,['/']);assert.equal(result.outcomes.every(outcome=>outcome.success),true);

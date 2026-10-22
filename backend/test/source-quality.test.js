@@ -34,8 +34,8 @@ test('bounded review prioritizes an alert deep in a file and rejects unsafe anal
   assert.ok(sourceToolArgs('cppcheck',{standard:'c++17',defines:['FEATURE=1']}).includes('-DFEATURE=1'));
 });
 
-test('CScan executor imports version-bound fixture findings and preserves corrected files and history',async t=>{
-  await cscanFixture(t,['bounds.c','null.c','lifetime.cpp'].map((name,index)=>({
+test('CScan executor imports report-backed C/C++ findings without inventing snapshots or source-version evidence',async t=>{
+  const cscan=await cscanFixture(t,['bounds.c','null.c','lifetime.cpp'].map((name,index)=>({
     file:'vulnerable/'+name,start_line:[4,3,4][index],title:'Fixture '+name,reason:'Test-owned source candidate',severity:'high',
     trace:[{file:'vulnerable/'+name,start_line:1,role:'supporting',note:'Fixture context'},
       {file:'vulnerable/'+name,start_line:[4,3,4][index],role:'sink',note:'Fixture diagnostic site'}]})));
@@ -62,13 +62,15 @@ test('CScan executor imports version-bound fixture findings and preserves correc
   const cpp=findings.filter(item=>item.tools.includes('cscan'));
   for(const filename of ['bounds.c','null.c','lifetime.cpp']) assert.ok(cpp.some(item=>item.file==='vulnerable/'+filename),filename);
   assert.equal(cpp.filter(item=>item.file.startsWith('fixed/')).length,0);
-  assert.ok(cpp.find(item=>item.file==='vulnerable/lifetime.cpp').trace.length>=2);
-  assert.ok(findings.every(item=>item.code && item.source_sha256 && item.snapshot_id && !item.runtime_verified));
+  assert.ok(findings.every(item=>item.evidence_origin==='cscan_report' && item.code==='' && item.trace.length===0));
+  assert.ok(findings.every(item=>item.source_sha256===null && item.snapshot_id===null && !item.runtime_verified && !item.source_version_verified));
+  assert.deepEqual(await readdir(cscan.sources),[],'the executor must not populate a source mount');
   const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
-  assert.equal(coverage.files,6);assert.equal(coverage.cscan_complete,true);assert.equal(coverage.engine,'cscan');
-  const snapshot=coverage.snapshot_id;
+  assert.equal(coverage.source_read,false);assert.equal(coverage.input_mode,'remote_agent');
+  assert.equal(coverage.cscan_complete,true);assert.equal(coverage.engine,'cscan');
+  const flowId=coverage.cscan.flow_id;
   assert.equal((await executeScan('quality')).ok,false);
-  assert.equal(JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis).snapshot_id,snapshot);
+  assert.equal(JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis).cscan.flow_id,flowId);
   // Corrected memcpy can still produce a lexical warning: do not pretend rules prove safety.
   assert.equal(cpp.length,3,'all three protocol fixture findings survive the production importer');
 });

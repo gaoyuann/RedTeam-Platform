@@ -1303,6 +1303,40 @@ int main(int argc, char **argv)
       if(it.key().contains("/attempts") || it.key().startsWith("POST /api/runs"))noExecution=false;
     verify(noExecution,"opening a node's findings never executes an attack");
   }
+  {
+    MockServer sourceServer;
+    sourceServer.handler=[](const QString &,const QString &){return MockReply{success(QJsonArray()),0};};
+    ApiClient sourceApi(QStringLiteral("http://127.0.0.1:%1").arg(sourceServer.serverPort()));
+    ScanPage sourcePage(&sourceApi);
+    const QJsonObject finding{{"id",901},{"result_type","source_finding"},{"severity","high"},{"source_tool","cscan"},
+      {"result_data",QString::fromUtf8(QJsonDocument(QJsonObject{{"title","Unchecked copy"},{"file","src/input.c"},
+        {"start_line",12},{"end_line",14},{"cwe","CWE-120"},{"reason","Destination capacity is not checked"}}).toJson(QJsonDocument::Compact))}};
+    const auto coverage=[](const QString &phase){return QJsonObject{{"id",900},{"result_type","source_coverage"},{"severity","info"},
+      {"result_data",QString::fromUtf8(QJsonDocument(QJsonObject{{"engine","cscan"},{"input_mode","remote_agent"},
+        {"cscan",QJsonObject{{"state",phase},{"subtask_progress",QJsonObject{{"finished",1},{"total",2}}}}}}).toJson(QJsonDocument::Compact))}};};
+    const QJsonObject raw{{"id",902},{"result_type","raw_output"},{"severity","info"},{"result_data","{\"report\":\"retained report\"}"}};
+    for(const auto &phase:{QString("running"),QString("parsing"),QString("importing")}) {
+      const QJsonArray records{coverage(phase),finding,raw};
+      sourcePage.updateStatusLabel(QJsonObject{{"status","RUNNING"},{"target","http://fixture.invalid/source/"},{"scan_type","source_scan"},{"results",records}});
+      sourcePage.renderGroupedResults(records);
+      verify(sourcePage.m_resultTree->topLevelItemCount()==0,"source scan and report processing never expose intermediate findings");
+      verify(sourcePage.m_statusLabel->text().contains(phase=="parsing"?QStringLiteral("解析"):phase=="importing"?QStringLiteral("导入"):QStringLiteral("运行中")),"source phase remains visible while attackable findings are withheld");
+    }
+    const QJsonArray finalRecords{coverage("finished"),finding,raw};
+    sourcePage.updateStatusLabel(QJsonObject{{"status","COMPLETED"},{"target","http://fixture.invalid/source/"},{"scan_type","source_scan"},{"results",finalRecords}});
+    sourcePage.renderGroupedResults(finalRecords);
+    verify(sourcePage.m_resultTree->topLevelItemCount()==1 && sourcePage.m_resultTree->isHidden() && !sourcePage.m_sourceDetailButton->isHidden(),"source scans enter the three-pane detail instead of exposing the attack table inline");
+    auto *row=sourcePage.m_resultTree->topLevelItem(0)->child(0);
+    verify(row->text(1)=="Unchecked copy" && row->text(3)=="CWE-120" && row->text(5)=="src/input.c:12","source table exposes title, category and source location");
+    sourcePage.m_showAllRecords->click();
+    verify(sourcePage.m_sourceRecordsMode && sourcePage.m_resultTree->topLevelItemCount()>1,"raw reports and progress remain available in explicit records view");
+    for(QTreeWidgetItemIterator it(sourcePage.m_resultTree);*it;++it)
+      verify((*it)->data(0,Qt::UserRole).toString()!="source_finding","records view cannot bypass the explicit all-vulnerabilities attack selector");
+    sourcePage.m_showAllRecords->click();
+    verify(!sourcePage.m_sourceRecordsMode && sourcePage.m_resultTree->isHidden(),"returning from records restores source browsing rather than the attack table");
+    sourcePage.clearDetailPanel();
+    verify(!sourcePage.m_sourceResultsView && sourcePage.m_sourceRecords.isEmpty(),"switching task clears source presentation state");
+  }
   std::cout << "TOTAL " << checks << " checks passed" << std::endl;
   return 0;
 }

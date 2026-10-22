@@ -29,6 +29,31 @@ function reportDb(t) {
   return db;
 }
 
+test('live scans translate legacy source locations to native CScan input without snapshot or mount work',async t=>{
+  for(const parameters of [{source_url:'/source/',input_kind:'source'},{}]) {
+    const db=reportDb(t),target='http://192.0.2.40:8089/source/';let calls=0;
+    db.exec('CREATE TABLE scan_tasks(scan_task_id TEXT PRIMARY KEY,parameters TEXT)');
+    db.prepare("INSERT INTO scan_tasks VALUES ('native-entry',?)").run(JSON.stringify(parameters));
+    const result=await auditSources({scan_task_id:'native-entry',scan_type:'source_scan',target},{db,parameters,
+      snapshot:()=>assert.fail('a live scan must never collect a snapshot'),
+      cscan:()=>assert.fail('a live scan must never stage a snapshot'),
+      runTool:()=>assert.fail('source retrieval belongs to CScan'),
+      nativeScan:async(source,options)=>{
+        calls++;assert.equal(source,target);
+        assert.equal(isTargetInScope(options.scope,source),true);
+        return {flow_id:'91',markdown:'Source-Access: available\n'+report,findings:[],source_access_reported:'available'};
+      }});
+    assert.equal(calls,1);assert.ok(result.outcomes.every(item=>item.success));
+    const row=db.prepare('SELECT manifest,analysis FROM source_audits').get();
+    assert.equal(JSON.parse(row.manifest).kind,'service_report');
+    assert.equal(JSON.parse(row.analysis).input_mode,'remote_agent');
+    const retainedParameters=db.prepare('SELECT parameters FROM scan_tasks').get().parameters;
+    await assert.rejects(auditSources({scan_task_id:'native-entry',scan_type:'source_scan',target},{db,
+      parameters:{source_url:'/other/',input_kind:'source'},nativeScan:()=>assert.fail('must not submit twice')}),/避免重复扫描/);
+    assert.equal(db.prepare('SELECT parameters FROM scan_tasks').get().parameters,retainedParameters,'rejected retries cannot change the source or runtime entry');
+  }
+});
+
 test('CScan retains raw subtask progress and only imports after every task finishes',async t=>{
   const db=reportDb(t);let polls=0,finished=false;
   const second=report.replace('Copy into a fixed buffer without checking capacity','Second path also copies without a bound');
@@ -290,6 +315,8 @@ test('remote target and audit requirements go to the Flow together with the exac
   const input=calls[0].variables.input;
   assert.match(input,/http:\/\/192\.0\.2\.40:8089\//);assert.match(input,/靶机网络目标/);
   assert.match(input,/\/var\/www\/project/);assert.ok(input.includes(JSON.stringify(scope)));
+  assert.match(input,/不得用历史任务、记忆召回、旧快照目录或其他本机目录替代/);
+  assert.match(input,/必须重新核实本次源码来源/);
   assert.doesNotMatch(input,/目标是 CScan 执行环境中的文件或目录路径|先确认该路径在执行容器中/);
   assert.equal(result.findings.length,1);
 });
