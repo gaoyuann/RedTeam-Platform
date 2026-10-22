@@ -30,8 +30,14 @@
 #include <QGuiApplication>
 #include <QScreen>
 #include <QResizeEvent>
+#include <QWindow>
 
 namespace {
+QScreen *widgetScreen(const QWidget *widget) {
+  const auto *window=widget?widget->window()->windowHandle():nullptr;
+  if(window && window->screen())return window->screen();
+  return QGuiApplication::primaryScreen();
+}
 void comboPlaceholder(QComboBox *combo,const QString &text) {
 #if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
   combo->setPlaceholderText(text);
@@ -236,7 +242,7 @@ FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QStrin
     const QString &existingVerificationId,const QString &existingAttemptId)
   :QDialog(parent),m_api(api),m_pipeline(pipeline) {
   setWindowTitle("逐漏洞攻击测试 · "+pipeline);setWindowFlag(Qt::WindowMaximizeButtonHint,true);
-  const auto *screen=parent?parent->screen():QGuiApplication::primaryScreen();
+  const auto *screen=widgetScreen(parent);
   resize(QSize(1360,860).boundedTo(screen?screen->availableGeometry().size():QSize(1360,860)));
   auto *layout=new QVBoxLayout(this);
   auto *intro=new QLabel("逐漏洞测试无需先生成、审批或执行全局预案；仍需核对授权范围并确认本次执行。");
@@ -804,7 +810,8 @@ bool FindingVerificationDialog::confirmExecution(const QString &title,const QStr
   connect(confirm,&QPushButton::clicked,&dialog,&QDialog::accept);
   connect(cancel,&QPushButton::clicked,&dialog,&QDialog::reject);
   connect(this,&QDialog::finished,&dialog,&QDialog::reject);
-  const QRect available=screen()?screen()->availableGeometry():QRect(0,0,800,600);
+  const auto *screen=widgetScreen(this);
+  const QRect available=screen?screen->availableGeometry():QRect(0,0,800,600);
   const QSize limit=(available.size()-QSize(32,64)).expandedTo(QSize(1,1));
   dialog.setMaximumSize(limit);
   dialog.resize(QSize(900,620).boundedTo(limit));
