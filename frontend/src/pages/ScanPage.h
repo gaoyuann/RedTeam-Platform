@@ -55,6 +55,13 @@ private slots:
 
 private:
   void setupUI();
+  void setStatusText(const QString &text);
+  void openRecordDetails(QTreeWidgetItem *item);
+  void resizeResultColumns();
+  bool eventFilter(QObject *object, QEvent *event) override;
+  QLabel *m_compactStatus = nullptr;
+  QLabel *m_listTitle = nullptr;
+  QPushButton *m_showAllRecords = nullptr;
   void openFindingVerification(const QList<qint64> &ids);
   QSet<qint64> m_checkedFindings;
   QList<QTreeWidgetItem*> selectableFindingItems() const;
