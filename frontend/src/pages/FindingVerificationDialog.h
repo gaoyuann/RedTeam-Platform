@@ -32,6 +32,8 @@ private:
   void loadSources();
   void showSourcePreview();
   void showPayloadPreview();
+  void renderPayloadArtifacts();
+  void showCollectedScript();
   void updateQueue();
   void startChecked();
   QString confirmationText(const QJsonObject &detail) const;
@@ -69,6 +71,12 @@ private:
   QJsonArray m_matches, m_planSteps, m_sourceItems;
   QPlainTextEdit *m_sourcePreview, *m_payloadPreview;
   QGroupBox *m_sourceChooser;
+  QGroupBox *m_artifactBox;
+  QComboBox *m_artifactCollections, *m_collectedScripts;
+  QPlainTextEdit *m_collectedCode, *m_pythonCode;
+  QLabel *m_artifactStatus, *m_artifactUsage;
+  QPushButton *m_collectArtifacts, *m_rewritePython, *m_stopArtifacts;
+  QJsonArray m_collectionRecords, m_scriptRecords;
   QComboBox *m_bindStep;
   QPushButton *m_useSource, *m_adjustAI, *m_bindPayload, *m_unbindPayload, *m_resolvePayload, *m_queueButton, *m_sourcesNext, *m_sourcesPrevious;
   QLineEdit *m_sourceSearch;

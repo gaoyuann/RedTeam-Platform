@@ -30,9 +30,10 @@ int main(int argc,char **argv) {
   verify(tree->topLevelItemCount()==1 && evidence->toPlainText().contains(QStringLiteral("访问条件")) && !attack->isEnabled(),"unstructured progress remains readable without inventing file findings");
   auto running=task("source-1","RUNNING",QJsonArray{a});
   running["source_scan"]=QJsonObject{{"phase","parsing"},{"subtask_progress",QJsonObject{{"finished",1},{"total",2}}}};
-  running["source_preview"]=QJsonObject{{"findings",QJsonArray{a["result_data"],b["result_data"]}}};
+  running["source_preview"]=QJsonObject{{"findings",QJsonArray{a["result_data"],b["result_data"]}},{"parsing",true},{"parse_errors",QJsonArray{QStringLiteral("阶段模型暂不可用")}}};
   view.setSnapshots({running});
   verify(view.findChild<QLabel*>("sourceScanNotice")->text().contains(QStringLiteral("过程预览")),"preview remains marked as provisional while processing reports");
+  verify(view.findChild<QLabel*>("sourceScanNotice")->text().contains(QStringLiteral("正在整理")) && view.findChild<QLabel*>("sourceScanNotice")->text().contains(QStringLiteral("原始报告仍可查看")),"background extraction and partial parser failures remain visible with existing previews");
   verify(!attack->isEnabled(),"an active scan cannot open the attack selector");
   verify(list->rowCount()==1 && evidence->toPlainText().contains("<b>"),"progress findings are browsable as literal text");
   verify(code->toPlainText().isEmpty(),"missing source code is not invented from report prose");

@@ -45,6 +45,10 @@ test('CScan stages immutable snapshot, creates once, polls and reads version-bou
       sourceKey = body.variables.input.match(/\/src\/(rt-[\w-]+)/)[1];
       assert.equal(await readFile(join(config.sourcesDir,sourceKey,'lib/input.c'),'utf8'),source.documents[0].content);
       assert.match(body.variables.input,/Do not perform network scanning/);
+      assert.match(body.variables.input,/使用当前 Flow 已分配的 vxcontrol\/kali-linux 容器/);
+      assert.match(body.variables.input,/禁止调用 memorist/);
+      assert.match(body.variables.input,/对每条有明确源码定位和依据的漏洞，生成与该漏洞一一对应/);
+      assert.match(body.variables.input,/Payload-Status: draft 或 unavailable/);
       assert.match(body.variables.input,/fixture-version/);
       await mkdir(join(config.workDir,'flow-12'));
       await writeFile(join(config.workDir,'flow-12','findings.json'),JSON.stringify({snapshot_id:source.snapshot_id,

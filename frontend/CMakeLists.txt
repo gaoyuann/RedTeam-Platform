@@ -198,6 +198,15 @@ if(BUILD_UI_CHECKS)
 endif()
 
 if(BUILD_UI_CHECKS)
+  add_executable(RedTeam-FindingPayloadArtifactChecks src/ApiClient.cpp
+    src/pages/FindingVerificationDialog.cpp test/finding_payload_artifact_checks.cpp)
+  target_include_directories(RedTeam-FindingPayloadArtifactChecks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(RedTeam-FindingPayloadArtifactChecks Qt5::Widgets Qt5::Network Qt5::Test)
+  add_test(NAME ui-finding-payload-artifacts COMMAND RedTeam-FindingPayloadArtifactChecks)
+  set_tests_properties(ui-finding-payload-artifacts PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 40)
+endif()
+
+if(BUILD_UI_CHECKS)
   add_executable(RedTeam-SourceScanDetailChecks src/ApiClient.cpp
     src/pages/SourceScanDetailDialog.cpp test/source_scan_detail_checks.cpp)
   target_include_directories(RedTeam-SourceScanDetailChecks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
