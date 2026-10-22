@@ -82,6 +82,11 @@ private:
   qint64 m_scanCursor = 0;
   qint64 m_scanThrough = 0;
   QJsonArray m_aggregateRecords;
+  bool m_sourceResultsView = false;
+  bool m_sourceResultsPending = false;
+  bool m_sourceRecordsMode = false;
+  QJsonArray m_sourceRecords;
+  QString m_sourceProgressText;
   QWidget *m_aggregateControls;
   QPushButton *m_allResultsButton;
   QPushButton *m_moreResultsButton;

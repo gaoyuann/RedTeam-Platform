@@ -141,6 +141,13 @@ static QString findingIndicatorStyle(const QString &selector) {
 
 static bool isProgramScan(const QString &type) { return type == "program_scan" || type == "source_scan"; }
 static bool isProgramFinding(const QString &type) { return type == "program_finding" || type == "source_finding"; }
+static QString sourceScanNotice(const QString &status) {
+  if(status=="COMPLETED") return QStringLiteral("扫描报告已统一解析；点击漏洞查看依据，后续验证单独执行。");
+  if(status=="PARTIAL") return QStringLiteral("扫描或报告处理存在缺口；表中仅包含已保存的有效发现，请查看扫描记录。");
+  if(status=="FAILED") return QStringLiteral("源码扫描失败，未生成完整漏洞表；请查看扫描记录中的错误原因。");
+  if(status=="CANCELLED") return QStringLiteral("源码扫描已取消，未生成完整漏洞表；已有记录保留。");
+  return QStringLiteral("源码扫描中，完成后统一解析并呈现漏洞表。");
+}
 
 static bool isVerificationRecord(const QJsonObject &row) {
   if(row.contains("category"))return row["category"].toString()=="vulnerability";
@@ -651,7 +658,7 @@ void ScanPage::setStatusText(const QString &text) {
 }
 
 void ScanPage::resizeResultColumns() {
-  const int available = qMax(100, m_resultTree->viewport()->width() - 260);
+  const int available = qMax(100, m_resultTree->viewport()->width() - 260 - (m_sourceResultsView && !m_sourceRecordsMode ? 90 : 0));
   m_resultTree->setColumnWidth(0, 52);
   m_resultTree->setColumnWidth(4, 72);
   m_resultTree->setColumnWidth(6, 136);
@@ -776,14 +783,40 @@ void ScanPage::loadPipelineResults(bool append)
     }
     const auto data = response["data"].toObject();
     const auto page = data["page"].toObject();
+    m_sourceResultsView = false;
+    m_sourceResultsPending = false;
+    m_sourceRecordsMode = m_resultCategory->currentData() != "vulnerability";
+    const QString selectedSource = m_resultSource->currentData().toString();
+    bool otherFindingSource = false;
+    for (const auto &value : data["scan_sources"].toArray()) {
+      const auto source = value.toObject();
+      if (!selectedSource.isEmpty() && source["scan_task_id"].toString() != selectedSource) continue;
+      if (source["scan_type"].toString() != "source_scan" && !source["source_scan"].isObject()) {
+        otherFindingSource = otherFindingSource || !QStringList{"port_scan","topology_scan"}.contains(source["scan_type"].toString());
+        continue;
+      }
+      m_sourceResultsView = true;
+      m_sourceResultsPending = m_sourceResultsPending || QStringList{"PENDING","RUNNING"}.contains(source["status"].toString());
+    }
+    if (otherFindingSource) m_sourceResultsView = false;
+    m_sourceProgressText = sourceScanNotice(m_sourceResultsPending ? "RUNNING" : "COMPLETED");
+    for (const auto &value : data["scan_sources"].toArray()) {
+      const auto source=value.toObject();
+      if((source["scan_type"].toString()=="source_scan" || source["source_scan"].isObject()) && !m_sourceResultsPending
+          && source["status"].toString()!="COMPLETED"
+          && (selectedSource.isEmpty() || source["scan_task_id"].toString()==selectedSource))
+        m_sourceProgressText=sourceScanNotice(source["status"].toString());
+    }
     for (const auto &row : data["scan_records"].toArray()) m_aggregateRecords.append(row);
     m_scanCursor = page["next_after"].toVariant().toLongLong();
     m_scanThrough = page["through"].toVariant().toLongLong();
     renderGroupedResults(m_aggregateRecords);
     m_moreResultsButton->setEnabled(page["has_more"].toBool());
-    m_listTitle->setText(QStringLiteral("%1 · 共 %2 条").arg(m_resultCategory->currentText()).arg(page["total"].toInt()));
-    m_resultHint->setText(QStringLiteral("已加载 %1 / %2 条记录 · 未去重")
-        .arg(m_aggregateRecords.size()).arg(page["total"].toInt()));
+    m_listTitle->setText(QStringLiteral("%1 · 共 %2 条").arg(m_sourceResultsView && !m_sourceRecordsMode
+        ? QStringLiteral("源码漏洞表") : m_resultCategory->currentText()).arg(page["total"].toInt()));
+    m_resultHint->setText(m_sourceResultsView && !m_sourceRecordsMode
+        ? m_sourceProgressText
+        : QStringLiteral("已加载 %1 / %2 条记录 · 未去重").arg(m_aggregateRecords.size()).arg(page["total"].toInt()));
     const auto summary = data["scan_summary"].toObject();
     QStringList states;
     bool active = false;
@@ -1605,7 +1638,12 @@ void ScanPage::setupUI() {
   m_showAllRecords = new QPushButton(QStringLiteral("查看全部记录"));
   m_showAllRecords->setObjectName("showAllScanRecords");
   connect(m_showAllRecords, &QPushButton::clicked, this, [this]() {
-    m_resultCategory->setCurrentIndex(m_resultCategory->findData("all"));
+    if (m_sourceResultsView && !m_allScanResults) {
+      m_sourceRecordsMode = !m_sourceRecordsMode;
+      renderGroupedResults(m_sourceRecords);
+    } else {
+      m_resultCategory->setCurrentIndex(m_resultCategory->findData(m_sourceResultsView && m_sourceRecordsMode ? "vulnerability" : "all"));
+    }
   });
   footer->addWidget(m_showAllRecords);
   footer->addWidget(m_moreResultsButton);
@@ -1812,6 +1850,9 @@ void ScanPage::updateStatusLabel(const QJsonObject &d) {
   auto arr = d["results"].toArray();
   bool structured = hasStructuredResults(arr);
   const bool sourceTask = isProgramScan(m_currentScanType);
+  m_sourceResultsView = m_currentScanType == "source_scan" || d["source_scan"].isObject();
+  m_sourceResultsPending = m_sourceResultsView && (status == "PENDING" || status == "RUNNING");
+  m_sourceProgressText = sourceScanNotice(status);
   m_canReparseReport = d["can_reparse_report"].toBool();
   m_reexecBtn->setText(sourceTask ? "重新解析报告" : "重新执行");
   m_reexecBtn->setEnabled(!sourceTask || m_canReparseReport);
@@ -1841,9 +1882,11 @@ void ScanPage::updateStatusLabel(const QJsonObject &d) {
       if (row["result_type"].toString() != "source_coverage") continue;
       const auto coverage = QJsonDocument::fromJson(row["result_data"].toString().toUtf8()).object();
       const auto phase = coverage["cscan"].toObject()["state"].toString();
-      if (phase == "parsing") parts << "正在解析报告";
-      else if (phase == "importing") parts << "正在导入漏洞";
+      if (phase == "parsing") { parts << "正在解析报告"; m_sourceProgressText = QStringLiteral("扫描已结束，正在统一解析报告；漏洞表尚未生成。"); }
+      else if (phase == "importing") { parts << "正在导入漏洞"; m_sourceProgressText = QStringLiteral("正在整理、去重并保存漏洞表。"); }
       else if (phase == "report_ready") parts << "报告已收齐，准备解析";
+      const auto progress = coverage["cscan"].toObject()["subtask_progress"].toObject();
+      if (progress["total"].toInt() > 0) parts << QStringLiteral("子任务 %1/%2 完成").arg(progress["finished"].toInt()).arg(progress["total"].toInt());
     }
   }
   QString dur = formatDuration(d["started_at"].toString(), d["completed_at"].toString());
@@ -1853,12 +1896,18 @@ void ScanPage::updateStatusLabel(const QJsonObject &d) {
   for (const auto &r : arr) {
     if (r.toObject()["result_type"].toString() != "raw_output" && r.toObject()["result_type"].toString() != "scan_error") structuredCount++;
   }
-  if (structuredCount > 0)
+  if (m_sourceResultsView) {
+    m_resultHint->setText(m_sourceProgressText);
+    if (!m_sourceResultsPending) {
+      int findings=0;for(const auto &r:arr)if(r.toObject()["result_type"].toString()=="source_finding")++findings;
+      parts << QStringLiteral("源码漏洞：%1 项").arg(findings);
+    }
+  } else if (structuredCount > 0)
     parts << QString("有效结果: %1").arg(structuredCount);
   else if (arr.size() > 0)
     parts << "仅原始输出";
 
-  QString summary = buildResultSummary(arr, d["scan_type"].toString());
+  QString summary = m_sourceResultsView && m_sourceResultsPending ? QString() : buildResultSummary(arr, d["scan_type"].toString());
   if (!summary.isEmpty()) parts << summary;
 
   setStatusText(parts.join(" | "));
@@ -1878,8 +1927,17 @@ void ScanPage::updateStatusLabel(const QJsonObject &d) {
 
 // ── Render grouped results in QTreeWidget ─────────────────────────────
 void ScanPage::renderGroupedResults(const QJsonArray &results) {
+  QJsonArray visibleResults;
+  if (m_sourceResultsView && !m_allScanResults) m_sourceRecords = results;
+  for (const auto &value : results) {
+    const auto row=value.toObject();
+    if (m_sourceResultsView && !m_sourceRecordsMode && row["result_type"].toString() != "source_finding") continue;
+    if (m_sourceResultsView && m_sourceResultsPending && row["result_type"].toString() == "source_finding") continue;
+    visibleResults.append(value);
+  }
   const QSignalBlocker blocker(m_resultTree);
-  m_resultOverview->setResults(results);
+  m_resultOverview->setResults(visibleResults);
+  m_resultOverview->setVisible(!m_sourceResultsView || !m_sourceResultsPending);
   m_resultTree->setRootIndex(QModelIndex());
   m_resultTree->clear();
   m_resultTree->setColumnHidden(3, false);
@@ -1892,13 +1950,14 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
   QStringList order = {"finding_candidates", "information", "program_coverage", "program_agent_step", "program_agent_summary", "program_finding", "source_coverage", "application_observation", "source_finding", "open_port", "vulnerability", "web_vuln", "source_vuln", "sql_injection",
                        "credential", "service_info", "http_probe", "technology_detection", "scan_error", "raw_output"};
 
-  for (const auto &r : results) {
+  for (const auto &r : visibleResults) {
     const auto row = r.toObject();
     QString type = isVerificationRecord(row) ? "finding_candidates"
       : (row["category"].toString()=="information"
           || (QStringList{"info", "inf"}.contains(row["severity"].toString().trimmed().toLower())
               && QStringList{"vulnerability", "web_vuln", "source_vuln", "source_finding", "program_finding", "auth_finding", "misconfiguration", "sql_injection"}.contains(row["result_type"].toString())))
         ? "information" : row["result_type"].toString();
+    if (m_sourceResultsView && !m_sourceRecordsMode) type = "finding_candidates";
     groups[type].append(r);
   }
 
@@ -2000,21 +2059,38 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
     groupItem->setExpanded(true);
   }
 
-  const bool candidatesOnly = m_allScanResults && m_resultCategory->currentData() == "vulnerability";
+  const bool sourceTable = m_sourceResultsView && !m_sourceRecordsMode;
+  const bool candidatesOnly = sourceTable || (m_allScanResults && m_resultCategory->currentData() == "vulnerability");
   if (candidatesOnly && m_resultTree->topLevelItemCount() == 1)
     m_resultTree->setRootIndex(m_resultTree->model()->index(0, 0));
   m_resultTree->setRootIsDecorated(!candidatesOnly);
   m_resultTree->setHeaderLabels({"选择", "漏洞名称 / 记录内容", "来源工具", "载荷情况", "严重性", "目标 / 位置", "验证状态", "验证结论"});
   for (int column : {2, 3, 7}) m_resultTree->setColumnHidden(column, true);
+  if (sourceTable) {
+    m_resultTree->setHeaderLabels({"选择", "漏洞名称", "来源工具", "CWE", "严重性", "源码文件 / 行号", "验证状态", "验证结论"});
+    m_resultTree->setColumnHidden(3, false);
+    m_resultTree->setColumnWidth(3, 90);
+  }
   for (QTreeWidgetItemIterator it(m_resultTree); *it; ++it) {
     if (!(*it)->parent()) continue;
+    if (sourceTable) {
+      const auto data=QJsonDocument::fromJson((*it)->toolTip(1).toUtf8()).object();
+      (*it)->setText(1,data["title"].toString((*it)->text(1)));
+      (*it)->setText(3,data["cwe"].toString(QStringLiteral("—")));
+      (*it)->setToolTip(3,QStringLiteral("漏洞类别"));
+      (*it)->setText(5,QStringLiteral("%1:%2").arg(data["file"].toString()).arg(data["start_line"].toInt()));
+    }
     (*it)->setToolTip(0, QStringLiteral("发现编号：") + (*it)->text(0));
     (*it)->setToolTip(5, (*it)->text(5));
     (*it)->setToolTip(6, (*it)->text(6) + " / " + (*it)->text(7));
   }
-  m_listTitle->setText(candidatesOnly ? QStringLiteral("漏洞候选") : QStringLiteral("扫描记录"));
-  m_showAllRecords->setVisible(candidatesOnly);
-  UiUtil::EmptyHint::setState(m_resultTree, candidatesOnly ? QStringLiteral("当前范围暂无漏洞候选，可查看全部记录；未完成检查不代表安全。") : QStringLiteral("当前范围暂无记录"));
+  m_listTitle->setText(sourceTable ? QStringLiteral("源码漏洞表") : candidatesOnly ? QStringLiteral("漏洞候选") : QStringLiteral("扫描记录"));
+  m_showAllRecords->setVisible(candidatesOnly || m_sourceResultsView);
+  m_showAllRecords->setText(m_sourceResultsView ? (m_sourceRecordsMode ? QStringLiteral("返回漏洞表") : QStringLiteral("查看扫描记录")) : QStringLiteral("查看全部记录"));
+  if (sourceTable) m_resultHint->setText(m_sourceProgressText);
+  UiUtil::EmptyHint::setState(m_resultTree, sourceTable
+      ? (m_sourceResultsPending ? m_sourceProgressText : QStringLiteral("暂无可呈现的源码漏洞；请结合扫描状态和错误记录判断结果。"))
+      : candidatesOnly ? QStringLiteral("当前范围暂无漏洞候选，可查看全部记录；未完成检查不代表安全。") : QStringLiteral("当前范围暂无记录"));
   resizeResultColumns();
   updateFindingSelection();
 }
@@ -2983,6 +3059,11 @@ void ScanPage::onDeleteTask() {
 
 // ── Clear detail panel ────────────────────────────────────────────────
 void ScanPage::clearDetailPanel() {
+  m_sourceResultsView = false;
+  m_sourceResultsPending = false;
+  m_sourceRecordsMode = false;
+  m_sourceRecords = {};
+  m_sourceProgressText.clear();
   ++m_generationRevision;
   m_generationInProgress = false;
   m_pendingSourceVerification = false;
