@@ -1334,8 +1334,10 @@ int main(int argc, char **argv)
     auto captureDialog = [&](QDialog *dialog, const QString &name) {
       QTest::qWait(30);
       const auto *buttons = dialog->findChild<QDialogButtonBox*>();
-      verify(dialog->width() <= dialog->screen()->availableGeometry().width()
-          && dialog->height() <= dialog->screen()->availableGeometry().height(), "task dialog fits the available screen at the current scale");
+      const auto *window = dialog->windowHandle();
+      const auto *screen = window && window->screen() ? window->screen() : QGuiApplication::primaryScreen();
+      verify(screen && dialog->width() <= screen->availableGeometry().width()
+          && dialog->height() <= screen->availableGeometry().height(), "task dialog fits the available screen at the current scale");
       verify(dialog->rect().contains(QRect(buttons->mapTo(dialog, QPoint()), buttons->size())),
         "task dialog always keeps both actions inside its visible bounds");
       const auto *consent = dialog->findChild<QCheckBox*>("taskAuthorizationCheck");
