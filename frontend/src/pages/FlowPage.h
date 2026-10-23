@@ -8,6 +8,7 @@
 #include <QPushButton>
 #include <QComboBox>
 #include <QJsonObject>
+#include <QJsonArray>
 
 class ApiClient;
 class QAction;
@@ -24,6 +25,7 @@ class AnalysisPage;
 class TaskPlanPage;
 class TaskOverviewPage;
 class TaskLogPanel;
+class QTimer;
 
 // ── FlowPage ───────────────────────────────────────────────────────────
 // PentAGI-inspired task entry: internal QStackedWidget switches between
@@ -79,6 +81,9 @@ private slots:
   void onFilterChanged(int index);
 
 private:
+  void renderFlows();
+  void scheduleTaskDetailRefresh();
+  void showEvent(QShowEvent *event) override;
   void setupUI();
   void setupListView();
   void setupWorkbenchView();
@@ -110,6 +115,14 @@ private:
   QLabel *m_listState;
   int m_flowListRequestRevision = 0;
   bool m_flowListFresh = false;
+  bool m_flowListBusy = false;
+  bool m_flowListPending = false;
+  QJsonArray m_flowRecords;
+  QJsonArray m_renderedFlowRecords;
+  QString m_renderedFlowFilter;
+  QString m_renderedFlowSearch;
+  QTimer *m_searchTimer = nullptr;
+  QTimer *m_detailRefreshTimer = nullptr;
   MetricCard *m_totalCard;
   MetricCard *m_runningCard;
   MetricCard *m_pendingCard;
@@ -149,6 +162,8 @@ private:
   QString m_lastDetailPipelineId;
   int m_taskContextRevision = 0;
   int m_taskDetailRequestRevision = 0;
+  bool m_taskDetailBusy = false;
+  QString m_pendingDetailPipelineId;
   QJsonObject m_lastDisplayedDetail;
   QString m_workbenchRunId;
   // Dedup guards: track the last run/playbook loaded into the attack tab,

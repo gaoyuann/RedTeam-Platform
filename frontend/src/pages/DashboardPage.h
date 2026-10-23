@@ -10,17 +10,21 @@ class QListWidget;
 class QTableWidget;
 class MetricCard;
 class DistributionPanel;
+class QTimer;
 
 class DashboardPage : public QWidget {
   Q_OBJECT
 public:
   explicit DashboardPage(ApiClient *api, QWidget *parent = nullptr);
   void refresh();
+  void scheduleRefresh();
 
 signals:
   void openTasksRequested();
 
 private:
+  void showEvent(QShowEvent *event) override;
+  void responseFinished();
   void setupUI();
   void loadPipelines();
   void loadReports();
@@ -32,6 +36,11 @@ private:
   void setState(QLabel *label, const QString &text, const QString &color);
 
   quint64 m_revision = 0;
+  QTimer *m_refreshTimer = nullptr;
+  int m_pendingResponses = 0;
+  bool m_refreshPending = false;
+  bool m_dirty = false;
+  bool m_hasBeenShown = false;
   ApiClient *m_api;
   MetricCard *m_taskCard = nullptr;
   MetricCard *m_assetCard = nullptr;

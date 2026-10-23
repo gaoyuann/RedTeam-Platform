@@ -249,6 +249,7 @@ void TaskExecutionPanel::clearTaskContext()
   m_detailKey.clear();
   m_snapshot = {};
   m_busy = false;
+  m_refreshFailed = false;
   m_timer->stop();
   m_refresh->setEnabled(false);
   for (auto *table : {m_steps, m_attempts, m_evidence, m_preflight, m_verifications}) table->setRowCount(0);
@@ -344,14 +345,21 @@ void TaskExecutionPanel::refresh()
       guard->m_busy = false;
       const auto snapshot = response.value("data").toObject();
       if (response.value("status").toString() != "ok" || !guard->validSnapshot(snapshot)) {
+        guard->m_refreshFailed = true;
         const QString error = response.value("error").toObject().value("message").toString();
         guard->m_state->setText(QStringLiteral("读取失败，保留上次快照（不是实时状态）：")
             + (error.isEmpty() ? QStringLiteral("响应身份或格式不匹配") : error));
         guard->m_state->setStyleSheet(Theme::StatusErrorStyle);
         return;
       }
+      auto previousContent = guard->m_snapshot;
+      auto nextContent = snapshot;
+      previousContent.remove("captured_at");
+      nextContent.remove("captured_at");
+      const bool needsRender = guard->m_refreshFailed || previousContent != nextContent;
       guard->m_snapshot = snapshot;
-      guard->render();
+      guard->m_refreshFailed = false;
+      if (needsRender) guard->render();
       const auto run = snapshot.value("run").toObject();
       const QString runId = run.value("run_id").toString();
       if (!runId.isEmpty() && guard->m_notifiedRunId != runId) {

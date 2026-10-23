@@ -138,69 +138,11 @@ void MainWindow::setupUI()
     m_dashboardPage = new DashboardPage(m_api, this);
     m_stackWidget->addWidget(m_dashboardPage);
 
-    // Page 1: FlowPage (测试任务 — task list + workbench)
-    m_flowPage = new FlowPage(m_api, m_role, m_username, this);
-    m_stackWidget->addWidget(m_flowPage);
-
-    // Page 2: assets and topology
-    auto *assetTopology=new TopologyPage(m_api,m_role,m_username,this);
-    m_stackWidget->addWidget(assetTopology);
-    connect(assetTopology,&TopologyPage::testTargetRequested,this,[this](const QString &target) {
-        if(m_dongleLocked) return;
-        switchToPage(1);
-        m_flowPage->createTestForTarget(target);
-    });
-
-    m_analysisPage = new AnalysisHubPage(m_api, m_role, m_username, this);
-    m_stackWidget->addWidget(m_analysisPage);
-    connect(m_analysisPage, &AnalysisHubPage::openTaskAnalysisRequested, this,
-        [this](const QString &pipelineId) {
-            if (m_dongleLocked) return;
-            switchToPage(1);
-            m_flowPage->openTaskAnalysis(pipelineId);
-            m_flowPage->setReturnPage(3, QStringLiteral("智能分析"));
-        });
-
-    // Page 4: Playbook and knowledge resources
-    auto *playbookPage = new PlaybookPage(m_api, m_role, m_username, this);
-    m_stackWidget->addWidget(playbookPage);
-
-    // Page 5: result and report management
-    auto *resultsPage = new ResultsPage(m_api, m_role, m_username, this);
-    m_stackWidget->addWidget(resultsPage);
-    connect(resultsPage, &ResultsPage::openTaskReportRequested, this,
-        [this](const QString &pipelineId, const QString &reportId) {
-            if (m_dongleLocked) return;
-            switchToPage(1);
-            m_flowPage->openTaskReport(pipelineId, reportId);
-            m_flowPage->setReturnPage(5, QStringLiteral("结果与报告"));
-        });
-    connect(m_flowPage, &FlowPage::returnPageRequested, this, &MainWindow::switchToPage);
-
-    // Page 6: System (includes 资源部署 as sub-tab)
-    if (m_role == QStringLiteral("admin")) {
-        m_stackWidget->addWidget(new SystemPage(m_api, m_role, m_username, this));
-    } else {
-        auto *restrictedPage = new QWidget(this);
-        restrictedPage->setObjectName(QStringLiteral("systemPermissionPage"));
-        restrictedPage->setStyleSheet(Theme::PageStyle);
-        auto *restrictedLayout = new QVBoxLayout(restrictedPage);
-        restrictedLayout->setContentsMargins(28, 24, 28, 24);
-        auto *restrictedTitle = new QLabel(QStringLiteral("系统管理 · 权限说明"), restrictedPage);
-        restrictedTitle->setStyleSheet(QStringLiteral("font-size:24px; font-weight:700; color:#12213c;"));
-        auto *restrictedHint = new QLabel(QStringLiteral("当前账号：%1（普通用户）\n用户、权限、模型和部署配置由管理员维护。\n"
-            "你可以在测试任务中创建自己的任务、编辑预案并提审；批准和驳回由管理员操作。\n"
-            "此页不会加载管理接口。其他模块操作仍由后端权限校验。 ").arg(m_username), restrictedPage);
-        restrictedHint->setTextFormat(Qt::PlainText);
-        restrictedHint->setWordWrap(true);
-        restrictedLayout->addWidget(restrictedTitle);
-        restrictedLayout->addWidget(restrictedHint);
-        auto *openTasks = new QPushButton(QStringLiteral("进入我的测试任务"), restrictedPage);
-        openTasks->setProperty("primary", true);
-        restrictedLayout->addWidget(openTasks, 0, Qt::AlignLeft);
-        restrictedLayout->addStretch();
-        connect(openTasks, &QPushButton::clicked, this, [this]() { switchToPage(1); });
-        m_stackWidget->addWidget(restrictedPage);
+    // Keep navigation indices stable while deferring unused module construction.
+    for (int index = 1; index < m_modules.size(); ++index) {
+        auto *placeholder = new QWidget(m_stackWidget);
+        placeholder->setProperty("deferredModule", true);
+        m_stackWidget->addWidget(placeholder);
     }
 
     // 加密锁锁屏页（不占导航行，仅在校验失败时显示）
@@ -267,15 +209,6 @@ void MainWindow::setupUI()
     // Logout button
     connect(m_logoutBtn, &QPushButton::clicked, this, &MainWindow::onLogout);
 
-    // Cross-page navigation: PlaybookPage → FlowPage workbench (攻击 Tab)
-    connect(playbookPage, &PlaybookPage::executeRequested, this,
-        [this](const QString &id) {
-            if (m_dongleLocked) return;
-            switchToPage(1);  // 测试任务
-            m_flowPage->jumpToExecution(id, QString());
-            m_flowPage->setReturnPage(4, QStringLiteral("预案与知识库"));
-        });
-
     connect(m_dashboardPage, &DashboardPage::openTasksRequested, this, [this]() {
         switchToPage(1);
     });
@@ -288,55 +221,10 @@ void MainWindow::setupWebSocket()
     m_ws = new WsClient(m_api, this);
     m_ws->connectToServer();
 
-    // Refresh task state and results on execution events
-    if (m_flowPage) {
-        // Pipeline events → FlowPage real-time updates
-        connect(m_ws, &WsClient::pipelineCreated, m_flowPage, &FlowPage::onPipelineCreated);
-        connect(m_ws, &WsClient::pipelineStatus, m_flowPage, &FlowPage::onPipelineStatus);
-        connect(m_ws, &WsClient::pipelineStep, m_flowPage, &FlowPage::onPipelineStep);
-        connect(m_ws, &WsClient::pipelineLog, m_flowPage, &FlowPage::onPipelineLog);
-        // Scan/run events also refresh flow list (pipeline creates scans/runs internally)
-        connect(m_ws, &WsClient::scanCompleted, m_flowPage, &FlowPage::refreshFlows);
-        connect(m_ws, &WsClient::runCompleted, m_flowPage, &FlowPage::refreshFlows);
-        if (m_dashboardPage) {
-            connect(m_ws, &WsClient::pipelineCreated, m_dashboardPage, &DashboardPage::refresh);
-            connect(m_ws, &WsClient::pipelineStatus, m_dashboardPage, [this](const QJsonObject &) {
-                m_dashboardPage->refresh();
-            });
-            connect(m_ws, &WsClient::runCompleted, m_dashboardPage, [this](const QJsonObject &) {
-                m_dashboardPage->refresh();
-            });
-        }
-    }
-
-    // Wire WebSocket to FlowPage's embedded stage-tab pages
-    if (m_flowPage) {
-        auto *embTopo = m_flowPage->topoTab();
-        if (embTopo) {
-            connect(m_ws, &WsClient::scanStarted, embTopo, &TopologyPage::onScanStarted);
-            connect(m_ws, &WsClient::scanCompleted, embTopo, &TopologyPage::onScanCompleted);
-        }
-        auto *embScan = m_flowPage->scanTab();
-        if (embScan) {
-            connect(m_ws, &WsClient::scanCreated, embScan, &ScanPage::onRefreshTasks);
-            connect(m_ws, &WsClient::scanCompleted, embScan, &ScanPage::onRefreshTasks);
-            // Embedded scan "推荐执行" → switch to attack tab within the workbench
-            connect(embScan, &ScanPage::playbookNavigateRequested, this,
-                [this](const QString &id, const QString &target) {
-                    m_flowPage->switchToStageTab(5);
-                    m_flowPage->execTab()->selectPlaybook(id, target);
-                });
-        }
-        auto *embExec = m_flowPage->execTab();
-        if (embExec) {
-            connect(m_ws, &WsClient::runReact, embExec, &ExecutionPage::onRunReact);
-            connect(m_ws, &WsClient::runCompleted, embExec, &ExecutionPage::onRefreshRuns);
-        }
-        connect(m_ws, &WsClient::runCompleted, m_flowPage, [this](const QJsonObject &data) {
-            m_flowPage->onRunCompleted(data.value(QStringLiteral("run_id")).toString());
-        });
-    }
-
+    connect(m_ws, &WsClient::pipelineCreated, m_dashboardPage, &DashboardPage::scheduleRefresh);
+    connect(m_ws, &WsClient::pipelineStatus, m_dashboardPage, &DashboardPage::scheduleRefresh);
+    connect(m_ws, &WsClient::runCompleted, m_dashboardPage, &DashboardPage::scheduleRefresh);
+    connectFlowWebSocket();
 
     // Wire to ToastOverlay
     if (m_role == QStringLiteral("admin")) {
@@ -355,6 +243,153 @@ void MainWindow::setupWebSocket()
     connect(m_ws, &WsClient::connectionError, this, [this](const QString &err) {
         statusBar()->showMessage(QString("实时通道错误: %1").arg(err), 5000);
     });
+}
+
+QWidget *MainWindow::createModulePage(int index)
+{
+    switch (index) {
+    case 1: {
+        m_flowPage = new FlowPage(m_api, m_role, m_username, this);
+        connect(m_flowPage, &FlowPage::returnPageRequested, this, &MainWindow::switchToPage);
+        connectFlowWebSocket();
+        return m_flowPage;
+    }
+    case 2: {
+        auto *assetTopology=new TopologyPage(m_api,m_role,m_username,this);
+        connect(assetTopology,&TopologyPage::testTargetRequested,this,[this](const QString &target) {
+            if(m_dongleLocked) return;
+            switchToPage(1);
+            m_flowPage->createTestForTarget(target);
+        });
+
+        return assetTopology;
+    }
+    case 3: {
+        m_analysisPage = new AnalysisHubPage(m_api, m_role, m_username, this);
+        connect(m_analysisPage, &AnalysisHubPage::openTaskAnalysisRequested, this,
+            [this](const QString &pipelineId) {
+                if (m_dongleLocked) return;
+                switchToPage(1);
+                m_flowPage->openTaskAnalysis(pipelineId);
+                m_flowPage->setReturnPage(3, QStringLiteral("智能分析"));
+            });
+
+        return m_analysisPage;
+    }
+    case 4: {
+        auto *playbookPage = new PlaybookPage(m_api, m_role, m_username, this);
+
+        // Cross-page navigation: PlaybookPage → FlowPage workbench (攻击 Tab)
+        connect(playbookPage, &PlaybookPage::executeRequested, this,
+            [this](const QString &id) {
+                if (m_dongleLocked) return;
+                switchToPage(1);  // 测试任务
+                m_flowPage->jumpToExecution(id, QString());
+                m_flowPage->setReturnPage(4, QStringLiteral("预案与知识库"));
+            });
+
+        return playbookPage;
+    }
+    case 5: {
+        auto *resultsPage = new ResultsPage(m_api, m_role, m_username, this);
+        connect(resultsPage, &ResultsPage::openTaskReportRequested, this,
+            [this](const QString &pipelineId, const QString &reportId) {
+                if (m_dongleLocked) return;
+                switchToPage(1);
+                m_flowPage->openTaskReport(pipelineId, reportId);
+                m_flowPage->setReturnPage(5, QStringLiteral("结果与报告"));
+            });
+        return resultsPage;
+    }
+
+    case 6: {
+        if (m_role == QStringLiteral("admin"))
+            return new SystemPage(m_api, m_role, m_username, this);
+        auto *restrictedPage = new QWidget(this);
+        restrictedPage->setObjectName(QStringLiteral("systemPermissionPage"));
+        restrictedPage->setStyleSheet(Theme::PageStyle);
+        auto *restrictedLayout = new QVBoxLayout(restrictedPage);
+        restrictedLayout->setContentsMargins(28, 24, 28, 24);
+        auto *restrictedTitle = new QLabel(QStringLiteral("系统管理 · 权限说明"), restrictedPage);
+        restrictedTitle->setStyleSheet(QStringLiteral("font-size:24px; font-weight:700; color:#12213c;"));
+        auto *restrictedHint = new QLabel(QStringLiteral("当前账号：%1（普通用户）\n用户、权限、模型和部署配置由管理员维护。\n"
+            "你可以在测试任务中创建自己的任务、编辑预案并提审；批准和驳回由管理员操作。\n"
+            "此页不会加载管理接口。其他模块操作仍由后端权限校验。 ").arg(m_username), restrictedPage);
+        restrictedHint->setTextFormat(Qt::PlainText);
+        restrictedHint->setWordWrap(true);
+        restrictedLayout->addWidget(restrictedTitle);
+        restrictedLayout->addWidget(restrictedHint);
+        auto *openTasks = new QPushButton(QStringLiteral("进入我的测试任务"), restrictedPage);
+        openTasks->setProperty("primary", true);
+        restrictedLayout->addWidget(openTasks, 0, Qt::AlignLeft);
+        restrictedLayout->addStretch();
+        connect(openTasks, &QPushButton::clicked, this, [this]() { switchToPage(1); });
+        return restrictedPage;
+    }
+    default: return nullptr;
+    }
+}
+
+void MainWindow::ensureModulePage(int index)
+{
+    auto *placeholder = m_stackWidget->widget(index);
+    if (!placeholder || !placeholder->property("deferredModule").toBool()) return;
+    auto *page = createModulePage(index);
+    if (!page) return;
+    m_stackWidget->insertWidget(index, page);
+    m_stackWidget->removeWidget(placeholder);
+    delete placeholder;
+}
+
+void MainWindow::connectFlowWebSocket()
+{
+    if (!m_ws || !m_flowPage || m_flowWebSocketConnected) return;
+    m_flowWebSocketConnected = true;
+    // Refresh task state and results on execution events
+    if (m_flowPage) {
+        // Pipeline events → FlowPage real-time updates
+        connect(m_ws, &WsClient::pipelineCreated, m_flowPage, &FlowPage::onPipelineCreated);
+        connect(m_ws, &WsClient::pipelineStatus, m_flowPage, &FlowPage::onPipelineStatus);
+        connect(m_ws, &WsClient::pipelineStep, m_flowPage, &FlowPage::onPipelineStep);
+        connect(m_ws, &WsClient::pipelineLog, m_flowPage, &FlowPage::onPipelineLog);
+        // Scan/run events also refresh flow list (pipeline creates scans/runs internally)
+        connect(m_ws, &WsClient::scanCompleted, m_flowPage, &FlowPage::onPipelineCreated);
+        connect(m_ws, &WsClient::runCompleted, m_flowPage, &FlowPage::onPipelineCreated);
+    }
+
+    // Wire WebSocket to FlowPage's embedded stage-tab pages
+    if (m_flowPage) {
+        auto *embTopo = m_flowPage->topoTab();
+        if (embTopo) {
+            connect(m_ws, &WsClient::scanStarted, embTopo, &TopologyPage::onScanStarted);
+            connect(m_ws, &WsClient::scanCompleted, embTopo, &TopologyPage::onScanCompleted);
+        }
+        auto *embScan = m_flowPage->scanTab();
+        if (embScan) {
+            const auto refreshVisibleScans = [embScan]() {
+                if (embScan->isVisible()) embScan->onRefreshTasks();
+            };
+            connect(m_ws, &WsClient::scanCreated, embScan, refreshVisibleScans);
+            connect(m_ws, &WsClient::scanCompleted, embScan, refreshVisibleScans);
+            // Embedded scan "推荐执行" → switch to attack tab within the workbench
+            connect(embScan, &ScanPage::playbookNavigateRequested, this,
+                [this](const QString &id, const QString &target) {
+                    m_flowPage->switchToStageTab(5);
+                    m_flowPage->execTab()->selectPlaybook(id, target);
+                });
+        }
+        auto *embExec = m_flowPage->execTab();
+        if (embExec) {
+            connect(m_ws, &WsClient::runReact, embExec, &ExecutionPage::onRunReact);
+            connect(m_ws, &WsClient::runCompleted, embExec, [embExec]() {
+                if (embExec->isVisible()) embExec->onRefreshRuns();
+            });
+        }
+        connect(m_ws, &WsClient::runCompleted, m_flowPage, [this](const QJsonObject &data) {
+            m_flowPage->onRunCompleted(data.value(QStringLiteral("run_id")).toString());
+        });
+    }
+
 }
 
 // ── Resize event: reposition toast overlay ─────────────────────────────
@@ -378,6 +413,7 @@ void MainWindow::onModuleChanged(int row)
 {
     if (m_dongleLocked) return;
     if (row >= 0 && row < m_stackWidget->count()) {
+        ensureModulePage(row);
         m_stackWidget->setCurrentIndex(row);
         // Trigger page refresh if it's a BasePage subclass
         auto *page = m_stackWidget->widget(row);
@@ -393,12 +429,7 @@ void MainWindow::onModuleChanged(int row)
                 }
             }
         }
-        if (row == 0 && m_dashboardPage) {
-            m_dashboardPage->refresh();
-        }
-        if (row == 1 && m_flowPage) {
-            m_flowPage->refreshFlows();
-        }
+
     }
 }
 

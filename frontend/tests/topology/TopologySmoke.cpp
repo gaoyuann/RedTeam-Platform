@@ -4,6 +4,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QSharedPointer>
+#include <algorithm>
 #include "ApiClient.h"
 #include "models/TopologyTypes.h"
 // Inspect the actual scene and task controls without adding production test APIs.
@@ -196,7 +197,7 @@ int main(int argc, char **argv) {
     if (!page.m_nodeScanButton->isEnabled() || !page.m_nodeEvidenceView->isReadOnly()
         || !page.m_nodeEvidenceView->toPlainText().contains("记录 #17")
         || !page.m_nodeEvidenceView->toPlainText().contains("缺少条件")) return 44;
-    // Exercise the actual press/release path, including queued scene rebuilds.
+    // Exercise the actual press/release path, including selection preservation.
     auto verify = [](bool condition, const char *message) {
         if (!condition) qCritical() << message;
         return condition;
@@ -220,15 +221,36 @@ int main(int argc, char **argv) {
     const QPoint start = page.m_graphView->mapFromScene(targetCard->sceneBoundingRect().center());
     const QPoint end = start + QPoint(30, 20);
     const QPointF oldPosition = targetCard->pos();
+    const quint64 sceneBeforeDrag = page.m_sceneGen;
+    const auto nodesBeforeDrag = page.m_nodeItems;
+    const auto edgesBeforeDrag = page.m_edgeItems;
+    auto *connectedEdge = page.m_edgeItems.value("member-target");
+    auto *unrelatedEdge = page.m_edgeItems.value("request");
+    const QLineF connectedBeforeDrag = connectedEdge->line();
+    const QLineF unrelatedBeforeDrag = unrelatedEdge->line();
+    const QPointF labelBeforeDrag = connectedEdge->childItems().first()->pos();
     QTest::mousePress(page.m_graphView->viewport(), Qt::LeftButton, Qt::NoModifier, start);
     QMouseEvent move(QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(page.m_graphView->viewport(), &move);
+    if (!verify(connectedEdge->line() != connectedBeforeDrag
+        && connectedEdge->childItems().first()->pos() != labelBeforeDrag
+        && unrelatedEdge->line() == unrelatedBeforeDrag,
+        "Dragging updates connected edges and labels while unrelated edges stay unchanged")) return 61;
     QTest::mouseRelease(page.m_graphView->viewport(), Qt::LeftButton, Qt::NoModifier, end);
     QTest::qWait(30);
     if (!verify(page.m_documentDirty && page.m_nodeItems.value("target")->pos() != oldPosition
         && page.m_selectedNodeId == "target" && page.m_detailStack->currentIndex() == 1
         && page.m_nodeIpEdit->text() == "192.168.1.111",
         "Dragging must retain the selected node and its properties")) return 36;
+    if (!verify(page.m_sceneGen == sceneBeforeDrag && page.m_nodeItems == nodesBeforeDrag
+        && page.m_edgeItems == edgesBeforeDrag,
+        "Dragging retains every scene item instead of rebuilding the graph")) return 62;
+    const auto serializedDrag = TopologyDocument::fromJsonObject(page.m_topologyDocument.toJsonObject());
+    const auto savedNode = std::find_if(serializedDrag.nodes.cbegin(), serializedDrag.nodes.cend(),
+        [](const TopologyNodeRecord &node) { return node.id == "target"; });
+    if (!verify(savedNode != serializedDrag.nodes.cend()
+        && QPointF(savedNode->x, savedNode->y) == targetCard->pos(),
+        "Dragging persists the final node coordinates for save and reload")) return 63;
     // Applying edits rebuilds lists and the scene without clearing fields.
     page.m_nodeNameEdit->setText(QStringLiteral("编辑后的目标"));
     page.m_applyDetailButton->click();

@@ -14,6 +14,8 @@
 #include "widgets/RemoteSourcePicker.h"
 #define private public
 #include "MainWindow.h"
+#include "pages/AnalysisHubPage.h"
+#include "pages/DashboardPage.h"
 #include "pages/FlowPage.h"
 #include "pages/ScanPage.h"
 #include "pages/FindingVerificationDialog.h"
@@ -181,6 +183,154 @@ int main(int argc, char **argv)
     std::cout << "PASS " << name << std::endl;
   };
 
+  {
+    MockServer startupServer;
+    startupServer.handler = [](const QString &, const QString &path) -> MockReply {
+      if (path == "/api/pipelines/A") {
+        auto task = taskRecord("A"); task["run_id"] = "";
+        return {success(task)};
+      }
+      if (path == "/api/pipelines" || path == "/api/pipelines?view=list")
+        return {success(QJsonArray{taskRecord("A")})};
+      if (path.startsWith("/api/reports/index")) return {success(QJsonObject{{"total", 0}})};
+      if (path == "/api/kg/stats") return {success(QJsonObject{{"node_count", 0}, {"edge_count", 0}})};
+      return {success(QJsonArray())};
+    };
+    ApiClient startupApi(QStringLiteral("http://127.0.0.1:%1").arg(startupServer.serverPort()));
+    MainWindow shell(&startupApi, "admin", "fixture-user");
+    shell.m_dongleTimer->stop(); shell.m_ws->disconnectFromServer(); shell.show();
+    verify(awaitCondition([&]() { return shell.m_dashboardPage->m_pendingResponses == 0; }),
+      "initial shell dashboard finishes loading");
+    verify(shell.m_stackWidget->count() == 8 && !shell.m_flowPage && !shell.m_analysisPage,
+      "startup preserves navigation slots while deferring unused modules");
+    for (int index = 1; index < 7; ++index)
+      verify(shell.m_stackWidget->widget(index)->property("deferredModule").toBool(), "unopened module retains a lightweight placeholder");
+    verify(!startupServer.requests.value("GET /api/scan-tasks")
+      && !startupServer.requests.value("GET /api/playbooks?includeGenerated=true")
+      && !startupServer.requests.value("GET /api/users")
+      && !startupServer.requests.value("GET /api/config"),
+      "startup sends no requests for unopened task or administration modules");
+    shell.switchToPage(3);
+    verify(shell.m_analysisPage && !shell.m_flowPage, "opening analysis does not construct the task module");
+    emit shell.m_analysisPage->openTaskAnalysisRequested("A");
+    verify(awaitCondition([&]() { return shell.m_flowPage && shell.m_flowPage->m_lastDetailPipelineId == "A"; }),
+      "cross-page navigation constructs and loads the requested task module");
+    verify(shell.m_stackWidget->currentIndex() == 1 && shell.m_flowWebSocketConnected,
+      "deferred task module has navigation and realtime bindings");
+    auto *taskPage = shell.m_flowPage;
+    shell.switchToPage(0); shell.switchToPage(1); shell.connectFlowWebSocket();
+    verify(shell.m_flowPage == taskPage && shell.findChildren<FlowPage*>().size() == 1,
+      "revisiting a module reuses its widget and websocket bindings");
+    shell.switchToPage(0); shell.setDongleLocked(true, "fixture lock");
+    shell.switchToPage(6);
+    verify(shell.m_stackWidget->currentIndex() == 7
+      && shell.m_stackWidget->widget(6)->property("deferredModule").toBool(),
+      "dongle lock blocks both navigation and deferred module construction");
+    shell.setDongleLocked(false);
+    verify(shell.m_stackWidget->currentIndex() == 0, "dongle recovery returns to the previous module");
+  }
+  {
+    MockServer performanceServer;
+    bool failList = false;
+    int responseDelay = 0;
+    QJsonArray rows;
+    for (int i = 0; i < 200; ++i) rows.append(taskRecord(QString::number(i)));
+    performanceServer.handler = [&](const QString &, const QString &path) -> MockReply {
+      if (path == "/api/pipelines?view=list")
+        return {failList ? QJsonObject{{"status", "error"}} : success(rows), responseDelay};
+      if (path == "/api/pipelines/A") {
+        auto task = taskRecord("A"); task["status"] = "running"; task["run_id"] = "";
+        return {success(task), responseDelay};
+      }
+      return {success(QJsonArray())};
+    };
+    ApiClient performanceApi(QStringLiteral("http://127.0.0.1:%1").arg(performanceServer.serverPort()));
+    FlowPage page(&performanceApi, "user", "fixture-user"); page.show();
+    verify(awaitCondition([&]() { return page.m_flowListFresh && !page.m_flowListBusy && !page.m_flowListPending; }),
+      "task list settles after constructor and show refreshes");
+    const QString listPath = "GET /api/pipelines?view=list";
+    const int beforeSearch = performanceServer.requests.value(listPath);
+    page.m_searchInput->setText("1"); page.m_searchInput->setText("19"); page.m_searchInput->setText("199 fixture");
+    verify(awaitCondition([&]() { return page.m_flowTable->rowCount() == 1; }), "typing filters cached task rows");
+    verify(performanceServer.requests.value(listPath) == beforeSearch, "search typing issues zero HTTP requests");
+    page.m_searchInput->clear();
+    verify(awaitCondition([&]() { return page.m_flowTable->rowCount() == 200; }), "clearing search restores cached rows");
+    page.m_flowTable->selectRow(17);
+    auto *selectedItem = page.m_flowTable->item(17, 0);
+    page.refreshFlows();
+    verify(awaitCondition([&]() { return !page.m_flowListBusy; }), "unchanged list refresh completes");
+    verify(page.m_flowTable->item(17, 0) == selectedItem && page.m_flowTable->currentRow() == 17,
+      "unchanged refresh keeps table items and selection");
+    responseDelay = 150;
+    const int beforeBurst = performanceServer.requests.value(listPath);
+    for (int i = 0; i < 40; ++i) page.refreshFlows();
+    verify(awaitCondition([&]() { return !page.m_flowListBusy && !page.m_flowListPending; }), "slow list refresh burst settles");
+    verify(performanceServer.requests.value(listPath) - beforeBurst == 2,
+      "40 overlapping list refreshes become one active request and one follow-up");
+    responseDelay = 0; failList = true; page.refreshFlows();
+    verify(awaitCondition([&]() { return !page.m_flowListBusy; }), "list failure releases in-flight guard");
+    verify(!page.m_flowListFresh && page.m_flowTable->rowCount() == 0, "list failure cannot expose stale actionable rows");
+    failList = false; page.refreshFlows();
+    verify(awaitCondition([&]() { return page.m_flowListFresh; }), "list refresh recovers after failure");
+    responseDelay = 150;
+    page.m_selectedPipelineId = "A"; page.m_stack->setCurrentIndex(1);
+    page.m_stageTabs->setCurrentWidget(page.m_overviewTab);
+    const QString detailPath = "GET /api/pipelines/A";
+    for (int i = 0; i < 40; ++i) page.loadFlowDetail("A");
+    verify(awaitCondition([&]() { return !page.m_taskDetailBusy && page.m_pendingDetailPipelineId.isEmpty(); }),
+      "slow detail refresh burst settles");
+    verify(performanceServer.requests.value(detailPath) == 2, "40 overlapping detail requests become two reads");
+    auto *analysisItem = page.m_analysisTab->m_table->item(0, 0);
+    verify(analysisItem != nullptr, "running task has an analysis row for render checks");
+    const int beforeEvents = performanceServer.requests.value(detailPath);
+    for (int i = 0; i < 40; ++i) page.onPipelineStep(QJsonObject{{"pipeline_id", "A"}});
+    verify(awaitCondition([&]() { return performanceServer.requests.value(detailPath) > beforeEvents
+      && !page.m_taskDetailBusy; }), "pipeline event burst reaches detail refresh");
+    verify(performanceServer.requests.value(detailPath) - beforeEvents == 1, "40 pipeline events share one detail refresh");
+    verify(page.m_analysisTab->m_table->item(0, 0) == analysisItem,
+      "unchanged running task preserves analysis table items");
+    const auto beforeHidden = performanceServer.requests;
+    page.hide();
+    QMetaObject::invokeMethod(page.m_scanTab->m_pollTimer, "timeout", Qt::DirectConnection);
+    QMetaObject::invokeMethod(page.m_execTab->m_pollTimer, "timeout", Qt::DirectConnection);
+    QTest::qWait(50);
+    verify(performanceServer.requests == beforeHidden, "hidden scan and execution timers issue no requests");
+  }
+  {
+    MockServer monitorServer;
+    bool fail = false;
+    int captured = 0;
+    auto record = findingExecutionRecord("A");
+    monitorServer.handler = [&](const QString &, const QString &) -> MockReply {
+      auto response = record;
+      response["captured_at"] = QString("2026-10-22T10:00:%1Z").arg(++captured, 2, 10, QLatin1Char('0'));
+      return {fail ? QJsonObject{{"status", "error"}} : success(response)};
+    };
+    ApiClient monitorApi(QStringLiteral("http://127.0.0.1:%1").arg(monitorServer.serverPort()));
+    TaskExecutionPanel monitor(&monitorApi, "user", "fixture-user");
+    monitor.setTaskContext("A", {}, "A.invalid");
+    verify(awaitCondition([&]() { return !monitor.m_busy; }), "execution snapshot loads");
+    auto *item = monitor.m_verifications->item(0, 0);
+    verify(item != nullptr, "execution snapshot has an execution row");
+    monitor.refresh();
+    verify(awaitCondition([&]() { return !monitor.m_busy; }), "timestamp-only execution refresh completes");
+    verify(monitor.m_verifications->item(0, 0) == item, "timestamp-only refresh keeps execution table items");
+    fail = true; monitor.refresh();
+    verify(awaitCondition([&]() { return !monitor.m_busy; }), "execution failure completes");
+    verify(monitor.m_refreshFailed && monitor.m_state->text().contains(QStringLiteral("读取失败")),
+      "execution failure labels the retained snapshot stale");
+    fail = false; monitor.refresh();
+    verify(awaitCondition([&]() { return !monitor.m_busy; }), "execution snapshot recovers");
+    verify(!monitor.m_refreshFailed && !monitor.m_state->text().contains(QStringLiteral("读取失败")),
+      "identical successful snapshot clears the failure state");
+    auto verifications = record["verification_runs"].toObject();
+    auto items = verifications["items"].toArray();
+    auto changed = items[0].toObject(); changed["finding_name"] = "Changed finding";
+    items[0] = changed; verifications["items"] = items; record["verification_runs"] = verifications;
+    monitor.refresh();
+    verify(awaitCondition([&]() { return !monitor.m_busy; }), "changed execution snapshot loads");
+    verify(monitor.m_verifications->item(0, 0)->text() == "Changed finding", "changed execution content is rendered");
+  }
   {
     MockServer aggregateServer;
     bool delay = false;

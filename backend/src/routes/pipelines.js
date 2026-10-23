@@ -147,7 +147,12 @@ export default function (db) {
   // List pipelines
   router.get('/', (req, res) => {
     const { status } = req.query;
-    let sql = 'SELECT * FROM pipelines WHERE 1=1';
+    // List views do not consume potentially multi-megabyte analysis/result JSON.
+    // Keep the default response compatible with older clients.
+    const columns = req.query.view === 'list'
+      ? 'pipeline_id, target, status, config, created_by, created_at, updated_at'
+      : '*';
+    let sql = `SELECT ${columns} FROM pipelines WHERE 1=1`;
     const params = [];
     if (status) { sql += ' AND status = ?'; params.push(status); }
     // Non-admin sees only their own

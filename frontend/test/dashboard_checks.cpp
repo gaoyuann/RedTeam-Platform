@@ -2,7 +2,9 @@
 #include <QtNetwork>
 #include <QtTest>
 #include "ApiClient.h"
+#define private public
 #include "pages/DashboardPage.h"
+#undef private
 #include "widgets/MetricCard.h"
 #include "AppStyle.h"
 
@@ -36,6 +38,24 @@ private slots:
   QList<QFrame*> cards; for(auto *frame:page.findChildren<QFrame*>()) if(frame->property("metricCard").toBool()) cards.append(frame); QCOMPARE(cards.size(),4);
   auto value=[&](int i){return cards[i]->findChild<QLabel*>("metricValue")->text();};
   QTRY_COMPARE(table->rowCount(),3);QCOMPARE(value(0),QString("3"));QCOMPARE(value(1),QString("1"));QCOMPARE(value(2),QString("3"));QTRY_COMPARE(value(3),QString("7"));QCOMPARE(table->item(0,0)->text(),QString("fixture-2"));
+  QTRY_COMPARE(page.m_pendingResponses,0);
+  int beforeEvents=requests;
+  for(int i=0;i<40;++i)page.scheduleRefresh();
+  QTRY_VERIFY(requests>=beforeEvents+4);
+  QTRY_COMPARE(page.m_pendingResponses,0);
+  QTest::qWait(150);
+  QCOMPARE(requests-beforeEvents,4);
+  delay=150;int beforeBurst=requests;
+  for(int i=0;i<40;++i)page.refresh();
+  QTRY_VERIFY(requests>=beforeBurst+8);
+  QTRY_COMPARE(page.m_pendingResponses,0);
+  QTest::qWait(150);
+  QCOMPARE(requests-beforeBurst,8);
+  delay=0;
+  page.hide();int beforeHidden=requests;
+  for(int i=0;i<40;++i)page.scheduleRefresh();
+  QTest::qWait(200);QCOMPARE(requests,beforeHidden);
+  page.show();QTRY_VERIFY(requests>=beforeHidden+4);QTRY_COMPARE(page.m_pendingResponses,0);
   mode="error"; page.refresh();QCOMPARE(table->rowCount(),0);QTRY_VERIFY(table->findChild<QLabel*>("itemViewEmptyHint")->text().contains(QStringLiteral("失败")));QCOMPARE(value(0),QString("—"));
   mode="normal";delay=180;int before=requests;page.refresh();QTRY_VERIFY(requests>=before+4);
   mode="empty";delay=0;page.refresh();QTRY_COMPARE(value(0),QString("0"));QTest::qWait(250);QCOMPARE(value(0),QString("0"));QCOMPARE(table->rowCount(),0);QVERIFY(table->findChild<QLabel*>("itemViewEmptyHint")->text().contains(QStringLiteral("暂无")));

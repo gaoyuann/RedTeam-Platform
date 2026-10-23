@@ -307,7 +307,8 @@ public:
     explicit TopologyNodeItem(const QString &nodeId, const QRectF &rect)
         : QGraphicsRectItem(rect),
           m_nodeId(nodeId) {
-        setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable);
+        setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemIsMovable
+                 | QGraphicsItem::ItemSendsGeometryChanges);
         setAcceptedMouseButtons(Qt::LeftButton);
         setData(0, nodeId);
         setData(1, QStringLiteral("node"));
@@ -316,8 +317,15 @@ public:
     }
 
     std::function<void(const QString &, const QPointF &)> onMoveFinished;
+    std::function<void(const QString &)> onPositionChanged;
 
 protected:
+    QVariant itemChange(GraphicsItemChange change, const QVariant &value) override {
+        const auto result = QGraphicsRectItem::itemChange(change, value);
+        if (change == QGraphicsItem::ItemPositionHasChanged && onPositionChanged)
+            onPositionChanged(m_nodeId);
+        return result;
+    }
     void paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget) override {
         Q_UNUSED(option);
         Q_UNUSED(widget);
@@ -2217,6 +2225,7 @@ void TopologyPage::populateDocumentPlaceholder(const QString &title,
     m_graphScene->setSceneRect(empty->boundingRect().adjusted(-40, -40, 40, 40));
     m_nodeItems.clear();
     m_edgeItems.clear();
+    m_incidentEdgeIndices.clear();
     m_nodeListWidget->clear();
     m_edgeListWidget->clear();
     showOverviewDetail();
@@ -2232,6 +2241,7 @@ void TopologyPage::renderTopologyScene() {
     m_graphScene->clear();
     m_nodeItems.clear();
     m_edgeItems.clear();
+    m_incidentEdgeIndices.clear();
 
     if (m_topologyDocument.nodes.isEmpty()) {
         m_graphScene->addText(QStringLiteral("当前没有可视化主机节点。"));
@@ -2297,17 +2307,10 @@ void TopologyPage::renderTopologyScene() {
                              node.id == m_selectedNodeId ? 3.0 : 2.0));
         ellipse->setToolTip(topologyNodeTooltip(node));
         ellipse->onMoveFinished = [this](const QString &nodeId, const QPointF &center) {
-            for (TopologyNodeRecord &record : m_topologyDocument.nodes) {
-                if (record.id == nodeId) {
-                    record.x = center.x();
-                    record.y = center.y();
-                    break;
-                }
-            }
-            markDocumentDirty(QStringLiteral("节点位置已更新，记得保存拓扑文件。"));
-            QTimer::singleShot(0, this, [this]() {
-                renderTopologyScene();
-            });
+            commitNodePosition(nodeId, center);
+        };
+        ellipse->onPositionChanged = [this](const QString &nodeId) {
+            updateConnectedEdges(nodeId);
         };
         m_graphScene->addItem(ellipse);
         m_nodeItems.insert(node.id, ellipse);
@@ -2361,21 +2364,10 @@ void TopologyPage::renderTopologyScene() {
     }
 
     // Connect the measured card boundaries; z-values keep edges below nodes.
-    for (const TopologyEdgeRecord &edge : m_topologyDocument.edges) {
-        if (!positions.contains(edge.sourceId) || !positions.contains(edge.targetId)) {
-            continue;
-        }
-        const QPointF source = positions.value(edge.sourceId);
-        const QPointF target = positions.value(edge.targetId);
-        auto anchor = [this](const QString &id, const QPointF &from, const QPointF &to) {
-            const QRectF bounds = m_nodeItems.value(id)->boundingRect();
-            const QPointF delta = to - from;
-            const qreal scale = qMax(qAbs(delta.x()) / (bounds.width() / 2 + 2),
-                                     qAbs(delta.y()) / (bounds.height() / 2 + 2));
-            return scale > 1.0 ? from + delta / scale : from;
-        };
-        auto *line = new TopologyEdgeItem(edge.id, QLineF(anchor(edge.sourceId, source, target),
-                                                        anchor(edge.targetId, target, source)));
+    for (int edgeIndex = 0; edgeIndex < m_topologyDocument.edges.size(); ++edgeIndex) {
+        const auto &edge = m_topologyDocument.edges.at(edgeIndex);
+        if (!positions.contains(edge.sourceId) || !positions.contains(edge.targetId)) continue;
+        auto *line = new TopologyEdgeItem(edge.id, QLineF());
         const bool selected = edge.id == m_selectedEdgeId;
         const QString provenanceKind = edge.provenance.value(QStringLiteral("kind")).toString();
         const bool manual = provenanceKind == QStringLiteral("manual")
@@ -2403,10 +2395,11 @@ void TopologyPage::renderTopologyScene() {
 
         auto *edgeText = m_graphScene->addSimpleText(relationLabel);
         edgeText->setBrush(QColor(selected ? Theme::Primary : Theme::MutedText));
-        edgeText->setPos((source.x() + target.x()) * 0.5 - edgeText->boundingRect().width() * 0.5,
-                         (source.y() + target.y()) * 0.5 - edgeText->boundingRect().height() - 4);
         edgeText->setParentItem(line);  // 跟随连线淡入/拖动
         edgeText->setZValue(1.2);
+        m_incidentEdgeIndices[edge.sourceId].append(edgeIndex);
+        if (edge.targetId != edge.sourceId) m_incidentEdgeIndices[edge.targetId].append(edgeIndex);
+        updateEdgeGeometry(edge);
     }
 
 
@@ -2434,6 +2427,49 @@ void TopologyPage::renderTopologyScene() {
             fxFadeIn(it.value(), m_sceneGen, edgeDelay + ei * 60, 0.0);
             ++ei;
         }
+    }
+}
+
+void TopologyPage::updateEdgeGeometry(const TopologyEdgeRecord &edge)
+{
+    auto *line = m_edgeItems.value(edge.id, nullptr);
+    auto *sourceItem = m_nodeItems.value(edge.sourceId, nullptr);
+    auto *targetItem = m_nodeItems.value(edge.targetId, nullptr);
+    if (!line || !sourceItem || !targetItem) return;
+    const QPointF source = sourceItem->pos();
+    const QPointF target = targetItem->pos();
+    const auto anchor = [](QGraphicsItem *item, const QPointF &from, const QPointF &to) {
+        const QRectF bounds = item->boundingRect();
+        const QPointF delta = to - from;
+        const qreal scale = qMax(qAbs(delta.x()) / (bounds.width() / 2 + 2),
+                                 qAbs(delta.y()) / (bounds.height() / 2 + 2));
+        return scale > 1.0 ? from + delta / scale : from;
+    };
+    line->setLine(QLineF(anchor(sourceItem, source, target), anchor(targetItem, target, source)));
+    for (auto *child : line->childItems()) {
+        if (auto *text = dynamic_cast<QGraphicsSimpleTextItem *>(child))
+            text->setPos((source.x() + target.x()) * 0.5 - text->boundingRect().width() * 0.5,
+                         (source.y() + target.y()) * 0.5 - text->boundingRect().height() - 4);
+    }
+}
+
+void TopologyPage::updateConnectedEdges(const QString &nodeId)
+{
+    for (const int index : m_incidentEdgeIndices.value(nodeId)) {
+        if (index >= 0 && index < m_topologyDocument.edges.size())
+            updateEdgeGeometry(m_topologyDocument.edges.at(index));
+    }
+}
+
+void TopologyPage::commitNodePosition(const QString &nodeId, const QPointF &center)
+{
+    for (auto &record : m_topologyDocument.nodes) {
+        if (record.id != nodeId) continue;
+        record.x = center.x();
+        record.y = center.y();
+        markDocumentDirty(QStringLiteral("节点位置已更新，记得保存拓扑文件。"));
+        m_graphScene->setSceneRect(m_graphScene->itemsBoundingRect().adjusted(-60, -60, 60, 60));
+        return;
     }
 }
 

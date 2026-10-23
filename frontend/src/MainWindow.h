@@ -38,6 +38,10 @@ private slots:
 private:
     void setupUI();
     void setupWebSocket();
+    QWidget *createModulePage(int index);
+    void ensureModulePage(int index);
+    void connectFlowWebSocket();
+    bool m_flowWebSocketConnected = false;
 
     // 加密锁运行时心跳与锁屏
     void verifyDongleHeartbeat();

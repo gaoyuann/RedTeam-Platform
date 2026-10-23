@@ -49,6 +49,7 @@ private:
   int m_contextVersion = 0;
   int m_requestVersion = 0;
   bool m_busy = false;
+  bool m_refreshFailed = false;
   QLabel *m_title;
   QLabel *m_state;
   QLabel *m_parentState;

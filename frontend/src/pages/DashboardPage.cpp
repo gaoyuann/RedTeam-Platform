@@ -1,4 +1,6 @@
 #include "DashboardPage.h"
+#include <QTimer>
+#include <QShowEvent>
 
 #include "../ApiClient.h"
 #include "../Theme.h"
@@ -188,6 +190,12 @@ DashboardPage::DashboardPage(ApiClient *api, QWidget *parent)
     : QWidget(parent), m_api(api)
 {
   setupUI();
+  m_refreshTimer = new QTimer(this);
+  m_refreshTimer->setSingleShot(true);
+  m_refreshTimer->setInterval(100);
+  connect(m_refreshTimer, &QTimer::timeout, this, [this]() {
+    if (isVisible()) refresh();
+  });
   refresh();
 }
 
@@ -375,8 +383,33 @@ void DashboardPage::setState(QLabel *label, const QString &text, const QString &
   label->setStyleSheet(QStringLiteral("color:%1;font-weight:600;").arg(color));
 }
 
+void DashboardPage::scheduleRefresh()
+{
+  m_dirty = true;
+  if (isVisible() && !m_refreshTimer->isActive()) m_refreshTimer->start();
+}
+
+void DashboardPage::showEvent(QShowEvent *event)
+{
+  QWidget::showEvent(event);
+  if (m_hasBeenShown || m_dirty) scheduleRefresh();
+  m_hasBeenShown = true;
+}
+
+void DashboardPage::responseFinished()
+{
+  if (--m_pendingResponses == 0 && m_refreshPending) {
+    m_refreshPending = false;
+    scheduleRefresh();
+  }
+}
+
 void DashboardPage::refresh()
 {
+  if (m_pendingResponses > 0) { m_refreshPending = true; return; }
+  m_refreshTimer->stop();
+  m_dirty = false;
+  m_pendingResponses = 4;
   ++m_revision;
   m_reportCard->setValue("—"); m_reportCard->setCaption(QStringLiteral("加载中"));
   m_knowledgeSummaryLabel->setText(QStringLiteral("知识统计加载中"));
@@ -506,6 +539,7 @@ void DashboardPage::loadPipelines()
   if (!m_api) return;
   m_api->get(QStringLiteral("/api/pipelines"), 5000, [this, guard = QPointer<DashboardPage>(this), revision = m_revision](const QJsonObject &response) {
     if (!guard || revision != m_revision) return;
+    responseFinished();
     if (response.value(QStringLiteral("status")).toString() != QStringLiteral("ok") || !response.value("data").isArray()) {
       showPipelineError(response.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString());
       return;
@@ -519,6 +553,7 @@ void DashboardPage::loadReports()
   if (!m_api) return;
   m_api->get(QStringLiteral("/api/reports/index?limit=1&offset=0"), 5000, [this, guard = QPointer<DashboardPage>(this), revision = m_revision](const QJsonObject &response) {
     if (!guard || revision != m_revision) return;
+    responseFinished();
     if (response.value(QStringLiteral("status")).toString() != QStringLiteral("ok")) {
       m_reportCard->setValue(QStringLiteral("—"));
       m_reportCard->setCaption(QStringLiteral("加载失败"));
@@ -537,6 +572,7 @@ void DashboardPage::loadKnowledge()
   if (!m_api) return;
   m_api->get(QStringLiteral("/api/kg/stats"), 5000, [this, guard = QPointer<DashboardPage>(this), revision = m_revision](const QJsonObject &response) {
     if (!guard || revision != m_revision) return;
+    responseFinished();
     if (response.value(QStringLiteral("status")).toString() != QStringLiteral("ok")) {
       m_knowledgeSummaryLabel->setText(QStringLiteral("知识图谱不可用"));
       setState(m_knowledgeStatusLabel, QStringLiteral("加载失败"), Theme::Error);
@@ -556,6 +592,7 @@ void DashboardPage::loadHealth()
   if (!m_api) return;
   m_api->get(QStringLiteral("/api/health"), 3000, [this, guard = QPointer<DashboardPage>(this), revision = m_revision](const QJsonObject &response) {
     if (!guard || revision != m_revision) return;
+    responseFinished();
     const bool ok = response.value(QStringLiteral("status")).toString() == QStringLiteral("ok");
     setState(m_apiStatusLabel, ok ? QStringLiteral("正常") : QStringLiteral("异常"), ok ? Theme::Success : Theme::Error);
     m_healthHintLabel->setText(QStringLiteral("未接入健康检查"));

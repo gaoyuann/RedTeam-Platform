@@ -92,6 +92,10 @@ private:
     void populateTopologyDocument();
     void populateDocumentPlaceholder(const QString &title, const QString &detail);
     void renderTopologyScene();
+    void updateEdgeGeometry(const TopologyEdgeRecord &edge);
+    void updateConnectedEdges(const QString &nodeId);
+    void commitNodePosition(const QString &nodeId, const QPointF &center);
+    QMap<QString, QList<int>> m_incidentEdgeIndices;
     void fxFadeIn(QGraphicsItem *item, quint64 gen, int delayMs, qreal fromScale);  // 发现动效：淡入+缩放
     void populateNodeList();
     void populateEdgeList();
