@@ -15,6 +15,7 @@
 #include <QPointer>
 
 class QCheckBox;
+class QPlainTextEdit;
 class ApiClient;
 class RemoteSourcePicker;
 class ScanResultOverview;
@@ -67,6 +68,7 @@ private:
   bool m_openSourceDetailsRequested = false;
   void resizeResultColumns();
   bool eventFilter(QObject *object, QEvent *event) override;
+  QPlainTextEdit *m_webScanProcess = nullptr;
   QLabel *m_compactStatus = nullptr;
   QLabel *m_listTitle = nullptr;
   QPushButton *m_showAllRecords = nullptr;

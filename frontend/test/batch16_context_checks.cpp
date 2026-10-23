@@ -200,6 +200,7 @@ int main(int argc, char **argv)
         {"severity", errors ? "info" : "high"}, {"source_tool", "fixture"}, {"result_data", errors ? QStringLiteral("{\"error\":\"fixture timeout\"}") : "{\"finding\":\"" + task + " fixture\"}"}});
       const QJsonObject page{{"total", total}, {"next_after", after + rows.size()}, {"through", total}, {"has_more", after + rows.size() < total}};
       const QJsonObject data{{"scan_records", rows}, {"page", page},
+        {"web_scan_process",QJsonArray{QJsonObject{{"result_type","scan_capability_assessment"},{"result_data",QStringLiteral("{\"capability\":\"web_scan\",\"observation_success\":true,\"detection_executed\":false,\"detection_complete\":false,\"coverage_incomplete\":true}")}},QJsonObject{{"result_type","web_agent_step"},{"result_data",QStringLiteral("{\"turn\":1,\"action\":\"check_sqli\",\"state\":\"completed\",\"reason\":\"真实入口证据\"}")}}, QJsonObject{{"result_type","web_scan_summary"},{"result_data",QStringLiteral("{\"reason\":\"服务重启\",\"checks\":null,\"pages\":null,\"complete\":false}")}}, QJsonObject{{"result_type","web_scan_summary"},{"result_data",QStringLiteral("{\"reason\":\"工具未启动\",\"checks\":1,\"checks_started\":0,\"pages\":7,\"complete\":false}")}}}},
         {"scan_summary", QJsonObject{{"record_count",235}, {"completeness","incomplete"}, {"unexecuted_checks",QJsonArray{"web_scan"}}}},
         {"scan_sources", QJsonArray{QJsonObject{{"scan_task_id","scan-"+task},{"scan_type","vuln_scan"},{"target","fixture.invalid"},{"status","PARTIAL"},{"error_message","fixture timeout"}}}}};
       return {success(data), delay && task == "A" ? 250 : 0};
@@ -258,6 +259,11 @@ int main(int argc, char **argv)
     aggregate.m_moreResultsButton->click();
     verify(awaitCondition([&]() { return aggregate.m_aggregateRecords.size() == 235; }), "all 235 records are reachable without payloads");
     verify(!aggregate.m_moreResultsButton->isEnabled() && aggregate.m_resultHint->text().contains("235 / 235"), "list count and paging completion agree");
+    verify(aggregate.m_webScanProcess->toPlainText().contains(QStringLiteral("观察成功：是 · 检测执行：否 · 检测完成：否 · 覆盖不足")), "capability states do not equate successful observation with detection");
+    verify(aggregate.m_webScanProcess->toPlainText().contains("SQL 派发尝试 未知 次 · 工具启动 未知 次"), "restart unknown counts are not rendered as zero");
+    verify(aggregate.m_webScanProcess->toPlainText().contains("SQL 派发尝试 1 次 · 工具启动 0 次"), "never-started tool is not rendered as one executed detection");
+    verify(aggregate.m_webScanProcess->toPlainText().contains("check_sqli")
+      && aggregate.m_webScanProcess->toPlainText().contains("真实入口证据"), "persisted AI scan process remains visible with the candidate filter");
     verify(aggregate.m_statusLabel->text().contains("未执行") && aggregate.m_statusLabel->text().contains("部分完成"), "incomplete checks remain visible beside findings");
     QJsonArray informationRows{QJsonObject{{"id",9999},{"result_type","web_vuln"},{"category","information"},{"severity","low"},{"source_tool","nikto"},{"result_data","{\"finding\":\"Allowed HTTP Methods: GET, POST\"}"}}};
     aggregate.renderGroupedResults(informationRows);
@@ -1298,6 +1304,35 @@ int main(int argc, char **argv)
     identityFlow.hide(); app.setStyleSheet(originalStyle);
   }
   {
+    MockServer sessionServer;
+    sessionServer.handler=[](const QString &, const QString &path)->MockReply {
+      if(path=="/api/pipelines")return {success(QJsonArray{})};
+      return {success(QJsonObject{})};
+    };
+    ApiClient sessionApi(QStringLiteral("http://127.0.0.1:%1").arg(sessionServer.serverPort()));
+    FlowPage sessionFlow(&sessionApi,"user");
+    sessionFlow.m_selectedPipelineId="session-test";
+    sessionFlow.m_lastDisplayedDetail=QJsonObject{{"pipeline_id","session-test"},{"status","created"},{"target","https://fixture.test/app/"},
+      {"config",QJsonObject{{"scan_orchestrator",QJsonObject{{"version",1},{"mode","react"}}}}}};
+    QTimer::singleShot(0,&sessionFlow,[&]{
+      auto *dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      verify(dialog!=nullptr,"general task opens temporary session dialog");
+      auto *mode=dialog->findChild<QComboBox*>("scanSessionMode");
+      auto *value=dialog->findChild<QLineEdit*>("scanSessionValue");
+      verify(mode && value && mode->currentData()=="anonymous","anonymous is the default with no credential required");
+      mode->setCurrentIndex(mode->findData("bearer"));
+      verify(!dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->isEnabled(),"empty selected bearer cannot start");
+      value->setText("fixture-session-token");
+      verify(value->echoMode()==QLineEdit::Password,"session value is masked");
+      dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    });
+    sessionFlow.onStartFlow();
+    verify(awaitCondition([&]{return sessionServer.requests.value("POST /api/pipelines/session-test/start")==1;}),"temporary session submitted through start API");
+    const auto auth=QJsonDocument::fromJson(sessionServer.requestBodies.value("POST /api/pipelines/session-test/start")).object()["authentication"].toObject();
+    verify(auth["type"]=="bearer" && auth["value"]=="fixture-session-token","selected session reaches start request without task config storage");
+  }
+
+  {
     MockServer createServer;
     bool rejectCreation = false;
     bool identityProtocol = true;
@@ -1604,7 +1639,11 @@ int main(int argc, char **argv)
       auto *dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());
       if(!dialog) {verify(false,"remote CScan task form is visible");return;}
       auto *type=dialog->findChild<QComboBox*>("taskTestTypeInput");
+      auto *webMode=dialog->findChild<QComboBox*>("webScanMode");
+      type->setCurrentIndex(type->findData("web"));
+      verify(!webMode && dialog->findChild<QLabel*>("scanOrchestratorHint")->toolTip().contains("ReAct"), "Web task defaults to general ReAct without a SQL-only selector");
       type->setCurrentIndex(type->findData("program"));
+      verify(!webMode, "source tasks retain their dedicated workflow without a SQL selector");
       auto *inputKind=dialog->findChild<QComboBox*>("taskProgramInputKind");
       verify(inputKind->currentData().toString()=="agent",
         "CScan task defaults to selecting the target folder");

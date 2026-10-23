@@ -29,6 +29,7 @@
 #include <QHeaderView>
 #include <QComboBox>
 #include <QFormLayout>
+#include <QPlainTextEdit>
 #include <QGroupBox>
 #include <QLineEdit>
 #include <QTabWidget>
@@ -66,6 +67,60 @@ static QJsonObject parseJsonObject(const QJsonValue &value)
   const auto document = QJsonDocument::fromJson(value.toString().toUtf8(), &error);
   return error.error == QJsonParseError::NoError && document.isObject()
       ? document.object() : QJsonObject{};
+}
+
+// Credentials live only in the request; never in task config or QSettings.
+static bool webScanStartBody(QWidget *parent, const QJsonObject &pipeline, QJsonObject &body)
+{
+  const auto config = parseJsonObject(pipeline["config"]);
+  if (config["scan_orchestrator"].toObject()["mode"].toString() == "react") {
+    const QUrl target(pipeline["target"].toString());
+    if (target.scheme() != "http" && target.scheme() != "https") return true;
+    QDialog dialog(parent); dialog.setWindowTitle(QStringLiteral("本次 Web 会话"));
+    QFormLayout layout(&dialog);
+    QLabel hint(QStringLiteral("匿名检查无需填写。可提供已获授权的 Cookie 或 Bearer Token，仅用于此应用路径的受控参数检查；其他工具未适配会话时不会携带凭据运行。"));
+    hint.setWordWrap(true); layout.addRow(&hint);
+    QComboBox mode; mode.addItem(QStringLiteral("匿名"), "anonymous"); mode.addItem(QStringLiteral("Cookie"), "cookie"); mode.addItem(QStringLiteral("Bearer Token"), "bearer");
+    QLineEdit value; value.setEchoMode(QLineEdit::Password); value.setMaxLength(4096); value.setEnabled(false);
+    mode.setObjectName("scanSessionMode"); value.setObjectName("scanSessionValue");
+    layout.addRow(QStringLiteral("认证方式"), &mode); layout.addRow(QStringLiteral("临时会话"), &value);
+    QPlainTextEdit requests; requests.setObjectName("scanPostRequests"); requests.setMaximumHeight(100);
+    requests.setPlaceholderText(QStringLiteral("可选 JSON 数组：只读 POST 查询模板，字段 url、encoding(form/json)、fields、parameters、read_only_confirmed。不要填写密码或令牌。"));
+    layout.addRow(QStringLiteral("授权 POST 模板"), &requests);
+    QDialogButtonBox buttons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel); layout.addRow(&buttons);
+    auto validate = [&] { const bool anonymous=mode.currentData().toString()=="anonymous"; value.setEnabled(!anonymous); buttons.button(QDialogButtonBox::Ok)->setEnabled(anonymous || !value.text().trimmed().isEmpty()); };
+    QObject::connect(&mode,QOverload<int>::of(&QComboBox::currentIndexChanged),&dialog,[&](int){validate();});
+    QObject::connect(&value,&QLineEdit::textChanged,&dialog,[&](const QString &){validate();});
+    QObject::connect(&buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);
+    QObject::connect(&buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+    const bool accepted=dialog.exec()==QDialog::Accepted;
+    if(accepted && mode.currentData().toString()!="anonymous")body["authentication"]=QJsonObject{{"type",mode.currentData().toString()},{"value",value.text()}};
+    if(accepted && !requests.toPlainText().trimmed().isEmpty()) {
+      QJsonParseError error;const auto doc=QJsonDocument::fromJson(requests.toPlainText().toUtf8(),&error);
+      if(error.error!=QJsonParseError::NoError || !doc.isArray()) {value.clear();requests.clear();QMessageBox::warning(parent,QStringLiteral("请求模板无效"),QStringLiteral("POST 模板须为 JSON 数组，未启动任务。"));return false;}
+      body["post_requests"]=doc.array();
+    }
+    value.clear();requests.clear();return accepted;
+  }
+  const auto web = parseJsonObject(pipeline["config"])["scan_parameters"].toObject()["web"].toObject();
+  if (web["mode"].toString() != "react_sqli") return true;
+  QDialog dialog(parent); dialog.setWindowTitle(QStringLiteral("DVWA 临时登录"));
+  auto *layout = new QFormLayout(&dialog);
+  auto *hint = new QLabel(QStringLiteral("仅用于本次扫描，不保存账号密码。安全等级以服务器为本次独立会话提供的值为准，过程区会显示；不会修改靶场等级设置。"), &dialog);
+  hint->setWordWrap(true); layout->addRow(hint);
+  auto *user = new QLineEdit(&dialog); user->setObjectName("webScanUsername"); user->setMaxLength(128);
+  auto *password = new QLineEdit(&dialog); password->setObjectName("webScanPassword"); password->setMaxLength(1024); password->setEchoMode(QLineEdit::Password);
+  layout->addRow(QStringLiteral("用户名"), user); layout->addRow(QStringLiteral("密码"), password);
+  auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+  layout->addRow(buttons); buttons->button(QDialogButtonBox::Ok)->setEnabled(false);
+  auto validate = [=]() { buttons->button(QDialogButtonBox::Ok)->setEnabled(!user->text().trimmed().isEmpty() && !password->text().isEmpty()); };
+  QObject::connect(user, &QLineEdit::textChanged, &dialog, validate);
+  QObject::connect(password, &QLineEdit::textChanged, &dialog, validate);
+  QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  const bool accepted = dialog.exec() == QDialog::Accepted;
+  if (accepted) body["authentication"] = QJsonObject{{"username",user->text().trimmed()},{"password",password->text()}};
+  user->clear(); password->clear(); return accepted;
 }
 
 static QString pipelineTaskName(const QJsonObject &pipeline)
@@ -1088,7 +1143,11 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     bool isAwaiting = (status == "awaiting_approval");
     bool isActive = (status == "running" || status == "awaiting_approval");
     bool isDeletable = !isActive;  // backend refuses delete on running/awaiting
-    m_startBtn->setVisible(status == "created");
+    const bool webRetry = (parseJsonObject(p["config"])["scan_parameters"].toObject()["web"].toObject()["mode"].toString() == "react_sqli"
+        || parseJsonObject(p["config"])["scan_orchestrator"].toObject()["mode"].toString() == "react")
+        && QStringList{"completed","failed","cancelled"}.contains(status);
+    m_startBtn->setVisible(status == "created" || webRetry);
+    m_startBtn->setText(webRetry ? QStringLiteral("重新扫描（新任务）") : QStringLiteral("▶ 启动任务"));
     m_approveBtn->setVisible(isAwaiting);
     m_resultBtn->setVisible((status == "completed" || status == "failed") && !runId.isEmpty());
     m_cancelAction->setVisible(isActive);
@@ -1254,6 +1313,8 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget)
   authorizationCheck->setChecked(false);
   l->addWidget(authorizationCheck);
   auto *scanPolicyHint = new QLabel(QStringLiteral("后续执行验证需人工确认。"), &dlg);
+  scanPolicyHint->setObjectName("scanOrchestratorHint");
+  scanPolicyHint->setToolTip(QStringLiteral("运行态任务使用 ReAct 扫描，源码任务保留专项流程。"));
   scanPolicyHint->setWordWrap(true);
   scanPolicyHint->setStyleSheet(QStringLiteral("font-size:12px; color:%1;").arg(Theme::TextSecondary));
   l->addWidget(scanPolicyHint);
@@ -1451,8 +1512,10 @@ void FlowPage::submitTaskCreation(const QJsonObject &body, bool startAfterCreate
     m_creationCopy->show(); m_creationOpen->show(); m_retryCreate->hide(); m_creationNotice->show();
     refreshFlows();
     if (!startAfterCreate) return;
+    QJsonObject startBody;
+    if (!webScanStartBody(this, res["data"].toObject(), startBody)) return;
     m_api->post(QStringLiteral("/api/pipelines/%1/start").arg(pipelineId),
-                QJsonObject{}, 10000, [this,guard,pipelineId](const QJsonObject &startResponse) {
+                startBody, 10000, [this,guard,pipelineId](const QJsonObject &startResponse) {
       if(!guard) return;
       if (startResponse["status"].toString() != "ok") {
         QMessageBox::warning(this, QStringLiteral("任务已创建"),
@@ -1603,10 +1666,33 @@ void FlowPage::onStartFlow()
 {
   if (m_selectedPipelineId.isEmpty()) return;
   const QString pipelineId = m_selectedPipelineId;
+  if (m_lastDisplayedDetail["status"].toString() != "created") {
+    if (m_startBtn->property("retrySource").toString() != pipelineId) {
+      m_startBtn->setProperty("retrySource", pipelineId);
+      m_startBtn->setProperty("retryId", QUuid::createUuid().toString(QUuid::WithoutBraces));
+    }
+    m_startBtn->setEnabled(false);
+    const QPointer<FlowPage> guard(this);
+    m_api->post(QStringLiteral("/api/pipelines/%1/retry-scan").arg(pipelineId),
+      QJsonObject{{"request_id",m_startBtn->property("retryId").toString()}},10000,[this,guard,pipelineId](const QJsonObject &response) {
+      if(!guard)return;
+      m_startBtn->setEnabled(true);
+      if(response["status"].toString()!="ok") {QMessageBox::warning(this,QStringLiteral("重试未创建"),response["error"].toObject()["message"].toString());return;}
+      if(m_selectedPipelineId!=pipelineId)return;
+      m_startBtn->setProperty("retrySource", QVariant()); m_startBtn->setProperty("retryId", QVariant());
+      m_lastDisplayedDetail=response["data"].toObject();m_selectedPipelineId=m_lastDisplayedDetail["pipeline_id"].toString();
+      refreshFlows();
+      if(m_lastDisplayedDetail["status"].toString()=="created")onStartFlow();
+      else loadFlowDetail(m_selectedPipelineId);
+    });
+    return;
+  }
+  QJsonObject startBody;
+  if (!webScanStartBody(this, m_lastDisplayedDetail, startBody)) return;
   m_startBtn->setEnabled(false);
   m_startBtn->setText(QStringLiteral("启动中…"));
   m_api->post(QStringLiteral("/api/pipelines/%1/start").arg(pipelineId),
-              QJsonObject{}, 10000, [this, pipelineId](const QJsonObject &response) {
+              startBody, 10000, [this, pipelineId](const QJsonObject &response) {
     m_startBtn->setEnabled(true);
     m_startBtn->setText(QStringLiteral("▶ 启动任务"));
     if (response.value(QStringLiteral("status")).toString() != QStringLiteral("ok")) {

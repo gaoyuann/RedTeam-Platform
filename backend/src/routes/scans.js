@@ -106,6 +106,7 @@ export default function (db) {
 
   router.post('/', async (req, res) => {
     let { target, scan_type, parameters } = req.body;
+    if(parameters?.web || parameters?.scan_parameters?.web || req.body.authentication) return res.status(400).json({status:'error',error:{message:'AI Web 扫描须通过父任务启动'}});
     let createdBy=req.user.sub;
     if (!target || !scan_type) return res.status(400).json({ status: 'error', error: { message: 'target, scan_type are required' } });
     if (isProgramScan(scan_type)) {
@@ -210,6 +211,8 @@ export default function (db) {
   router.delete('/:scanTaskId', (req, res) => {
     if(isScanActive(req.params.scanTaskId) || db.prepare("SELECT 1 FROM scan_tasks WHERE scan_task_id=? AND status='RUNNING'").get(req.params.scanTaskId))
       return res.status(409).json({status:'error',error:{message:'扫描尚未收束，不能删除'}});
+    if(hasScanIntegrity(db) && db.prepare("SELECT 1 FROM scan_tool_runs WHERE scan_task_id=? AND (state='running' OR json_extract(outcome,'$.stopped')=0)").get(req.params.scanTaskId))
+      return res.status(409).json({status:'error',error:{message:'工具停止未确认，须保留扫描记录'}});
     if(hasScanIntegrity(db) && db.prepare('SELECT 1 FROM scan_tasks WHERE retry_of_scan_task_id=?').get(req.params.scanTaskId))
       return res.status(409).json({status:'error',error:{message:'存在关联重试，须保留原扫描来源'}});
     if(hasStatistics(db) && db.prepare(`SELECT 1 FROM finding_instance_records m JOIN scan_results r ON r.id=m.finding_id
@@ -272,6 +275,9 @@ export default function (db) {
   // A retry is a new immutable scan identity, never a reset of old evidence.
   router.post('/:scanTaskId/retry', (req,res) => {
     const task=db.prepare('SELECT * FROM scan_tasks WHERE scan_task_id=?').get(req.params.scanTaskId);
+    let parameters={};try{parameters=JSON.parse(task.parameters||'{}');}catch{}
+    if(parameters.web?.mode==='react_sqli') return res.status(409).json({status:'error',error:{message:'临时认证扫描请新建任务并重新输入登录信息'}});
+    if(JSON.parse(task.parameters || '{}').react_managed || task.scan_type==='react_scan')return res.status(409).json({status:'error',error:{message:'ReAct 子检查请从父任务创建关联重试'}});
     if(isProgramScan(task.scan_type)) return res.status(409).json({status:'error',error:{message:'程序测试请新建任务'}});
     if(isScanActive(task.scan_task_id) || ['RUNNING','PENDING'].includes(task.status)) return res.status(409).json({status:'error',error:{message:'原扫描尚未收束'}});
     if(!hasScanIntegrity(db)) return res.status(409).json({status:'error',error:{message:'扫描结果迁移尚未安装'}});

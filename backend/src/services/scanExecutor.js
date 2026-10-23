@@ -1,3 +1,7 @@
+import {scanSessionAuth} from './scanSessionAuth.js';
+import {isScanAgent} from './scanAgentConfig.js';
+import {scanWebAgent} from './webScanAgent.js';
+import {isWebAgent,hasWebScanSchema} from './webScanConfig.js';
 import { parseResults, createScanOutputCollector } from './scanResultParsers.js';
 export { parseResults } from './scanResultParsers.js';
 import { beginToolRun, finishToolRun, hasScanIntegrity } from './scanResultStore.js';
@@ -263,7 +267,7 @@ export function buildArgs(scanType, target, parameters = {}) {
 }
 
 // ── Main entry: executeScan ───────────────────────────────────────────
-export async function executeScan(scanTaskId, {reportOnly=false} = {}) {
+export async function executeScan(scanTaskId, {reportOnly=false,budget} = {}) {
   if (runningScans.has(scanTaskId)) {
     return { ok: false, error: 'Scan is already executing' };
   }
@@ -292,8 +296,15 @@ export async function executeScan(scanTaskId, {reportOnly=false} = {}) {
   let parentConfig={}; try {parentConfig=JSON.parse(parent?.config || '{}');} catch {}
   const scope=parentConfig.task_scope ? taskScope(parent) : null;
   const scopedTarget=/^[^/]+:\d+$/.test(task.target) ? `tcp://${task.target}` : task.target;
-  const blocked=scope ? scopeBlockReason(scope,scopedTarget,task.scan_type) : null;
+  const smartWeb=isWebAgent(parentConfig);
+  const blocked=scope ? scopeBlockReason(scope,scopedTarget,smartWeb?'web_agent':task.scan_type) : null;
   if(blocked) return rejectScope(blocked);
+  let requestedWeb;try{requestedWeb=JSON.parse(task.parameters || '{}').web;}catch{return rejectScope('扫描配置无效');}
+  const reactManaged=JSON.parse(task.parameters||'{}').react_managed;
+  if((reactManaged || task.scan_type==='web_parameter_scan') && (!parent || !isScanAgent(parentConfig) || parent.status!=='running'))return rejectScope('ReAct 检查缺少活动父任务');
+  if(requestedWeb && (!smartWeb || !hasWebScanSchema(db) || task.target!==parent.target || parent.status!=='running' || task.scan_type!=='web_scan' ||
+    JSON.stringify(requestedWeb)!==JSON.stringify(parentConfig.scan_parameters.web)))return rejectScope('AI Web 扫描缺少一致的活动父任务范围或迁移');
+  if(smartWeb && !requestedWeb)return rejectScope('AI Web 父任务禁止回退到基础扫描');
   let nativeSource;
   try {const params=JSON.parse(task.parameters || '{}');nativeSource=params.cscan_target || params.source_path;} catch {}
   if(scope && nativeSource) {
@@ -317,6 +328,8 @@ export async function executeScan(scanTaskId, {reportOnly=false} = {}) {
 
     const runAbortableTool = async (toolId, args, options) => {
       if (scanAbortFlags.get(scanTaskId)) return {success:false,aborted:true,exitCode:-2,stdout:'',stderr:'扫描被操作员中止'};
+      if(budget)options={...options,timeout:Math.min(options.timeout||120000,budget.timeout('tool_ms'))};
+      budget?.consumeMany(toolId==='target-request'?['tools','pages']:['tools']);
       const controller = new AbortController();
       const traceId=!options.onOutput?beginToolRun(db,scanTaskId,toolId,args.includes('--iflist')?'network_context':'lan_discovery'):null;
       const result=await raceScanWithAbort(runTool(toolId,args,{...options,signal:controller.signal}),scanTaskId,controller);
@@ -373,7 +386,7 @@ export async function executeScan(scanTaskId, {reportOnly=false} = {}) {
       try {
         result = classifyToolResult(toolId, await runAbortableTool(toolId,args,{timeout,onOutput:collector.push}));
       } catch(error) {
-        result={success:false,exitCode:-1,stdout:'',stderr:'',error:error.message};
+        result={success:false,exitCode:-1,stdout:'',stderr:'',error:error.message,...(error.code==='SCAN_BUDGET_EXHAUSTED'?{toolStarted:false,processStopped:true}:{})};
       }
       if (scanAbortFlags.get(scanTaskId) || result.executionMode === 'aborted') result={...result,success:false,aborted:true,error:'扫描被操作员中止'};
       const parsed=collector.finish(result);
@@ -417,6 +430,11 @@ export async function executeScan(scanTaskId, {reportOnly=false} = {}) {
 
     if (task.scan_type === 'topology_scan') {
       totalResults = await runAndStore('topology_scan', 'nmap', task.target, parameters, timeoutMs);
+    } else if ((task.scan_type === 'web_scan' && parameters.web?.mode==='react_sqli') || task.scan_type==='web_parameter_scan') {
+      const controller=new AbortController();
+      const result=await raceScanWithAbort(scanWebAgent(task,{db,parent,signal:controller.signal,anonymous:task.scan_type==='web_parameter_scan',authentication:scanSessionAuth(task.pipeline_id,task.created_by),budget}),scanTaskId,controller);
+      if(!result.outcomes)throw new Error('智能扫描未完成');
+      totalResults+=result.count;outcomes.push(...result.outcomes);
     } else if (task.scan_type === 'web_scan') {
       // ── General web scan with optional explicit injection endpoint ──
       try {
@@ -481,9 +499,10 @@ export async function executeScan(scanTaskId, {reportOnly=false} = {}) {
     // ── Application target scan types ─────────────────────────────────
     } else if (task.scan_type === 'app_discovery') {
       if (scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');
+      const httpTimeout=budget?Math.min(8000,budget.timeout('tool_ms')):8000;
       const httpRun=beginToolRun(db,scanTaskId,'http-discovery','app_discovery');
       const controller=new AbortController();
-      const probes=await raceScanWithAbort(probeTarget(task.target,{signal:controller.signal,
+      const probes=await raceScanWithAbort(probeTarget(task.target,{signal:controller.signal,...(budget?{request:(url,options)=>{budget.consume('pages');return fetch(url,options);},timeoutMs:httpTimeout} : {}),
         allowUrl:scope ? url=>isTargetInScope(scope,url) : undefined}),scanTaskId,controller);
       const records=Array.isArray(probes)?probes:probes.partialResults || [];
       const success=Array.isArray(probes) && !scanAbortFlags.get(scanTaskId);
@@ -601,7 +620,7 @@ export async function executeScan(scanTaskId, {reportOnly=false} = {}) {
 
   } catch (err) {
     const isAbort = scanAbortFlags.get(scanTaskId);
-    const usable = !isProgramScan(task.scan_type) && db.prepare("SELECT 1 FROM scan_results WHERE scan_task_id=? AND result_type NOT IN ('scan_error','scan_warning','scan_evidence','raw_output','network_context') LIMIT 1").get(scanTaskId);
+    const usable = !isProgramScan(task.scan_type) && db.prepare("SELECT 1 FROM scan_results WHERE scan_task_id=? AND result_type NOT IN ('scan_error','scan_warning','scan_evidence','raw_output','network_context','web_observation','web_agent_step','web_scan_summary') LIMIT 1").get(scanTaskId);
     const finalStatus = isAbort ? 'CANCELLED' : usable ? 'PARTIAL' : 'FAILED';
     const completedAt = new Date().toISOString();
     db.prepare("UPDATE scan_tasks SET status = ?, completed_at = ?, error_message = ? WHERE scan_task_id = ?")

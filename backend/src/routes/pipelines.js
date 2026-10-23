@@ -1,4 +1,10 @@
+import {putPostRequests,clearPostRequests} from '../services/scanPostRequests.js';
+import {isTargetInScope} from '../services/taskScope.js';
+import {putScanSessionAuth,clearScanSessionAuth} from '../services/scanSessionAuth.js';
+import {defaultScanAgent,isScanAgent,scanAgentBusy,isSourceTask,validateScanAgentMode} from '../services/scanAgentConfig.js';
+import {validateWebScanConfig,isWebAgent,hasWebScanSchema,putWebCredentials,clearWebCredentials,webTargetBusy} from '../services/webScanConfig.js';
 import { hasStatistics } from '../services/findingInstances.js';
+import { hasScanIntegrity } from '../services/scanResultStore.js';
 import findingVerificationRoutes from './findingVerifications.js';
 import {isProgramMode} from '../services/programScan.js';
 import { Router } from 'express';
@@ -284,6 +290,7 @@ export default function (db) {
 
   // Create pipeline
   router.post('/', asyncRoute(async (req, res) => {
+    if(req.body?.authentication||req.body?.post_requests)return res.status(400).json({status:'error',error:{message:'临时认证仅可在启动时提交'}});
     let { target, config } = req.body;
     if (!target) {
       return res.status(400).json({ status: 'error', error: { message: '目标地址不能为空' } });
@@ -321,6 +328,8 @@ export default function (db) {
     try {
       const program=await normalizeProgramConfig(JSON.parse(configJson),target);
       target=program.target;
+      program.config=defaultScanAgent(program.config,target);
+      validateWebScanConfig(program.config,target);
       configJson=JSON.stringify({...program.config,task_scope:normalizeTaskScope(program.config,target),topology_origin:captureTopologyOrigin(req)});
     } catch(error) {return res.status(400).json({status:'error',error:{message:error.message}});}
     try {
@@ -356,6 +365,7 @@ export default function (db) {
 
   // Update pipeline
   router.put('/:id', asyncRoute(async (req, res) => {
+    if(req.body?.authentication||req.body?.post_requests)return res.status(400).json({status:'error',error:{message:'临时认证仅可在启动时提交'}});
     const pipeline = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(req.params.id);
     if (!pipeline) return res.status(404).json({ status: 'error', error: { message: '流水线不存在' } });
     if (!canModifyPipeline(req, pipeline)) {
@@ -386,8 +396,21 @@ export default function (db) {
       try {
         const previous=JSON.parse(pipeline.config || '{}');
         const requested=JSON.parse(configStr);
+        for(const key of ['retry_of_pipeline_id','retry_request_id','scan_orchestrator']) if(previous[key]) requested[key]=previous[key];
         if(requested.task_scope === undefined) requested.task_scope=previous.task_scope;
         const normalized=await normalizeProgramConfig(requested,pipeline.target);
+        // Recompute only for editable tasks. Historical runtime tasks retain
+        // their original mode unless crossing the source/runtime boundary.
+        if(pipeline.status==='created' && (isScanAgent(previous) || isSourceTask(previous,pipeline.target)!==isSourceTask(normalized.config,normalized.target)))
+          normalized.config=defaultScanAgent(normalized.config,normalized.target);
+        validateWebScanConfig(normalized.config,normalized.target);
+        if((isWebAgent(previous)||isWebAgent(normalized.config)||isScanAgent(previous)) && (pipeline.status!=='created' ||
+          db.prepare('SELECT status,config FROM pipelines WHERE pipeline_id=?').get(pipeline.pipeline_id)?.config!==pipeline.config ||
+          db.prepare('SELECT status FROM pipelines WHERE pipeline_id=?').get(pipeline.pipeline_id)?.status!=='created'))
+          return res.status(409).json({status:'error',error:{message:'AI Web 扫描配置已冻结或发生并发变更，请重新读取任务'}});
+        validateScanAgentMode(normalized.config,normalized.target);
+        if(pipeline.status!=='created' && JSON.stringify(previous.scan_parameters || {})!==JSON.stringify(normalized.config.scan_parameters || {}))
+          return res.status(409).json({status:'error',error:{message:'扫描已启动，不能改变扫描配置'}});
         normalized.config.task_scope=normalizeTaskScope(normalized.config,normalized.target);
         if(pipeline.status!=='created' && JSON.stringify(previous.task_scope || normalizeTaskScope(previous,pipeline.target))!==JSON.stringify(normalized.config.task_scope))
           return res.status(409).json({status:'error',error:{message:'扫描已启动，不能改变测试范围；请新建任务'}});
@@ -428,6 +451,11 @@ export default function (db) {
     if (['running', 'awaiting_approval'].includes(pipeline.status)) {
       return res.status(400).json({ status: 'error', error: { message: '运行中或待确认的流水线不能删除，请先取消' } });
     }
+    if(hasScanIntegrity(db) && db.prepare(`SELECT 1 FROM scan_tool_runs r JOIN scan_tasks s USING(scan_task_id)
+      WHERE s.pipeline_id=? AND (r.state='running' OR json_extract(r.outcome,'$.stopped')=0)`).get(pipeline.pipeline_id))
+      return res.status(409).json({status:'error',error:{message:'工具停止未确认，须保留任务来源'}});
+    if(db.prepare("SELECT 1 FROM pipelines WHERE json_extract(config,'$.retry_of_pipeline_id')=?").get(pipeline.pipeline_id))
+      return res.status(409).json({status:'error',error:{message:'存在关联重试，须保留原任务来源'}});
 
     if(hasStatistics(db) && db.prepare(`SELECT 1 FROM finding_instances WHERE pipeline_id=?
       UNION ALL SELECT 1 FROM task_baselines WHERE pipeline_id=?
@@ -464,6 +492,30 @@ export default function (db) {
     const now = new Date().toISOString();
     let startConfig = {};
     try { startConfig = JSON.parse(pipeline.config || '{}'); } catch {}
+    try {
+      validateScanAgentMode(startConfig,pipeline.target);
+      validateWebScanConfig(startConfig,pipeline.target);
+      if(isScanAgent(startConfig)) {
+        if(!hasWebScanSchema(db))return res.status(409).json({status:'error',error:{message:'ReAct 扫描所需迁移尚未安装'}});
+        if(scanAgentBusy(db,pipeline.target,pipeline.pipeline_id))return res.status(409).json({status:'error',error:{message:'目标存在活动任务或停止未确认工具'}});
+        if(req.body?.authentication){
+          if(req.user.sub!==pipeline.created_by)return res.status(403).json({status:'error',error:{message:'临时会话须由任务所有者提供'}});
+          putScanSessionAuth(pipeline.pipeline_id,pipeline.created_by,pipeline.target,req.body.authentication);
+        }
+      }
+      if(req.body?.post_requests){
+        if(!isScanAgent(startConfig)||req.user.sub!==pipeline.created_by)throw Error('POST 模板仅由通用任务所有者提供');
+        putPostRequests(pipeline.pipeline_id,pipeline.created_by,pipeline.target,req.body.post_requests,u=>isTargetInScope(taskScope(pipeline),u));
+      }
+      if(isWebAgent(startConfig)) {
+        if(req.user.sub!==pipeline.created_by) return res.status(403).json({status:'error',error:{message:'临时认证扫描须由任务所有者启动'}});
+        if(!hasWebScanSchema(db)) return res.status(409).json({status:'error',error:{message:'AI Web 扫描迁移尚未安装'}});
+        if(webTargetBusy(db,pipeline.target,pipeline.pipeline_id))
+          return res.status(409).json({status:'error',error:{message:'该目标仍有工具活动或停止未确认，不能重复启动'}});
+        putWebCredentials(pipeline.pipeline_id,pipeline.created_by,req.body?.authentication);
+      } else if(req.body?.authentication && !isScanAgent(startConfig)) return res.status(400).json({status:'error',error:{message:'基础扫描不接受临时认证'}});
+    } catch(error) { clearScanSessionAuth(pipeline.pipeline_id);clearPostRequests(pipeline.pipeline_id);return res.status(400).json({status:'error',error:{message:error.message}}); }
+    if(req.body){delete req.body.authentication;delete req.body.post_requests;}
     startConfig = { ...startConfig, topology_origin: captureTopologyOrigin(req) };
     db.prepare("UPDATE pipelines SET status = 'running', updated_at = ?, config = ? WHERE pipeline_id = ?")
       .run(now, JSON.stringify(startConfig), req.params.id);
@@ -475,16 +527,45 @@ export default function (db) {
     // Fire-and-forget: start pipeline engine
     try {
       const { runPipeline } = await import('../services/pipelineEngine.js');
-      runPipeline(req.params.id).catch(err => {
+      runPipeline(req.params.id).finally(()=>{clearWebCredentials(req.params.id);clearScanSessionAuth(req.params.id);clearPostRequests(req.params.id);}).catch(err => {
         console.error(`[PipelineEngine] Error for ${req.params.id}:`, err.message);
       });
     } catch (err) {
+      clearWebCredentials(req.params.id);clearScanSessionAuth(req.params.id);clearPostRequests(req.params.id);
       console.error('[PipelineEngine] Failed to import engine:', err.message);
     }
 
     const row = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(req.params.id);
     row.status_cn = statusCn(row.status);
     res.status(202).json({ status: 'ok', data: row });
+  });
+
+  // A new task identity is required because credentials and request templates are ephemeral.
+  router.post(['/:id/retry-web-scan','/:id/retry-scan'], (req,res) => {
+    const original=db.prepare('SELECT * FROM pipelines WHERE pipeline_id=?').get(req.params.id);
+    if(!original || original.created_by!==req.user.sub) return res.status(403).json({status:'error',error:{message:'只能重试自己的任务'}});
+    const config=JSON.parse(original.config || '{}');
+    if(!(isWebAgent(config)||isScanAgent(config)) || !['completed','failed','cancelled'].includes(original.status))
+      return res.status(409).json({status:'error',error:{message:'原智能扫描任务尚未结束或模式不适用'}});
+    if(!hasWebScanSchema(db))return res.status(409).json({status:'error',error:{message:'AI Web 扫描迁移尚未安装'}});
+    const requestId=req.body?.request_id;
+    if(typeof requestId!=='string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(requestId))return res.status(400).json({status:'error',error:{message:'需要有效重试请求编号'}});
+    const known=db.prepare("SELECT * FROM pipelines WHERE created_by=? AND json_extract(config,'$.retry_of_pipeline_id')=? AND json_extract(config,'$.retry_request_id')=?").get(req.user.sub,original.pipeline_id,requestId);
+    if(known)return res.status(200).json({status:'ok',data:{...known,config:JSON.parse(known.config)}});
+    if(isScanAgent(config)?scanAgentBusy(db,original.target):webTargetBusy(db,original.target))
+      return res.status(409).json({status:'error',error:{message:'该应用仍有活动扫描或工具停止未确认'}});
+    const limitErr=checkPipelineLimits(db,req.user.sub);
+    if(limitErr)return res.status(429).json({status:'error',error:{message:limitErr}});
+    const row=db.transaction(()=>{
+      const found=db.prepare("SELECT * FROM pipelines WHERE created_by=? AND json_extract(config,'$.retry_of_pipeline_id')=? AND json_extract(config,'$.retry_request_id')=?").get(req.user.sub,original.pipeline_id,requestId);
+      if(found)return found;
+      const next={...config,retry_of_pipeline_id:original.pipeline_id,retry_request_id:requestId,auto_execute:false,require_approval:true};
+      const created = insertNumberedTask(db, { target: original.target, config: next, owner: req.user.sub,
+        checkLimits: () => checkPipelineLimits(db, req.user.sub) }).row;
+      appendTaskLog(db,created.pipeline_id,'已创建关联扫描重试，等待启动；认证不会沿用');
+      return created;
+    }).immediate();
+    res.status(201).json({status:'ok',data:{...row,config:JSON.parse(row.config)}});
   });
 
   // Cancel running pipeline

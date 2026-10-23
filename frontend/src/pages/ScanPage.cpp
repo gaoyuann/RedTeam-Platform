@@ -768,7 +768,7 @@ void ScanPage::loadPipelineResults(bool append)
   const int request = ++m_scanPageRequest;
   const QString pipeline = m_pipelineId;
   const int scope = m_scopeRevision;
-  if (!append) { m_scanCursor = 0; m_aggregateRecords = {}; m_resultTree->setRootIndex(QModelIndex()); m_resultTree->clear(); m_resultOverview->clear(); }
+  if (!append) { if(m_webScanProcess){m_webScanProcess->clear();m_webScanProcess->hide();} m_scanCursor = 0; m_aggregateRecords = {}; m_resultTree->setRootIndex(QModelIndex()); m_resultTree->clear(); m_resultOverview->clear(); }
   m_allScanResults = true;
   m_selectedTaskId.clear();
   m_reexecBtn->hide(); m_genBtn->setEnabled(false);
@@ -799,6 +799,47 @@ void ScanPage::loadPipelineResults(bool append)
       return;
     }
     const auto data = response["data"].toObject();
+    QStringList processLines;
+    for (const auto &value : data["web_scan_process"].toArray()) {
+      const auto row = value.toObject();
+      const auto step = QJsonDocument::fromJson(row["result_data"].toString().toUtf8()).object();
+      if (row["result_type"].toString() == "scan_agent_summary")
+        processLines << QStringLiteral("ReAct 调度结束：%1 · 决策 %2 轮 · 派发 %3 项 · %4")
+          .arg(step["reason"].toString()).arg(step["decisions"].toInt()).arg(step["dispatches"].toInt())
+          .arg(step["complete"].toBool() ? QStringLiteral("已接入检查完成") : QStringLiteral("覆盖不完整，查看检查详情"));
+      else if (row["result_type"].toString() == "scan_capability_assessment") {
+        const auto stateText=[](const QJsonValue &v) { return v.isBool() ? (v.toBool() ? QStringLiteral("是") : QStringLiteral("否")) : QStringLiteral("不适用或未知"); };
+        processLines << QStringLiteral("能力 %1 · 观察成功：%2 · 检测执行：%3 · 检测完成：%4 · %5")
+          .arg(step["capability"].toString(),stateText(step["observation_success"]),stateText(step["detection_executed"]),stateText(step["detection_complete"]),
+            step["coverage_incomplete"].toBool() ? QStringLiteral("覆盖不足") : QStringLiteral("本项检查完成"));
+      }
+      else if (row["result_type"].toString() == "scan_agent_step")
+        processLines << QStringLiteral("ReAct 第 %1 轮 · %2 · %3 · %4：%5")
+          .arg(step["turn"].toInt()).arg(step["action"].toString(), step["scan_type"].toString(), step["state"].toString(), step["reason"].toString());
+      else if (row["result_type"].toString() == "web_scan_summary")
+        processLines << QStringLiteral("结束：%1 · SQL 派发尝试 %2 次 · 工具启动 %3 次 · 页面请求 %4 次 · %5")
+            .arg(step["reason"].toString()).arg(step["checks"].isDouble() ? QString::number(step["checks"].toInt()) : QStringLiteral("未知")).arg(step["checks_started"].isDouble() ? QString::number(step["checks_started"].toInt()) : QStringLiteral("未知")).arg(step["pages"].isDouble() ? QString::number(step["pages"].toInt()) : QStringLiteral("未知"))
+            .arg(step["complete"].toBool() ? QStringLiteral("检查计划完成") : QStringLiteral("覆盖不完整"));
+      else if(step["action"].toString()=="authentication")
+        processLines << QStringLiteral("本次独立会话安全等级：%1 · %2").arg(step["security_level"].toString(),step["reason"].toString());
+      else processLines << QStringLiteral("第 %1 轮 · %2 · %3：%4")
+          .arg(step["turn"].toInt()).arg(step["action"].toString(), step["state"].toString(), step["reason"].toString() + (step["result"].toString().isEmpty() ? QString() : " · " + step["result"].toString()));
+    }
+    for (const auto &value : data["web_scan_process"].toArray()) {
+      const auto row=value.toObject();
+      if(row["result_type"].toString()!="scan_agent_summary")continue;
+      const auto summary=QJsonDocument::fromJson(row["result_data"].toString().toUtf8()).object();
+      const auto budget=summary["budget"].toObject(),used=budget["used"].toObject(),limits=budget["limits"].toObject();
+      if(budget.isEmpty())continue;
+      QStringList counts;
+      const QStringList keys{"decisions","checks","pages","tools","sql_checks"};
+      const QStringList labels{QStringLiteral("模型决策"),QStringLiteral("检查派发"),QStringLiteral("页面请求"),QStringLiteral("工具尝试"),QStringLiteral("SQL 尝试")};
+      for(int i=0;i<keys.size();++i)
+        counts << QStringLiteral("%1 %2/%3").arg(labels[i]).arg(used[keys[i]].toInt()).arg(limits[keys[i]].toInt());
+      processLines << QStringLiteral("全任务预算：%1").arg(counts.join(QStringLiteral(" · ")));
+    }
+    if (data["web_scan_process_truncated"].toBool()) processLines.prepend(QStringLiteral("仅显示最近 100 条过程，完整记录见全部扫描记录"));
+    m_webScanProcess->setPlainText(processLines.join("\n")); m_webScanProcess->setVisible(!processLines.isEmpty());
     const auto page = data["page"].toObject();
     m_sourceResultsView = false;
     m_sourceResultsPending = false;
@@ -1579,6 +1620,9 @@ void ScanPage::setupUI() {
   m_sourceDemoBtn->setEnabled(false);
   right->addWidget(m_sourceDemoBtn);
   connect(m_sourceDemoBtn, &QPushButton::clicked, this, &ScanPage::selectSourceDemonstration);
+  m_webScanProcess = new QPlainTextEdit(resultsPage);
+  m_webScanProcess->setObjectName("webScanProcess"); m_webScanProcess->setReadOnly(true);
+  m_webScanProcess->setMaximumHeight(150); m_webScanProcess->hide(); right->addWidget(m_webScanProcess);
   m_sourceDetailButton=new QPushButton(QStringLiteral("打开源码扫描详情"));
   m_sourceDetailButton->setObjectName("openSourceScanDetail");m_sourceDetailButton->hide();
   m_sourceDetailButton->setToolTip(QStringLiteral("按文件查看扫描进度、证据和发现；攻击测试时统一选择漏洞。"));
@@ -1969,6 +2013,7 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
     visibleResults.append(value);
   }
   const QSignalBlocker blocker(m_resultTree);
+  if (!m_allScanResults && m_webScanProcess) { m_webScanProcess->clear(); m_webScanProcess->hide(); }
   m_resultOverview->setResults(visibleResults);
   m_resultOverview->setVisible(!m_sourceResultsView || !m_sourceResultsPending);
   m_resultTree->setRootIndex(QModelIndex());
@@ -2194,6 +2239,12 @@ void ScanPage::decorateResultRow(QTreeWidgetItem *item, const QJsonObject &recor
   }
   item->setText(5, locations.isEmpty() ? QStringLiteral("未记录") : locations.join(" · "));
   item->setToolTip(5, item->text(5));
+  const auto detection = data["detection_status"].toString();
+  if (!detection.isEmpty()) {
+    const QString label = detection == "tool_positive" ? QStringLiteral("工具检测阳性") : QStringLiteral("证据不足，需复核");
+    item->setText(5, item->text(5) + " · " + label);
+    item->setToolTip(5, item->text(5) + QStringLiteral("\n扫描检出状态独立于后续验证结论"));
+  }
   if (isVerificationRecord(record)) {
     QString name;
     for (const auto &key : {"title", "name", "finding", "template"}) {
@@ -3118,6 +3169,7 @@ void ScanPage::clearDetailPanel() {
   for (auto *dialog : findChildren<QDialog*>("scanAuxRecord")) dialog->close();
   m_resultOverview->clear();
   m_coverageTree->clear(); m_coverageTree->hide();
+  if (m_webScanProcess) {m_webScanProcess->clear();m_webScanProcess->hide();}
   m_listTitle->setText(QStringLiteral("漏洞候选"));
   m_showAllRecords->hide(); m_moreResultsButton->hide();
   setStatusText("选择任务查看详情");
