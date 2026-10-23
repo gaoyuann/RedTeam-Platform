@@ -34,6 +34,7 @@ set(SOURCES
     src/pages/KnowledgeGraphPage.cpp
     src/pages/FindingVerificationDialog.cpp
     src/pages/ScanPage.cpp
+    src/pages/SourceScanDetailDialog.cpp
     src/pages/PayloadPage.cpp
     src/pages/ExecutionPage.cpp
     src/pages/TaskExecutionPanel.cpp
@@ -82,6 +83,7 @@ set(HEADERS
     src/pages/KnowledgeGraphPage.h
     src/pages/FindingVerificationDialog.h
     src/pages/ScanPage.h
+    src/pages/SourceScanDetailDialog.h
     src/pages/PayloadPage.h
     src/pages/ExecutionPage.h
     src/pages/TaskExecutionPanel.h
@@ -196,6 +198,18 @@ if(BUILD_UI_CHECKS)
 endif()
 
 if(BUILD_UI_CHECKS)
+  add_executable(RedTeam-SourceScanDetailChecks src/ApiClient.cpp
+    src/pages/SourceScanDetailDialog.cpp test/source_scan_detail_checks.cpp)
+  target_include_directories(RedTeam-SourceScanDetailChecks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(RedTeam-SourceScanDetailChecks Qt5::Widgets Qt5::Network Qt5::Test)
+  foreach(UI_SCALE IN ITEMS 1 1.25 1.5)
+    add_test(NAME ui-source-detail-${UI_SCALE} COMMAND RedTeam-SourceScanDetailChecks)
+    set_tests_properties(ui-source-detail-${UI_SCALE} PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${UI_SCALE}" TIMEOUT 40)
+  endforeach()
+endif()
+
+if(BUILD_UI_CHECKS)
   add_executable(RedTeam-GlobalSearchChecks
     src/ApiClient.cpp src/GlobalSearchDialog.cpp
     test/global_search_checks.cpp)
@@ -216,7 +230,7 @@ endif()
 if(BUILD_UI_CHECKS)
   add_executable(RedTeam-TaskReportExportChecks
     src/ApiClient.cpp src/ReportFileActions.cpp src/pages/TaskResultsPanel.cpp
-    src/pages/ScanPage.cpp src/pages/FindingVerificationDialog.cpp
+    src/pages/ScanPage.cpp src/pages/SourceScanDetailDialog.cpp src/pages/FindingVerificationDialog.cpp
     test/task_report_export_checks.cpp)
   target_include_directories(RedTeam-TaskReportExportChecks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(RedTeam-TaskReportExportChecks Qt5::Widgets Qt5::Network Qt5::Test)

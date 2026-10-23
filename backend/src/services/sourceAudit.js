@@ -11,19 +11,34 @@ const active = new WeakMap();
 
 // Both task pipelines and standalone program scans use this CScan-only entry.
 export function auditSources(task, context) {
+  const parameters=context.parameters || {};
+  return runAuditOnce(task,context,()=>context.reportOnly ? auditCscanNative(task,context)
+    : parameters.input_kind==='remote_directory' || (!parameters.cscan_target && !parameters.source_path && (parameters.connection_id || parameters.source_url))
+      ? auditSelectedDirectory(task,{...context,parameters})
+      : auditCscanNative(task,{...context,parameters:{...parameters,
+        ...(!parameters.cscan_target && !parameters.source_path ? {cscan_target:task.target} : {})}}));
+}
+
+// Explicit compatibility utility for archived snapshot tooling. Live scan entries
+// always use auditSources and never collect or stage a source snapshot.
+export function auditLegacySnapshot(task,context) {
+  return runAuditOnce(task,context,()=>audit(task,context));
+}
+
+function runAuditOnce(task,context,operation) {
   let pending = active.get(context.db);
   if (!pending) {pending = new Map();active.set(context.db,pending);}
   if (pending.has(task.scan_task_id)) return pending.get(task.scan_task_id);
-  const operation = context.reportOnly ? auditCscanNative(task,context) : context.parameters?.input_kind==='remote_directory'
-    ? auditSelectedDirectory(task,context)
-    : context.parameters?.cscan_target || context.parameters?.source_path ? auditCscanNative(task,context) : audit(task,context);
-  const promise = operation
+  const promise = operation()
     .finally(()=>pending.delete(task.scan_task_id));
   pending.set(task.scan_task_id,promise);
   return promise;
 }
 
 async function auditSelectedDirectory(task,context) {
+  if(context.signal?.aborted) throw new Error('源码扫描已取消');
+  if(context.db.prepare('SELECT 1 FROM source_audits WHERE scan_task_id=?').get(task.scan_task_id))
+    throw new Error('本任务已有 CScan 提交记录，请新建任务，避免重复扫描');
   const connection=await resolveTaskSource(context.parameters,task.target);
   if(!connection) throw new Error('请选择目标源码目录或直接填写源码路径／地址');
   const path=connection.kind==='http' ? connection.source_url
@@ -32,8 +47,15 @@ async function auditSelectedDirectory(task,context) {
   const location=connection.kind==='ssh'
     ? `目标源码位于主机 ${connection.host} 的目录 ${path}（SSH 端口 ${connection.port}）。请使用执行环境已有的授权访问条件自行读取；不要把此路径当成容器本机路径。`
     : `目标源码地址或执行侧路径：${path}。`;
-  return auditCscanNative(task,{...context,parameters:{...context.parameters,cscan_target:target},
-    sourceLocation:location});
+  const legacy=context.parameters.input_kind!=='remote_directory';
+  const runtime=legacy?programExecutionTarget({...task,parameters:context.parameters}):context.parameters.runtime_target || null;
+  const parameters={...context.parameters,cscan_target:target,runtime_target:runtime};
+  if(context.signal?.aborted) throw new Error('源码扫描已取消');
+  // Preserve a previously declared runtime entry when migrating old inputs. It
+  // remains separate from the source URL and is not inferred from report text.
+  if(context.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='scan_tasks'").get())
+    context.db.prepare('UPDATE scan_tasks SET parameters=? WHERE scan_task_id=?').run(JSON.stringify(parameters),task.scan_task_id);
+  return auditCscanNative(task,{...context,parameters,sourceLocation:location,runtimeTarget:legacy?runtime:null});
 }
 
 async function audit(task, {db, parameters = {}, signal, runTool, snapshot = createSourceSnapshot, cscan = runCscan}) {

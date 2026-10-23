@@ -21,10 +21,12 @@ export async function cscanFixture(t, findings = []) {
         const id = String(counts.created),input = body.variables.input;
         if(!input.includes('"snapshot_id":')) {
           const accepted=typeof findings==='function'?await findings({input}):findings;
-          const markdown=accepted.length?accepted.map(f=>[
+          const markdown='Source-Access: available\n'+(accepted.length?accepted.map(f=>[
             '## '+f.title,'File: '+f.file,'Line: '+f.start_line,'Severity: '+f.severity,
             'CWE: '+(f.cwe || ''),'Evidence: '+f.reason,
-          ].join('\n')).join('\n\n'):'No findings in the fixture report.';
+            'Preconditions: '+(f.preconditions || 'Fixture source access; runtime linkage unverified'),
+            'Remediation: '+(f.suggestion || 'Review the cited source'),
+          ].join('\n')).join('\n\n'):'No findings in the fixture report.');
           reports.set(id,markdown);
           res.end(JSON.stringify({data:{createFlow:{id,status:'running'}}}));return;
         }
