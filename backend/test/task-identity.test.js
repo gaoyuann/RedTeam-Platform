@@ -55,7 +55,14 @@ test('deletion, rollback, cross day, overflow and request retries preserve uniqu
  assert.throws(()=>insertNumberedTask(db,{...request,hash:'changed'}),e=>e.status===409);
  db.prepare('DELETE FROM pipelines WHERE pipeline_id=?').run(a.row.pipeline_id);
  assert.throws(()=>insertNumberedTask(db,request),/已删除/);
- assert.throws(()=>insertNumberedTask(db,{...input,owner:'missing'}),/FOREIGN KEY/);
+ assert.throws(()=>insertNumberedTask(db,{...input,owner:'missing'}),e=>e.status===401 && e.code==='AUTH_REQUIRED');
+ db.exec("CREATE TRIGGER fixture_insert_failure BEFORE INSERT ON pipelines WHEN NEW.target='reject.invalid' BEGIN SELECT RAISE(ABORT,'fixture insert failure'); END");
+ assert.throws(()=>insertNumberedTask(db,{...input,target:'reject.invalid'}),/fixture insert failure/);
+ db.exec("CREATE TRIGGER fixture_request_failure BEFORE INSERT ON task_creation_requests WHEN NEW.request_id='reject-request' BEGIN SELECT RAISE(ABORT,'fixture request failure'); END");
+ assert.throws(()=>insertNumberedTask(db,{...input,requestId:'reject-request',hash:'fixture'}),/fixture request failure/);
+ assert.equal(db.prepare('SELECT count(*) n FROM pipelines').get().n,0);
+ assert.equal(db.prepare('SELECT count(*) n FROM task_creation_requests').get().n,1);
+ assert.equal(db.prepare("SELECT last_value FROM task_number_counters WHERE day='20261023'").get().last_value,1);
  assert.equal(insertNumberedTask(db,input).row.task_no,'TASK-20261023-000002');
  assert.equal(insertNumberedTask(db,{...input,now:'2026-10-23T16:00:00Z'}).row.task_no,'TASK-20261024-000001');
  db.prepare("UPDATE task_number_counters SET last_value=999999 WHERE day='20261023'").run();
@@ -73,5 +80,25 @@ test('concurrent independent connections and restart retain unique high water',a
  })));
  assert.equal(new Set(results.flat()).size,32);
  const reopened=new Database(path);try{assert.equal(insertNumberedTask(reopened,input).row.task_no,'TASK-20261023-000033');}finally{reopened.close();}
+ }finally{rmSync(folder,{recursive:true,force:true});}
+});
+
+test('concurrent connections retry one request without consuming additional numbers',async()=>{
+ const folder=mkdtempSync(join(tmpdir(),'task-request-'));const path=join(folder,'identity.db');
+ const db=fixture(path);db.pragma('journal_mode=WAL');db.close();try{
+ const module=new URL('../src/services/taskIdentity.js',import.meta.url).href;
+ const sqlite=new URL('../node_modules/better-sqlite3/lib/index.js',import.meta.url).href;
+ const request={...input,requestId:'shared-request',hash:creationHash(input)};
+ const code=`const {parentPort,workerData}=require('node:worker_threads');(async()=>{const {default:DB}=await import(${JSON.stringify(sqlite)});const {insertNumberedTask}=await import(${JSON.stringify(module)});const db=new DB(workerData);db.pragma('busy_timeout=10000');const rows=[];for(let i=0;i<8;i++)rows.push(insertNumberedTask(db,${JSON.stringify(request)}).row);db.close();parentPort.postMessage(rows)})().catch(e=>{throw e})`;
+ const rows=(await Promise.all(Array.from({length:4},()=>new Promise((resolve,reject)=>{
+  const worker=new Worker(code,{eval:true,workerData:path});worker.once('message',resolve);worker.once('error',reject);
+ })))).flat();
+ assert.equal(new Set(rows.map(row=>row.pipeline_id)).size,1);
+ assert.deepEqual([...new Set(rows.map(row=>row.task_no))],['TASK-20261023-000001']);
+ const reopened=new Database(path);try{
+  assert.equal(reopened.prepare('SELECT count(*) n FROM pipelines').get().n,1);
+  assert.equal(reopened.prepare('SELECT count(*) n FROM task_creation_requests').get().n,1);
+  assert.equal(insertNumberedTask(reopened,input).row.task_no,'TASK-20261023-000002');
+ }finally{reopened.close();}
  }finally{rmSync(folder,{recursive:true,force:true});}
 });

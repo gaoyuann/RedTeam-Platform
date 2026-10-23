@@ -333,7 +333,7 @@ export default function (db) {
       configJson=JSON.stringify({...program.config,task_scope:normalizeTaskScope(program.config,target),topology_origin:captureTopologyOrigin(req)});
     } catch(error) {return res.status(400).json({status:'error',error:{message:error.message}});}
     try {
-      const created = insertNumberedTask(db, { target, config: JSON.parse(configJson), owner: req.user.sub, now,
+      const created = insertNumberedTask(db, { target, config: JSON.parse(configJson), owner: req.user.sub, ownerRole: req.user.role, now,
         requestId, hash, checkLimits: () => checkPipelineLimits(db, req.user.sub) });
       const pipelineId = created.row.pipeline_id;
       if (created.reused) return res.json({ status: 'ok', data: { ...created.row, status_cn: statusCn(created.row.status), config: JSON.parse(created.row.config || '{}') }, reused: true,

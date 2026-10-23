@@ -47,11 +47,6 @@ test('real API persists one task for retries, searches all states and enforces o
  assert.equal(f.db.prepare('SELECT count(*) n FROM pipelines').get().n,1);
  assert.equal(f.db.prepare('SELECT count(*) n FROM pipeline_steps').get().n,0);
  const duplicate=await f.request('POST','/pipelines',{...body,request_id:'fixture-creation-2'});assert.notEqual(duplicate.data.task_no,a.data.task_no);
- f.db.prepare("UPDATE pipelines SET status='completed' WHERE pipeline_id=?").run(a.data.pipeline_id);
- const retry=await f.request('POST','/pipelines/'+a.data.pipeline_id+'/retry-scan',{request_id:'fixture-retry-1'});
- assert.equal(retry.http,201);assert.notEqual(retry.data.task_no,a.data.task_no);
- const retryAgain=await f.request('POST','/pipelines/'+a.data.pipeline_id+'/retry-scan',{request_id:'fixture-retry-1'});
- assert.equal(retryAgain.http,200);assert.equal(retryAgain.data.task_no,retry.data.task_no);
  assert.equal((await f.request('POST','/pipelines',{...body,request_id:'bad'})).http,400);
  }finally{await f.close();}
 });
@@ -101,7 +96,6 @@ test('ID search rejects disabled accounts and outdated administrator roles like 
   for(const suffix of ['/execution','/logs','/steps'])
    assert.equal((await f.request('GET','/pipelines/'+a.pipeline_id+suffix)).http,401);
   assert.equal((await f.request('POST','/pipelines',{...body,request_id:'disabled-new-task'})).http,401);
-  assert.equal((await f.request('POST','/pipelines/'+a.pipeline_id+'/retry-scan',{request_id:'disabled-retry-task'})).http,401);
   f.db.prepare("UPDATE users SET role='user' WHERE username='admin'").run();
   assert.equal((await f.request('GET','/pipelines?search='+a.task_no,undefined,'admin')).http,401);
   assert.equal((await f.request('GET','/pipelines/'+a.pipeline_id,undefined,'admin')).http,401);
@@ -117,5 +111,29 @@ test('server search retains translated type names and special characters',async(
   assert.equal(found.data[0]?.pipeline_id,task.pipeline_id);
   assert.equal(found.meta.search_applied,true);
   assert.equal(found.meta.task_identity_version,1);
+ }finally{await f.close();}
+});
+
+test('concurrent HTTP retries, parameter conflicts and per-user request IDs remain isolated',async()=>{
+ const f=await fixture();try{
+  const responses=await Promise.all(Array.from({length:8},()=>f.request('POST','/pipelines',body)));
+  assert.equal(responses.filter(response=>response.http===201).length,1);
+  assert.equal(responses.filter(response=>response.http===200).length,7);
+  assert.equal(new Set(responses.map(response=>response.data.task_no)).size,1);
+  assert.equal(new Set(responses.map(response=>response.data.pipeline_id)).size,1);
+  const conflict=await f.request('POST','/pipelines',{...body,config:{...body.config,task_name:'changed'}});
+  assert.equal(conflict.http,409);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM pipelines').get().n,1);
+  assert.equal(f.db.prepare('SELECT last_value FROM task_number_counters').get().last_value,1);
+  const other=await f.request('POST','/pipelines',body,'other');
+  assert.equal(other.http,201);
+  assert.notEqual(other.data.task_no,responses[0].data.task_no);
+  assert.equal((await f.request('GET','/pipelines?search='+encodeURIComponent('same name'))).data.length,1);
+  assert.equal((await f.request('GET','/pipelines/'+responses[0].data.pipeline_id,undefined,'other')).http,403);
+  const invalid=await f.request('POST','/pipelines',{...body,request_id:'invalid-scope',config:{...body.config,task_scope:{includes:[]}}});
+  assert.equal(invalid.http,400);
+  assert.equal(f.db.prepare('SELECT last_value FROM task_number_counters').get().last_value,2);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM pipeline_steps').get().n,0);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM scan_tasks').get().n,0);
  }finally{await f.close();}
 });

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
+const fail = (status, message, code) => { throw Object.assign(new Error(message), { status, ...(code ? { code } : {}) }); };
 export const isTaskNumber = value => typeof value === 'string' && /^TASK-\d{8}-\d{6,}$/i.test(value.trim());
 export const isTaskIdentifier = value => isTaskNumber(value) || /^pipe_[a-z\d-]+$/i.test(value || '');
 const dayFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -54,9 +54,14 @@ export function existingCreation(db, owner, requestId, hash) {
   return row;
 }
 
-export function insertNumberedTask(db, { target, config, owner, now = new Date().toISOString(), requestId, hash, checkLimits }) {
+export function insertNumberedTask(db, { target, config, owner, ownerRole, now = new Date().toISOString(), requestId, hash, checkLimits }) {
   if (!hasTaskIdentity(db)) fail(503, '任务ID迁移尚未安装，请先更新后端数据库');
   return db.transaction(() => {
+    // Async source validation may outlive the account state checked at the route entrance.
+    // Hold the write lock before rechecking, including when returning an existing request.
+    const account = db.prepare('SELECT role,is_active FROM users WHERE username=?').get(owner);
+    if (account?.is_active !== 1 || ownerRole !== undefined && account.role !== ownerRole)
+      fail(401, '登录身份已失效，请重新登录', 'AUTH_REQUIRED');
     const known = existingCreation(db, owner, requestId, hash);
     if (known) return { row: known, reused: true };
     const limit = checkLimits?.();

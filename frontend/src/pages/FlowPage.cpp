@@ -48,6 +48,7 @@
 #include <QUrlQuery>
 #include <QUuid>
 #include <QScreen>
+#include <QWindow>
 #include <QSignalBlocker>
 #include <cmath>
 
@@ -1350,7 +1351,9 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget)
   auto resizeDialog = [=, &dlg] {
     bodyLayout->invalidate();
     bodyLayout->activate();
-    const auto screenSize = dlg.screen()->availableGeometry().size();
+    const auto *window = dlg.windowHandle();
+    const auto *screen = window && window->screen() ? window->screen() : QGuiApplication::primaryScreen();
+    const auto screenSize = screen ? screen->availableGeometry().size() : QSize(1360, 860);
     const int dialogWidth = qMin(560, qMax(520, screenSize.width() - 32));
     const int contentWidth = dialogWidth - l->contentsMargins().left() - l->contentsMargins().right();
     const auto labelHeight = [=](QLabel *label) {
