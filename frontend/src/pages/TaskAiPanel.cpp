@@ -213,7 +213,7 @@ void TaskAiPanel::setStage(const QString &stage)
   m_stage = stage;
   m_stageLabel->setText(stage.isEmpty() ? QStringLiteral("未选择阶段") : stage);
   if (!m_pipelineId.isEmpty())
-    m_contextStateLabel->setText(QStringLiteral("上下文已绑定任务 %1 · %2").arg(m_pipelineId, stage));
+    m_contextStateLabel->setText(QStringLiteral("上下文已绑定任务 %1 · %2").arg(UiUtil::taskIdentifier(m_pipeline), stage));
 }
 
 void TaskAiPanel::setQuestion(const QString &question)
@@ -264,6 +264,7 @@ void TaskAiPanel::rebuildContext()
 
   QStringList summary;
   summary << QStringLiteral("任务：%1").arg(taskName.isEmpty() ? QStringLiteral("未命名任务") : taskName);
+  summary << QStringLiteral("任务ID：%1").arg(UiUtil::taskIdentifier(m_pipeline));
   summary << QStringLiteral("目标：%1").arg(target.isEmpty() ? QStringLiteral("未提供") : target);
   if (!type.isEmpty()) summary << QStringLiteral("类型：%1").arg(type);
   summary << QStringLiteral("状态：%1").arg(status.isEmpty() ? QStringLiteral("未知") : status);
@@ -271,7 +272,7 @@ void TaskAiPanel::rebuildContext()
       ? QStringLiteral("用户已确认（不等于范围已自动校验）") : QStringLiteral("未确认 / 无记录"));
   if (!scope.isEmpty()) summary << QStringLiteral("授权范围：%1").arg(scope);
   m_contextStateLabel->setText(QStringLiteral("上下文已绑定任务 %1 · %2").arg(
-      m_pipelineId, m_stage.isEmpty() ? QStringLiteral("任务工作台") : m_stage));
+      UiUtil::taskIdentifier(m_pipeline), m_stage.isEmpty() ? QStringLiteral("任务工作台") : m_stage));
   addCard(QStringLiteral("任务摘要"), summary.join(QStringLiteral("\n")), QStringLiteral("#2563eb"));
 
   QStringList sources;

@@ -150,6 +150,7 @@ void WsClient::onTextMessageReceived(const QString &message)
   // Domain event dispatch — aligned with backend event names
   if (event == "scan:created")      emit scanCreated(data);
   if (event == "scan:started")      emit scanStarted(data);
+  if (event == "scan:agent_step") emit scanAgentStep(data);
   if (event == "scan:completed")    emit scanCompleted(data);
   if (event == "run:created")       emit runCreated(data);
   if (event == "run:started")       emit runStarted(data);

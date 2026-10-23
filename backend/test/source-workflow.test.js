@@ -43,7 +43,7 @@ async function fixture(t) {
     if(name.includes('import')) continue;
     const migration=await import(directory+name);(migration.default || migration.up)(db);
   }
-  for(const [username,role] of [['alice','user'],['admin','admin']]) db.prepare('INSERT OR IGNORE INTO users(username,password,role) VALUES (?,\'fixture\',?)').run(username,role);
+  for(const [username,role] of [['alice','user'],['bob','user'],['admin','admin']]) db.prepare('INSERT OR IGNORE INTO users(username,password,role) VALUES (?,\'fixture\',?)').run(username,role);
   const app=express();app.use(express.json(),(req,res,next)=>{const sub=req.headers['x-user'] || 'alice';req.user={sub,role:sub==='admin'?'admin':'user'};next();});
   app.use('/pipelines',pipelineRoutes(db));app.use('/scans',scanRoutes(db));
   const api=await listen(t,http.createServer(app));

@@ -28,8 +28,8 @@
 #include <QTableWidgetItem>
 #include <QHeaderView>
 #include <QComboBox>
-#include <QSpinBox>
 #include <QFormLayout>
+#include <QPlainTextEdit>
 #include <QGroupBox>
 #include <QLineEdit>
 #include <QTabWidget>
@@ -45,6 +45,10 @@
 #include <QDateTime>
 #include <QTimer>
 #include <QPointer>
+#include <QUrlQuery>
+#include <QUuid>
+#include <QScreen>
+#include <QSignalBlocker>
 #include <cmath>
 
 // ── Step metadata ──────────────────────────────────────────────────────
@@ -62,6 +66,60 @@ static QJsonObject parseJsonObject(const QJsonValue &value)
   const auto document = QJsonDocument::fromJson(value.toString().toUtf8(), &error);
   return error.error == QJsonParseError::NoError && document.isObject()
       ? document.object() : QJsonObject{};
+}
+
+// Credentials live only in the request; never in task config or QSettings.
+static bool webScanStartBody(QWidget *parent, const QJsonObject &pipeline, QJsonObject &body)
+{
+  const auto config = parseJsonObject(pipeline["config"]);
+  if (config["scan_orchestrator"].toObject()["mode"].toString() == "react") {
+    const QUrl target(pipeline["target"].toString());
+    if (target.scheme() != "http" && target.scheme() != "https") return true;
+    QDialog dialog(parent); dialog.setWindowTitle(QStringLiteral("本次 Web 会话"));
+    QFormLayout layout(&dialog);
+    QLabel hint(QStringLiteral("匿名检查无需填写。可提供已获授权的 Cookie 或 Bearer Token，仅用于此应用路径的受控参数检查；其他工具未适配会话时不会携带凭据运行。"));
+    hint.setWordWrap(true); layout.addRow(&hint);
+    QComboBox mode; mode.addItem(QStringLiteral("匿名"), "anonymous"); mode.addItem(QStringLiteral("Cookie"), "cookie"); mode.addItem(QStringLiteral("Bearer Token"), "bearer");
+    QLineEdit value; value.setEchoMode(QLineEdit::Password); value.setMaxLength(4096); value.setEnabled(false);
+    mode.setObjectName("scanSessionMode"); value.setObjectName("scanSessionValue");
+    layout.addRow(QStringLiteral("认证方式"), &mode); layout.addRow(QStringLiteral("临时会话"), &value);
+    QPlainTextEdit requests; requests.setObjectName("scanPostRequests"); requests.setMaximumHeight(100);
+    requests.setPlaceholderText(QStringLiteral("可选 JSON 数组：只读 POST 查询模板，字段 url、encoding(form/json)、fields、parameters、read_only_confirmed。不要填写密码或令牌。"));
+    layout.addRow(QStringLiteral("授权 POST 模板"), &requests);
+    QDialogButtonBox buttons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel); layout.addRow(&buttons);
+    auto validate = [&] { const bool anonymous=mode.currentData().toString()=="anonymous"; value.setEnabled(!anonymous); buttons.button(QDialogButtonBox::Ok)->setEnabled(anonymous || !value.text().trimmed().isEmpty()); };
+    QObject::connect(&mode,QOverload<int>::of(&QComboBox::currentIndexChanged),&dialog,[&](int){validate();});
+    QObject::connect(&value,&QLineEdit::textChanged,&dialog,[&](const QString &){validate();});
+    QObject::connect(&buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);
+    QObject::connect(&buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+    const bool accepted=dialog.exec()==QDialog::Accepted;
+    if(accepted && mode.currentData().toString()!="anonymous")body["authentication"]=QJsonObject{{"type",mode.currentData().toString()},{"value",value.text()}};
+    if(accepted && !requests.toPlainText().trimmed().isEmpty()) {
+      QJsonParseError error;const auto doc=QJsonDocument::fromJson(requests.toPlainText().toUtf8(),&error);
+      if(error.error!=QJsonParseError::NoError || !doc.isArray()) {value.clear();requests.clear();QMessageBox::warning(parent,QStringLiteral("请求模板无效"),QStringLiteral("POST 模板须为 JSON 数组，未启动任务。"));return false;}
+      body["post_requests"]=doc.array();
+    }
+    value.clear();requests.clear();return accepted;
+  }
+  const auto web = parseJsonObject(pipeline["config"])["scan_parameters"].toObject()["web"].toObject();
+  if (web["mode"].toString() != "react_sqli") return true;
+  QDialog dialog(parent); dialog.setWindowTitle(QStringLiteral("DVWA 临时登录"));
+  auto *layout = new QFormLayout(&dialog);
+  auto *hint = new QLabel(QStringLiteral("仅用于本次扫描，不保存账号密码。安全等级以服务器为本次独立会话提供的值为准，过程区会显示；不会修改靶场等级设置。"), &dialog);
+  hint->setWordWrap(true); layout->addRow(hint);
+  auto *user = new QLineEdit(&dialog); user->setObjectName("webScanUsername"); user->setMaxLength(128);
+  auto *password = new QLineEdit(&dialog); password->setObjectName("webScanPassword"); password->setMaxLength(1024); password->setEchoMode(QLineEdit::Password);
+  layout->addRow(QStringLiteral("用户名"), user); layout->addRow(QStringLiteral("密码"), password);
+  auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+  layout->addRow(buttons); buttons->button(QDialogButtonBox::Ok)->setEnabled(false);
+  auto validate = [=]() { buttons->button(QDialogButtonBox::Ok)->setEnabled(!user->text().trimmed().isEmpty() && !password->text().isEmpty()); };
+  QObject::connect(user, &QLineEdit::textChanged, &dialog, validate);
+  QObject::connect(password, &QLineEdit::textChanged, &dialog, validate);
+  QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  const bool accepted = dialog.exec() == QDialog::Accepted;
+  if (accepted) body["authentication"] = QJsonObject{{"username",user->text().trimmed()},{"password",password->text()}};
+  user->clear(); password->clear(); return accepted;
 }
 
 static QString pipelineTaskName(const QJsonObject &pipeline)
@@ -258,7 +316,7 @@ void FlowPage::setupListView()
   connect(m_refreshBtn, &QPushButton::clicked, this, &FlowPage::refreshFlows);
 
   m_searchInput = new QLineEdit(m_listView);
-  m_searchInput->setPlaceholderText(QStringLiteral("搜索任务名称、目标、负责人…"));
+  m_searchInput->setPlaceholderText(QStringLiteral("搜索任务ID、名称或目标…"));
   m_searchInput->setMinimumWidth(120);
   m_searchInput->setMaximumWidth(270);
 
@@ -283,7 +341,58 @@ void FlowPage::setupListView()
   toolbar->addWidget(m_filterCombo);
   layout->addLayout(toolbar);
 
-  connect(m_searchInput, &QLineEdit::textChanged, this, [this]() { loadFlows(); });
+  m_searchInput->setMaxLength(128);
+  m_searchInput->setClearButtonEnabled(true);
+  m_searchTimer = new QTimer(this);
+  m_searchTimer->setSingleShot(true);
+  m_searchTimer->setInterval(250);
+  connect(m_searchTimer, &QTimer::timeout, this, &FlowPage::loadFlows);
+  connect(m_searchInput, &QLineEdit::textChanged, this, [this]() {
+    ++m_flowListRequestRevision;
+    m_flowListFresh = false;
+    m_flowTable->setRowCount(0);
+    m_searchOpenRequested = false;
+    m_listState->setText(QStringLiteral("正在检索任务…"));
+    m_searchTimer->start();
+  });
+  connect(m_searchInput, &QLineEdit::returnPressed, this, [this]() {
+    m_searchTimer->stop();
+    if (m_flowListFresh && UiUtil::isTaskIdentifier(m_searchInput->text()) && m_flowTable->rowCount() == 1) {
+      m_flowTable->setCurrentCell(0, 0); onOpenFlow(); return;
+    }
+    m_searchOpenRequested = UiUtil::isTaskIdentifier(m_searchInput->text());
+    loadFlows();
+  });
+
+  m_creationNotice = new QFrame(m_listView);
+  m_creationNotice->setObjectName("taskCreationNotice");
+  m_creationNotice->setProperty("softCard", true);
+  auto *noticeLayout = new QHBoxLayout(m_creationNotice);
+  noticeLayout->setContentsMargins(12, 10, 12, 10);
+  m_creationLabel = new QLabel(m_creationNotice);
+  m_creationLabel->setObjectName("taskCreationIdentity");
+  m_creationLabel->setTextFormat(Qt::PlainText);
+  m_creationLabel->setWordWrap(true);
+  m_creationLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  noticeLayout->addWidget(m_creationLabel, 1);
+  m_creationCopy = new QPushButton(QStringLiteral("复制ID"), m_creationNotice);
+  m_creationOpen = new QPushButton(QStringLiteral("打开任务"), m_creationNotice);
+  m_retryCreate = new QPushButton(QStringLiteral("重试原请求"), m_creationNotice);
+  for (auto *button : {m_creationCopy, m_creationOpen, m_retryCreate}) {
+    UiUtil::styleToolbarButton(button); noticeLayout->addWidget(button);
+  }
+  connect(m_creationCopy, &QPushButton::clicked, this, [this]() {
+    UiUtil::copyTaskIdentifier(m_creationCopy->property("taskId").toString());
+  });
+  connect(m_creationOpen, &QPushButton::clicked, this, [this]() {
+    openTaskAnalysis(m_creationOpen->property("pipelineId").toString());
+  });
+  connect(m_retryCreate, &QPushButton::clicked, this, [this]() {
+    if (m_taskIdentitySupported && m_pendingCreateCanRetry && !m_pendingCreateBody.isEmpty())
+      submitTaskCreation(m_pendingCreateBody, m_pendingCreateStart);
+  });
+  layout->addWidget(m_creationNotice);
+  m_creationNotice->hide();
 
   // Hint label
   m_listState = new QLabel(
@@ -359,7 +468,27 @@ void FlowPage::setupWorkbenchView()
   m_targetLabel->setStyleSheet("font-size:15px; font-weight:600; color:#1e293b;");
   m_targetLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
   m_targetLabel->setMinimumWidth(80);
-  topLayout->addWidget(m_targetLabel, 1);
+  auto *identityColumn = new QVBoxLayout;
+  identityColumn->setSpacing(3);
+  identityColumn->addWidget(m_targetLabel);
+  auto *identityRow = new QHBoxLayout;
+  m_taskIdLabel = new QLabel(topBar);
+  m_taskIdLabel->setObjectName("taskHeaderIdentity");
+  m_taskIdLabel->setTextFormat(Qt::PlainText);
+  m_taskIdLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  m_taskIdLabel->setStyleSheet(QStringLiteral("font-size:12px; color:%1;").arg(Theme::TextSecondary));
+  m_copyTaskId = new QPushButton(QStringLiteral("复制ID"), topBar);
+  m_copyTaskId->setObjectName("copyTaskIdentity");
+  m_copyTaskId->setProperty("compact", true);
+  m_copyTaskId->setProperty("quiet", true);
+  m_copyTaskId->setStyleSheet(Theme::ButtonStyle);
+  m_copyTaskId->setEnabled(false);
+  connect(m_copyTaskId, &QPushButton::clicked, this, [this]() {
+    UiUtil::copyTaskIdentifier(m_copyTaskId->property("taskId").toString());
+  });
+  identityRow->addWidget(m_taskIdLabel); identityRow->addWidget(m_copyTaskId); identityRow->addStretch();
+  identityColumn->addLayout(identityRow);
+  topLayout->addLayout(identityColumn, 1);
 
   m_statusLabel = new QLabel(topBar);
   m_statusLabel->setObjectName("flowStatusBadge");
@@ -632,13 +761,26 @@ void FlowPage::refreshFlows()
 
 void FlowPage::loadFlows()
 {
+  if (m_searchTimer) m_searchTimer->stop();
   const int revision = ++m_flowListRequestRevision;
   m_flowListFresh = false;
   m_listState->setStyleSheet(Theme::StatusInfoStyle);
   m_listState->setText(QStringLiteral("正在读取任务列表…已有行暂不可打开，等待本次刷新。"));
   UiUtil::EmptyHint::setState(m_flowTable, QStringLiteral("正在读取任务列表…"));
+  const QString search = m_searchInput ? m_searchInput->text().trimmed() : QString();
+  const QString filter = m_filterCombo ? m_filterCombo->currentData().toString() : QString();
+  const bool exact = UiUtil::isTaskIdentifier(search);
+  const bool openFound = m_searchOpenRequested;
+  m_searchOpenRequested = false;
+  QString path = QStringLiteral("/api/pipelines");
+  if (!search.isEmpty()) {
+    QUrlQuery query;
+    query.addQueryItem("search", QString::fromLatin1(QUrl::toPercentEncoding(search)));
+    if (!filter.isEmpty() && !exact) query.addQueryItem("status", filter);
+    path += '?' + query.toString(QUrl::FullyEncoded);
+  }
   QPointer<FlowPage> guard(this);
-  m_api->get("/api/pipelines", 5000, [this, guard, revision](const QJsonObject &res) {
+  m_api->get(path, 5000, [this, guard, revision, search, filter, exact, openFound](const QJsonObject &res) {
     if (!guard || revision != m_flowListRequestRevision) return;
     if (res["status"].toString() != "ok" || !res["data"].isArray()) {
       m_flowTable->setRowCount(0);
@@ -651,8 +793,6 @@ void FlowPage::loadFlows()
     }
 
     auto arr = res["data"].toArray();
-    QString filter = m_filterCombo ? m_filterCombo->currentData().toString() : QString();
-    QString search = m_searchInput ? m_searchInput->text().trimmed() : QString();
 
     int runningCount = 0;
     int pendingCount = 0;
@@ -664,17 +804,26 @@ void FlowPage::loadFlows()
       if (status == "awaiting_approval") ++pendingCount;
       if (status == "completed") ++completedCount;
     }
-    m_totalCard->setValue(QString::number(arr.size()));
-    m_runningCard->setValue(QString::number(runningCount));
-    m_pendingCard->setValue(QString::number(pendingCount));
-    m_completedCard->setValue(QString::number(completedCount));
+    const auto meta = res["meta"].toObject();
+    m_taskIdentitySupported = meta["task_identity_version"].toInt() >= 1;
+    if (!m_taskIdentitySupported && !m_pendingCreateBody.isEmpty() && m_pendingCreateCanRetry) {
+      m_pendingCreateCanRetry = false;
+      m_retryCreate->hide(); m_retryCreate->setEnabled(false);
+      if (m_creationOpen->isHidden())
+        m_creationLabel->setText(QStringLiteral("创建结果未确认，请刷新列表核对是否已创建。"));
+    }
+    const auto counts = meta["counts"].toObject();
+    m_totalCard->setValue(QString::number(meta["visible_total"].toInt(arr.size())));
+    m_runningCard->setValue(QString::number(counts["running"].toInt(runningCount)));
+    m_pendingCard->setValue(QString::number(counts["awaiting_approval"].toInt(pendingCount)));
+    m_completedCard->setValue(QString::number(counts["completed"].toInt(completedCount)));
 
     m_flowTable->setRowCount(0);
     int row = 0;
     for (int i = 0; i < arr.size(); i++) {
       auto p = arr[i].toObject();
       QString status = p["status"].toString();
-      if (!filter.isEmpty() && status != filter) continue;
+      if (!exact && !filter.isEmpty() && status != filter) continue;
 
       QString pid = p["pipeline_id"].toString();
       QString target = p["target"].toString();
@@ -682,15 +831,23 @@ void FlowPage::loadFlows()
       QString taskName = pipelineTaskName(p);
       QString type = pipelineTypeText(p);
       QString owner = p["created_by"].toString();
-      if (!search.isEmpty()) {
-        const QString haystack = taskName + " " + target + " " + type + " " + owner;
-        if (!haystack.contains(search, Qt::CaseInsensitive)) continue;
+      if (!search.isEmpty() && !meta["search_applied"].toBool()) {
+        const QString identifier = UiUtil::taskIdentifier(p);
+        if (exact) {
+          if (identifier.compare(search, Qt::CaseInsensitive) != 0 && pid.compare(search, Qt::CaseInsensitive) != 0) continue;
+        } else {
+          const QString haystack = identifier + " " + pid + " " + taskName + " " + target + " " + type + " " + owner;
+          if (!haystack.contains(search, Qt::CaseInsensitive)) continue;
+        }
       }
 
       m_flowTable->insertRow(row);
 
-      auto *nameItem = new QTableWidgetItem(taskName);
-      nameItem->setToolTip(taskName);
+      const auto identifier = UiUtil::taskIdentifier(p);
+      auto *nameItem = new QTableWidgetItem(taskName + "\n" + identifier);
+      nameItem->setData(Qt::UserRole + 1, identifier);
+      nameItem->setToolTip(taskName + "\n" + UiUtil::taskIdentifierTip(p));
+      m_flowTable->setRowHeight(row, 52);
       m_flowTable->setItem(row, 0, nameItem);
 
       auto *targetItem = new QTableWidgetItem(target);
@@ -734,7 +891,10 @@ void FlowPage::loadFlows()
     m_flowListFresh = true;
     UiUtil::EmptyHint::reset(m_flowTable);
     m_listState->setText(QStringLiteral("读取 %1 个可见任务，当前匹配 %2 个 · 双击打开任务；统计不是漏洞数量。")
-        .arg(arr.size()).arg(row));
+        .arg(meta["visible_total"].toInt(arr.size())).arg(row));
+    if (exact) m_listState->setText(row ? QStringLiteral("已按任务ID定位，显示全部状态中的匹配任务。")
+        : QStringLiteral("未找到可访问的任务。"));
+    if (openFound && exact && row == 1) { m_flowTable->setCurrentCell(0, 0); onOpenFlow(); }
   });
 }
 
@@ -806,6 +966,11 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     m_evalTab->setTarget(target);
 
     // Header
+    const auto identifier = UiUtil::taskIdentifier(p);
+    m_taskIdLabel->setText(QStringLiteral("任务ID：%1").arg(identifier));
+    m_taskIdLabel->setToolTip(UiUtil::taskIdentifierTip(p));
+    m_copyTaskId->setProperty("taskId", identifier);
+    m_copyTaskId->setEnabled(!identifier.isEmpty());
     const QString taskTitle = pipelineTaskName(p);
     m_targetLabel->setText(QStringLiteral("%1 · %2").arg(taskTitle, target));
     m_targetLabel->setToolTip(QStringLiteral("任务：%1\n目标：%2").arg(taskTitle, target));
@@ -977,7 +1142,11 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     bool isAwaiting = (status == "awaiting_approval");
     bool isActive = (status == "running" || status == "awaiting_approval");
     bool isDeletable = !isActive;  // backend refuses delete on running/awaiting
-    m_startBtn->setVisible(status == "created");
+    const bool webRetry = (parseJsonObject(p["config"])["scan_parameters"].toObject()["web"].toObject()["mode"].toString() == "react_sqli"
+        || parseJsonObject(p["config"])["scan_orchestrator"].toObject()["mode"].toString() == "react")
+        && QStringList{"completed","failed","cancelled"}.contains(status);
+    m_startBtn->setVisible(status == "created" || webRetry);
+    m_startBtn->setText(webRetry ? QStringLiteral("重新扫描（新任务）") : QStringLiteral("▶ 启动任务"));
     m_approveBtn->setVisible(isAwaiting);
     m_resultBtn->setVisible((status == "completed" || status == "failed") && !runId.isEmpty());
     m_cancelAction->setVisible(isActive);
@@ -1004,239 +1173,346 @@ void FlowPage::createTestForTarget(const QString &target)
 void FlowPage::createFlow(bool quickMode, const QString &initialTarget)
 {
   QDialog dlg(this);
-  if(!initialTarget.isEmpty()) dlg.setObjectName("topologyTargetTaskDialog");
+  dlg.setObjectName(initialTarget.isEmpty() ? "taskCreateDialog" : "topologyTargetTaskDialog");
   dlg.setWindowTitle(QStringLiteral("新建测试任务"));
-  dlg.setMinimumWidth(quickMode ? 480 : 560);
+  dlg.setMinimumWidth(520);
+  dlg.setStyleSheet(Theme::PageStyle + QStringLiteral(
+      "QDialog#taskCreateDialog, QDialog#topologyTargetTaskDialog { background:%1; }"
+      "QScrollArea#taskCreateScroll, QWidget#taskCreateBody { background:transparent; border:none; }"
+      "QLineEdit, QComboBox { min-height:22px; font-size:13px; }"
+      "QComboBox::drop-down { border:none; width:24px; }"
+      "QCheckBox { font-size:13px; spacing:8px; }")
+      .arg(Theme::Background));
   auto *l = new QVBoxLayout(&dlg);
-  l->setSpacing(12);
-  l->setContentsMargins(20, 20, 20, 20);
+  l->setSpacing(16);
+  l->setContentsMargins(24, 20, 24, 20);
 
-  if (quickMode) {
-    auto *intro = new QLabel(QStringLiteral("快速测试会创建正式测试任务并启动基础扫描。"), &dlg);
-    intro->setWordWrap(true);
-    intro->setStyleSheet(QStringLiteral("color:#64748b;"));
-    l->addWidget(intro);
-  }
+  auto *heading = new QLabel(QStringLiteral("新建测试任务"), &dlg);
+  heading->setStyleSheet(QStringLiteral("font-size:22px; font-weight:700; color:%1;").arg(Theme::Text));
+  l->addWidget(heading);
+  auto *intro = new QLabel(quickMode || !initialTarget.isEmpty()
+      ? QStringLiteral("确认测试目标后，创建任务并开始扫描。")
+      : QStringLiteral("填写测试目标，创建后可在任务工作台启动扫描。"), &dlg);
+  intro->setWordWrap(true);
+  intro->setStyleSheet(QStringLiteral("font-size:13px; color:%1;").arg(Theme::TextSecondary));
+  l->addWidget(intro);
 
-  auto *form = new QFormLayout;
-  QLineEdit *nameInput = nullptr;
-  if (!quickMode) {
-    nameInput = new QLineEdit(&dlg);
-    nameInput->setPlaceholderText(QStringLiteral("例如：本地测试环境安全验证"));
-    if(!initialTarget.isEmpty()) nameInput->setText(QStringLiteral("%1 服务与漏洞检查").arg(initialTarget));
-    form->addRow(QStringLiteral("任务名称"), nameInput);
-  }
+  auto *scroll = new QScrollArea(&dlg);
+  scroll->setObjectName("taskCreateScroll");
+  scroll->setWidgetResizable(true);
+  scroll->setFrameShape(QFrame::NoFrame);
+  scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  auto *bodyWidget = new QWidget;
+  bodyWidget->setObjectName("taskCreateBody");
+  auto *bodyLayout = new QVBoxLayout(bodyWidget);
+  bodyLayout->setContentsMargins(0, 0, 0, 0);
+  bodyLayout->setSpacing(12);
+  bodyLayout->setAlignment(Qt::AlignTop);
+  bodyLayout->setSizeConstraint(QLayout::SetMinimumSize);
+  scroll->setWidget(bodyWidget);
+  l->addWidget(scroll, 1);
 
-  auto *targetInput = new QLineEdit(&dlg);
-  targetInput->setPlaceholderText(QStringLiteral("例: 192.168.1.0/24 或 http://172.17.0.2"));
+  auto makeForm = [](QWidget *parent) {
+    auto *form = new QFormLayout(parent);
+    form->setContentsMargins(16, 16, 16, 16);
+    form->setHorizontalSpacing(14);
+    form->setVerticalSpacing(12);
+    form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    return form;
+  };
+  auto *basicCard = new QFrame(bodyWidget);
+  basicCard->setProperty("card", true);
+  auto *form = makeForm(basicCard);
+  auto *nameInput = new QLineEdit(basicCard);
+  nameInput->setObjectName("taskNameInput");
+  nameInput->setPlaceholderText(QStringLiteral("按目标自动命名，可自行修改"));
+  nameInput->setToolTip(QStringLiteral("可选；留空时自动生成任务名称。"));
+  form->addRow(QStringLiteral("任务名称"), nameInput);
+
+  auto *targetInput = new QLineEdit(basicCard);
+  targetInput->setPlaceholderText(QStringLiteral("IP、网段或 URL，例如 https://example.com/"));
   targetInput->setObjectName("taskTargetInput");
+  targetInput->setMaxLength(256);
+  targetInput->setClearButtonEnabled(true);
   targetInput->setText(initialTarget);
   form->addRow(QStringLiteral("测试目标"), targetInput);
 
-  auto *testType = new QComboBox(&dlg);
+  auto *testType = new QComboBox(basicCard);
   testType->setObjectName("taskTestTypeInput");
   testType->addItem(QStringLiteral("综合测试"), QStringLiteral("comprehensive"));
   testType->addItem(QStringLiteral("Web 安全测试"), QStringLiteral("web"));
   testType->addItem(QStringLiteral("主机安全测试"), QStringLiteral("host"));
   testType->addItem(QStringLiteral("内网渗透测试"), QStringLiteral("internal"));
-  testType->addItem(QStringLiteral("源码扫描（CScan） / 程序测试"), QStringLiteral("program"));
-  if(initialTarget.startsWith("http://") || initialTarget.startsWith("https://")) testType->setCurrentIndex(testType->findData("web"));
+  testType->addItem(QStringLiteral("源码／程序测试"), QStringLiteral("program"));
+  testType->setToolTip(QStringLiteral("根据目标自动选择，也可手动调整。"));
   form->addRow(QStringLiteral("任务类型"), testType);
-  auto *programKind = new QComboBox(&dlg);
-  programKind->addItem("选择目标主机的源码文件夹", "remote_directory");
-  programKind->addItem("程序运行入口", "runtime");
-  programKind->addItem("源码路径／地址（CScan 自行读取）", "agent");
+
+  bodyLayout->addWidget(basicCard);
+
+  auto *programCard = new QFrame(bodyWidget);
+  programCard->setObjectName("taskProgramFields");
+  programCard->setProperty("card", true);
+  auto *programLayout = new QVBoxLayout(programCard);
+  programLayout->setContentsMargins(16, 16, 16, 16);
+  programLayout->setSpacing(12);
+  // Each conditional field has one container, so hidden fields leave no form rows behind.
+  auto addProgramField = [&](const QString &label, QWidget *field) {
+    auto *row = new QWidget(programCard);
+    auto *rowForm = makeForm(row);
+    rowForm->setContentsMargins(0, 0, 0, 0);
+    auto *caption = new QLabel(label, row);
+    caption->setMinimumWidth(84);
+    rowForm->addRow(caption, field);
+    programLayout->addWidget(row);
+    return row;
+  };
+  auto *programKind = new QComboBox(programCard);
+  programKind->addItem(QStringLiteral("选择目标主机的源码文件夹"), "remote_directory");
+  programKind->addItem(QStringLiteral("程序运行入口"), "runtime");
+  programKind->addItem(QStringLiteral("源码路径或地址"), "agent");
   programKind->setObjectName("taskProgramInputKind");
   programKind->setCurrentIndex(programKind->findData("agent"));
-  auto *programKindLabel = new QLabel("输入类型",&dlg);
-  form->addRow(programKindLabel,programKind);
-  auto *sourcePicker=new RemoteSourcePicker(m_api,&dlg);
-  auto *sourcePickerLabel=new QLabel("目标源码文件夹",&dlg);
-  form->addRow(sourcePickerLabel,sourcePicker);
-  sourcePicker->setTarget(targetInput->text());sourcePicker->hide();sourcePickerLabel->hide();
-  connect(targetInput,&QLineEdit::textChanged,sourcePicker,&RemoteSourcePicker::setTarget);
-  auto updatePicker=[=] {
-    const bool show=testType->currentData().toString()=="program" && programKind->currentData().toString()=="remote_directory";
-    sourcePicker->setVisible(show);sourcePickerLabel->setVisible(show);
-    if(show) targetInput->setPlaceholderText("目标主机地址，例如 http://192.168.1.113:8089/");
-  };
-  connect(testType,QOverload<int>::of(&QComboBox::currentIndexChanged),sourcePicker,[=](int){updatePicker();});
-  connect(programKind,QOverload<int>::of(&QComboBox::currentIndexChanged),sourcePicker,[=](int){updatePicker();});
-  auto *runtimeInput = new QLineEdit(&dlg);
-  runtimeInput->setPlaceholderText("可选：对应程序的运行入口；只有文件也可以扫描");
-  auto *runtimeLabel = new QLabel("攻击测试运行入口",&dlg);
-  form->addRow(runtimeLabel,runtimeInput);
-  programKind->hide();programKindLabel->hide();runtimeInput->hide();runtimeLabel->hide();
-  connect(testType,QOverload<int>::of(&QComboBox::currentIndexChanged),&dlg,[testType,targetInput,programKind,programKindLabel,runtimeInput,runtimeLabel](int) {
-    const bool program=testType->currentData().toString()=="program";
-    programKind->setVisible(program);programKindLabel->setVisible(program);
-    const bool agent=program && programKind->currentData().toString()=="agent";
-    runtimeInput->setVisible(agent);runtimeLabel->setVisible(agent);
-    targetInput->setPlaceholderText(program ? "目标主机地址，例如 http://主机:端口/" : "例: 192.168.1.0/24 或 http://172.17.0.2");
-  });
-  connect(programKind,QOverload<int>::of(&QComboBox::currentIndexChanged),&dlg,[programKind,testType,targetInput,runtimeInput,runtimeLabel](int) {
-    const bool agent=testType->currentData().toString()=="program" && programKind->currentData().toString()=="agent";
-    runtimeInput->setVisible(agent);runtimeLabel->setVisible(agent);
-    targetInput->setPlaceholderText(agent ? "靶机 IP:端口、HTTP/TCP 地址或远端源码路径"
-      : programKind->currentData().toString()=="remote_directory" ? "目标主机地址，例如 http://主机:端口/" : "程序运行入口：http://主机:端口/ 或 tcp://主机:端口");
-  });
-
-  auto *sourceNotes = new QLineEdit(&dlg);
+  addProgramField(QStringLiteral("输入类型"), programKind);
+  auto *sourcePicker = new RemoteSourcePicker(m_api, programCard);
+  auto *pickerRow = addProgramField(QStringLiteral("源码文件夹"), sourcePicker);
+  sourcePicker->setTarget(targetInput->text());
+  auto *runtimeInput = new QLineEdit(programCard);
+  runtimeInput->setObjectName("taskRuntimeInput");
+  runtimeInput->setMaxLength(256);
+  runtimeInput->setPlaceholderText(QStringLiteral("可选，填写对应程序的运行地址"));
+  auto *runtimeRow = addProgramField(QStringLiteral("运行入口"), runtimeInput);
+  auto *sourceNotes = new QLineEdit(programCard);
   sourceNotes->setObjectName("taskSourceNotesInput");
-  sourceNotes->setMaxLength(4000);sourceNotes->setPlaceholderText("可选：审计范围和关注问题；源码文件夹请通过上方按钮选择");
-  sourceNotes->setToolTip("备注不能替代目标源码目录的选择。");
-  auto *sourceNotesLabel=new QLabel("源码审计说明",&dlg);
-  form->addRow(sourceNotesLabel,sourceNotes);sourceNotes->hide();sourceNotesLabel->hide();
-  connect(testType,QOverload<int>::of(&QComboBox::currentIndexChanged),&dlg,[testType,sourceNotes,sourceNotesLabel](int) {
-    const bool show=testType->currentData().toString()=="program";sourceNotes->setVisible(show);sourceNotesLabel->setVisible(show);
-  });
-  QLineEdit *scopeInput = nullptr;
-  QLineEdit *additionalTargets = nullptr;
-  QLineEdit *excludedTargets = nullptr;
-  QLineEdit *environmentRef = nullptr;
-  QLineEdit *authConfigRef = nullptr;
-  QComboBox *scanLocation = nullptr;
-  QSpinBox *discoveryBudget = nullptr;
-  if (!quickMode) {
-    scopeInput = new QLineEdit(&dlg);
-    scopeInput->setPlaceholderText(QStringLiteral("仅填写已获得授权的目标或范围"));
-    scopeInput->setObjectName("taskAuthorizationScopeInput");
-    scopeInput->setText(initialTarget);
-    form->addRow(QStringLiteral("授权范围"), scopeInput);
-    additionalTargets = new QLineEdit(&dlg);
-    additionalTargets->setPlaceholderText(QStringLiteral("可选；多个 IP、CIDR 或 URL 用半角逗号分隔"));
-    form->addRow(QStringLiteral("其他授权目标"), additionalTargets);
-    excludedTargets = new QLineEdit(&dlg);
-    excludedTargets->setPlaceholderText(QStringLiteral("可选；排除的 IP、CIDR 或 URL，用半角逗号分隔"));
-    form->addRow(QStringLiteral("排除项"), excludedTargets);
-    scanLocation = new QComboBox(&dlg);
-    scanLocation->addItem(QStringLiteral("扫描端（已配置）"), QStringLiteral("scanner"));
-    scanLocation->addItem(QStringLiteral("远端（需先完成连接配置）"), QStringLiteral("remote"));
-    form->addRow(QStringLiteral("扫描位置"), scanLocation);
-    discoveryBudget = new QSpinBox(&dlg);
-    discoveryBudget->setRange(0, 100);
-    discoveryBudget->setValue(5);
-    discoveryBudget->setToolTip(QStringLiteral("范围内新发现入口最多补充检查的数量；0 表示仅记录"));
-    form->addRow(QStringLiteral("新入口检查预算"), discoveryBudget);
-    environmentRef = new QLineEdit(&dlg);
-    environmentRef->setPlaceholderText(QStringLiteral("可选；靶场配置编号，不填写凭据"));
-    form->addRow(QStringLiteral("靶场引用"), environmentRef);
-    authConfigRef = new QLineEdit(&dlg);
-    authConfigRef->setPlaceholderText(QStringLiteral("可选；认证配置编号，不填写密码或令牌"));
-    form->addRow(QStringLiteral("认证配置引用"), authConfigRef);
-  }
-  l->addLayout(form);
+  sourceNotes->setMaxLength(4000);
+  sourceNotes->setPlaceholderText(QStringLiteral("可选，填写审计范围或关注问题"));
+  sourceNotes->setToolTip(QStringLiteral("说明不能替代源码文件夹的选择。"));
+  addProgramField(QStringLiteral("审计说明"), sourceNotes);
+  bodyLayout->addWidget(programCard);
+
+  auto *scopeCard = new QFrame(bodyWidget);
+  scopeCard->setProperty("softCard", true);
+  auto *scopeLayout = new QVBoxLayout(scopeCard);
+  scopeLayout->setContentsMargins(16, 12, 16, 12);
+  scopeLayout->setSpacing(6);
+  auto *scopeTitle = new QLabel(QStringLiteral("本次授权目标"), scopeCard);
+  scopeTitle->setStyleSheet(QStringLiteral("font-size:13px; font-weight:600; color:%1;").arg(Theme::Text));
+  scopeLayout->addWidget(scopeTitle);
+  auto *scopeSummary = new QLabel(scopeCard);
+  scopeSummary->setObjectName("taskScopeSummary");
+  scopeSummary->setTextFormat(Qt::PlainText);
+  scopeSummary->setWordWrap(true);
+  scopeSummary->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+  scopeSummary->setStyleSheet(QStringLiteral("font-size:13px; color:%1;").arg(Theme::TextSecondary));
+  scopeLayout->addWidget(scopeSummary);
+  bodyLayout->addWidget(scopeCard);
 
   auto *authorizationCheck = new QCheckBox(QStringLiteral("我确认已获得对上述目标开展测试的授权"), &dlg);
   authorizationCheck->setObjectName("taskAuthorizationCheck");
   authorizationCheck->setChecked(false);
   l->addWidget(authorizationCheck);
+  auto *scanPolicyHint = new QLabel(QStringLiteral("后续执行验证需人工确认。"), &dlg);
+  scanPolicyHint->setObjectName("scanOrchestratorHint");
+  scanPolicyHint->setToolTip(QStringLiteral("运行态任务使用 ReAct 扫描，源码任务保留专项流程。"));
+  scanPolicyHint->setWordWrap(true);
+  scanPolicyHint->setStyleSheet(QStringLiteral("font-size:12px; color:%1;").arg(Theme::TextSecondary));
+  l->addWidget(scanPolicyHint);
 
-  auto *approvalCheck = new QCheckBox(QStringLiteral("执行验证前需人工确认"), &dlg);
-  approvalCheck->setChecked(true);
-  l->addWidget(approvalCheck);
-
-  auto *btns = new QDialogButtonBox(
-    QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
-
+  auto *btns = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
   UiUtil::styleDialogButtons(btns);
   auto *confirmButton = btns->button(QDialogButtonBox::Ok);
-  confirmButton->setText(!initialTarget.isEmpty()?QStringLiteral("确认目标并开始扫描"):quickMode ? QStringLiteral("授权并开始快速测试")
-                                   : QStringLiteral("创建任务"));
+  confirmButton->setText(!initialTarget.isEmpty() ? QStringLiteral("确认并开始扫描")
+      : quickMode ? QStringLiteral("创建并开始扫描") : QStringLiteral("创建任务"));
   confirmButton->setEnabled(false);
-  connect(authorizationCheck, &QCheckBox::toggled, confirmButton, &QPushButton::setEnabled);
-  connect(btns, &QDialogButtonBox::accepted, &dlg, [=,&dlg] {
-    if(testType->currentData().toString()=="program" && programKind->currentData().toString()=="remote_directory"
-      && !sourcePicker->hasSelection()) {
-      QMessageBox::warning(&dlg,"请选择目标文件夹","请先浏览并选择目标主机的源码文件夹。");return;
+  confirmButton->setIcon(QIcon());
+  btns->button(QDialogButtonBox::Cancel)->setIcon(QIcon());
+  for (auto *button : btns->buttons()) UiUtil::styleToolbarButton(qobject_cast<QPushButton*>(button));
+  l->addWidget(btns);
+
+  const QString nameTimestamp = QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss");
+  auto automaticName = [=] {
+    const auto target = targetInput->text().trimmed();
+    return target.isEmpty() ? QString() : QStringLiteral("%1 %2 %3")
+        .arg(target, quickMode ? QStringLiteral("快速测试") : QStringLiteral("安全测试"), nameTimestamp);
+  };
+  connect(nameInput, &QLineEdit::textEdited, &dlg, [=](const QString &text) {
+    nameInput->setProperty("customName", !text.trimmed().isEmpty());
+  });
+  auto updateScope = [=] {
+    QStringList targets;
+    if (!targetInput->text().trimmed().isEmpty()) targets << targetInput->text().trimmed();
+    if (testType->currentData().toString() == "program" && programKind->currentData().toString() == "agent"
+        && !runtimeInput->text().trimmed().isEmpty()) targets << runtimeInput->text().trimmed();
+    targets.removeDuplicates();
+    scopeSummary->setText(targets.isEmpty() ? QStringLiteral("填写测试目标后自动生成") : targets.join('\n'));
+    scopeSummary->setToolTip(targets.join('\n'));
+  };
+  auto resizeDialog = [=, &dlg] {
+    bodyLayout->invalidate();
+    bodyLayout->activate();
+    const auto screenSize = dlg.screen()->availableGeometry().size();
+    const int dialogWidth = qMin(560, qMax(520, screenSize.width() - 32));
+    const int contentWidth = dialogWidth - l->contentsMargins().left() - l->contentsMargins().right();
+    const auto labelHeight = [=](QLabel *label) {
+      return label->hasHeightForWidth() ? label->heightForWidth(contentWidth) : label->sizeHint().height();
+    };
+    const int availableHeight = screenSize.height() - 64;
+    const int fixedHeight = l->contentsMargins().top() + l->contentsMargins().bottom()
+        + l->spacing() * (l->count() - 1) + labelHeight(heading) + labelHeight(intro)
+        + authorizationCheck->sizeHint().height() + labelHeight(scanPolicyHint) + btns->sizeHint().height();
+    const int bodyHeight = bodyLayout->hasHeightForWidth() ? bodyLayout->totalHeightForWidth(contentWidth)
+        : bodyLayout->sizeHint().height();
+    scroll->setFixedHeight(qMin(bodyHeight, qMax(80, availableHeight - fixedHeight)));
+    l->invalidate();
+    l->activate();
+    dlg.resize(dialogWidth, fixedHeight + scroll->height());
+  };
+  auto updateProgramFields = [=, &dlg] {
+    const bool program = testType->currentData().toString() == "program";
+    const auto kind = programKind->currentData().toString();
+    programCard->setVisible(program);
+    pickerRow->setVisible(program && kind == "remote_directory");
+    runtimeRow->setVisible(program && kind == "agent");
+    targetInput->setPlaceholderText(!program ? QStringLiteral("IP、网段或 URL，例如 https://example.com/")
+        : kind == "agent" ? QStringLiteral("靶机地址或远端源码路径")
+        : kind == "runtime" ? QStringLiteral("HTTP 或 TCP 程序运行地址")
+        : QStringLiteral("目标主机地址，例如 http://主机:端口/"));
+    updateScope();
+    QTimer::singleShot(0, &dlg, resizeDialog);
+  };
+  auto updateReady = [=] {
+    confirmButton->setEnabled(authorizationCheck->isChecked() && !targetInput->text().trimmed().isEmpty());
+  };
+  connect(authorizationCheck, &QCheckBox::toggled, &dlg, updateReady);
+  connect(testType, QOverload<int>::of(&QComboBox::currentIndexChanged), &dlg, [=](int) {
+    testType->setProperty("manualType", true);
+    authorizationCheck->setChecked(false);
+    updateProgramFields();
+  });
+  connect(programKind, QOverload<int>::of(&QComboBox::currentIndexChanged), &dlg, [=](int) {
+    authorizationCheck->setChecked(false);
+    updateProgramFields();
+  });
+  connect(runtimeInput, &QLineEdit::textChanged, &dlg, [=] {
+    authorizationCheck->setChecked(false);
+    updateScope();
+  });
+  connect(sourcePicker->findChild<QLineEdit*>("remoteSourceSelection"), &QLineEdit::textChanged, &dlg, [=] {
+    authorizationCheck->setChecked(false);
+  });
+  auto updateTarget = [=] {
+    authorizationCheck->setChecked(false);
+    sourcePicker->setTarget(targetInput->text());
+    if (!nameInput->property("customName").toBool()) nameInput->setText(automaticName());
+    if (!testType->property("manualType").toBool()) {
+      const auto target = targetInput->text().trimmed();
+      const QString type = target.startsWith("http://", Qt::CaseInsensitive) || target.startsWith("https://", Qt::CaseInsensitive) ? "web"
+          : target.startsWith('/') || target.startsWith("tcp://", Qt::CaseInsensitive) ? "program"
+          : target.contains('/') ? "internal" : target.isEmpty() ? "comprehensive" : "host";
+      const QSignalBlocker blocker(testType);
+      testType->setCurrentIndex(testType->findData(type));
+    }
+    updateProgramFields();
+    updateReady();
+  };
+  connect(targetInput, &QLineEdit::textChanged, &dlg, updateTarget);
+  connect(btns, &QDialogButtonBox::accepted, &dlg, [=, &dlg] {
+    if (!authorizationCheck->isChecked() || targetInput->text().trimmed().isEmpty()) return;
+    if (testType->currentData().toString() == "program" && programKind->currentData().toString() == "remote_directory"
+        && !sourcePicker->hasSelection()) {
+      QMessageBox::warning(&dlg, QStringLiteral("请选择目标文件夹"), QStringLiteral("请先浏览并选择目标主机的源码文件夹。"));
+      return;
     }
     dlg.accept();
   });
   connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-  l->addWidget(btns);
+  updateTarget();
+  targetInput->setFocus();
 
   if (dlg.exec() != QDialog::Accepted) return;
 
-  QString target = targetInput->text().trimmed();
-  if (target.isEmpty()) {
-    QMessageBox::warning(this, QStringLiteral("无法创建任务"), QStringLiteral("请先填写测试目标。"));
-    return;
-  }
-  const QString taskName = nameInput ? nameInput->text().trimmed()
-      : QStringLiteral("%1 快速测试").arg(target);
-  if (taskName.isEmpty()) {
-    QMessageBox::warning(this, QStringLiteral("无法创建任务"), QStringLiteral("请填写任务名称。"));
-    return;
-  }
-  if (scopeInput && scopeInput->text().trimmed().isEmpty()) {
-    QMessageBox::warning(this, QStringLiteral("无法创建任务"), QStringLiteral("请填写已获授权的测试范围。"));
-    return;
-  }
-
+  const QString target = targetInput->text().trimmed();
+  const QString taskName = nameInput->text().trimmed().isEmpty() ? automaticName() : nameInput->text().trimmed();
   QJsonObject config;
-  config["require_approval"] = approvalCheck->isChecked();
   config["auto_execute"] = true;
+  config["require_approval"] = true;
   config["task_name"] = taskName;
   config["test_type"] = testType->currentData().toString();
-  if (testType->currentData().toString()=="program") {
-    config["scan_mode"]="program_dynamic";
-    config["input_kind"]=programKind->currentData().toString();
-    if(programKind->currentData().toString()=="remote_directory") {
-      if(!sourcePicker->hasSelection()) {
-        QMessageBox::warning(this,"无法创建任务","请先浏览并选择目标主机的源码文件夹。");return;
-      }
-      const auto selected=sourcePicker->selection();
-      config["source_url"]=selected["source_url"];
-      config["source_connection_id"]=selected["connection_id"];
-      config["source_subdir"]=selected["source_subdir"];
-      config["scan_mode"]="source_assisted";
+  const bool hasRuntime = testType->currentData().toString() == "program"
+      && programKind->currentData().toString() == "agent" && !runtimeInput->text().trimmed().isEmpty();
+  if (testType->currentData().toString() == "program") {
+    config["scan_mode"] = "program_dynamic";
+    config["input_kind"] = programKind->currentData().toString();
+    if (programKind->currentData().toString() == "remote_directory") {
+      const auto selected = sourcePicker->selection();
+      config["source_url"] = selected["source_url"];
+      config["source_connection_id"] = selected["connection_id"];
+      config["source_subdir"] = selected["source_subdir"];
+      config["scan_mode"] = "source_assisted";
     }
-    if(!runtimeInput->text().trimmed().isEmpty()) config["runtime_target"]=runtimeInput->text().trimmed();
-    if(programKind->currentData().toString()=="agent") config["cscan_target"]=target;
-    config["source_notes"]=sourceNotes->text().trimmed();
+    if (hasRuntime) config["runtime_target"] = runtimeInput->text().trimmed();
+    if (programKind->currentData().toString() == "agent") config["cscan_target"] = target;
+    config["source_notes"] = sourceNotes->text().trimmed();
   }
   config["authorization_confirmed"] = authorizationCheck->isChecked();
-  config["authorization_scope"] = scopeInput ? scopeInput->text().trimmed() : target;
-  QJsonObject taskScope;
-  QJsonArray includes; includes.append(target);
-  if (testType->currentData().toString()=="program" && !runtimeInput->text().trimmed().isEmpty())
+  QJsonArray includes{target};
+  QStringList scopeTargets{target};
+  if (hasRuntime && runtimeInput->text().trimmed() != target) {
     includes.append(runtimeInput->text().trimmed());
-  if (additionalTargets) for (const auto &value : additionalTargets->text().split(',', QString::SkipEmptyParts)) includes.append(value.trimmed());
-  QJsonArray excludes;
-  if (excludedTargets) for (const auto &value : excludedTargets->text().split(',', QString::SkipEmptyParts)) excludes.append(value.trimmed());
-  taskScope["includes"] = includes;
-  taskScope["excludes"] = excludes;
-  taskScope["execution_location"] = scanLocation ? scanLocation->currentData().toString() : QStringLiteral("scanner");
-  taskScope["environment_ref"] = environmentRef ? environmentRef->text().trimmed() : QString();
-  taskScope["auth_config_ref"] = authConfigRef ? authConfigRef->text().trimmed() : QString();
-  taskScope["discovery_budget"] = discoveryBudget ? discoveryBudget->value() : 3;
-  config["task_scope"] = taskScope;
+    scopeTargets << runtimeInput->text().trimmed();
+  }
+  config["authorization_scope"] = scopeTargets.join('\n');
+  config["task_scope"] = QJsonObject{{"includes", includes}, {"excludes", QJsonArray{}},
+      {"execution_location", "scanner"}, {"environment_ref", QString()}, {"auth_config_ref", QString()},
+      {"discovery_budget", quickMode ? 3 : 5}};
   config["creation_mode"] = quickMode ? QStringLiteral("quick") : QStringLiteral("full");
   config["created_by_label"] = m_username;
-  QJsonObject body;
-  body["target"] = target;
-  body["config"] = config;
+  const QJsonObject body{{"target", target}, {"config", config},
+      {"request_id", QUuid::createUuid().toString(QUuid::WithoutBraces)}};
+  submitTaskCreation(body, quickMode || !initialTarget.isEmpty());
+}
 
+void FlowPage::submitTaskCreation(const QJsonObject &body, bool startAfterCreate)
+{
+  m_pendingCreateBody = body;
+  m_pendingCreateStart = startAfterCreate;
+  m_pendingCreateCanRetry = m_taskIdentitySupported;
+  m_retryCreate->setEnabled(false);
   m_newBtn->setEnabled(false);
   m_quickBtn->setEnabled(false);
 
-  const bool startAfterCreate=quickMode || !initialTarget.isEmpty();
   const QPointer<FlowPage> guard(this);
   m_api->post("/api/pipelines", body, 10000, [this,guard,startAfterCreate](const QJsonObject &res) {
     if(!guard) return;
     m_newBtn->setEnabled(true);
     m_quickBtn->setEnabled(true);
-    if (res["status"].toString() != "ok") {
+    if (res["status"].toString() != "ok" || res["data"].toObject()["pipeline_id"].toString().isEmpty()) {
+      m_pendingCreateCanRetry = m_pendingCreateCanRetry && m_taskIdentitySupported;
+      m_creationLabel->setText(m_pendingCreateCanRetry ? QStringLiteral("创建结果未确认，可重试原请求找回任务。")
+          : QStringLiteral("创建结果未确认，请刷新列表核对是否已创建。"));
+      m_creationNotice->show(); m_creationOpen->hide(); m_creationCopy->hide();
+      m_retryCreate->setVisible(m_pendingCreateCanRetry); m_retryCreate->setEnabled(m_pendingCreateCanRetry);
       QMessageBox::warning(this, QStringLiteral("任务创建失败"),
           res["error"].toObject()["message"].toString());
       return;
     }
 
-    QString pipelineId = res["data"].toObject()["pipeline_id"].toString();
+    const auto task = res["data"].toObject();
+    m_taskIdentitySupported = res["meta"].toObject()["task_identity_version"].toInt() >= 1;
+    QString pipelineId = task["pipeline_id"].toString();
+    const auto identifier = UiUtil::taskIdentifier(task);
+    m_pendingCreateBody = {};
+    m_creationLabel->setText(QStringLiteral("任务已创建 · 任务ID：%1").arg(identifier));
+    m_creationLabel->setToolTip(UiUtil::taskIdentifierTip(task));
+    m_creationCopy->setProperty("taskId", identifier);
+    m_creationOpen->setProperty("pipelineId", pipelineId);
+    m_creationCopy->show(); m_creationOpen->show(); m_retryCreate->hide(); m_creationNotice->show();
     refreshFlows();
     if (!startAfterCreate) return;
+    QJsonObject startBody;
+    if (!webScanStartBody(this, res["data"].toObject(), startBody)) return;
     m_api->post(QStringLiteral("/api/pipelines/%1/start").arg(pipelineId),
-                QJsonObject{}, 10000, [this,guard,pipelineId](const QJsonObject &startResponse) {
+                startBody, 10000, [this,guard,pipelineId](const QJsonObject &startResponse) {
       if(!guard) return;
       if (startResponse["status"].toString() != "ok") {
         QMessageBox::warning(this, QStringLiteral("任务已创建"),
@@ -1285,6 +1561,8 @@ void FlowPage::onFlowContextMenu(const QPoint &pos)
   bool isActive = statusText.contains("进行中") || statusText.contains("待确认");
 
   auto *menu = new QMenu(this);
+  const auto identifier = m_flowTable->item(row, 0)->data(Qt::UserRole + 1).toString();
+  menu->addAction(QStringLiteral("复制任务ID"), [identifier]() { UiUtil::copyTaskIdentifier(identifier); });
   menu->addAction(QStringLiteral("打开"), [this, pid]() {
     m_selectedPipelineId = pid;
     clearRunContext();
@@ -1385,10 +1663,33 @@ void FlowPage::onStartFlow()
 {
   if (m_selectedPipelineId.isEmpty()) return;
   const QString pipelineId = m_selectedPipelineId;
+  if (m_lastDisplayedDetail["status"].toString() != "created") {
+    if (m_startBtn->property("retrySource").toString() != pipelineId) {
+      m_startBtn->setProperty("retrySource", pipelineId);
+      m_startBtn->setProperty("retryId", QUuid::createUuid().toString(QUuid::WithoutBraces));
+    }
+    m_startBtn->setEnabled(false);
+    const QPointer<FlowPage> guard(this);
+    m_api->post(QStringLiteral("/api/pipelines/%1/retry-scan").arg(pipelineId),
+      QJsonObject{{"request_id",m_startBtn->property("retryId").toString()}},10000,[this,guard,pipelineId](const QJsonObject &response) {
+      if(!guard)return;
+      m_startBtn->setEnabled(true);
+      if(response["status"].toString()!="ok") {QMessageBox::warning(this,QStringLiteral("重试未创建"),response["error"].toObject()["message"].toString());return;}
+      if(m_selectedPipelineId!=pipelineId)return;
+      m_startBtn->setProperty("retrySource", QVariant()); m_startBtn->setProperty("retryId", QVariant());
+      m_lastDisplayedDetail=response["data"].toObject();m_selectedPipelineId=m_lastDisplayedDetail["pipeline_id"].toString();
+      refreshFlows();
+      if(m_lastDisplayedDetail["status"].toString()=="created")onStartFlow();
+      else loadFlowDetail(m_selectedPipelineId);
+    });
+    return;
+  }
+  QJsonObject startBody;
+  if (!webScanStartBody(this, m_lastDisplayedDetail, startBody)) return;
   m_startBtn->setEnabled(false);
   m_startBtn->setText(QStringLiteral("启动中…"));
   m_api->post(QStringLiteral("/api/pipelines/%1/start").arg(pipelineId),
-              QJsonObject{}, 10000, [this, pipelineId](const QJsonObject &response) {
+              startBody, 10000, [this, pipelineId](const QJsonObject &response) {
     m_startBtn->setEnabled(true);
     m_startBtn->setText(QStringLiteral("▶ 启动任务"));
     if (response.value(QStringLiteral("status")).toString() != QStringLiteral("ok")) {
@@ -1474,6 +1775,9 @@ void FlowPage::clearRunContext()
   m_generatedPlaybookId.clear();
   m_execTab->clearRunContext();
   m_evalTab->clearRun();
+  m_taskIdLabel->clear();
+  m_copyTaskId->setProperty("taskId", QString());
+  m_copyTaskId->setEnabled(false);
   m_targetLabel->setText(QStringLiteral("任务详情加载中…"));
   m_targetLabel->setToolTip(QString());
   m_statusLabel->setText(QStringLiteral("等待任务数据"));
@@ -1499,6 +1803,9 @@ void FlowPage::clearRunContext()
 
 void FlowPage::showTaskDetailError(const QString &message)
 {
+  m_taskIdLabel->clear();
+  m_copyTaskId->setProperty("taskId", QString());
+  m_copyTaskId->setEnabled(false);
   m_targetLabel->setText(QStringLiteral("任务详情加载失败"));
   m_targetLabel->setToolTip(message);
   m_statusLabel->setText(QStringLiteral("加载失败"));

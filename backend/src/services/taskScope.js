@@ -51,6 +51,14 @@ function contains(rule, candidate) {
   return candidate.path === rule.path || candidate.path.startsWith(prefix);
 }
 
+// Host-level execution lock deliberately spans ports/paths. No DNS resolution:
+// aliases are not proof of distinct assets. CIDR containment is symmetric here.
+export function executionTargetsOverlap(left, right) {
+  const hostRule=value=>{const a=address(value);return ['url','tcp'].includes(a.kind)?{kind:'host',host:a.host}:a;};
+  try {const a=hostRule(left),b=hostRule(right);return contains(a,b)||contains(b,a);}
+  catch {return left===right;}
+}
+
 export function normalizeTaskScope(config, target) {
   const raw = config?.task_scope;
   if (raw !== undefined && (typeof raw !== 'object' || raw === null || Array.isArray(raw))) invalid('测试范围配置无效');

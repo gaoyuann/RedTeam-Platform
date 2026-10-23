@@ -385,8 +385,8 @@ void TaskExecutionPanel::render()
   const auto counts = run.value("counts").toObject();
   const auto plan = m_snapshot.value("plan").toObject();
   const QString runId = run.value("run_id").toString();
-  m_identity->setText(QStringLiteral("任务：%1  ·  目标：%2  ·  创建人：%3\nRun：%4  ·  预案：%5  ·  引擎：%6")
-      .arg(m_pipelineId, m_snapshot.value("target").toString(), m_snapshot.value("owner").toString(),
+  m_identity->setText(QStringLiteral("任务ID：%1  ·  目标：%2  ·  创建人：%3\nRun：%4  ·  预案：%5  ·  引擎：%6")
+      .arg(UiUtil::taskIdentifier(m_snapshot), m_snapshot.value("target").toString(), m_snapshot.value("owner").toString(),
         runId.isEmpty() ? QStringLiteral("尚未生成") : runId, run.value("playbook_name").toString(), run.value("engine_type").toString()));
   const auto verifications=m_snapshot.value("verification_runs").toObject();
   QString status = runId.isEmpty() ? QStringLiteral("主预案尚未执行 · 任务%1").arg(stateText(m_snapshot.value("pipeline_status").toString()))

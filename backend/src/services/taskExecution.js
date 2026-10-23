@@ -42,7 +42,7 @@ export function taskExecutionSnapshot(db, pipeline) {
   return db.transaction(() => {
     const plan = db.prepare('SELECT state, revision, approved_playbook_id FROM task_plans WHERE pipeline_id = ?').get(pipeline.pipeline_id);
     const config = parse(pipeline.config, {}) || {};
-    const snapshot = { version: 1, pipeline_id: pipeline.pipeline_id, target: text(pipeline.target), owner: pipeline.created_by,
+    const snapshot = { version: 1, pipeline_id: pipeline.pipeline_id, task_no: pipeline.task_no || null, target: text(pipeline.target), owner: pipeline.created_by,
       pipeline_status: pipeline.status, plan: plan ? { state: plan.state, revision: plan.revision } : null,
       requires_approval: config.require_approval !== false, run: null, steps: [], attempts: [], evidence: [], preflight: [],
       limits: { records: 200, text: 2000 }, verification_runs:findingVerificationExecution(db,pipeline), captured_at: new Date().toISOString() };

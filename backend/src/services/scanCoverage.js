@@ -41,7 +41,7 @@ export function beginCoverage(db,pipeline,initialScans) {
   if(!hasScanCoverage(db)) return [];
   const planned=[];
   for(const scan of initialScans) {
-    const check=addCheck(db,pipeline,{type:scan.scan_type,scanType:scan.scan_type,target:scan.target,
+    const check=addCheck(db,pipeline,{type:scan.scan_type,scanType:scan.scan_type,target:scan.target,sourceId:scan.source_record_id??null,
       ...classifyCheck(taskScope(pipeline),scan.target,scan.scan_type)});
     if(check.state==='planned') planned.push(check);
   }

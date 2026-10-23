@@ -14,6 +14,7 @@
 #include <QTabWidget>
 
 class QCheckBox;
+class QPlainTextEdit;
 class ApiClient;
 class RemoteSourcePicker;
 class ScanResultOverview;
@@ -59,6 +60,7 @@ private:
   void openRecordDetails(QTreeWidgetItem *item);
   void resizeResultColumns();
   bool eventFilter(QObject *object, QEvent *event) override;
+  QPlainTextEdit *m_webScanProcess = nullptr;
   QLabel *m_compactStatus = nullptr;
   QLabel *m_listTitle = nullptr;
   QPushButton *m_showAllRecords = nullptr;
