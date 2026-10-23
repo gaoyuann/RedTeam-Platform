@@ -1222,6 +1222,335 @@ int main(int argc, char **argv)
   }
   chooseFinding.stop();
   {
+    MockServer identityServer;
+    const QString firstNumber = "TASK-20261023-000001", secondNumber = "TASK-20261023-000002";
+    auto first = taskRecord("identity-a"), second = taskRecord("identity-b");
+    first["task_no"] = firstNumber; second["task_no"] = secondNumber;
+    first["status"] = "completed"; second["status"] = "failed";
+    bool detailFails = false;
+    identityServer.handler = [&](const QString &, const QString &requestPath) -> MockReply {
+      const auto url = QUrl(requestPath); const auto path = url.path(); const QUrlQuery query(url);
+      if (path == "/api/pipelines") {
+        const auto search = query.queryItemValue("search", QUrl::FullyDecoded);
+        QJsonArray rows;
+        if (search.isEmpty()) rows = QJsonArray{first, second};
+        else if (search == "slow" || search == "comprehensive" || search == "C++ 100% & #") rows = QJsonArray{first};
+        else for (const auto &p : {first, second})
+          if (p["task_no"].toString().contains(search, Qt::CaseInsensitive)) rows.append(p);
+        return {QJsonObject{{"status", "ok"}, {"data", rows}, {"meta", QJsonObject{{"visible_total", 2}, {"search_applied", true}, {"task_identity_version", 1}}}}, search == "slow" ? 600 : 0};
+      }
+      if (path == "/api/pipelines/identity-a" || path == "/api/pipelines/identity-b") {
+        if (detailFails) return {QJsonObject{{"status", "error"}, {"error", QJsonObject{{"message", "identity fixture detail failed"}}}}};
+        return {success(path.endsWith('a') ? first : second)};
+      }
+      if (path.endsWith("/execution")) return {success(executionRecord(path.contains("identity-a") ? "identity-a" : "identity-b"))};
+      if (path.endsWith("/results")) return {success(resultsRecord(path.contains("identity-a") ? "identity-a" : "identity-b"))};
+      if (path.endsWith("/plan")) return {success(QJsonValue::Null)};
+      return {success(QJsonArray{})};
+    };
+    ApiClient identityApi(QStringLiteral("http://127.0.0.1:%1").arg(identityServer.serverPort()));
+    const auto originalStyle = app.styleSheet(); app.setStyleSheet(Theme::GlobalStyle + Theme::ButtonStyle);
+    FlowPage identityFlow(&identityApi, "user", "fixture-user"); identityFlow.resize(1360, 860); identityFlow.show();
+    verify(awaitCondition([&] { return identityFlow.m_flowListFresh; }), "numbered task list loads");
+    verify(identityFlow.m_flowTable->item(0, 0)->text().contains(firstNumber), "task list displays a copyable business ID below its name");
+    const QString captureRoot = qEnvironmentVariable("TASK_IDENTITY_CAPTURE_DIR");
+    const QString capture = captureRoot.isEmpty() ? QString() : captureRoot + "/scale-" + qEnvironmentVariable("QT_SCALE_FACTOR", "1");
+    if (!capture.isEmpty()) { QDir().mkpath(capture); identityFlow.grab().save(capture + "/task-list.png"); }
+    identityFlow.m_filterCombo->setCurrentIndex(identityFlow.m_filterCombo->findData("failed"));
+    identityFlow.m_searchInput->setText(firstNumber.toLower());
+    verify(awaitCondition([&] { return identityFlow.m_flowListFresh && identityFlow.m_flowTable->rowCount() == 1; }),
+      "exact task ID finds a completed task even under the failed-state filter");
+    verify(identityFlow.m_flowTable->item(0, 3)->data(Qt::UserRole).toString() == "identity-a"
+        && identityFlow.m_listState->text().contains("任务ID定位"), "ID search routes by stable internal identity and explains state override");
+    const auto requested = identityServer.requests;
+    bool serverSearch = false;
+    for (auto it = requested.cbegin(); it != requested.cend(); ++it) serverSearch = serverSearch || it.key().contains("search=");
+    verify(serverSearch, "task search reaches the backend instead of searching only a downloaded page");
+    QTest::keyClick(identityFlow.m_searchInput, Qt::Key_Return);
+    verify(awaitCondition([&] { return identityFlow.m_copyTaskId->isEnabled(); }), "enter on exact ID opens its task detail");
+    verify(identityFlow.m_taskIdLabel->text().contains(firstNumber), "detail header displays the searched task ID");
+    identityFlow.m_copyTaskId->click();
+    verify(QApplication::clipboard()->text() == firstNumber, "copy action writes only the full task ID");
+    if (!capture.isEmpty()) { identityFlow.grab().save(capture + "/task-detail.png"); identityFlow.resize(1024, 600); app.processEvents(); identityFlow.grab().save(capture + "/task-detail-1024.png"); }
+    identityFlow.openTaskAnalysis("identity-b");
+    verify(identityFlow.m_taskIdLabel->text().isEmpty() && !identityFlow.m_copyTaskId->isEnabled(), "task switching clears the previous copyable ID immediately");
+    verify(awaitCondition([&] { return identityFlow.m_taskIdLabel->text().contains(secondNumber); }), "next task shows its own ID");
+    detailFails = true; identityFlow.loadFlowDetail("identity-b");
+    verify(awaitCondition([&] { return identityFlow.m_taskIdLabel->text().isEmpty(); }) && !identityFlow.m_copyTaskId->isEnabled(), "failed detail cannot retain a stale task ID");
+    identityFlow.onBackToList(); identityFlow.m_filterCombo->setCurrentIndex(0);
+    identityFlow.m_searchInput->setText("slow"); QTest::qWait(280);
+    identityFlow.m_searchInput->setText(secondNumber);
+    verify(awaitCondition([&] { return identityFlow.m_flowListFresh && identityFlow.m_flowTable->rowCount() == 1; }), "new ID search completes while an older query is pending");
+    QTest::qWait(650);
+    verify(identityFlow.m_flowTable->item(0, 3)->data(Qt::UserRole).toString() == "identity-b", "late search replies cannot restore a different task");
+    identityFlow.m_searchInput->setText("comprehensive");
+    verify(awaitCondition([&] { return identityFlow.m_flowListFresh && identityFlow.m_flowTable->rowCount() == 1; }),
+      "server matches are retained when searching a raw type code instead of its translated display name");
+    identityFlow.m_searchInput->setText("C++ 100% & #");
+    verify(awaitCondition([&] { return identityFlow.m_flowListFresh; }), "special character search finishes");
+    bool encodedSearch = false;
+    for (auto it = identityServer.requests.cbegin(); it != identityServer.requests.cend(); ++it)
+      encodedSearch = encodedSearch || it.key().contains("search=C%2B%2B%20100%25%20%26%20%23");
+    verify(encodedSearch && identityFlow.m_flowTable->rowCount() == 1,
+      "literal plus, percent, ampersand and fragment characters reach server search without reinterpretation");
+    identityFlow.m_searchInput->clear();
+    verify(awaitCondition([&] { return identityFlow.m_flowListFresh && identityFlow.m_flowTable->rowCount() == 2; }), "clearing the ID restores the normal task list");
+    identityFlow.hide(); app.setStyleSheet(originalStyle);
+  }
+  {
+    MockServer createServer;
+    bool rejectCreation = false;
+    bool identityProtocol = true;
+    createServer.handler = [&](const QString &method, const QString &requestPath) -> MockReply {
+      const auto path = QUrl(requestPath).path();
+      if (method == "POST" && path == "/api/pipelines") {
+        if (rejectCreation) return {QJsonObject{{"status", "error"}, {"error", QJsonObject{{"message", "Fixture creation failed"}}}}};
+        auto reply = success(QJsonObject{{"pipeline_id", "create-fixture"}, {"task_no", "TASK-20261023-000003"}});
+        if (identityProtocol) reply["meta"] = QJsonObject{{"task_identity_version", 1}};
+        return {reply};
+      }
+      if (path == "/api/pipelines") {
+        auto reply = success(QJsonArray{});
+        if (identityProtocol) reply["meta"] = QJsonObject{{"task_identity_version", 1}, {"search_applied", true}};
+        return {reply};
+      }
+      return {success(QJsonObject{})};
+    };
+    ApiClient createApi(QStringLiteral("http://127.0.0.1:%1").arg(createServer.serverPort()));
+    const auto previousStyle = app.styleSheet();
+    const auto previousFont = app.font();
+    app.setStyleSheet(Theme::GlobalStyle + Theme::ButtonStyle);
+    auto font = app.font(); font.setPointSize(11); app.setFont(font);
+    MainWindow createShell(&createApi, "user", "fixture-user");
+    createShell.m_dongleTimer->stop();
+    createShell.m_ws->disconnectFromServer();
+    createShell.switchToPage(1);
+    createShell.resize(1360, 860);
+    createShell.show();
+    auto &createFlow = *createShell.m_flowPage;
+    const QString captureRoot = qEnvironmentVariable("TASK_CREATE_CAPTURE_DIR");
+    const QString capture = captureRoot.isEmpty() ? QString()
+        : captureRoot + "/scale-" + qEnvironmentVariable("QT_SCALE_FACTOR", "1");
+    auto captureDialog = [&](QDialog *dialog, const QString &name) {
+      QTest::qWait(30);
+      const auto *buttons = dialog->findChild<QDialogButtonBox*>();
+      const auto *window = dialog->windowHandle();
+      const auto *screen = window && window->screen() ? window->screen() : QGuiApplication::primaryScreen();
+      verify(screen && dialog->width() <= screen->availableGeometry().width()
+          && dialog->height() <= screen->availableGeometry().height(), "task dialog fits the available screen at the current scale");
+      verify(dialog->rect().contains(QRect(buttons->mapTo(dialog, QPoint()), buttons->size())),
+        "task dialog always keeps both actions inside its visible bounds");
+      const auto *consent = dialog->findChild<QCheckBox*>("taskAuthorizationCheck");
+      verify(consent->width() >= consent->sizeHint().width(), "authorization text fits without clipping");
+      auto *scroll = dialog->findChild<QScrollArea*>("taskCreateScroll");
+      verify(scroll->horizontalScrollBar()->maximum() == 0, "task form never needs horizontal scrolling");
+      if (!capture.isEmpty()) {
+        QDir().mkpath(capture);
+        verify(dialog->grab().save(capture + '/' + name + ".png"), "task dialog screenshot saved");
+      }
+      if (scroll->verticalScrollBar()->maximum() > 0) {
+        scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
+        QTest::qWait(10);
+        auto *summary = dialog->findChild<QLabel*>("taskScopeSummary");
+        verify(scroll->viewport()->rect().contains(summary->mapTo(scroll->viewport(), summary->rect().bottomLeft())),
+          "scrolling reaches the full authorization summary on small high DPI screens");
+        if (!capture.isEmpty()) dialog->grab().save(capture + '/' + name + "-scrolled.png");
+        scroll->verticalScrollBar()->setValue(0);
+      }
+    };
+    const QString target = "http://192.0.2.40:8089/app/";
+    QTimer::singleShot(0, &createFlow, [&] {
+      auto *dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      verify(dialog && dialog->objectName() == "taskCreateDialog", "full task opens the simplified dialog");
+      auto *input = dialog->findChild<QLineEdit*>("taskTargetInput");
+      auto *name = dialog->findChild<QLineEdit*>("taskNameInput");
+      auto *type = dialog->findChild<QComboBox*>("taskTestTypeInput");
+      auto *consent = dialog->findChild<QCheckBox*>("taskAuthorizationCheck");
+      auto *ok = dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok);
+      verify(name->geometry().top() < input->geometry().top() && input->geometry().top() < type->geometry().top(),
+        "task name is the first field, followed by target and task type");
+      verify(!ok->isEnabled() && !consent->isChecked(), "blank task starts disabled and unauthorized");
+      consent->setChecked(true);
+      verify(!ok->isEnabled(), "authorization alone cannot submit an empty target");
+      input->setText(target);
+      verify(!consent->isChecked() && type->currentData() == "web" && name->text().contains(target),
+        "typing a URL selects Web, names the task and clears obsolete authorization");
+      verify(!dialog->findChild<QLineEdit*>("taskAuthorizationScopeInput")
+          && dialog->findChildren<QSpinBox*>().isEmpty() && dialog->findChildren<QCheckBox*>().size() == 1,
+        "scope input, budget control and ineffective approval switch are removed");
+      const QStringList removedLabels{"授权范围", "其他授权目标", "排除项", "扫描位置", "靶场引用", "认证配置引用", "高级设置"};
+      bool removed = true;
+      for (auto *label : dialog->findChildren<QLabel*>()) removed = removed && !removedLabels.contains(label->text());
+      verify(removed, "deleted advanced fields have no hidden labels or entry point");
+      verify(dialog->findChild<QLabel*>("taskScopeSummary")->text() == target,
+        "authorization summary preserves the full target path");
+      name->selectAll(); QTest::keyClicks(name, "Custom task");
+      input->setText(target + "child/");
+      verify(name->text() == "Custom task", "target edits preserve a user supplied task name");
+      type->setCurrentIndex(type->findData("host"));
+      input->setText(target);
+      verify(type->currentData() == "host", "automatic inference preserves a manual task type choice");
+      type->setCurrentIndex(type->findData("web"));
+      name->selectAll(); QTest::keyClick(name, Qt::Key_Backspace);
+      input->setText(target + "child/"); input->setText(target);
+      verify(!name->text().isEmpty() && name->text().contains(target), "cleared names return to automatic naming");
+      captureDialog(dialog, "task-create-1360");
+      consent->setChecked(true);
+      verify(ok->isEnabled() && ok->property("primary").toBool() && ok->icon().isNull(),
+        "valid authorized task enables the shared primary action without native icons");
+      const auto buttonImage = ok->grab().toImage();
+      const auto buttonColor = buttonImage.pixelColor(buttonImage.width() / 2, qRound(6 * buttonImage.devicePixelRatio()));
+      verify(buttonColor.blue() > buttonColor.red() + 80, "enabled create action visibly uses the main window blue");
+      captureDialog(dialog, "task-create-ready");
+      input->setText(target + "changed/");
+      verify(!ok->isEnabled() && !consent->isChecked(), "changing the confirmed target requires fresh authorization");
+      dialog->reject();
+    });
+    createFlow.createFlow(false);
+    verify(createServer.requests.value("POST /api/pipelines") == 0, "cancelling a filled task creates nothing");
+    if (!capture.isEmpty()) createShell.grab().save(capture + "/main-window-1360.png");
+    QTimer::singleShot(0, &createFlow, [&] {
+      auto *dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      dialog->findChild<QLineEdit*>("taskTargetInput")->setText(target);
+      dialog->findChild<QLineEdit*>("taskNameInput")->clear();
+      dialog->findChild<QCheckBox*>("taskAuthorizationCheck")->setChecked(true);
+      dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    });
+    createFlow.createFlow(false);
+    verify(awaitCondition([&] { return createServer.requests.value("POST /api/pipelines") == 1; }),
+      "full task submits exactly once without requiring a name or scope input");
+    auto body = QJsonDocument::fromJson(createServer.requestBodies.value("POST /api/pipelines")).object();
+    auto config = body["config"].toObject();
+    const auto scope = config["task_scope"].toObject();
+    verify(config["task_name"].toString().contains(target) && config["authorization_scope"] == target
+        && config["authorization_confirmed"].toBool() && config["require_approval"].toBool()
+        && config["auto_execute"].toBool() && config["creation_mode"] == "full",
+      "automatic name and authorization record retain the existing manual approval execution contract");
+    verify(scope["includes"].toArray() == QJsonArray{target} && scope["excludes"].toArray().isEmpty()
+        && scope["execution_location"] == "scanner" && scope["environment_ref"].toString().isEmpty()
+        && scope["auth_config_ref"].toString().isEmpty() && scope["discovery_budget"].toInt() == 5,
+      "removed fields use explicit compatible defaults and never broaden the target");
+    verify(createServer.requests.value("POST /api/pipelines/create-fixture/start") == 0,
+      "full creation still waits for a separate start action");
+    verify(awaitCondition([&] { return createFlow.m_creationLabel->text().contains("TASK-20261023-000003"); })
+        && !body["request_id"].toString().isEmpty(),
+      "successful creation exposes the server-issued ID and sends a persistent request identity");
+    createFlow.m_creationCopy->click();
+    verify(QApplication::clipboard()->text() == "TASK-20261023-000003", "new task feedback copies its actual server number");
+    const auto identityCapture = qEnvironmentVariable("TASK_IDENTITY_CAPTURE_DIR");
+    if (!identityCapture.isEmpty()) {
+      const auto folder = identityCapture + "/scale-" + qEnvironmentVariable("QT_SCALE_FACTOR", "1");
+      QDir().mkpath(folder); createFlow.m_creationNotice->grab().save(folder + "/creation-feedback.png");
+    }
+
+    createShell.resize(1024, 600);
+    QTimer::singleShot(0, &createFlow, [&] {
+      auto *dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      auto *input = dialog->findChild<QLineEdit*>("taskTargetInput");
+      auto *type = dialog->findChild<QComboBox*>("taskTestTypeInput");
+      auto *kind = dialog->findChild<QComboBox*>("taskProgramInputKind");
+      input->setText(target);
+      captureDialog(dialog, "task-create-1024");
+      const int basicHeight = dialog->height();
+      type->setCurrentIndex(type->findData("program"));
+      auto *runtime = dialog->findChild<QLineEdit*>("taskRuntimeInput");
+      const QString runtimeTarget = "tcp://192.0.2.40:8091";
+      runtime->setText(runtimeTarget);
+      verify(dialog->findChild<QLabel*>("taskScopeSummary")->text() == target + '\n' + runtimeTarget,
+        "source and optional runtime targets both appear in the authorization summary");
+      captureDialog(dialog, "task-create-program");
+      kind->setCurrentIndex(kind->findData("remote_directory"));
+      verify(dialog->findChild<QPushButton*>("remoteSourceBrowse")->isVisible(),
+        "source directory mode still exposes its remote folder picker");
+      captureDialog(dialog, "task-create-source-directory");
+      kind->setCurrentIndex(kind->findData("runtime"));
+      input->setText(runtimeTarget);
+      verify(!runtime->isVisible() && dialog->findChild<QLabel*>("taskScopeSummary")->text() == runtimeTarget,
+        "hidden source runtime input is excluded from the visible scope");
+      type->setCurrentIndex(type->findData("web"));
+      input->setText(target);
+      QTest::qWait(30);
+      captureDialog(dialog, "task-create-returned");
+      verify(!dialog->findChild<QWidget*>("taskProgramFields")->isVisible() && dialog->height() == basicHeight,
+        "returning to a normal task removes source fields and their empty space");
+      type->setCurrentIndex(type->findData("program"));
+      input->setText(runtimeTarget);
+      dialog->findChild<QCheckBox*>("taskAuthorizationCheck")->setChecked(true);
+      dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    });
+    createFlow.createFlow(false);
+    verify(awaitCondition([&] { return createServer.requests.value("POST /api/pipelines") == 2; }),
+      "program task still creates through the standard API");
+    body = QJsonDocument::fromJson(createServer.requestBodies.value("POST /api/pipelines")).object();
+    config = body["config"].toObject();
+    verify(config["input_kind"] == "runtime" && !config.contains("runtime_target")
+        && config["task_scope"].toObject()["includes"].toArray() == QJsonArray{body["target"]},
+      "stale hidden fields cannot add an unconfirmed runtime target to the request");
+    rejectCreation = true;
+    bool errorShown = false;
+    QTimer dismissError;
+    QObject::connect(&dismissError, &QTimer::timeout, [&] {
+      if (auto *message = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
+        errorShown = message->text().contains("Fixture creation failed");
+        message->accept();
+      }
+    });
+    dismissError.start(10);
+    QTimer::singleShot(0, &createFlow, [&] {
+      auto *dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      dialog->findChild<QLineEdit*>("taskTargetInput")->setText(target);
+      dialog->findChild<QCheckBox*>("taskAuthorizationCheck")->setChecked(true);
+      dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    });
+    createFlow.createFlow(false);
+    verify(awaitCondition([&] { return errorShown; }) && createFlow.m_newBtn->isEnabled()
+        && createFlow.m_quickBtn->isEnabled() && createServer.requests.value("POST /api/pipelines/create-fixture/start") == 0,
+      "creation failure is shown, restores both entry actions and cannot start a scan");
+    const auto uncertainBody = createServer.requestBodies.value("POST /api/pipelines");
+    rejectCreation = false;
+    createFlow.m_retryCreate->click();
+    verify(awaitCondition([&] { return createFlow.m_pendingCreateBody.isEmpty(); })
+        && createServer.requestBodies.value("POST /api/pipelines") == uncertainBody,
+      "retrying uncertain creation sends the exact original request ID and body");
+    rejectCreation = true; errorShown = false;
+    QTimer::singleShot(0, &createFlow, [&] {
+      auto *dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      dialog->findChild<QLineEdit*>("taskTargetInput")->setText(target);
+      dialog->findChild<QCheckBox*>("taskAuthorizationCheck")->setChecked(true);
+      dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    });
+    createFlow.createFlow(false);
+    verify(awaitCondition([&] { return errorShown; }) && !createFlow.m_retryCreate->isHidden(),
+      "supported backend failure keeps a pending idempotent request");
+    identityProtocol = false;
+    createFlow.refreshFlows();
+    verify(awaitCondition([&] { return createFlow.m_flowListFresh; }), "legacy backend metadata loads");
+    const int beforeWithdrawal = createServer.requests.value("POST /api/pipelines");
+    verify(createFlow.m_retryCreate->isHidden(), "backend capability withdrawal disables an already pending retry");
+    emit createFlow.m_retryCreate->clicked(); QTest::qWait(40);
+    verify(createServer.requests.value("POST /api/pipelines") == beforeWithdrawal,
+      "a previously supported request cannot be replayed after backend capability withdrawal");
+    rejectCreation = true; errorShown = false;
+    QTimer::singleShot(0, &createFlow, [&] {
+      auto *dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      dialog->findChild<QLineEdit*>("taskTargetInput")->setText(target);
+      dialog->findChild<QCheckBox*>("taskAuthorizationCheck")->setChecked(true);
+      dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    });
+    createFlow.createFlow(false);
+    verify(awaitCondition([&] { return errorShown; }), "legacy backend creation error is shown");
+    const int beforeUnsupportedRetry = createServer.requests.value("POST /api/pipelines");
+    verify(createFlow.m_retryCreate->isHidden() && createFlow.m_creationLabel->text().contains("刷新列表"),
+      "legacy backends cannot offer idempotent replay that they do not support");
+    emit createFlow.m_retryCreate->clicked(); QTest::qWait(40);
+    verify(createServer.requests.value("POST /api/pipelines") == beforeUnsupportedRetry,
+      "unsupported retry cannot create a duplicate task even when invoked programmatically");
+    dismissError.stop();
+    createShell.hide();
+    app.setStyleSheet(previousStyle);
+    app.setFont(previousFont);
+  }
+  {
     MockServer nodeServer;nodeServer.listen(QHostAddress::LocalHost,0);
     nodeServer.handler=[](const QString &method,const QString &requestPath)->MockReply {
       const QString path=QUrl(requestPath).path();
@@ -1294,6 +1623,9 @@ int main(int argc, char **argv)
       "remote CScan task submits a normal pipeline request");
     const auto remoteBody=QJsonDocument::fromJson(nodeServer.requestBodies.value("POST /api/pipelines")).object();
     const auto remoteConfig=remoteBody["config"].toObject();
+    verify(remoteConfig["task_scope"].toObject()["discovery_budget"].toInt() == 3
+        && remoteConfig["require_approval"].toBool() && remoteConfig["auto_execute"].toBool(),
+      "simplified quick creation retains its existing budget and manual approval contract");
     verify(remoteConfig["cscan_target"].toString()==observedService
       && remoteConfig["source_notes"].toString().contains("/var/www/project")
       && !remoteConfig.contains("source_path") && !remoteConfig.contains("source_url"),

@@ -30,7 +30,7 @@ QJsonObject fixture() {
   auto system=[](const QString &status,const QString &reason){return QJsonObject{{"schema_version",1},{"status",status},{"reason",reason},{"evidence_ids",status=="achieved"?QJsonArray{41}:QJsonArray{}},{"objective",QJsonObject{{"label","确认目录索引暴露"},{"category","configuration_exposure"}}},{"object",QJsonObject{{"target","http://fixture.invalid/docs/"}}},{"unverified",QJsonArray{"仅确认目录暴露，不证明敏感文件泄露"}}};};
   auto oldSummary=historical["summary"].toObject();oldSummary["result"]=system("inconclusive","历史目标未明确，证据不足；人工意见不替代系统结论");historical["summary"]=oldSummary;
   auto newSummary=latest["summary"].toObject();newSummary["result"]=system("achieved",latestAuto["note"].toString());latest["summary"]=newSummary;
-  return {{"id","fixture-verification"},{"revision",3},{"state","draft"},
+  return {{"id","fixture-verification"},{"task_no","TASK-20261023-000001"},{"revision",3},{"state","draft"},
     {"finding",QJsonObject{{"result_data","{\"finding\":\"Directory indexing found.\",\"path\":\"/docs/\"}"}}},
     {"summary",QJsonObject{{"conclusion","confirmed"},{"method","automatic"}}},{"attempts",QJsonArray{latest,historical}}};
 }
@@ -52,6 +52,8 @@ int main(int argc,char **argv) {
   {const QSignalBlocker guard(dialog.m_items);dialog.m_items->setRowCount(1);for(int col=0;col<6;col++)dialog.m_items->setItem(0,col,new QTableWidgetItem);dialog.m_items->item(0,0)->setCheckState(Qt::Checked);dialog.m_items->item(0,0)->setData(Qt::UserRole,detail["id"].toString());dialog.m_items->item(0,1)->setText("执行结束");const auto status=detail["attempts"].toArray().first().toObject()["summary"].toObject()["result"].toObject()["status"].toString();dialog.m_items->item(0,2)->setText(status=="achieved"?"目标已达成":status=="not_performed"?"未开展适用验证":"证据不足");dialog.m_items->item(0,3)->setText(fixturePath.isEmpty()?"Directory indexing found.":"历史记录");dialog.m_items->setCurrentCell(0,0);}
   const auto attempts=detail["attempts"].toArray();{const QSignalBlocker guard(dialog.m_attempts);for(const auto &v:attempts){const auto a=v.toObject();dialog.m_attempts->addItem(a["created_at"].toString()+" · 执行结束",a["id"]);}}
   dialog.m_tabs->setCurrentIndex(1);dialog.renderAttempt(0);dialog.updateQueue();dialog.show();QTest::qWait(30);
+  auto *identity=dialog.findChild<QLabel*>("findingTaskIdentity");
+  if(!identity||!identity->text().contains("isolated-result-replay"))return fail(34,"legacy task identity is missing before detail loads");
   const auto screenshots=qEnvironmentVariable("F08_SCREENSHOT_DIR");if(!screenshots.isEmpty())QDir().mkpath(screenshots);
   auto screenshot=[&](const QString &name){if(!screenshots.isEmpty()&&!dialog.grab().save(QDir(screenshots).filePath(name+".png")))return false;return true;};
   auto summaryVisible=[&]{const auto resultRect=dialog.m_tabs->widget(1)->rect();const QRect summaryRect(dialog.m_resultSummary->mapTo(dialog.m_tabs->widget(1),QPoint()),dialog.m_resultSummary->size());if(!resultRect.contains(summaryRect))return false;
@@ -72,6 +74,7 @@ int main(int argc,char **argv) {
     serveDetail=true;dialog.m_attempts->setCurrentIndex(0);dialog.load(false);dialog.m_attempts->setCurrentIndex(1);dialog.m_evidenceTable->item(0,0)->setCheckState(Qt::Checked);dialog.m_note->setPlainText("轮询期间填写的复核依据");dialog.m_conclusion->setCurrentIndex(dialog.m_conclusion->findData("inconclusive"));
     for(int i=0;i<80&&dialog.m_loading;i++)QTest::qWait(10);
     if(dialog.m_loading||dialog.m_attempts->currentData()!="attempt-old"||!dialog.m_resultConclusion->text().contains("证据不足")||!dialog.m_note->toPlainText().contains("轮询期间")||dialog.m_evidenceTable->item(0,0)->checkState()!=Qt::Checked)return fail(20,"late detail poll replaced selected history or review input");
+    if(!identity->text().contains(detail["task_no"].toString())||!dialog.windowTitle().contains(detail["task_no"].toString()))return fail(35,"loaded task number is inconsistent with the verification window");
     auto old=attempts[1].toObject();old.remove("summary");auto compatible=attempts;compatible[1]=old;dialog.m_detail["attempts"]=compatible;dialog.renderAttempt(1);if(!dialog.m_resultConclusion->text().contains("证据不足")||!dialog.m_resultBasis->toolTip().contains("旧版接口"))return fail(13,"old service fallback crossed attempt boundary");dialog.m_detail=detail;
   }
   dialog.resize(1024,600);QTest::qWait(30);if(dialog.size()!=QSize(1024,600)||!summaryVisible()){qCritical()<<"actual narrow size"<<dialog.size()<<"minHint"<<dialog.minimumSizeHint()<<"result"<<dialog.m_tabs->widget(1)->size()<<"summary"<<dialog.m_resultSummary->geometry();screenshot("result-narrow-failed");return fail(14,"narrow summary is outside visible result region");}if(!screenshot("result-history-1024"))return 15;

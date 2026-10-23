@@ -245,8 +245,14 @@ FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QStrin
   const auto *screen=widgetScreen(parent);
   resize(QSize(1360,860).boundedTo(screen?screen->availableGeometry().size():QSize(1360,860)));
   auto *layout=new QVBoxLayout(this);
-  auto *intro=new QLabel("逐漏洞测试无需先生成、审批或执行全局预案；仍需核对授权范围并确认本次执行。");
-  intro->setWordWrap(true);layout->addWidget(intro);
+  auto *identityLabel = new QLabel(QStringLiteral("任务ID：%1 · 核对授权范围并确认本次执行").arg(pipeline), this);
+  identityLabel->setObjectName("findingTaskIdentity");
+  identityLabel->setTextFormat(Qt::PlainText);
+  identityLabel->setWordWrap(true);
+  identityLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  identityLabel->setToolTip(QStringLiteral("逐漏洞测试无需先生成、审批或执行全局预案；仍需核对授权范围并确认本次执行。"));
+  identityLabel->setProperty("taskId", pipeline);
+  layout->addWidget(identityLabel);
   auto *split=new QSplitter(this);layout->addWidget(split,1);
   m_items=new QTableWidget(0,6);m_items->setHorizontalHeaderLabels({"选择","执行状态","最新系统结果","漏洞名称","位置","严重程度"});
   m_items->setMinimumWidth(0);
@@ -468,7 +474,13 @@ void FindingVerificationDialog::load(bool editor) {
   const auto edits=m_editGeneration;
   QPointer<FindingVerificationDialog> self(this);
   m_api->get(base()+"/"+id,10000,[self,id,editor,context,edits](const QJsonObject &r){if(!self || self->m_finished)return;self->m_loading=false;if(self->m_reloadEditor || self->currentId()!=id || self->m_contextGeneration!=context){const bool switched=self->currentId()!=id || self->m_contextGeneration!=context;self->m_reloadEditor=false;self->load(switched || edits==self->m_editGeneration);return;}if(r["status"]!="ok"){self->setStatus(r["error"].toObject()["message"].toString());return;}
-    self->m_detail=r["data"].toObject();self->m_details[id]=self->m_detail;self->m_context->setPlainText(contextText(self->m_detail));const bool replaceEditor=editor && edits==self->m_editGeneration;if(replaceEditor) {
+    self->m_detail=r["data"].toObject();
+    const auto taskNumber = self->m_detail["task_no"].toString(self->m_pipeline);
+    self->setWindowTitle(QStringLiteral("逐漏洞攻击测试 · %1").arg(taskNumber));
+    if (auto *label = self->findChild<QLabel*>("findingTaskIdentity")) {
+      label->setText(QStringLiteral("任务ID：%1 · 核对授权范围并确认本次执行").arg(taskNumber)); label->setProperty("taskId", taskNumber);
+    }
+    self->m_details[id]=self->m_detail;self->m_context->setPlainText(contextText(self->m_detail));const bool replaceEditor=editor && edits==self->m_editGeneration;if(replaceEditor) {
       self->m_revision=self->m_detail["revision"].toInt();self->m_stale=false;
     } else if(self->m_revision!=self->m_detail["revision"].toInt()) {
       self->m_stale=true;self->m_confirm->setChecked(false);

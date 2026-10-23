@@ -2,11 +2,11 @@ import { hasStatistics } from '../services/findingInstances.js';
 import findingVerificationRoutes from './findingVerifications.js';
 import {isProgramMode} from '../services/programScan.js';
 import { Router } from 'express';
-import { randomUUID } from 'crypto';
 import { askTaskAssistant } from '../services/taskAssistant.js';
 import taskPlanRoutes from './taskPlans.js';
 import { appendTaskLog, broadcastTaskEvent, taskSummary } from '../services/taskActivity.js';
-import { taskExecutionSnapshot } from '../services/taskExecution.js';
+import { taskExecutionSnapshot, taskDisplayText } from '../services/taskExecution.js';
+import { insertNumberedTask, creationHash, existingCreation, validateCreationRequest, visibleTaskLookup, isTaskIdentifier, hasTaskIdentity } from '../services/taskIdentity.js';
 import taskResultsRoutes from './taskResults.js';
 import { assertPlaybookUse } from '../services/playbookAccess.js';
 import { requireActor } from '../middleware/recordAccess.js';
@@ -130,11 +130,12 @@ const STEP_TYPE_CN = {
 
 export default function (db) {
   const router = Router();
+  router.use(requireActor(db));
   const assistantRequests = new Set();
   router.use('/:id/results', taskResultsRoutes(db));
   router.use('/:id/verifications', findingVerificationRoutes(db));
 
-  router.get('/analysis-index', requireActor(db), (req, res, next) => {
+  router.get('/analysis-index', (req, res, next) => {
     try {
       res.json({ status: 'ok', data: taskAnalysisIndex(db, { username: req.user.sub, role: req.user.role }, req.query) });
     } catch (error) {
@@ -144,18 +145,44 @@ export default function (db) {
 
   // ── Pipeline CRUD ──────────────────────────────────────────────────────
 
-  // List pipelines
+  router.get('/lookup', (req, res) => {
+    const identifier = req.query.task_no;
+    if (typeof identifier !== 'string' || identifier.length > 128 || !isTaskIdentifier(identifier.trim()))
+      return res.status(400).json({ status: 'error', error: { message: '任务ID格式无效' } });
+    const row = visibleTaskLookup(db, req.user, identifier);
+    if (!row) return res.status(404).json({ status: 'error', error: { message: '未找到可访问的任务' } });
+    res.json({ status: 'ok', data: { pipeline_id: row.pipeline_id, task_no: row.task_no || null, status: row.status } });
+  });
+
+  // Search the entire visible set. Exact IDs intentionally bypass status filters.
   router.get('/', (req, res) => {
-    const { status } = req.query;
-    let sql = 'SELECT * FROM pipelines WHERE 1=1';
-    const params = [];
-    if (status) { sql += ' AND status = ?'; params.push(status); }
-    // Non-admin sees only their own
-    if (req.user.role !== 'admin') { sql += ' AND created_by = ?'; params.push(req.user.sub); }
-    sql += ' ORDER BY created_at DESC';
-    const rows = db.prepare(sql).all(...params);
-    for (const row of rows) { row.status_cn = statusCn(row.status); }
-    res.json({ status: 'ok', data: rows, meta: { total: rows.length } });
+    const { status, search = '' } = req.query;
+    if (typeof search !== 'string' || search.length > 128 || status !== undefined && typeof status !== 'string')
+      return res.status(400).json({ status: 'error', error: { message: '任务筛选参数无效' } });
+    const needle = search.trim().toLowerCase();
+    const exact = isTaskIdentifier(needle);
+    const totals = db.prepare(`SELECT count(*) visible_total,
+      COALESCE(SUM(status='running'),0) running, COALESCE(SUM(status='awaiting_approval'),0) awaiting_approval,
+      COALESCE(SUM(status='completed'),0) completed FROM pipelines WHERE (?='admin' OR created_by=?)`)
+      .get(req.user.role, req.user.sub);
+    const found = exact ? visibleTaskLookup(db, req.user, needle) : null;
+    const visible = exact ? (found ? [found] : []) : db.prepare("SELECT * FROM pipelines WHERE (?='admin' OR created_by=?) ORDER BY created_at DESC,id DESC")
+      .all(req.user.role, req.user.sub);
+    const rows = visible.filter(row => {
+      if (exact) return row.task_no?.toLowerCase() === needle || row.pipeline_id.toLowerCase() === needle;
+      if (status && row.status !== status) return false;
+      if (!needle) return true;
+      let config; try { config = JSON.parse(row.config || '{}'); } catch { config = {}; }
+      const typeLabels = { comprehensive: '综合测试', web: 'Web 安全测试', host: '主机安全测试', internal: '内网渗透测试',
+        source: '程序漏洞测试 源码／程序测试 源码扫描（CScan）', program: '程序漏洞测试 源码／程序测试 源码扫描（CScan）' };
+      return [row.task_no, row.pipeline_id, taskDisplayText(config?.task_name || ''), taskDisplayText(row.target), config?.test_type,
+        typeLabels[config?.test_type], row.created_by]
+        .some(value => String(value || '').toLowerCase().includes(needle));
+    });
+    for (const row of rows) row.status_cn = statusCn(row.status);
+    res.json({ status: 'ok', data: rows, meta: { total: rows.length, visible_total: totals.visible_total, exact_id: exact,
+      search_applied: true, task_identity_version: hasTaskIdentity(db) ? 1 : 0,
+      counts: { running: totals.running, awaiting_approval: totals.awaiting_approval, completed: totals.completed } } });
   });
 
   // Get pipeline detail (with steps)
@@ -265,14 +292,6 @@ export default function (db) {
       return res.status(400).json({ status: 'error', error: { message: '目标地址格式无效（支持HTTP/HTTPS、tcp://主机:端口、IP/CIDR/主机名）' } });
     }
 
-    const limitErr = checkPipelineLimits(db, req.user.sub);
-    if (limitErr) {
-      return res.status(429).json({ status: 'error', error: { message: limitErr } });
-    }
-
-    const pipelineId = `pipe_${randomUUID().slice(0, 12)}`;
-    const now = new Date().toISOString();
-
     // Validate and sanitize config
     let configJson = '{}';
     if (config) {
@@ -290,14 +309,26 @@ export default function (db) {
       }
     }
 
+    const requestId = req.body.request_id;
+    validateCreationRequest(requestId);
+    const hash = creationHash({ target, config: JSON.parse(configJson) });
+    const known = existingCreation(db, req.user.sub, requestId, hash);
+    if (known) return res.json({ status: 'ok', data: { ...known, status_cn: statusCn(known.status), config: JSON.parse(known.config || '{}') }, reused: true,
+      meta: { task_identity_version: 1 } });
+    const limitErr = checkPipelineLimits(db, req.user.sub);
+    if (limitErr) return res.status(429).json({ status: 'error', error: { message: limitErr } });
+    const now = new Date().toISOString();
     try {
       const program=await normalizeProgramConfig(JSON.parse(configJson),target);
       target=program.target;
       configJson=JSON.stringify({...program.config,task_scope:normalizeTaskScope(program.config,target),topology_origin:captureTopologyOrigin(req)});
     } catch(error) {return res.status(400).json({status:'error',error:{message:error.message}});}
     try {
-      db.prepare(`INSERT INTO pipelines (pipeline_id, target, status, config, created_by, created_at, updated_at)
-        VALUES (?, ?, 'created', ?, ?, ?, ?)`).run(pipelineId, target, configJson, req.user.sub, now, now);
+      const created = insertNumberedTask(db, { target, config: JSON.parse(configJson), owner: req.user.sub, ownerRole: req.user.role, now,
+        requestId, hash, checkLimits: () => checkPipelineLimits(db, req.user.sub) });
+      const pipelineId = created.row.pipeline_id;
+      if (created.reused) return res.json({ status: 'ok', data: { ...created.row, status_cn: statusCn(created.row.status), config: JSON.parse(created.row.config || '{}') }, reused: true,
+        meta: { task_identity_version: 1 } });
 
       auditLog(db, 'pipeline_create', pipelineId, req.user.role, target, { config: configJson });
       appendTaskLog(db, pipelineId, '任务已创建，等待启动');
@@ -310,9 +341,9 @@ export default function (db) {
       try { row.result = JSON.parse(row.result || '{}'); } catch {}
 
       // WebSocket broadcast
-      broadcastTaskEvent(db, 'pipeline:created', { pipeline_id: pipelineId, target, user: req.user.sub });
+      broadcastTaskEvent(db, 'pipeline:created', { pipeline_id: pipelineId, task_no: row.task_no, target, user: req.user.sub });
 
-      res.status(201).json({ status: 'ok', data: row });
+      res.status(201).json({ status: 'ok', data: row, meta: { task_identity_version: 1 } });
     } catch (err) {
       if (err.message.includes('UNIQUE')) {
         return res.status(409).json({ status: 'error', error: { message: '流水线ID冲突，请重试' } });

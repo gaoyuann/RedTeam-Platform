@@ -1,5 +1,6 @@
 #include "GlobalSearchDialog.h"
 #include "ApiClient.h"
+#include "UiUtil.h"
 #include <QLineEdit>
 #include <QListWidget>
 #include <QLabel>
@@ -20,7 +21,7 @@ GlobalSearchDialog::GlobalSearchDialog(ApiClient *api, const QStringList &module
     m_input->setObjectName("searchQuery");
     m_input->setMaxLength(120);
     m_input->setClearButtonEnabled(true);
-    m_input->setPlaceholderText(QStringLiteral("搜索模块、任务名称、目标或报告编号"));
+    m_input->setPlaceholderText(QStringLiteral("搜索任务ID、模块、名称、目标或报告编号"));
     layout->addWidget(m_input);
     auto *hint = new QLabel(QStringLiteral("搜索范围：模块入口、当前账号可见任务和报告。双击或选中后按回车打开。"), this);
     hint->setWordWrap(true);
@@ -137,7 +138,7 @@ void GlobalSearchDialog::fetch()
                     self->m_seen[type].insert(id);
                     const QString title = row[type == 0 ? "task_name" : "title"].toString();
                     auto *item = new QListWidgetItem(QStringLiteral("%1 · %2\n%3 · %4")
-                        .arg(type == 0 ? QStringLiteral("任务") : QStringLiteral("报告"), title, id, row["target"].toString()), self->m_results);
+                        .arg(type == 0 ? QStringLiteral("任务") : QStringLiteral("报告"), title, type == 0 ? UiUtil::taskIdentifier(row) : id, row["target"].toString()), self->m_results);
                     // Legacy reports have no reliable task association.
                     if (type == 1 && row["kind"].toString() != "trace_snapshot") {
                         row.remove("pipeline_id");
