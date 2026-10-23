@@ -50,7 +50,52 @@
 #include <QScreen>
 #include <QWindow>
 #include <QSignalBlocker>
+#include <QStyledItemDelegate>
+#include <QStyleOptionViewItem>
+#include <QTextLayout>
 #include <cmath>
+
+namespace {
+enum TaskListColumn {
+  TaskIdColumn, TaskNameColumn, TaskTargetColumn, TaskTypeColumn, TaskStatusColumn,
+  TaskProgressColumn, TaskTimeColumn, TaskOwnerColumn, TaskActionColumn, TaskColumnCount
+};
+
+// Supply explicit line breaks so native Qt painting also wraps unbroken URLs/IDs.
+// Keep model text untouched for copying, tooltips and task navigation.
+class TaskListDelegate final : public QStyledItemDelegate {
+public:
+  explicit TaskListDelegate(QTableWidget *table) : QStyledItemDelegate(table), m_table(table) {}
+
+protected:
+  void initStyleOption(QStyleOptionViewItem *option, const QModelIndex &index) const override {
+    QStyledItemDelegate::initStyleOption(option, index);
+    option->textElideMode = Qt::ElideNone;
+    option->features |= QStyleOptionViewItem::WrapText;
+    QString text = option->text;
+    text.replace('\n', QChar::LineSeparator);
+    QTextLayout layout(text, option->font);
+    QTextOption wrapping;
+    wrapping.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    layout.setTextOption(wrapping);
+    QStringList lines;
+    layout.beginLayout();
+    while (true) {
+      auto line = layout.createLine();
+      if (!line.isValid()) break;
+      line.setLineWidth(qMax(1, m_table->columnWidth(index.column()) - 18));
+      auto part = text.mid(line.textStart(), line.textLength());
+      if (part.endsWith(QChar::LineSeparator)) part.chop(1);
+      lines.append(part);
+    }
+    layout.endLayout();
+    option->text = lines.join('\n');
+  }
+
+private:
+  QTableWidget *m_table;
+};
+}
 
 // ── Step metadata ──────────────────────────────────────────────────────
 static const QStringList STEP_NAMES = {
@@ -404,24 +449,30 @@ void FlowPage::setupListView()
   layout->addWidget(m_listState);
 
   // Flow table
-  m_flowTable = new QTableWidget(0, 8, m_listView);
+  m_flowTable = new QTableWidget(0, TaskColumnCount, m_listView);
+  m_flowTable->setObjectName("taskListTable");
+  m_flowTable->setStyleSheet(QStringLiteral(
+      "QTableWidget#taskListTable::item { padding:5px 6px; }"
+      "QTableWidget#taskListTable QHeaderView::section { padding:8px 6px; }"));
   UiUtil::EmptyHint::attach(m_flowTable, QStringLiteral("暂无测试任务"));
   m_flowTable->setHorizontalHeaderLabels(
-    { QStringLiteral("任务名称"), QStringLiteral("目标范围"), QStringLiteral("任务类型"),
+    { QStringLiteral("任务 ID"), QStringLiteral("任务名称"), QStringLiteral("目标范围"), QStringLiteral("任务类型"),
       QStringLiteral("状态"), QStringLiteral("进度"), QStringLiteral("创建时间"),
       QStringLiteral("负责人"), QStringLiteral("操作") });
-  m_flowTable->setColumnWidth(0, 220);
-  m_flowTable->setColumnWidth(1, 180);
-  m_flowTable->setColumnWidth(2, 130);
-  m_flowTable->setColumnWidth(3, 100);
-  m_flowTable->setColumnWidth(4, 100);
-  m_flowTable->setColumnWidth(5, 150);
-  m_flowTable->setColumnWidth(6, 100);
-  m_flowTable->setColumnWidth(7, 70);
   m_flowTable->horizontalHeader()->setStretchLastSection(false);
-  m_flowTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-  m_flowTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+  m_flowTable->horizontalHeader()->setMinimumSectionSize(32);
+  m_flowTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
   m_flowTable->verticalHeader()->setVisible(false);
+  m_flowTable->verticalHeader()->setMinimumSectionSize(44);
+  m_flowTable->setWordWrap(true);
+  m_flowTable->setTextElideMode(Qt::ElideNone);
+  m_flowTable->setItemDelegate(new TaskListDelegate(m_flowTable));
+  m_flowTable->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+  m_flowResizeTimer = new QTimer(this);
+  m_flowResizeTimer->setSingleShot(true);
+  connect(m_flowResizeTimer, &QTimer::timeout, this, &FlowPage::resizeFlowColumns);
+  m_flowTable->viewport()->installEventFilter(this);
+  m_flowTable->installEventFilter(this);
   m_flowTable->setSelectionBehavior(QAbstractItemView::SelectRows);
   m_flowTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_flowTable->setAlternatingRowColors(true);
@@ -749,8 +800,53 @@ QColor FlowPage::statusColor(const QString &status) const
 QString FlowPage::flowIdAtRow(int row) const
 {
   if (row < 0 || row >= m_flowTable->rowCount()) return QString();
-  auto *item = m_flowTable->item(row, 3);
+  auto *item = m_flowTable->item(row, TaskIdColumn);
   return item ? item->data(Qt::UserRole).toString() : QString();
+}
+
+bool FlowPage::eventFilter(QObject *watched, QEvent *event)
+{
+  if (m_flowResizeTimer && (watched == m_flowTable || watched == m_flowTable->viewport())
+      && (event->type() == QEvent::Resize || event->type() == QEvent::Show
+          || event->type() == QEvent::FontChange || event->type() == QEvent::StyleChange))
+    m_flowResizeTimer->start(0);
+  return QWidget::eventFilter(watched, event);
+}
+
+void FlowPage::resizeFlowColumns()
+{
+  const int available = m_flowTable->viewport()->width();
+  if (available <= 0) return;
+  const auto metrics = m_flowTable->fontMetrics();
+  const auto width = [&](const QString &text) { return metrics.horizontalAdvance(text) + 18; };
+  int identifierWidth = width(QStringLiteral("TASK-00000000-000000"));
+  for (int row = 0; row < m_flowTable->rowCount(); ++row) {
+    const auto *item = m_flowTable->item(row, TaskIdColumn);
+    if (item && item->text().startsWith("TASK-", Qt::CaseInsensitive) && UiUtil::isTaskIdentifier(item->text()))
+      identifierWidth = qMax(identifierWidth, width(item->text()));
+  }
+  const QList<QPair<int, int>> compactColumns{
+    {TaskIdColumn, identifierWidth},
+    {TaskTypeColumn, qMax(width(QStringLiteral("Web 安全测试")), width(QStringLiteral("程序漏洞测试")))},
+    {TaskStatusColumn, width(QStringLiteral("◎  待确认"))},
+    {TaskProgressColumn, qMax(width(QStringLiteral("未提供")), width(QStringLiteral("100.0%")))},
+    {TaskTimeColumn, width(QStringLiteral("00:00:00"))},
+    {TaskOwnerColumn, width(QStringLiteral("负责人"))},
+    {TaskActionColumn, width(QStringLiteral("操作"))}
+  };
+  int preferred = 0;
+  for (const auto &column : compactColumns) preferred += column.second;
+  // Reserve reading space for name/target; on smaller views let all text wrap.
+  const double scale = qMin(1.0, double(available) / (preferred + 300));
+  int used = 0;
+  for (const auto &column : compactColumns) {
+    m_flowTable->setColumnWidth(column.first, qMax(32, qRound(column.second * scale)));
+    used += m_flowTable->columnWidth(column.first);
+  }
+  const int remaining = qMax(64, available - used);
+  m_flowTable->setColumnWidth(TaskNameColumn, remaining * 55 / 100);
+  m_flowTable->setColumnWidth(TaskTargetColumn, remaining - m_flowTable->columnWidth(TaskNameColumn));
+  m_flowTable->resizeRowsToContents();
 }
 
 // ── Load flow list ─────────────────────────────────────────────────────
@@ -845,17 +941,20 @@ void FlowPage::loadFlows()
       m_flowTable->insertRow(row);
 
       const auto identifier = UiUtil::taskIdentifier(p);
-      auto *nameItem = new QTableWidgetItem(taskName + "\n" + identifier);
-      nameItem->setData(Qt::UserRole + 1, identifier);
-      nameItem->setToolTip(taskName + "\n" + UiUtil::taskIdentifierTip(p));
-      m_flowTable->setRowHeight(row, 52);
-      m_flowTable->setItem(row, 0, nameItem);
+      auto *idItem = new QTableWidgetItem(identifier);
+      idItem->setData(Qt::UserRole, pid);
+      idItem->setData(Qt::UserRole + 1, identifier);
+      idItem->setToolTip(UiUtil::taskIdentifierTip(p));
+      m_flowTable->setItem(row, TaskIdColumn, idItem);
+      auto *nameItem = new QTableWidgetItem(taskName);
+      nameItem->setToolTip(taskName);
+      m_flowTable->setItem(row, TaskNameColumn, nameItem);
 
       auto *targetItem = new QTableWidgetItem(target);
       targetItem->setToolTip(target);
-      m_flowTable->setItem(row, 1, targetItem);
+      m_flowTable->setItem(row, TaskTargetColumn, targetItem);
 
-      m_flowTable->setItem(row, 2, new QTableWidgetItem(type));
+      m_flowTable->setItem(row, TaskTypeColumn, new QTableWidgetItem(type));
 
       // Status column stores pipeline_id in UserRole for row actions.
       auto *statusItem = new QTableWidgetItem(
@@ -864,7 +963,7 @@ void FlowPage::loadFlows()
       QColor sc = statusColor(status);
       statusItem->setForeground(sc);
       statusItem->setTextAlignment(Qt::AlignCenter);
-      m_flowTable->setItem(row, 3, statusItem);
+      m_flowTable->setItem(row, TaskStatusColumn, statusItem);
 
       const QString progressText = pipelineProgressText(p);
       auto *progressItem = new QTableWidgetItem(progressText);
@@ -872,25 +971,29 @@ void FlowPage::loadFlows()
       const bool progressKnown = progressText != QStringLiteral("未提供");
       progressItem->setForeground(progressKnown && status == "completed" ? QColor("#16a34a")
           : progressKnown ? QColor("#2563eb") : QColor("#64748b"));
-      m_flowTable->setItem(row, 4, progressItem);
+      m_flowTable->setItem(row, TaskProgressColumn, progressItem);
 
       auto dt = QDateTime::fromString(created, Qt::ISODate);
       QString displayTime = dt.isValid()
-        ? dt.toString("MM-dd HH:mm:ss") : created.left(19);
+        ? dt.toString("MM-dd\nHH:mm:ss") : created.left(19);
       auto *timeItem = new QTableWidgetItem(displayTime);
+      timeItem->setToolTip(dt.isValid() ? dt.toString("yyyy-MM-dd HH:mm:ss") : created);
       timeItem->setTextAlignment(Qt::AlignCenter);
-      m_flowTable->setItem(row, 5, timeItem);
+      m_flowTable->setItem(row, TaskTimeColumn, timeItem);
 
-      m_flowTable->setItem(row, 6, new QTableWidgetItem(owner.isEmpty() ? QStringLiteral("—") : owner));
+      auto *ownerItem = new QTableWidgetItem(owner.isEmpty() ? QStringLiteral("—") : owner);
+      ownerItem->setToolTip(owner);
+      m_flowTable->setItem(row, TaskOwnerColumn, ownerItem);
       auto *openItem = new QTableWidgetItem(QStringLiteral("进入"));
       openItem->setForeground(QColor("#2563eb"));
       openItem->setTextAlignment(Qt::AlignCenter);
-      m_flowTable->setItem(row, 7, openItem);
+      m_flowTable->setItem(row, TaskActionColumn, openItem);
 
       row++;
     }
     m_flowListFresh = true;
     UiUtil::EmptyHint::reset(m_flowTable);
+    resizeFlowColumns();
     m_listState->setText(QStringLiteral("读取 %1 个可见任务，当前匹配 %2 个 · 双击打开任务；统计不是漏洞数量。")
         .arg(meta["visible_total"].toInt(arr.size())).arg(row));
     if (exact) m_listState->setText(row ? QStringLiteral("已按任务ID定位，显示全部状态中的匹配任务。")
@@ -1560,11 +1663,11 @@ void FlowPage::onFlowContextMenu(const QPoint &pos)
   if (pid.isEmpty()) return;
 
   // Read status from the item text (stored as "icon  text")
-  QString statusText = m_flowTable->item(row, 3)->text();
+  QString statusText = m_flowTable->item(row, TaskStatusColumn)->text();
   bool isActive = statusText.contains("进行中") || statusText.contains("待确认");
 
   auto *menu = new QMenu(this);
-  const auto identifier = m_flowTable->item(row, 0)->data(Qt::UserRole + 1).toString();
+  const auto identifier = m_flowTable->item(row, TaskIdColumn)->data(Qt::UserRole + 1).toString();
   menu->addAction(QStringLiteral("复制任务ID"), [identifier]() { UiUtil::copyTaskIdentifier(identifier); });
   menu->addAction(QStringLiteral("打开"), [this, pid]() {
     m_selectedPipelineId = pid;
