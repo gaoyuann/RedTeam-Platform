@@ -1233,17 +1233,34 @@ int main(int argc, char **argv)
     auto first = taskRecord("identity-a"), second = taskRecord("identity-b");
     first["task_no"] = firstNumber; second["task_no"] = secondNumber;
     first["status"] = "completed"; second["status"] = "failed";
+    const QString longTarget = "http://192.0.2.40/vulnerabilities/sqli/";
+    const QString longName = longTarget + QStringLiteral(" 安全测试 20261023-131901");
+    first["target"] = longTarget;
+    first["config"] = QJsonObject{{"task_name", longName}, {"test_type", "web"}};
+    first["created_at"] = "2026-10-23T05:28:41Z"; first["created_by"] = "admin";
+    second["config"] = QJsonObject{{"task_name", "web_dvwa"}, {"test_type", "comprehensive"}};
+    second["target"] = "192.0.2.40";
+    second["created_at"] = "2026-10-22T09:58:50Z"; second["created_by"] = "admin";
+    int extraRows = 0;
     bool detailFails = false;
     identityServer.handler = [&](const QString &, const QString &requestPath) -> MockReply {
       const auto url = QUrl(requestPath); const auto path = url.path(); const QUrlQuery query(url);
       if (path == "/api/pipelines") {
         const auto search = query.queryItemValue("search", QUrl::FullyDecoded);
         QJsonArray rows;
-        if (search.isEmpty()) rows = QJsonArray{first, second};
+        if (search.isEmpty()) {
+          rows = QJsonArray{first, second};
+          for (int i = 0; i < extraRows; ++i) {
+            auto record = second;
+            record["pipeline_id"] = QStringLiteral("identity-extra-%1").arg(i);
+            record["task_no"] = QStringLiteral("TASK-20261023-%1").arg(i + 3, 6, 10, QChar('0'));
+            rows.append(record);
+          }
+        }
         else if (search == "slow" || search == "comprehensive" || search == "C++ 100% & #") rows = QJsonArray{first};
         else for (const auto &p : {first, second})
           if (p["task_no"].toString().contains(search, Qt::CaseInsensitive)) rows.append(p);
-        return {QJsonObject{{"status", "ok"}, {"data", rows}, {"meta", QJsonObject{{"visible_total", 2}, {"search_applied", true}, {"task_identity_version", 1}}}}, search == "slow" ? 600 : 0};
+        return {QJsonObject{{"status", "ok"}, {"data", rows}, {"meta", QJsonObject{{"visible_total", 2 + extraRows}, {"search_applied", true}, {"task_identity_version", 1}}}}, search == "slow" ? 600 : 0};
       }
       if (path == "/api/pipelines/identity-a" || path == "/api/pipelines/identity-b") {
         if (detailFails) return {QJsonObject{{"status", "error"}, {"error", QJsonObject{{"message", "identity fixture detail failed"}}}}};
@@ -1258,15 +1275,53 @@ int main(int argc, char **argv)
     const auto originalStyle = app.styleSheet(); app.setStyleSheet(Theme::GlobalStyle + Theme::ButtonStyle);
     FlowPage identityFlow(&identityApi, "user", "fixture-user"); identityFlow.resize(1360, 860); identityFlow.show();
     verify(awaitCondition([&] { return identityFlow.m_flowListFresh; }), "numbered task list loads");
-    verify(identityFlow.m_flowTable->item(0, 0)->text().contains(firstNumber), "task list displays a copyable business ID below its name");
+    verify(identityFlow.m_flowTable->columnCount() == 9
+        && identityFlow.m_flowTable->horizontalHeaderItem(0)->text() == QStringLiteral("任务 ID")
+        && identityFlow.m_flowTable->horizontalHeaderItem(1)->text() == QStringLiteral("任务名称"),
+      "task ID and task name have independent, labelled columns");
+    verify(identityFlow.m_flowTable->item(0, 0)->text() == firstNumber
+        && identityFlow.m_flowTable->item(0, 1)->text() == longName,
+      "splitting task identity preserves the full ID and original task name");
     const QString captureRoot = qEnvironmentVariable("TASK_IDENTITY_CAPTURE_DIR");
     const QString capture = captureRoot.isEmpty() ? QString() : captureRoot + "/scale-" + qEnvironmentVariable("QT_SCALE_FACTOR", "1");
-    if (!capture.isEmpty()) { QDir().mkpath(capture); identityFlow.grab().save(capture + "/task-list.png"); }
+    if (!capture.isEmpty()) QDir().mkpath(capture);
+    auto checkTaskListLayout = [&](const QSize &size, const QString &name) {
+      identityFlow.resize(size); QTest::qWait(40);
+      auto *table = identityFlow.m_flowTable;
+      verify(table->horizontalScrollBar()->maximum() == 0
+          && table->horizontalHeader()->length() <= table->viewport()->width(),
+        "all nine task columns fit without horizontal scrolling after a window resize");
+      bool visible = true;
+      for (int column = 0; column < table->columnCount(); ++column)
+        visible = visible && !table->isColumnHidden(column)
+            && table->viewport()->rect().contains(table->visualItemRect(table->item(0, column)));
+      verify(visible, "every field and the entry action remain inside the visible task row");
+      verify(table->columnWidth(0) >= table->fontMetrics().horizontalAdvance(firstNumber) + 18,
+        "standard task IDs remain readable in full on a single line");
+      verify(table->item(0, 2)->text() == longTarget
+          && table->item(0, 6)->text().contains("05:28:41")
+          && table->item(0, 6)->toolTip().contains("2026-10-23"),
+        "wrapping and compact timestamps retain the complete target, seconds and year tooltip");
+      if (!capture.isEmpty()) verify(identityFlow.grab().save(capture + '/' + name + ".png"), "responsive task list screenshot saved");
+      return table->rowHeight(0);
+    };
+    const int wideHeight = checkTaskListLayout(QSize(1360, 860), "task-list");
+    const int narrowHeight = checkTaskListLayout(QSize(1024, 600), "task-list-1024");
+    verify(narrowHeight > wideHeight, "long task names and URLs gain row height instead of being truncated on narrow screens");
+    checkTaskListLayout(QSize(1360, 860), "task-list-expanded");
+    verify(identityFlow.m_flowTable->rowHeight(0) == wideHeight, "widening the task list releases obsolete wrapped row height");
+    QTimer::singleShot(0, &identityFlow, [&] {
+      auto *menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+      verify(menu && !menu->actions().isEmpty(), "task context menu opens from the new ID column");
+      if (menu) { menu->actions().first()->trigger(); menu->close(); }
+    });
+    identityFlow.onFlowContextMenu(identityFlow.m_flowTable->visualItemRect(identityFlow.m_flowTable->item(0, 0)).center());
+    verify(QApplication::clipboard()->text() == firstNumber, "context copy still returns the full standalone task ID");
     identityFlow.m_filterCombo->setCurrentIndex(identityFlow.m_filterCombo->findData("failed"));
     identityFlow.m_searchInput->setText(firstNumber.toLower());
     verify(awaitCondition([&] { return identityFlow.m_flowListFresh && identityFlow.m_flowTable->rowCount() == 1; }),
       "exact task ID finds a completed task even under the failed-state filter");
-    verify(identityFlow.m_flowTable->item(0, 3)->data(Qt::UserRole).toString() == "identity-a"
+    verify(identityFlow.flowIdAtRow(0) == "identity-a"
         && identityFlow.m_listState->text().contains("任务ID定位"), "ID search routes by stable internal identity and explains state override");
     const auto requested = identityServer.requests;
     bool serverSearch = false;
@@ -1288,7 +1343,7 @@ int main(int argc, char **argv)
     identityFlow.m_searchInput->setText(secondNumber);
     verify(awaitCondition([&] { return identityFlow.m_flowListFresh && identityFlow.m_flowTable->rowCount() == 1; }), "new ID search completes while an older query is pending");
     QTest::qWait(650);
-    verify(identityFlow.m_flowTable->item(0, 3)->data(Qt::UserRole).toString() == "identity-b", "late search replies cannot restore a different task");
+    verify(identityFlow.flowIdAtRow(0) == "identity-b", "late search replies cannot restore a different task");
     identityFlow.m_searchInput->setText("comprehensive");
     verify(awaitCondition([&] { return identityFlow.m_flowListFresh && identityFlow.m_flowTable->rowCount() == 1; }),
       "server matches are retained when searching a raw type code instead of its translated display name");
@@ -1301,6 +1356,27 @@ int main(int argc, char **argv)
       "literal plus, percent, ampersand and fragment characters reach server search without reinterpretation");
     identityFlow.m_searchInput->clear();
     verify(awaitCondition([&] { return identityFlow.m_flowListFresh && identityFlow.m_flowTable->rowCount() == 2; }), "clearing the ID restores the normal task list");
+    extraRows = 24; identityFlow.refreshFlows();
+    verify(awaitCondition([&] { return identityFlow.m_flowListFresh && identityFlow.m_flowTable->rowCount() == 26; }),
+      "a longer task list loads for scrollbar layout coverage");
+    checkTaskListLayout(QSize(1024, 600), "task-list-many-1024");
+    verify(identityFlow.m_flowTable->verticalScrollBar()->maximum() > 0,
+      "all task columns still fit when a vertical scrollbar consumes viewport width");
+    extraRows = 0;
+    first.remove("task_no");
+    first["pipeline_id"] = "pipe_01234567-89ab-4def-8123-0123456789ab";
+    identityFlow.resize(1024, 600); identityFlow.refreshFlows();
+    verify(awaitCondition([&] { return identityFlow.m_flowListFresh; })
+        && identityFlow.m_flowTable->item(0, 0)->text() == first["pipeline_id"].toString()
+        && identityFlow.flowIdAtRow(0) == first["pipeline_id"].toString(),
+      "legacy internal IDs remain complete and navigate to the correct task in the new column");
+    verify(identityFlow.m_flowTable->horizontalScrollBar()->maximum() == 0,
+      "long legacy UUIDs wrap without widening the task table");
+    if (!capture.isEmpty()) identityFlow.grab().save(capture + "/task-list-legacy-1024.png");
+    bool readOnly = true;
+    for (auto it = identityServer.requests.cbegin(); it != identityServer.requests.cend(); ++it)
+      readOnly = readOnly && it.key().startsWith("GET ");
+    verify(readOnly, "column resizing, copying and task navigation never issue write or scan requests");
     identityFlow.hide(); app.setStyleSheet(originalStyle);
   }
   {

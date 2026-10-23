@@ -80,10 +80,12 @@ private slots:
   void onFilterChanged(int index);
 
 private:
+  bool eventFilter(QObject *watched, QEvent *event) override;
   void setupUI();
   void setupListView();
   void setupWorkbenchView();
   void loadFlows();
+  void resizeFlowColumns();
   void submitTaskCreation(const QJsonObject &body, bool startAfterCreate);
   void loadFlowDetail(const QString &pipelineId);
   void clearRunContext();
@@ -111,6 +113,7 @@ private:
   QComboBox *m_filterCombo;
   QLabel *m_listState;
   QTimer *m_searchTimer = nullptr;
+  QTimer *m_flowResizeTimer = nullptr;
   bool m_searchOpenRequested = false;
   QWidget *m_creationNotice = nullptr;
   QLabel *m_creationLabel = nullptr;
