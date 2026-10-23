@@ -227,6 +227,8 @@ export function buildTaskAttackReport(document) {
   const count = (number, unit) => number === null ? '未知' : `${number} ${unit}`;
   const overview = [
     `任务：${summary(results.task_name || document.pipeline_id)}；目标：${summary(document.target)}`,
+    ...(recorded(document.report.content.provenance?.task_no || results.task_no)
+      ? [`任务ID：${text(document.report.content.provenance?.task_no || results.task_no)}`] : []),
     `报告：${text(document.report.report_id)}；保存时间：${text(document.report.created_at || document.report.content.provenance?.captured_at)}`,
     `测试时间：${savedTestPeriod(results)}；环境：${summary(results.baseline?.environment_id || results.statistics?.baseline?.environment_id)}；环境版本：${summary(results.baseline?.environment_version || results.statistics?.baseline?.environment_version)}。`,
     `扫描候选记录：${count(stats.scanned_records, '条')}；已归并漏洞实例：${count(stats.vulnerability_instances, '个')}。`,

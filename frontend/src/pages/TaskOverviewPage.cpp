@@ -1,5 +1,6 @@
 #include "TaskOverviewPage.h"
 #include "../Theme.h"
+#include "../UiUtil.h"
 #include "../widgets/MetricCard.h"
 
 #include <QDateTime>
@@ -210,7 +211,7 @@ void TaskOverviewPage::setTaskContext(const QJsonObject &pipeline)
            pipeline.value("error_message").toString().isEmpty() ? QStringLiteral("数据来源：当前任务详情及后端关联统计。") : pipeline.value("error_message").toString()));
   m_state->setStyleSheet(pipeline.value("status").toString() == "failed" ? Theme::StatusErrorStyle : Theme::StatusInfoStyle);
   m_identity->setText(QStringLiteral("任务：%1\n任务 ID：%2\n目标：%3\n创建人：%4\n创建时间（本地）：%5")
-      .arg(taskName.isEmpty() ? QStringLiteral("未提供") : taskName, pipeline.value("pipeline_id").toString(),
+      .arg(taskName.isEmpty() ? QStringLiteral("未提供") : taskName, UiUtil::taskIdentifier(pipeline),
            target.isEmpty() ? QStringLiteral("未提供") : target,
            pipeline.value("created_by").toString().trimmed().isEmpty() ? QStringLiteral("未提供") : pipeline.value("created_by").toString(), timeText(pipeline.value("created_at").toString())));
   m_authorization->setText(QStringLiteral("授权确认记录：%1\n授权范围记录：%2\n后端目标范围：%3\n排除项：%4\n扫描位置：%5 · 靶场引用：%6 · 认证配置引用：%7\n缺失条件：%8\n授权记录仍需人工核验；后端按结构化目标范围限制任务调用。")

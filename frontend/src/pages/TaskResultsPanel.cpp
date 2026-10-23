@@ -459,8 +459,8 @@ void TaskResultsPanel::render()
   const auto counts = run.value("counts").toObject();
   const auto assessment = m_snapshot.value("assessment").toObject();
   const auto score = assessment.value("teaching_score").toObject();
-  m_identity->setText(QStringLiteral("任务：%1 · %2  ·  目标：%3\nRun：%4  ·  预案：%5")
-      .arg(m_snapshot.value("task_name").toString(), m_pipelineId, m_snapshot.value("target").toString(),
+  m_identity->setText(QStringLiteral("任务：%1 · 任务ID：%2  ·  目标：%3\nRun：%4  ·  预案：%5")
+      .arg(m_snapshot.value("task_name").toString(), UiUtil::taskIdentifier(m_snapshot), m_snapshot.value("target").toString(),
         run.value("run_id").toString().isEmpty() ? QStringLiteral("尚未生成") : run.value("run_id").toString(), run.value("playbook_name").toString()));
   m_state->setText(run.isEmpty() ? QStringLiteral("暂无执行结果；可以查看已有候选，但不能生成执行结果报告。")
       : QStringLiteral("Run %1 · %2").arg(state(run.value("status").toString()), run.value("stop_reason").toString()));
@@ -570,6 +570,8 @@ void TaskResultsPanel::renderDetail()
       detail = QStringLiteral("报告：%1\n编号：%2 · %3 · %4\n")
         .arg(report.value("title").toString(), report.value("report_id").toString(), state(report.value("status").toString()),
           time(report.value("created_at").toString()));
+      if (report.value("task_no_source").toString() == "current_task_metadata" && !report.value("task_no").toString().isEmpty())
+        detail += QStringLiteral("所属任务ID：%1（来自当前任务信息；历史报告快照保持原样）\n").arg(report.value("task_no").toString());
       if (report.value("kind").toString() == "trace_snapshot") {
         const QString brief = presentationText(m_report.value("presentation").toObject());
         detail += brief.isEmpty() ? QStringLiteral("\n详细攻击效果未提供，请刷新或更新后端。") : "\n" + brief;
@@ -584,7 +586,7 @@ void TaskResultsPanel::renderDetail()
   if (!item || !table->selectionModel()->hasSelection()) {
     m_detail->setPlainText(QStringLiteral("选择一条候选、工具结果或证据记录查看来源；缺少记录不能推断为安全或验证成功。")); return;
   }
-  const QString detail = QStringLiteral("任务：%1\n候选和工具结果不自动代表目标达成，source_state 只校验记录关联。\n\n").arg(m_pipelineId) + pretty(item->data(Qt::UserRole).toJsonObject());
+  const QString detail = QStringLiteral("任务ID：%1\n候选和工具结果不自动代表目标达成，source_state 只校验记录关联。\n\n").arg(UiUtil::taskIdentifier(m_snapshot)) + pretty(item->data(Qt::UserRole).toJsonObject());
   if (m_detail->toPlainText() != detail) m_detail->setPlainText(detail);
 }
 
@@ -613,7 +615,7 @@ void TaskResultsPanel::generateReport()
   const auto run = m_snapshot.value("execution").toObject().value("run").toObject();
   const QString fingerprint = m_snapshot.value("source_fingerprint").toString();
   QMessageBox confirmation(QMessageBox::Question, QStringLiteral("生成结果报告"),
-    QStringLiteral("将保存任务 %1 / Run %2 的脱敏、限长来源快照。\n不会重新执行、评分或判定漏洞；同一来源重复生成会复用已有报告。\n是否继续？").arg(m_pipelineId, run.value("run_id").toString()),
+    QStringLiteral("将保存任务 %1 / Run %2 的脱敏、限长来源快照。\n不会重新执行、评分或判定漏洞；同一来源重复生成会复用已有报告。\n是否继续？").arg(UiUtil::taskIdentifier(m_snapshot), run.value("run_id").toString()),
     QMessageBox::Yes | QMessageBox::No, this);
   confirmation.setTextFormat(Qt::PlainText); confirmation.setDefaultButton(QMessageBox::No);
   if (confirmation.exec() != QMessageBox::Yes || context != m_contextVersion || !m_fresh) return;

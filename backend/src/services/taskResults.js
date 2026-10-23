@@ -41,6 +41,8 @@ function frozenContent(row, pipeline) {
   if(row.template!=='task_trace_v'+content.schema_version || content.schema_version===1 && !row.run_id) return null;
   if(content.schema_version===2 && (row.template!=='task_trace_v2' || row.pipeline_id!==pipeline.pipeline_id || !content.results?.statistics)) return null;
   const provenance = content.provenance;
+  if (provenance?.task_no != null && (provenance.task_no !== pipeline.task_no
+      || content.results?.task_no !== provenance.task_no || content.results?.execution?.task_no !== provenance.task_no)) return null;
   if (provenance?.pipeline_id !== pipeline.pipeline_id || provenance.owner !== pipeline.created_by
       || provenance.target !== taskDisplayText(pipeline.target) || provenance.run_id !== row.run_id
       || (content.results?.execution?.run?.run_id ?? null) !== row.run_id || content.results.pipeline_id !== pipeline.pipeline_id
@@ -70,7 +72,7 @@ function frozenContent(row, pipeline) {
 
 function reportMetadata(db, row, pipeline) {
   const content = frozenContent(row, pipeline);
-  return { report_id: row.report_id, run_id: row.run_id, title: taskDisplayText(row.title), status: row.status,
+  return { task_no: pipeline.task_no || null, task_no_source: content?.provenance.task_no ? 'snapshot' : 'current_task_metadata', report_id: row.report_id, run_id: row.run_id, title: taskDisplayText(row.title), status: row.status,
     generated_by: taskDisplayText(row.generated_by), created_at: row.created_at,
     kind: content ? 'trace_snapshot' : ['task_trace_v1','task_trace_v2'].includes(row.template) ? 'invalid' : 'legacy',
     source_fingerprint: content?.provenance.source_fingerprint || null };
@@ -129,7 +131,7 @@ export function taskResultsSnapshot(db, pipeline) {
       steps: records('execution_steps'), attempts: records('execution_attempts'), evidence: records('evidence_records'), plan,
       playbook: run ? db.prepare('SELECT * FROM playbooks WHERE playbook_id = ?').get(run.playbook_id) : null,
       definitions: run ? db.prepare('SELECT * FROM playbook_steps WHERE playbook_id = ? ORDER BY step_index').all(run.playbook_id) : [] })).digest('hex');
-    return { version: 1, pipeline_id: pipeline.pipeline_id, owner: pipeline.created_by, target: taskDisplayText(pipeline.target),
+    return { version: 1, pipeline_id: pipeline.pipeline_id, task_no: pipeline.task_no || null, owner: pipeline.created_by, target: taskDisplayText(pipeline.target),
       pipeline_status: pipeline.status, task_name: taskDisplayText(json(pipeline.config, {})?.task_name || pipeline.pipeline_id),
       source_fingerprint: fingerprint, captured_at: new Date().toISOString(), execution, findings,
       ...(f09?{statistics:f09.statistics,instances:f09.instances,coverage_checks:f09.checks,baseline:f09.baseline,verification_attempts:f09.attempts}:{}),
@@ -162,7 +164,7 @@ export function createTaskReport(db, pipeline, actor, body) {
     if (existing) return { pipeline_id: pipeline.pipeline_id, run_id: body.run_id, report: reportMetadata(db, existing, pipeline), reused: true };
     const { reports, ...results } = snapshot;
     const content = taskDisplayValue({ schema_version: 1, type: 'task_result_report',
-      provenance: { pipeline_id: pipeline.pipeline_id, owner: pipeline.created_by, target: snapshot.target,
+      provenance: { pipeline_id: pipeline.pipeline_id, task_no: pipeline.task_no || null, owner: pipeline.created_by, target: snapshot.target,
         run_id: body.run_id, playbook_id: snapshot.execution.run.playbook_id, plan: snapshot.trace.plan,
         source_fingerprint: snapshot.source_fingerprint, captured_at: snapshot.captured_at },
       notice: '此报告是脱敏、限长的来源快照，不是完整原始证据、审批结论或风险评级；历史快照不随后续记录变化自动更新。', results }, 0, 200);
@@ -189,7 +191,7 @@ export function readTaskReport(db, pipeline, reportId) {
     if(v2) {
       const content=frozenContent(v2,pipeline);
       if(!content) fail(409,'报告缺少有效任务来源，不能作为本任务追溯快照');
-      const document = {pipeline_id:pipeline.pipeline_id,owner:pipeline.created_by,target:taskDisplayText(pipeline.target),report:{...reportMetadata(db,v2,pipeline),content}};
+      const document = {pipeline_id:pipeline.pipeline_id,task_no:pipeline.task_no || null,owner:pipeline.created_by,target:taskDisplayText(pipeline.target),report:{...reportMetadata(db,v2,pipeline),content}};
       return {...document,presentation:buildTaskAttackReport(document)};
     }
   }
@@ -199,7 +201,7 @@ export function readTaskReport(db, pipeline, reportId) {
   if (!row) fail(404, '报告不存在或不属于此任务');
   const content = frozenContent(row, pipeline);
   if (!content && (row.run_id !== pipeline.run_id || row.template === 'task_trace_v1')) fail(409, '报告缺少有效任务来源，不能作为本任务追溯快照');
-  const document = { pipeline_id: pipeline.pipeline_id, owner: pipeline.created_by, target: taskDisplayText(pipeline.target),
+  const document = { pipeline_id: pipeline.pipeline_id, task_no: pipeline.task_no || null, owner: pipeline.created_by, target: taskDisplayText(pipeline.target),
     report: { ...reportMetadata(db, row, pipeline),
       content: content || { schema_version: 0,
       notice: '旧报告只与当前 Run 关联，缺少完整任务及批准预案来源；原结论未重新验证，不支持追溯快照导出。',
@@ -230,7 +232,7 @@ function createTaskReportV2(db,pipeline,actor,body) {
     if(existing)return {pipeline_id:pipeline.pipeline_id,run_id:existing.run_id,report:reportMetadata(db,existing,pipeline),reused:true};
     const {reports,...results}=snapshot;
     const runId=snapshot.execution.run?.run_id || null;
-    const content={schema_version:2,type:'task_result_report',provenance:{pipeline_id:pipeline.pipeline_id,owner:pipeline.created_by,target:snapshot.target,
+    const content={schema_version:2,type:'task_result_report',provenance:{pipeline_id:pipeline.pipeline_id,task_no:pipeline.task_no || null,owner:pipeline.created_by,target:snapshot.target,
       run_id:runId,source_fingerprint:snapshot.source_fingerprint,captured_at:snapshot.captured_at},
       notice:'保存时的脱敏快照；统计基于全量数据，候选预览和执行明细存在展示上限。未知或未检查不代表安全。',results};
     const reportId='task_rpt_'+randomUUID(), time=new Date().toISOString();

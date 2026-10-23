@@ -169,7 +169,7 @@ void ResultsPage::refresh()
         const QMap<QString, QString> reviewStates{{"draft", "草稿 / 未审阅"}, {"submitted", "待审阅"}, {"rejected", "已退回"}, {"reviewed", "已审阅（非漏洞验证）"}};
         const QStringList cells{row.value("report_id").toString() + " · " + row.value("title").toString(),
           trace ? QStringLiteral("任务追溯快照") : QStringLiteral("历史 / 来源不完整"),
-          trace ? row.value("pipeline_id").toString() : QStringLiteral("不推断归属"), row.value("run_id").toString(),
+          trace ? UiUtil::taskIdentifier(row) : QStringLiteral("不推断归属"), row.value("run_id").toString(),
           row.value("owner").toString() + " · " + row.value("target").toString(),
           trace ? review.value("available").toBool() ? reviewStates.value(review.value("state").toString(), QStringLiteral("审阅状态不可用"))
             : QStringLiteral("审阅状态不可用") : row.value("status").toString(), row.value("created_at").toString()};

@@ -24,6 +24,7 @@ class AnalysisPage;
 class TaskPlanPage;
 class TaskOverviewPage;
 class TaskLogPanel;
+class QTimer;
 
 // ── FlowPage ───────────────────────────────────────────────────────────
 // PentAGI-inspired task entry: internal QStackedWidget switches between
@@ -83,6 +84,7 @@ private:
   void setupListView();
   void setupWorkbenchView();
   void loadFlows();
+  void submitTaskCreation(const QJsonObject &body, bool startAfterCreate);
   void loadFlowDetail(const QString &pipelineId);
   void clearRunContext();
   void showTaskDetailError(const QString &message);
@@ -108,6 +110,17 @@ private:
   QLineEdit *m_searchInput;
   QComboBox *m_filterCombo;
   QLabel *m_listState;
+  QTimer *m_searchTimer = nullptr;
+  bool m_searchOpenRequested = false;
+  QWidget *m_creationNotice = nullptr;
+  QLabel *m_creationLabel = nullptr;
+  QPushButton *m_creationOpen = nullptr;
+  QPushButton *m_creationCopy = nullptr;
+  QPushButton *m_retryCreate = nullptr;
+  QJsonObject m_pendingCreateBody;
+  bool m_pendingCreateStart = false;
+  bool m_taskIdentitySupported = false;
+  bool m_pendingCreateCanRetry = false;
   int m_flowListRequestRevision = 0;
   bool m_flowListFresh = false;
   MetricCard *m_totalCard;
@@ -119,6 +132,8 @@ private:
   QWidget *m_workbenchView;
   QPushButton *m_backBtn;
   QLabel *m_targetLabel;
+  QLabel *m_taskIdLabel = nullptr;
+  QPushButton *m_copyTaskId = nullptr;
   QLabel *m_statusLabel;
   QPushButton *m_startBtn;
   QPushButton *m_approveBtn;
