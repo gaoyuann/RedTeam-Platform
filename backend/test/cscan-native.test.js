@@ -76,7 +76,7 @@ test('CScan retains raw subtask progress and only imports after every task finis
   const result=await auditSources({scan_task_id:'batch',target:'/src/project'},{db,parameters:{source_path:'/src/project'},
     nativeScan:(target,options)=>scanCscanTarget(target,{...options,client,config:{pollMs:1,timeoutMs:3000},
       onProgress:state=>{if(state.state==='parsing') assert.equal(finished,true);return options.onProgress(state);},
-      llm:()=>assert.fail('explicit fields')})});
+      llm:async messages=>JSON.parse(messages[1].content).report_phase==='progress'?{ok:false}:assert.fail('explicit final fields')})});
   assert.ok(result.outcomes.every(item=>item.success));
   const rows=db.prepare("SELECT * FROM scan_results WHERE result_type='source_finding'").all();
   assert.equal(rows.length,1);
@@ -88,8 +88,8 @@ test('CScan retains raw subtask progress and only imports after every task finis
   assert.equal(coverage.cscan.incremental,undefined);
 });
 
-test('report parsing runs once after completion; retained reports support repeated retries without rescanning or duplicate IDs',async t=>{
-  const db=reportDb(t);let polls=0,calls=0,creates=0,finished=false;
+test('final report parsing runs once despite progress failures; retained reports retry without rescanning or duplicate IDs',async t=>{
+  const db=reportDb(t);let polls=0,calls=0,progressCalls=0,creates=0,finished=false;
   const raw='src/input.c line 12: Copy into a fixed buffer without checking capacity';
   const task={scan_task_id:'retry',target:'/src/project'},parameters={source_path:'/src/project'};
   const client={create:async()=>{creates++;return {id:'91',status:'running'};},flow:async()=>{
@@ -98,8 +98,11 @@ test('report parsing runs once after completion; retained reports support repeat
       result:raw,subtasks:[{id:'s',status:'finished',result:raw}]}]};
   },report:async()=>raw,finish:async()=>{finished=true;return true;},stop:async()=>true};
   await auditSources(task,{db,parameters,nativeScan:(target,options)=>scanCscanTarget(target,{...options,client,config:{pollMs:1,timeoutMs:3000},
-    llm:async()=>{assert.equal(finished,true);calls++;return {ok:false};}})});
-  assert.equal(calls,1);
+    llm:async messages=>{
+      if(JSON.parse(messages[1].content).report_phase==='progress') {assert.equal(finished,false);progressCalls++;return {ok:false};}
+      assert.equal(finished,true);calls++;return {ok:false};
+    }})});
+  assert.equal(calls,1);assert.equal(progressCalls,3,'the same failed progress report has at most three attempts');
   let coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
   assert.equal(coverage.cscan.state,'report_error');assert.equal(coverage.cscan_complete,false);
   assert.ok(db.prepare("SELECT result_data FROM scan_results WHERE result_type='raw_output'").all().some(row=>{
@@ -277,6 +280,15 @@ test('native source scan passes the service path and requirements, consumes task
   assert.equal(result.report_source,'task_result');assert.equal(result.flow_id,'91');assert.equal(result.findings.length,1);
   const input=calls[0].variables.input;
   assert.match(input,/\/src\/project/);assert.match(input,/重点检查输入长度/);assert.match(input,/API 仅提交路径/);
+  assert.match(input,/使用当前 Flow 已分配的 vxcontrol\/kali-linux 容器/);
+  assert.match(input,/不使用其他 Flow 的容器/);
+  assert.match(input,/禁止调用 memorist/);
+  assert.match(input,/不得通过终端查找记忆目录、数据库、环境变量或 Python 包/);
+  assert.match(input,/将上述容器与记忆约束传递给所有规划、执行和子任务代理/);
+  assert.match(input,/对每条有明确源码定位和依据的漏洞，生成与该漏洞一一对应/);
+  assert.match(input,/Payload-For: 文件路径:起止行/);
+  assert.match(input,/在该漏洞的原任务和子任务报告中保留完整载荷正文/);
+  assert.match(input,/载荷只生成、不执行/);
   assert.doesNotMatch(input,/findings\.json|snapshot_id|SHA256/);
   assert.match(input,/所选远端目录 \/opt\/example/);
   assert.ok(calls.some(c=>c.query.includes('CScanReport')));assert.ok(calls.at(-1).query.includes('finishFlow'));
@@ -317,8 +329,30 @@ test('remote target and audit requirements go to the Flow together with the exac
   assert.match(input,/\/var\/www\/project/);assert.ok(input.includes(JSON.stringify(scope)));
   assert.match(input,/不得用历史任务、记忆召回、旧快照目录或其他本机目录替代/);
   assert.match(input,/必须重新核实本次源码来源/);
+  assert.match(input,/使用当前 Flow 已分配的 vxcontrol\/kali-linux 容器/);
+  assert.match(input,/禁止调用 memorist/);
+  assert.match(input,/Payload-Status: unavailable 并逐项列出缺失条件/);
+  assert.match(input,/无源码或无明确漏洞时不生成载荷/);
+  assert.doesNotMatch(input,/历史信息只能提供线索/);
   assert.doesNotMatch(input,/目标是 CScan 执行环境中的文件或目录路径|先确认该路径在执行容器中/);
   assert.equal(result.findings.length,1);
+});
+
+test('per-finding payload drafts remain report artifacts and do not become extra source findings',async t=>{
+  const markdown='Source-Access: available\n'+report+'\n'+[
+    'Payload-For: src/input.c:12-12','Payload-Status: draft','Payload-Language: python','Payload-Content:',
+    '```python','print("fixture boundary input")','## This is script text, not another finding',
+    'File: invented.c','Line: 99','Evidence: script comment','```',
+    'Payload-Usage: Review before use','Payload-Prerequisites: Confirm the input protocol',
+    'Payload-Baseline: normal input','Payload-Expected: Compare with baseline, not an observed success',
+    'Payload-Limitations: Not executed',
+  ].join('\n');
+  const {config}=await protocol(t,markdown);
+  const result=await scanCscanTarget('/src/project',{config,llm:()=>assert.fail('explicit finding fields suffice')});
+  assert.equal(result.findings.length,1);assert.equal(result.findings[0].file,'src/input.c');
+  assert.equal(result.findings[0].reason,'Copy into a fixed buffer without checking capacity');
+  assert.equal(result.findings[0].suggestion,'Enforce the buffer capacity');
+  assert.ok(result.markdown.includes('print("fixture boundary input")'),'the original payload text is retained for collection');
 });
 
 test('unavailable or unconfirmed source access preserves the report and cannot complete a source audit',async t=>{

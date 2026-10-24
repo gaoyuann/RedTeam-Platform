@@ -21,6 +21,12 @@ function contextFromRow(row) {
   const data = JSON.parse(safe.result_data || '{}');
   const details = Object.fromEntries(CONTEXT_FIELDS.filter(key => data[key] != null)
     .map(key => [key, String(data[key]).slice(0, 500)]));
+  if(data.evidence_origin==='cscan_report')Object.assign(details,{
+    file:String(data.file || '').slice(0,1024),start_line:data.start_line,end_line:data.end_line,
+    reason:String(data.reason || '').slice(0,3000),code:String(data.code || '').slice(0,12000),
+    suggestion:String(data.suggestion || '').slice(0,2000),cscan_flow_id:String(data.cscan_flow_id || ''),
+    report_evidence:Array.isArray(data.report_evidence)?data.report_evidence.slice(0,10):[],
+  });
   if (/\b(?:not vulnerable|no vulnerability|false positive|not affected)\b|未发现漏洞|不存在漏洞|误报/i
     .test([details.title, details.finding, details.detail].filter(Boolean).join(' ')))
     throw Object.assign(new Error('该记录不支持生成攻击载荷：发现内容表明漏洞未成立'), { status: 422 });
@@ -33,6 +39,7 @@ function contextFromRow(row) {
     row.result_type, String(identity).trim().toLowerCase(), details.product?.toLowerCase() || '',
     details.version?.toLowerCase() || '', location.toLowerCase(),
     (details.parameter || '').toLowerCase(), targetType,
+    ...(data.evidence_origin==='cscan_report'?[details.file,details.start_line,details.end_line,details.cscan_flow_id]:[]),
   ])).digest('hex');
   return { finding_id: row.id, scan_task_id: row.scan_task_id, result_type: row.result_type,
     severity: row.severity, source_tool: row.source_tool, target_type: targetType,

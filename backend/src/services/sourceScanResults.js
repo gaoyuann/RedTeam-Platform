@@ -1,6 +1,7 @@
 import {parseResultData} from './scanResultCatalog.js';
 import {parseCscanMarkdown} from './cscanReport.js';
 import {normalizeCscanReportedFinding} from './cscanNative.js';
+import {cscanReportHash} from './cscanProgress.js';
 
 export function sourceScanPending(task) {
   return ['source_scan','program_scan'].includes(task?.scan_type) && ['PENDING','RUNNING'].includes(task.status);
@@ -35,7 +36,7 @@ export function sourceScanPreview(task,rows) {
   if(!sourceScanResultState(task,rows)) return null;
   const parameters=parseResultData(task.parameters) || {};
   const target=parameters.cscan_target || parameters.source_path || task.target;
-  const findings=new Map();let bytes=0,truncated=false;
+  const findings=new Map(),parseErrors=new Set();let bytes=0,truncated=false,parsing=false;
   const reports=rows.filter(row=>row.result_type==='raw_output').map(row=>parseResultData(row.result_data))
     .filter(raw=>typeof raw?.report==='string');
   if(reports.some(raw=>/^\s*Source-Access:\s*unavailable\s*$/mi.test(raw.report)))
@@ -43,14 +44,24 @@ export function sourceScanPreview(task,rows) {
   for(const raw of reports) {
     bytes+=Buffer.byteLength(raw.report);
     if(bytes>2*1024*1024) {truncated=true;break;}
-    let parsed;try {parsed=parseCscanMarkdown(raw.report,null).findings;} catch {continue;}
+    const analysis=raw.progress_analysis;
+    const current=analysis?.report_hash===cscanReportHash(raw.report);
+    if(current) {
+      parsing ||= analysis.state==='pending';
+      for(const error of analysis.parse_errors || [])if(typeof error==='string')parseErrors.add(error);
+    }
+    let parsed;try {parsed=current && Array.isArray(analysis.findings) && (analysis.state==='complete' || analysis.findings.length)
+      ?analysis.findings:parseCscanMarkdown(raw.report,null).findings;} catch {continue;}
     for(const finding of parsed) {
       let data;try {data=normalizeCscanReportedFinding(finding,raw.report,target);} catch {continue;}
       const key=[data.file,data.start_line,data.cwe || data.title].join('|');
       if(!findings.has(key) && findings.size>=1000) {truncated=true;break;}
-      findings.set(key,{...data,preview:true,source_task_ids:raw.source_task_ids || [],source_subtask_ids:raw.source_subtask_ids || []});
+      const previous=findings.get(key);
+      findings.set(key,{...data,preview:true,
+        source_task_ids:[...new Set([...(previous?.source_task_ids || []),...(raw.source_task_ids || [])])],
+        source_subtask_ids:[...new Set([...(previous?.source_subtask_ids || []),...(raw.source_subtask_ids || [])])]});
     }
     if(truncated) break;
   }
-  return {findings:[...findings.values()],truncated,source_unavailable:false};
+  return {findings:[...findings.values()],truncated,source_unavailable:false,parsing,parse_errors:[...parseErrors]};
 }

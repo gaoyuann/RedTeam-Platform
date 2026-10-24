@@ -290,6 +290,31 @@ FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QStrin
   auto *payloadSection=section("2. 本次载荷与步骤关联");
   auto *payloadHelp=new QLabel("载荷是步骤使用的具体输入；匹配或生成只准备候选，须手动绑定。无需独立载荷的步骤可直接使用工具输入。");
   payloadHelp->setWordWrap(true);payloadSection->addWidget(payloadHelp);
+  m_artifactBox=new QGroupBox("源码漏洞载荷 · Assistant 收集与 Python 改写");m_artifactBox->setObjectName("findingPayloadArtifacts");
+  auto *artifacts=new QVBoxLayout(m_artifactBox);payloadSection->addWidget(m_artifactBox);
+  m_artifactStatus=new QLabel;m_artifactStatus->setObjectName("findingArtifactStatus");m_artifactStatus->setWordWrap(true);artifacts->addWidget(m_artifactStatus);
+  auto *artifactActions=new QHBoxLayout;m_collectArtifacts=new QPushButton("Assistant 收集载荷");m_collectArtifacts->setObjectName("findingCollectPayloads");
+  m_rewritePython=new QPushButton("将所选载荷改写为 Python");m_rewritePython->setObjectName("findingRewritePython");
+  m_stopArtifacts=new QPushButton("停止收集或改写");m_stopArtifacts->setObjectName("findingStopArtifacts");
+  for(auto *button:{m_collectArtifacts,m_rewritePython,m_stopArtifacts})artifactActions->addWidget(button);artifacts->addLayout(artifactActions);
+  m_artifactCollections=new QComboBox;m_artifactCollections->setObjectName("findingArtifactCollections");artifacts->addWidget(m_artifactCollections);
+  m_collectedScripts=new QComboBox;m_collectedScripts->setObjectName("findingCollectedScripts");artifacts->addWidget(m_collectedScripts);
+  auto *codeColumns=new QHBoxLayout;
+  for(const auto &python:{false,true}) {
+    auto *column=new QVBoxLayout;column->addWidget(new QLabel(python?"Python 改写结果（尚未执行验证）":"当前 Flow 中的原始载荷"));
+    auto *code=new QPlainTextEdit;code->setReadOnly(true);code->setMinimumHeight(130);code->setMaximumHeight(200);
+    code->setObjectName(python?"findingPythonPayload":"findingCollectedPayload");column->addWidget(code);codeColumns->addLayout(column,1);
+    if(python)m_pythonCode=code;else m_collectedCode=code;
+  }
+  artifacts->addLayout(codeColumns);m_artifactUsage=new QLabel;m_artifactUsage->setWordWrap(true);m_artifactUsage->setTextFormat(Qt::PlainText);artifacts->addWidget(m_artifactUsage);
+  connect(m_artifactCollections,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int){showCollectedScript();updateButtons();});
+  connect(m_collectedScripts,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int){showCollectedScript();updateButtons();});
+  connect(m_collectArtifacts,&QPushButton::clicked,this,[this]{m_artifactCollections->setCurrentIndex(-1);action("/payloads/collect",{{"expected_revision",m_revision},{"refresh",true}},false);});
+  connect(m_rewritePython,&QPushButton::clicked,this,[this]{
+    const int i=m_collectedScripts->currentIndex();if(i<0 || i>=m_scriptRecords.size())return;const auto script=m_scriptRecords[i].toObject();
+    action("/payloads/python",{{"expected_revision",m_revision},{"collection_id",m_artifactCollections->currentData().toString()},{"script_id",script["id"]},{"source_hash",script["source_hash"]}},false);
+  });
+  connect(m_stopArtifacts,&QPushButton::clicked,this,[this]{action("/payloads/collection-cancel",{},false);});
   m_payloads=new QComboBox;payloadSection->addWidget(m_payloads);
   m_payloadPreview=new QPlainTextEdit;m_payloadPreview->setReadOnly(true);m_payloadPreview->setMinimumHeight(120);payloadSection->addWidget(m_payloadPreview);
   auto *binding=new QHBoxLayout;m_bindStep=new QComboBox;comboPlaceholder(m_bindStep,"请手动选择目标步骤");binding->addWidget(m_bindStep,1);
@@ -369,6 +394,7 @@ FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QStrin
     ++m_contextGeneration;++m_attemptSelectionGeneration;m_pendingAttemptRunId.clear();m_pendingExistingAttemptId.clear();m_pendingPayload.clear();m_browseSources=false;m_sourceOffset=0;m_detail={};
     m_sources->blockSignals(true);m_sources->clear();m_sources->blockSignals(false);m_sourceItems={};m_sourcePreview->clear();
     m_payloads->blockSignals(true);m_payloads->clear();m_payloads->blockSignals(false);m_matches={};m_payloadPreview->clear();
+    renderPayloadArtifacts();
     m_context->clear();m_planSummary->setPlainText("正在读取此漏洞的方案与载荷…");m_revision=0;m_dirty=false;m_stale=true;
     renderAttempt(-1);
     m_confirm->setChecked(false);updateButtons();load(true);
@@ -524,7 +550,7 @@ void FindingVerificationDialog::load(bool editor) {
     self->m_matches=self->m_detail["payloads"].toObject()["matches"].toArray();const auto selectedPayload=self->m_pendingPayload.isEmpty()?self->m_payloads->currentData():QVariant(self->m_pendingPayload);self->m_pendingPayload.clear();
     self->m_payloads->blockSignals(true);self->m_payloads->clear();for(const auto &v:self->m_matches){const auto payload=v.toObject();self->m_payloads->addItem(payload["name"].toString()+ (payload["created_here"].toBool()?" · 本次新生成":" · 已有载荷"),payload["payload_id"].toString());}
     self->m_payloads->setCurrentIndex(self->m_payloads->findData(selectedPayload));self->m_payloads->blockSignals(false);
-    self->showPayloadPreview();self->updateButtons();self->updateQueue();
+    self->showPayloadPreview();self->renderPayloadArtifacts();self->updateButtons();self->updateQueue();
     if(!self->m_detail["reason"].toString().isEmpty())self->setStatus(self->m_detail["reason"].toString());
     if(!self->m_queueStarting && !self->m_queueRunId.isEmpty() && summary["run_id"].toString()==self->m_queueRunId && self->m_activeQueue==id && QStringList{"completed","failed","aborted","unknown"}.contains(state)){self->m_activeQueue.clear();self->m_queueRunId.clear();self->m_items->setEnabled(true);self->updateButtons();if(state=="unknown"||state=="aborted")self->m_queue.clear();self->executeNext();}
   });
@@ -657,6 +683,51 @@ void FindingVerificationDialog::updateButtons() {
   m_bindPayload->setEnabled(idle&&!m_dirty&&compatible);
   m_unbindPayload->setEnabled(idle&&!m_dirty&&step>=0&&step<m_planSteps.size()&&!m_planSteps[step].toObject()["payload_id"].toString().isEmpty());
   m_resolvePayload->setEnabled(idle&&!m_dirty&&step>=0);
+  const auto artifacts=m_detail["payload_artifacts"].toObject();
+  const auto latest=artifacts["collections"].toArray().isEmpty()?QJsonObject():artifacts["collections"].toArray().first().toObject();
+  bool artifactBusy=latest["state"].toString()=="collecting",stoppable=QStringList{"collecting","interrupted","uncertain"}.contains(latest["state"].toString());
+  for(const auto &collection:artifacts["collections"].toArray())for(const auto &value:collection.toObject()["rewrites"].toArray()) {
+    const auto state=value.toObject()["state"].toString();artifactBusy=artifactBusy || state=="rewriting";stoppable=stoppable || state=="rewriting";
+  }
+  m_collectArtifacts->setEnabled(idle&&!m_dirty&&artifacts["supported"].toBool()&&!artifactBusy);
+  m_rewritePython->setEnabled(idle&&!m_dirty&&!artifactBusy&&m_collectedScripts->currentIndex()>=0);
+  m_stopArtifacts->setEnabled(!m_busy&&!m_finished&&!currentId().isEmpty()&&stoppable);
+}
+
+void FindingVerificationDialog::renderPayloadArtifacts() {
+  const auto finding=m_detail["finding"].toObject();auto data=finding["result_data"].toObject();
+  if(finding["result_data"].isString())data=QJsonDocument::fromJson(finding["result_data"].toString().toUtf8()).object();
+  m_artifactBox->setVisible(data["evidence_origin"].toString()=="cscan_report");
+  const QString selected=m_artifactCollections->currentData().toString();m_collectionRecords=m_detail["payload_artifacts"].toObject()["collections"].toArray();
+  const QMap<QString,QString> states{{"collecting","收集中"},{"ready","已收集"},{"empty","暂无载荷"},{"uncertain","待核对"},{"interrupted","已中断"},{"error","未完成"},{"cancelled","已停止"}};
+  m_artifactCollections->blockSignals(true);m_artifactCollections->clear();
+  for(const auto &value:m_collectionRecords){const auto row=value.toObject();m_artifactCollections->addItem(row["updated_at"].toString()+" · "+states.value(row["state"].toString(),"状态待核对"),row["id"].toString());}
+  const int index=m_artifactCollections->findData(selected);m_artifactCollections->setCurrentIndex(index>=0?index:m_collectionRecords.isEmpty()?-1:0);m_artifactCollections->blockSignals(false);
+  const auto row=m_collectionRecords.isEmpty()?QJsonObject():m_collectionRecords.first().toObject();const auto state=row["state"].toString();
+  const QMap<QString,QString> labels{{"collecting","Assistant 正在收集"},{"ready","已收集载荷"},{"empty","本 Flow 尚无与此漏洞关联的载荷"},{"uncertain","原请求待核对，可继续收集"},{"interrupted","等待已中断，可继续原请求"},{"error","收集未完成，历史结果仍保留"},{"cancelled","收集已停止"}};
+  m_artifactStatus->setText(labels.value(state,"从当前扫描 Flow 收集已有载荷，再选择一项改写为 Python。")+"。收集和改写均不会执行代码，也不表示漏洞已验证。"+(row["error_message"].toString().isEmpty()?QString():"\n"+row["error_message"].toString()));
+  m_collectArtifacts->setText(QStringList{"uncertain","interrupted"}.contains(state)?"继续收集原请求":row.isEmpty()?"Assistant 收集载荷":"刷新收集载荷");
+  showCollectedScript();
+}
+
+void FindingVerificationDialog::showCollectedScript() {
+  const int selectedCollection=m_artifactCollections->currentIndex();const QString previous=m_collectedScripts->currentData().toString();
+  const auto collection=selectedCollection>=0&&selectedCollection<m_collectionRecords.size()?m_collectionRecords[selectedCollection].toObject():QJsonObject();
+  m_scriptRecords=collection["scripts"].toArray();m_collectedScripts->blockSignals(true);m_collectedScripts->clear();
+  for(const auto &value:m_scriptRecords){const auto script=value.toObject();m_collectedScripts->addItem(script["name"].toString()+" · "+script["language"].toString(),script["id"].toString());}
+  const int index=m_collectedScripts->findData(previous);m_collectedScripts->setCurrentIndex(index>=0?index:m_scriptRecords.isEmpty()?-1:0);m_collectedScripts->blockSignals(false);
+  const int selected=m_collectedScripts->currentIndex();const auto script=selected>=0?m_scriptRecords[selected].toObject():QJsonObject();
+  if(m_collectedCode->toPlainText()!=script["content"].toString())m_collectedCode->setPlainText(script["content"].toString());
+  QString pythonText;QStringList usage;
+  if(!script.isEmpty())usage<<"来源：Flow "+collection["flow_id"].toString()+" / "+script["source_type"].toString()+" "+script["source_id"].toString()<<script["purpose"].toString()<<script["usage"].toString()<<script["safety_notes"].toString();
+  for(const auto &value:collection["rewrites"].toArray()) {
+    const auto rewrite=value.toObject();if(rewrite["script_id"]!=script["id"] || rewrite["source_hash"]!=script["source_hash"])continue;
+    pythonText=rewrite["python_code"].toString();
+    const QMap<QString,QString> labels{{"rewriting","模型正在改写 Python"},{"ready","Python 改写已保存，尚未执行验证"},{"error","Python 改写未完成"},{"interrupted","Python 改写已中断，可重试"}};
+    usage<<labels.value(rewrite["state"].toString())<<rewrite["explanation"].toString()<<rewrite["usage"].toString()<<rewrite["error_message"].toString();
+  }
+  if(m_pythonCode->toPlainText()!=pythonText)m_pythonCode->setPlainText(pythonText);
+  m_artifactUsage->setText(usage.join('\n'));
 }
 
 void FindingVerificationDialog::renderAttempt(int index) {

@@ -15,6 +15,7 @@ import { assertPlaybookUse } from './playbookAccess.js';
 import { getPayloadById } from './payloadLoader.js';
 import { findingPayloadMatches } from './findingPayloads.js';
 import { compilePlaybook } from './playbookCompiler.js';
+import {payloadArtifactView} from './findingPayloadArtifacts.js';
 
 export const json = (value, fallback = {}) => { try { return typeof value === 'string' ? JSON.parse(value) : value ?? fallback; } catch { return fallback; } };
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
@@ -82,7 +83,7 @@ export function verificationDetail(db, pipeline, id) {
   const entry=findingVerificationEntry(db,pipeline,row);
   const detail=taskDisplayValue({ ...item, task_no:pipeline.task_no || null, eligible:resultCategory(row)==='vulnerability',
     ineligibility_reason:resultCategory(row)==='vulnerability' ? null : '此记录现归为信息或非漏洞记录，仅保留历史与停止操作，不能新建验证。', default_target:entry.target,entry_context:entry, finding:publicScanRecord(row), plans, attempts,
-    payloads:verificationPayloadCatalog(db,item,row,plans[0]?.content),readiness:verificationReadiness(db,pipeline,item,plans[0]), summary:verificationSummary(db,item.finding_id,pipeline.pipeline_id) });
+    payloads:verificationPayloadCatalog(db,item,row,plans[0]?.content),payload_artifacts:payloadArtifactView(db,item),readiness:verificationReadiness(db,pipeline,item,plans[0]), summary:verificationSummary(db,item.finding_id,pipeline.pipeline_id) });
   // Serialize only after field-level redaction; legacy readers still receive valid JSON.
   for(const attempt of detail.attempts)for(const evidence of attempt.evidence)if(evidence.observation)evidence.raw_stdout=JSON.stringify(evidence.observation);
   return detail;

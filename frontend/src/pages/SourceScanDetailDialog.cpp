@@ -83,7 +83,7 @@ void SourceScanDetailDialog::refresh() {
 void SourceScanDetailDialog::setSnapshots(const QJsonArray &tasks) {
   ++m_snapshotRevision;
   m_displayRows={};m_finalRows={};m_progressReport.clear();m_pending=false;m_canTest=!tasks.isEmpty();m_fresh=true;
-  QStringList statuses,progressNotes,errors;bool truncated=false;
+  QStringList statuses,progressNotes,errors;bool truncated=false,previewParsing=false,previewError=false;
   for(const auto &value:tasks) {
     const auto task=value.toObject();const auto status=task["status"].toString();
     const bool active=QStringList{"PENDING","RUNNING"}.contains(status);m_pending=m_pending || active;
@@ -109,6 +109,7 @@ void SourceScanDetailDialog::setSnapshots(const QJsonArray &tasks) {
       m_finalRows.append(row);m_displayRows.append(row);++finals;
     }
     const auto preview=task["source_preview"].toObject();truncated=truncated || preview["truncated"].toBool();
+    previewParsing=previewParsing || preview["parsing"].toBool();previewError=previewError || !preview["parse_errors"].toArray().isEmpty();
     if(active || finals==0)for(const auto &entry:preview["findings"].toArray())
       m_displayRows.append(QJsonObject{{"scan_task_id",task["scan_task_id"]},{"preview",true},{"result_data",entry}});
   }
@@ -128,6 +129,8 @@ void SourceScanDetailDialog::setSnapshots(const QJsonArray &tasks) {
   if(!m_pending && !m_canTest)m_notice->setText(QStringLiteral("本次扫描未成功完成，已有过程记录仅供核对；攻击测试暂不可用。"));
   else if(!m_pending && m_finalRows.isEmpty())m_notice->setText(QStringLiteral("扫描已结束，暂无可测试漏洞；过程报告仍可查看。"));
   if(truncated)m_notice->setText(m_notice->text()+QStringLiteral(" 当前过程预览达到显示上限，最终结果以完整报告处理为准。"));
+  if(m_pending && previewParsing)m_notice->setText(m_notice->text()+QStringLiteral(" 正在整理已完成子任务的阶段发现。"));
+  if(m_pending && previewError)m_notice->setText(m_notice->text()+QStringLiteral(" 部分阶段报告暂未解析，原始报告仍可查看，最终结果将统一处理。"));
   errors.removeDuplicates();if(!errors.isEmpty())m_notice->setText(m_notice->text()+QStringLiteral("\n扫描说明：")+errors.join(QStringLiteral("；")));
   m_attack->setEnabled(m_canTest && !m_pending && !m_finalRows.isEmpty());m_refresh->setEnabled(true);
   if(m_pending && m_api)m_timer->start();else m_timer->stop();
