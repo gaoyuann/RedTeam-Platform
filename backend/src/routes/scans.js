@@ -82,11 +82,22 @@ export default function (db) {
     res.json({ status: 'ok', data: rows, meta: { total: rows.length } });
   });
 
+  router.get('/:scanTaskId/source-file', (req,res)=>{
+    const row=db.prepare("SELECT result_data FROM scan_results WHERE scan_task_id=? AND result_type='source_file_copy' AND id=?")
+      .get(req.params.scanTaskId,Number(req.query.id));
+    if(!row)return res.status(404).json({status:'error',error:{message:'源码副本不存在'}});
+    res.json({status:'ok',data:JSON.parse(row.result_data)});
+  });
+
   router.get('/:scanTaskId', (req, res) => {
     const row = db.prepare('SELECT * FROM scan_tasks WHERE scan_task_id = ?').get(req.params.scanTaskId);
     if (!row) return res.status(404).json({ status: 'error', error: { message: 'Scan task not found' } });
     if (!sourceAccess(req,row)) return res.status(403).json({status:'error',error:{message:'没有权限查看源码任务'}});
     row.results = db.prepare('SELECT * FROM scan_results WHERE scan_task_id = ? ORDER BY captured_at,id').all(req.params.scanTaskId);
+    row.source_files=[...new Map(row.results.filter(item=>item.result_type==='source_file_copy').map(item=>{
+      const {content,...data}=JSON.parse(item.result_data);return [data.path,{...data,id:item.id}];
+    })).values()];
+    row.results=row.results.filter(item=>item.result_type!=='source_file_copy');
     row.source_scan=sourceScanResultState(row,row.results);
     row.source_preview=sourceScanPreview(row,row.results);
     row.results=visibleSourceScanRecords(row,row.results);

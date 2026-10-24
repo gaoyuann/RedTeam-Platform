@@ -31,7 +31,12 @@ export function cscanConfig(env = process.env) {
     sourcesDir: resolve(env.CSCAN_SOURCES_DIR || join(home, 'workspace/sources')),
     workDir: resolve(env.CSCAN_WORK_DIR || join(home, 'workspace/work')),
     provider: env.CSCAN_PROVIDER || 'custom',
+    // Report parsing remains bounded; long-running scans poll until completion or cancellation.
     timeoutMs: integer('CSCAN_TIMEOUT_MS', 1800000, 100, 7200000),
+    scanTimeoutMs: integer('CSCAN_SCAN_TIMEOUT_MS', 0, 0, 2147483647),
+    modelTimeoutMs: integer('CSCAN_MODEL_TIMEOUT_MS', 900000, 100, 7200000),
+    progressTimeoutMs: integer('CSCAN_PROGRESS_TIMEOUT_MS', 900000, 100, 7200000),
+    collectAssistant: true,
     requestTimeoutMs: integer('CSCAN_REQUEST_TIMEOUT_MS', 15000, 100, 120000),
     createTimeoutMs: integer('CSCAN_CREATE_TIMEOUT_MS', 300000, 100, 600000),
     pollMs: integer('CSCAN_POLL_MS', 3000, 10, 60000),
@@ -130,6 +135,7 @@ export function cscanPrompt(source, staged) {
   ];
   if(source.service_target) return [
     '执行授权范围内的源码审计。目标：'+source.service_target,
+      '对于 HTTP 源码目录，将本目标下载的真实源码保存在 /work/src 下，并保留相对目录结构。不要放入其他目标文件、凭据或生成的载荷；平台仅从该目录保存源码证据副本。',
     ...executionRequirements,
     ...(source.source_location?['用户选择的源码位置（仅提交位置，不传输文件）：'+source.source_location]:[]),
     source.service_target.startsWith('/')
@@ -266,7 +272,8 @@ export async function runCscan(source, {signal, onProgress = ()=>{}, onTasks, co
   const cancel = () => controller.abort();
   signal?.addEventListener('abort', cancel, {once:true});
   if (signal?.aborted) cancel();
-  const timer = setTimeout(cancel, config.timeoutMs);
+  const scanTimeoutMs = config.scanTimeoutMs ?? 0;
+  const timer = scanTimeoutMs > 0 ? setTimeout(cancel, scanTimeoutMs) : null;
   let flowId, flowStatus, submissionStarted = false;
   try {
     const staged = await stage(source,config,{signal:controller.signal});

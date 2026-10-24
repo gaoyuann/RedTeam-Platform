@@ -4,7 +4,7 @@ export const cscanReportHash = report => createHash('sha256').update(report).dig
 
 // Parse completed subtask reports in the background while the scanner keeps
 // polling. Results are provisional annotations on raw evidence, never findings.
-export function createCscanProgressParser({parse,normalize,onReport,signal,timeoutMs=60000,maxReports=64,maxBytes=128*1024}) {
+export function createCscanProgressParser({parse,normalize,onReport,signal,timeoutMs=900000,maxReports=64,maxBytes=128*1024}) {
   const entries=new Map();
   let closed=false,active=null,runningEntry=null;
   const current=entry=>!closed && !signal?.aborted && entries.get(entry.key)===entry;

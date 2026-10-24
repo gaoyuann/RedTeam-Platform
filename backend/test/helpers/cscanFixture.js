@@ -41,6 +41,10 @@ export async function cscanFixture(t, findings = []) {
         res.end(JSON.stringify({data:{createFlow:{id,status:'running'}}}));
       } else if(body.query.includes('stopFlow')) {counts.stopped++;res.end(JSON.stringify({data:{stopFlow:'success'}}));}
       else if(body.query.includes('finishFlow')) {counts.finished++;res.end(JSON.stringify({data:{finishFlow:'success'}}));}
+      else if(body.query.includes('createAssistant'))res.end(JSON.stringify({data:{createAssistant:{assistant:{id:'a1',flowId:body.variables.id,status:'waiting',useAgents:false}}}}));
+      else if(body.query.includes('assistantLogs'))res.end(JSON.stringify({data:{assistantLogs:[{id:'l1',flowId:body.variables.id,assistantId:'a1',type:'assistant',message:'{"reports":[]}',appendPart:false}]}}));
+      else if(body.query.includes('assistants('))res.end(JSON.stringify({data:{assistants:[{id:'a1',flowId:body.variables.id,status:'waiting',useAgents:false}]}}));
+      else if(body.query.includes('CScanPayloadEvidence'))res.end(JSON.stringify({data:{tasks:[],terminalLogs:[],messageLogs:[]}}));
       else if(body.query.includes('CScanHealth')) res.end(JSON.stringify({data:{flows:[]}}));
       else if(body.query.includes('CScanReport')) res.end(JSON.stringify({data:{tasks:[{id:'1',flowId:body.variables.id,
         status:'finished',result:reports.get(body.variables.id) || '',subtasks:[]}]}}));
