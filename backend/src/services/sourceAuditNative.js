@@ -38,7 +38,7 @@ export async function auditCscanNative(task,{db,parameters,signal,nativeScan=sca
     source_version_verified:false,whole_project_complete:false,cscan_complete:false,
     cscan:{state:'preparing'},source_errors:[],parse_errors:[],rejected_findings:[],
     runtime_target:parameters.runtime_target || null,
-    note:'源码读取和扫描由 CScan 完成。平台接收任务报告，不采集源码；报告定位和版本尚需复核。'};
+    note:'源码读取和扫描由 CScan 完成。平台保存任务报告与可取得的工作目录源码副本；审计覆盖和运行版本仍需复核。'};
   if(!retained) db.prepare('INSERT INTO source_audits(scan_task_id,snapshot_id,connection_id,manifest,analysis,created_at) VALUES (?,?,?,?,?,?)')
     .run(task.scan_task_id,'cscan-report:'+task.scan_task_id,'cscan',JSON.stringify({kind:'service_report',source_target:source,source_location:sourceLocation,files:[]}),JSON.stringify(coverage),new Date().toISOString());
   const id=retained?db.prepare("SELECT id FROM scan_results WHERE scan_task_id=? AND result_type='source_coverage' ORDER BY id LIMIT 1").get(task.scan_task_id)?.id:store('source_coverage',coverage);
@@ -109,7 +109,14 @@ export async function auditCscanNative(task,{db,parameters,signal,nativeScan=sca
       report={...await parseCompletedCscanReport(retained.raw.report,source,{llm,signal,sourceReports:retained.raw.source_reports}),
         flow_id:retained.raw.flow_id,finish_status:coverage.cscan.finish_status};
     } else {
-      report=await nativeScan(source,{notes,sourceLocation,scope,signal,llm,onRawReport:storeRaw,onProgress});
+      report=await nativeScan(source,{notes,sourceLocation,scope,signal,llm,onRawReport:storeRaw,onProgress,onSourceEvidence:snapshot=>{
+        const manifest={...snapshot,files:snapshot.files.map(({content,...file})=>file)};
+        db.transaction(()=>{
+          const previous=new Map(db.prepare("SELECT result_data FROM scan_results WHERE scan_task_id=? AND result_type='source_file_copy' ORDER BY id").all(task.scan_task_id).map(row=>{const file=JSON.parse(row.result_data);return [file.path,file.sha256];}));
+          for(const file of snapshot.files)if(previous.get(file.path)!==file.sha256)store('source_file_copy',{...file,flow_id:snapshot.flow_id,captured_at:snapshot.captured_at});
+          db.prepare('UPDATE source_audits SET manifest=? WHERE scan_task_id=?').run(JSON.stringify(manifest),task.scan_task_id);
+        })();
+      }});
     }
     if(signal?.aborted) throw new Error('源码扫描已取消');
     if(!Array.isArray(report.findings) || report.findings.length>1000 || typeof report.markdown!=='string')

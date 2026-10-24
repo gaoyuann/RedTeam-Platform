@@ -70,6 +70,10 @@ int main(int argc,char **argv) {
       const auto request=buffer.left(buffer.indexOf('\r')).split(' ');if(request[0]=="GET")++gets;else ++mutations;
       const QString id=QString::fromUtf8(request[1]).section('/',-1);QJsonArray rows;
       for(int i=0;i<(id=="source-a"?501:1);++i)rows.append(finding(id=="source-a"?1000+i:2000,"module/"+id+".c",i+1));
+      if(request[1].contains("/source-file?")) {
+        const auto payload=QJsonDocument(QJsonObject{{"status","ok"},{"data",QJsonObject{{"sha256","copy-hash"},{"content","int main() {\n return 0;\n}\n"},{"captured_at","fixture-time"}}}}).toJson(QJsonDocument::Compact);
+        socket->write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: "+QByteArray::number(payload.size())+"\r\n\r\n"+payload);socket->disconnectFromHost();return;
+      }
       const auto body=QJsonDocument(fail?QJsonObject{{"status","error"}}:QJsonObject{{"status","ok"},{"data",task(id,"COMPLETED",rows)}}).toJson(QJsonDocument::Compact);
       socket->write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: "+QByteArray::number(body.size())+"\r\n\r\n"+body);socket->disconnectFromHost();QObject::connect(socket,&QTcpSocket::disconnected,socket,&QObject::deleteLater);
     });
@@ -82,6 +86,12 @@ int main(int argc,char **argv) {
   completeAttack->click();auto *large=complete.findChild<QTableWidget*>("sourceScanAttackTable");
   verify(large && large->rowCount()==502,"all vulnerabilities load beyond the aggregate page limit");
   verify(gets==2 && mutations==0,"preview and all-findings selection perform only scoped reads");
+  auto copied=task("source-a","COMPLETED",{});
+  copied["source_files"]=QJsonArray{QJsonObject{{"id",42},{"path","/work/src/clean.c"},{"sha256","copy-hash"}}};
+  complete.setSnapshots({copied});
+  auto *copyCode=complete.findChild<QPlainTextEdit*>("sourceScanCode");
+  verify(waitFor([&](){return copyCode->toPlainText().contains("int main()");}),"files without findings load their actual complete saved body");
+  verify(complete.findChild<QTableWidget*>("sourceScanFindings")->rowCount()==0,"a saved source file does not invent findings");
   fail=true;complete.refresh();verify(waitFor([&](){return complete.findChild<QPushButton*>("sourceScanRefresh")->isEnabled();}),"refresh failure completes");
   verify(!completeAttack->isEnabled(),"failed refresh cannot authorize testing against stale data");
   return 0;

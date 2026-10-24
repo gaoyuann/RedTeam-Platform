@@ -264,6 +264,10 @@ async function protocol(t,markdown=report) {
     res.setHeader('content-type','application/json');
     const task={id:'1',flowId:'91',status:'finished',result:markdown,subtasks:[{id:'1',status:'finished',result:''}]};
     if(body.query.includes('createFlow')) res.end(JSON.stringify({data:{createFlow:{id:'91',status:'running'}}}));
+    else if(body.query.includes('createAssistant'))res.end(JSON.stringify({data:{createAssistant:{assistant:{id:'a1',flowId:'91',status:'waiting',useAgents:false}}}}));
+    else if(body.query.includes('assistantLogs'))res.end(JSON.stringify({data:{assistantLogs:[{id:'l1',flowId:'91',assistantId:'a1',type:'assistant',message:'{"reports":[]}',appendPart:false}]}}));
+    else if(body.query.includes('assistants('))res.end(JSON.stringify({data:{assistants:[{id:'a1',flowId:'91',status:'waiting',useAgents:false}]}}));
+    else if(body.query.includes('CScanPayloadEvidence'))res.end(JSON.stringify({data:{tasks:[task],terminalLogs:[],messageLogs:[]}}));
     else if(body.query.includes('CScanReport')) res.end(JSON.stringify({data:{tasks:[task]}}));
     else if(body.query.includes('finishFlow')) res.end(JSON.stringify({data:{finishFlow:'success'}}));
     else if(body.query.includes('stopFlow')) res.end(JSON.stringify({data:{stopFlow:'success'}}));
@@ -447,7 +451,7 @@ test('default CScan environment check needs API credentials, not shared source o
 });
 
 test('native report retrieval honors the overall scan deadline and retains Flow identity',async()=>{
-  const config={...cscanConfig({}),timeoutMs:60,pollMs:10};let stopped=0;let reportSignal;
+  const config={...cscanConfig({}),scanTimeoutMs:60,pollMs:10};let stopped=0;let reportSignal;
   const progress=[];
   await assert.rejects(scanCscanTarget('/src/project',{config,onProgress:p=>progress.push(p),client:{
     create:async()=>({id:'90',status:'waiting'}),
@@ -479,6 +483,14 @@ test('report retry API reuses retained evidence and finding IDs, rejects incompl
     const response=await fetch(base+'/scans/report-retry'+suffix,{method,headers:{'content-type':'application/json','x-user':user},...(method==='POST'?{body:'{}'}:{})});
     return {status:response.status,body:await response.json()};
   };
+  const copyId=Number(db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data) VALUES ('report-retry','source_file_copy',?)")
+    .run(JSON.stringify({path:'/work/src/main.c',sha256:'fixture-hash',content:'actual source body'})).lastInsertRowid);
+  assert.equal((await request('/source-file?id='+copyId,'GET','bob')).status,403);
+  assert.equal((await request('/source-file?id='+copyId,'GET')).body.data.content,'actual source body');
+  assert.equal((await request('/source-file?id=999999','GET')).status,404);
+  const detail=(await request('','GET')).body.data;
+  assert.equal(detail.source_files[0].id,copyId);assert.equal(detail.source_files[0].content,undefined);
+  assert.ok(!detail.results.some(row=>row.result_type==='source_file_copy'));
   assert.equal((await request('/reparse','POST','bob')).status,403);
   assert.equal((await request('','GET')).body.data.can_reparse_report,true);
   db.prepare("UPDATE scan_tasks SET status='RUNNING'").run();
