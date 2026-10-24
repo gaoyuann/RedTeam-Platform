@@ -81,13 +81,16 @@ private slots:
   void onFilterChanged(int index);
 
 private:
-  void renderFlows();
+  void renderFlows(bool openFound = false);
   void scheduleTaskDetailRefresh();
   void showEvent(QShowEvent *event) override;
+  bool eventFilter(QObject *watched, QEvent *event) override;
   void setupUI();
   void setupListView();
   void setupWorkbenchView();
   void loadFlows();
+  void resizeFlowColumns();
+  void submitTaskCreation(const QJsonObject &body, bool startAfterCreate);
   void loadFlowDetail(const QString &pipelineId);
   void clearRunContext();
   void showTaskDetailError(const QString &message);
@@ -113,15 +116,29 @@ private:
   QLineEdit *m_searchInput;
   QComboBox *m_filterCombo;
   QLabel *m_listState;
+  QTimer *m_searchTimer = nullptr;
+  QTimer *m_flowResizeTimer = nullptr;
+  bool m_searchOpenRequested = false;
+  QWidget *m_creationNotice = nullptr;
+  QLabel *m_creationLabel = nullptr;
+  QPushButton *m_creationOpen = nullptr;
+  QPushButton *m_creationCopy = nullptr;
+  QPushButton *m_retryCreate = nullptr;
+  QJsonObject m_pendingCreateBody;
+  bool m_pendingCreateStart = false;
+  bool m_taskIdentitySupported = false;
+  bool m_pendingCreateCanRetry = false;
   int m_flowListRequestRevision = 0;
   bool m_flowListFresh = false;
   bool m_flowListBusy = false;
   bool m_flowListPending = false;
   QJsonArray m_flowRecords;
+  QJsonObject m_flowMeta;
+  QString m_flowSearch;
+  QString m_flowFilter;
   QJsonArray m_renderedFlowRecords;
   QString m_renderedFlowFilter;
   QString m_renderedFlowSearch;
-  QTimer *m_searchTimer = nullptr;
   QTimer *m_detailRefreshTimer = nullptr;
   MetricCard *m_totalCard;
   MetricCard *m_runningCard;
@@ -132,6 +149,8 @@ private:
   QWidget *m_workbenchView;
   QPushButton *m_backBtn;
   QLabel *m_targetLabel;
+  QLabel *m_taskIdLabel = nullptr;
+  QPushButton *m_copyTaskId = nullptr;
   QLabel *m_statusLabel;
   QPushButton *m_startBtn;
   QPushButton *m_approveBtn;

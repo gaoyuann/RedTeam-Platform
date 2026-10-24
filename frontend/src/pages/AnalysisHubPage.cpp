@@ -221,7 +221,7 @@ void AnalysisHubPage::refresh()
       const auto row = m_records.at(index).toObject();
       const auto analysis = row["analysis"].toObject();
       const QString identifier = row["pipeline_id"].toString();
-      const QStringList cells = {row["task_name"].toString() + " · " + identifier, row["target"].toString(),
+      const QStringList cells = {row["task_name"].toString() + " · " + UiUtil::taskIdentifier(row), row["target"].toString(),
           row["owner"].toString(), UiUtil::taskStatusText(row["status"].toString()),
           sourceLabel(analysis["source"].toString()) + " / " + stepLabel(analysis["step_status"].toString()),
           QString::number(analysis["total_entries"].toInt()), row["updated_at"].toString()};

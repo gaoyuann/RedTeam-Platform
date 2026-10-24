@@ -56,13 +56,13 @@ export default function (db) {
       const reportKind = document ? 'trace_snapshot' : 'legacy';
       const source = getRecord(db, 'run', row.run_id) || getRecord(db, 'scan', row.scan_task_id);
       const record = { report_id: row.report_id, title: taskDisplayText(row.title), run_id: row.run_id,
-        pipeline_id: document?.pipeline_id || null, owner: document?.owner || source?.user_sub || source?.created_by || row.generated_by || null,
+        pipeline_id: document?.pipeline_id || null, task_no: document?.task_no || null, owner: document?.owner || source?.user_sub || source?.created_by || row.generated_by || null,
         target: document?.target || taskDisplayText(source?.target || ''),
         kind: reportKind, status: row.status, review: document?.report.review
           ? { available: document.report.review.available, state: document.report.review.state, revision: document.report.review.revision } : null,
         created_at: row.created_at };
       if (kind !== 'all' && kind !== reportKind) continue;
-      if (search && ![record.report_id, record.title, record.pipeline_id || '', record.target].some(value => value.toLowerCase().includes(search.toLowerCase()))) continue;
+      if (search && ![record.report_id, record.title, record.task_no || '', record.pipeline_id || '', record.target].some(value => value.toLowerCase().includes(search.toLowerCase()))) continue;
       records.push(record);
     }
     res.json({ status: 'ok', data: { schema_version: 1, records: records.slice(Number(offset), Number(offset) + pageSize),

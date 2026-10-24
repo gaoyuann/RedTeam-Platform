@@ -45,6 +45,10 @@ test('CScan stages immutable snapshot, creates once, polls and reads version-bou
       sourceKey = body.variables.input.match(/\/src\/(rt-[\w-]+)/)[1];
       assert.equal(await readFile(join(config.sourcesDir,sourceKey,'lib/input.c'),'utf8'),source.documents[0].content);
       assert.match(body.variables.input,/Do not perform network scanning/);
+      assert.match(body.variables.input,/使用当前 Flow 已分配的 vxcontrol\/kali-linux 容器/);
+      assert.match(body.variables.input,/禁止调用 memorist/);
+      assert.match(body.variables.input,/对每条有明确源码定位和依据的漏洞，生成与该漏洞一一对应/);
+      assert.match(body.variables.input,/Payload-Status: draft 或 unavailable/);
       assert.match(body.variables.input,/fixture-version/);
       await mkdir(join(config.workDir,'flow-12'));
       await writeFile(join(config.workDir,'flow-12','findings.json'),JSON.stringify({snapshot_id:source.snapshot_id,
@@ -83,7 +87,7 @@ test('CScan HTTP and GraphQL failures do not disclose credentials or retry creat
 test('CScan cancellation and deadline stop the known remote flow without using the aborted signal',async t=>{
   for(const kind of ['cancel','timeout','waiting','failed']) {
     const {source,config} = await fixture(t),controller = new AbortController(),stops=[],progress=[];
-    config.timeoutMs=35;
+    config.scanTimeoutMs=35;
     const client = {
       create:async()=>({id:'9',status:kind==='waiting'?'waiting':kind==='failed'?'failed':'running'}),
       flow:async()=>({id:'9',status:kind==='waiting'?'waiting':'running',tasks:[{id:'1',status:'waiting',subtasks:[]}]}),
@@ -283,4 +287,41 @@ test('completed scan report survives an unconfirmed finishFlow and records the c
     finish:async()=>{throw new Error('timeout');},stop:()=>assert.fail('must retain the completed report')}});
   assert.equal(result.finish_status,'unconfirmed');assert.equal(progress.at(-1).flow_status,'waiting');
   assert.equal(result.snapshot_id,source.snapshot_id);
+});
+
+
+test('CScan polling outlives the report deadline without stopping or recreating the Flow',async()=>{
+  const config={...cscanConfig({CSCAN_TIMEOUT_MS:'100'}),pollMs:10};
+  let creates=0,polls=0,finishes=0;
+  const started=Date.now();
+  const result=await runCscan({service_target:'http://example.test/source',documents:[]},{config,
+    stage:async()=>({key:null,containerPath:'http://example.test/source'}),
+    readReport:async()=>({markdown:'complete report'}),
+    client:{
+      create:async()=>{creates++;return {id:'42',status:'running'};},
+      flow:async()=>{polls++;return {id:'42',status:Date.now()-started<180?'running':'waiting',
+        tasks:[{status:Date.now()-started<180?'running':'finished',subtasks:[]}]};},
+      finish:async()=>{finishes++;},stop:async()=>assert.fail('must not stop a healthy long scan'),
+    }});
+  assert.ok(Date.now()-started>=180);assert.ok(polls>1);
+  assert.equal(creates,1);assert.equal(finishes,1);assert.equal(result.markdown,'complete report');
+});
+
+test('CScan default unlimited polling remains cancellable',async()=>{
+  const config={...cscanConfig({}),pollMs:10},controller=new AbortController();
+  let stopped=0,polls=0;
+  await assert.rejects(runCscan({service_target:'/project',documents:[]},{config,signal:controller.signal,
+    stage:async()=>({key:null,containerPath:'/project'}),
+    client:{create:async()=>({id:'43',status:'running'}),
+      flow:async()=>{if(++polls===3)controller.abort();return {id:'43',status:'running',tasks:[]};},
+      stop:async(id,options)=>{assert.equal(id,'43');assert.equal(options,undefined);stopped++;}},
+  }),/取消/);
+  assert.equal(stopped,1);assert.equal(polls,3);
+});
+
+test('CScan scan deadline is independent of legacy report timeout and validates timer bounds',()=>{
+  assert.equal(cscanConfig({CSCAN_TIMEOUT_MS:'7200000'}).scanTimeoutMs,0);
+  assert.equal(cscanConfig({CSCAN_SCAN_TIMEOUT_MS:'172800000'}).scanTimeoutMs,172800000);
+  for(const value of ['-1','NaN','2147483648'])
+    assert.throws(()=>cscanConfig({CSCAN_SCAN_TIMEOUT_MS:value}),/CSCAN_SCAN_TIMEOUT_MS/);
 });

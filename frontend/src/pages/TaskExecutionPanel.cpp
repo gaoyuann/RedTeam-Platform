@@ -360,6 +360,7 @@ void TaskExecutionPanel::refresh()
       guard->m_snapshot = snapshot;
       guard->m_refreshFailed = false;
       if (needsRender) guard->render();
+      else guard->updateSnapshotTime();
       const auto run = snapshot.value("run").toObject();
       const QString runId = run.value("run_id").toString();
       if (!runId.isEmpty() && guard->m_notifiedRunId != runId) {
@@ -393,8 +394,8 @@ void TaskExecutionPanel::render()
   const auto counts = run.value("counts").toObject();
   const auto plan = m_snapshot.value("plan").toObject();
   const QString runId = run.value("run_id").toString();
-  m_identity->setText(QStringLiteral("任务：%1  ·  目标：%2  ·  创建人：%3\nRun：%4  ·  预案：%5  ·  引擎：%6")
-      .arg(m_pipelineId, m_snapshot.value("target").toString(), m_snapshot.value("owner").toString(),
+  m_identity->setText(QStringLiteral("任务ID：%1  ·  目标：%2  ·  创建人：%3\nRun：%4  ·  预案：%5  ·  引擎：%6")
+      .arg(UiUtil::taskIdentifier(m_snapshot), m_snapshot.value("target").toString(), m_snapshot.value("owner").toString(),
         runId.isEmpty() ? QStringLiteral("尚未生成") : runId, run.value("playbook_name").toString(), run.value("engine_type").toString()));
   const auto verifications=m_snapshot.value("verification_runs").toObject();
   QString status = runId.isEmpty() ? QStringLiteral("主预案尚未执行 · 任务%1").arg(stateText(m_snapshot.value("pipeline_status").toString()))
@@ -462,8 +463,6 @@ void TaskExecutionPanel::render()
     else { table->clearSelection(); table->setCurrentCell(-1, -1); }
     table->blockSignals(false);
   }
-  m_updated->setText(QStringLiteral("快照时间：%1 · 步骤展示前 200 项，尝试/证据展示最新 200 项（当前 %2 / %3 条）；文本最多 2000 字符并脱敏，可能省略内容，不作为完整原始证据。")
-      .arg(timeText(m_snapshot.value("captured_at").toString())).arg(m_attempts->rowCount()).arg(m_evidence->rowCount()));
   const auto childRows=verifications.value("items").toArray();
   const auto *selected=m_verifications->item(m_verifications->currentRow(),0);
   const QString selectedId=selected?selected->data(Qt::UserRole).toJsonObject().value("attempt_id").toString():QString();
@@ -479,9 +478,17 @@ void TaskExecutionPanel::render()
     if(selectedRow>=0)m_verifications->selectRow(selectedRow);
     else {m_verifications->clearSelection();m_verifications->setCurrentCell(-1,-1);}
   }
+  updateSnapshotTime();
+  renderDetail();
+}
+
+void TaskExecutionPanel::updateSnapshotTime()
+{
+  const auto verifications = m_snapshot.value("verification_runs").toObject();
+  m_updated->setText(QStringLiteral("快照时间：%1 · 步骤展示前 200 项，尝试/证据展示最新 200 项（当前 %2 / %3 条）；文本最多 2000 字符并脱敏，可能省略内容，不作为完整原始证据。")
+      .arg(timeText(m_snapshot.value("captured_at").toString())).arg(m_attempts->rowCount()).arg(m_evidence->rowCount()));
   if(verifications.value("schema_version").toInt()==1)m_updated->setText(m_updated->text()+QStringLiteral("\n逐漏洞记录：显示最新 %1 / %2 次%3；双击只查看历史，不重新执行。")
     .arg(verifications.value("returned").toInt()).arg(verifications.value("total").toInt()).arg(verifications.value("has_more").toBool()?QStringLiteral("（较早记录可从扫描发现打开）"):QString()));
-  renderDetail();
 }
 
 void TaskExecutionPanel::renderDetail()

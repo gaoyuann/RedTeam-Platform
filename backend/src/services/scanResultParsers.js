@@ -78,7 +78,7 @@ function legacyParseResults(scanType, stdout) {
         const m1 = line.match(osvdbLine);
         if (m1) {
           osvdbId = m1[1];
-          path = m1[2];
+          path = m1[2].replace(/:$/,'');
           finding = m1[3].trim();
         } else {
           // Pattern 2: + /path: finding
@@ -108,7 +108,7 @@ function legacyParseResults(scanType, stdout) {
         if (fl.includes('sql') || fl.includes('inject') || fl.includes('exec') || fl.includes('vulnerable')) sev = 'high';
         if (fl.includes('leak') || fl.includes('expos')) sev = 'medium';
 
-        const informational=ordinaryHttpMethods({result_type:'web_vuln',source_tool:'nikto',result_data:{finding}});
+        const informational=/^(?:Admin login page\/section found\.|Apache default file found\.|The X-XSS-Protection header is not defined\.)/i.test(finding) || ordinaryHttpMethods({result_type:'web_vuln',source_tool:'nikto',result_data:{finding}});
         results.push({
           result_type: informational ? 'information' : 'web_vuln',
           result_data: { finding, ...(path && { path }), ...(osvdbId && { osvdb_id: osvdbId }) },

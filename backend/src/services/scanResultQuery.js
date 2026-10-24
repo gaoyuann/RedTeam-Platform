@@ -76,7 +76,9 @@ export function scanPage(db,pipeline,query={}) {
   const payloadIndex = selected.some(row=>row.category==='vulnerability') ? getPayloadIndex(db) : null;
   const records=selected.length?db.prepare(`SELECT * FROM scan_results WHERE id IN (${selected.map(()=>'?').join(',')}) ORDER BY id`).all(...selected.map(r=>r.id))
     .map(row=>({...publicScanRecord(row),verification:verificationSummary(db,row.id,pipeline.pipeline_id),payload_match:payloadIndex ? findingPayloadSummary(db,row,payloadIndex) : null})):[];
-  return {scan_summary:collection.summary,scan_coverage:collection.coverage,scan_records:records,
+  const processIds=collection.rows.filter(r=>['web_agent_step','web_scan_summary','scan_agent_step','scan_agent_summary','scan_capability_assessment'].includes(r.result_type) && (!query.scan_task_id || r.scan_task_id===query.scan_task_id)).map(r=>r.id);
+  const process=processIds.length?db.prepare(`SELECT * FROM scan_results WHERE id IN (${processIds.slice(-100).map(()=>'?')}) ORDER BY id`).all(...processIds.slice(-100)).map(publicScanRecord):[];
+  return {web_scan_process:process,web_scan_process_truncated:processIds.length>100,scan_summary:collection.summary,scan_coverage:collection.coverage,scan_records:records,
     scan_sources:collection.scans.map(s=>({scan_task_id:s.scan_task_id,scan_type:s.scan_type,status:s.status,target:s.target,error_message:redactScanValue(s.error_message),retry_of_scan_task_id:s.retry_of_scan_task_id || null,
       source_scan:sourceScanResultState(s,collection.rows.filter(row=>row.scan_task_id===s.scan_task_id))})),
     scan_runs:collection.runs.map(({evidence,...r})=>({...r,outcome:parseResultData(r.outcome),diagnostics:parseResultData(r.diagnostics)})),

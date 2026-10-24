@@ -81,7 +81,8 @@ function getVolumeMounts(toolId, options = {}) {
     if (!options.sourceDir) throw new Error('源码工具必须指定任务快照目录');
     mounts.push('-v', `${resolve(options.sourceDir)}:/src/project:ro`);
   }
-  mounts.push('-v', `${outputDir}:/tmp/redteam-output`);
+  if (options.privateOutputDir) mounts.push('-v', `${resolve(options.privateOutputDir)}:/tmp/redteam-private`);
+  else mounts.push('-v', `${outputDir}:/tmp/redteam-output`);
 
   // Capture tools need access to the captures directory for PCAP read/write
   if (CAPTURE_TOOLS.has(toolId)) {
@@ -120,6 +121,7 @@ function runProcess(bin, args, options, executionMode, stopContainer) {
       options.signal?.removeEventListener('abort', onAbort);
       cleanupResult.then(stopped => resolveResult(classifyToolResult(options.toolId, {
         ...result, toolStarted:!!child.pid, stdout: stdout.trim(), stderr: stderr.trim(), executionMode,
+        ...(options.privateOutputDir ? {processRef:options.privateContainerName || child.pid || null} : {}),
         timedOut, aborted, outputLimitExceeded, outputBytes, durationMs: Date.now() - started,
         processStopped: result.processStopped !== false && stopped !== false,
         ...(outputConsumerError ? {exitCode:-1,error:'Output collection failed: '+outputConsumerError} : {}),
@@ -187,17 +189,18 @@ export async function runTool(toolId, args, options = {}) {
 
   if(options.signal?.aborted) return cancelled();
   if (engine === 'host' || !image) {
+    if (options.privateOutputDir) args = args.map(arg => arg.replace('/tmp/redteam-private/', resolve(options.privateOutputDir) + '/'));
     if (SAST_TOOLS.has(toolId)) args = args.map(arg => arg === '--project=/src/project/.rt-compile-commands.json'
       ? '--project='+resolve(options.sourceDir,'.rt-host-compile-commands.json')
       : arg === '/src/project' ? resolve(options.sourceDir) : arg);
     return runProcess(bin, args, { ...options, toolId }, 'host');
   }
 
-  ensureOutputDir();
+  if(!options.privateOutputDir)ensureOutputDir();
   const name = `rt-tool-${randomUUID()}`;
-  const containerArgs = ['run', '--rm', ...(SAST_TOOLS.has(toolId) ? ['--pull=never'] : []), '--name', name, '--network', SAST_TOOLS.has(toolId) ? 'none' : 'host',
+  const containerArgs = ['run', '--rm', ...(SAST_TOOLS.has(toolId) || options.privateOutputDir ? ['--pull=never'] : []), '--name', name, ...(options.privateOutputDir && engine==='podman' ? ['--userns=keep-id'] : []), ...(options.privateOutputDir && process.getuid ? ['--user', `${process.getuid()}:${process.getgid()}`] : []), '--network', SAST_TOOLS.has(toolId) ? 'none' : 'host',
     ...getVolumeMounts(toolId, options), ...(PRIVILEGED_TOOLS.has(toolId) ? ['--privileged'] : []), image, bin, ...args];
-  return runProcess(engine, containerArgs, { ...options, toolId }, engine, () => new Promise(resolveCleanup => {
+  return runProcess(engine, containerArgs, { ...options, toolId,privateContainerName:name }, engine, () => new Promise(resolveCleanup => {
     const cleanup = spawn(engine, ['rm', '-f', name], { stdio: 'ignore' });
     cleanup.on('error', () => resolveCleanup(false));
     const cleanupTimer = setTimeout(() => { cleanup.kill('SIGKILL'); resolveCleanup(false); }, 10000);

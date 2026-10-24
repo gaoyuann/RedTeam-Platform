@@ -13,6 +13,8 @@ export function ordinaryHttpMethods(row) {
 const vulnerabilities = new Set(['vulnerability','web_vuln','sql_injection','misconfiguration','auth_finding','source_vuln','source_finding','program_finding']);
 const assets = new Set(['open_port','service_info','host_discovery','lan_host_discovery','network_context','network_link','lan_scope','http_probe','technology_detection','api_parameter','api_endpoint']);
 export function resultCategory(row) {
+  if (['web_agent_step','web_scan_summary','scan_agent_step','scan_agent_summary','scan_capability_assessment'].includes(row.result_type)) return 'information';
+  if (row.result_type==='web_observation') return 'asset';
   if (['scan_error','scan_warning'].includes(row.result_type)) return 'error';
   if (['raw_output','scan_evidence'].includes(row.result_type)) return 'evidence';
   if (row.result_type === 'credential') return 'credential';

@@ -1,3 +1,8 @@
+import {clearPostRequests} from './scanPostRequests.js';
+import {clearScanSessionAuth} from './scanSessionAuth.js';
+import {isScanAgent,validateScanAgentMode} from './scanAgentConfig.js';
+import {runScanAgent} from './scanAgent.js';
+import {isWebAgent,clearWebCredentials,hasWebScanSchema} from './webScanConfig.js';
 import { pipelineScans } from './scanResultQuery.js';
 import { hasScanIntegrity } from './scanResultStore.js';
 import { beginCoverage, completeCoverage, hasScanCoverage, markCheck, observePortScan, observeWebScan, pendingChecks } from './scanCoverage.js';
@@ -13,6 +18,7 @@ import { recommendForScans } from './playbookRecommendations.js';
 
 // ── Track running pipelines for cancellation ──────────────────────────────
 const runningPipelines = new Set();
+const scanAgentControllers = new Map();
 
 // ── Step type constants ───────────────────────────────────────────────────
 const STEP_SCAN     = 'scan';
@@ -158,9 +164,24 @@ async function runPipelineScan(db, pipeline) {
 
   // Determine scan types to run
   let config={}; try {config=JSON.parse(pipeline.config || '{}');} catch {}
+  if(isScanAgent(config)) {
+    const controller=new AbortController();scanAgentControllers.set(pipelineId,controller);
+    ensureStep(db,pipelineId,0,STEP_SCAN);updateStep(db,pipelineId,0,'running',{step_type:STEP_SCAN});
+    try {
+      const result=await runScanAgent(db,pipeline,{signal:controller.signal,execute:async(child,signal,budget)=>{
+        const {executeScan,requestScanAbort}=await import('./scanExecutor.js');
+        const abort=()=>requestScanAbort(child);signal.addEventListener('abort',abort,{once:true});
+        if(signal.aborted){abort();signal.removeEventListener('abort',abort);signal.throwIfAborted();}
+        try{return await executeScan(child,{budget});}finally{signal.removeEventListener('abort',abort);}
+      }});
+      updateStep(db,pipelineId,0,result.cancelled?'cancelled':result.ok?'completed':'failed',{step_type:STEP_SCAN,output_data:result,error_message:result.error});
+      return result;
+    } finally {scanAgentControllers.delete(pipelineId);clearScanSessionAuth(pipelineId);clearPostRequests(pipelineId);}
+  }
   const sourceMode=isProgramMode(config.scan_mode) || target.startsWith('tcp://');
-  const useCoverage=config.input_kind!=='remote_directory' && !config.cscan_target && !config.source_path && Boolean(config.task_scope) && hasScanCoverage(db);
-  const initialTypes = config.input_kind==='remote_directory' || config.source_path || config.cscan_target?.startsWith('/') ? ['source_scan'] : sourceMode ? [config.scan_mode==='source_assisted' ? 'source_scan' : 'program_scan', 'port_scan']
+  const smartWeb=isWebAgent(config);
+  const useCoverage=!smartWeb && config.input_kind!=='remote_directory' && !config.cscan_target && !config.source_path && Boolean(config.task_scope) && hasScanCoverage(db);
+  const initialTypes = smartWeb ? ['web_scan'] : config.input_kind==='remote_directory' || config.source_path || config.cscan_target?.startsWith('/') ? ['source_scan'] : sourceMode ? [config.scan_mode==='source_assisted' ? 'source_scan' : 'program_scan', 'port_scan']
     : useCoverage ? ['port_scan'] : isWebLike ? ['port_scan', 'app_discovery', 'web_scan'] : ['port_scan'];
   const initialScans=initialTypes.map(scan_type=>({scan_type,target:sourceMode && scan_type==='port_scan'
     ? programNetworkTarget(programExecutionTarget(pipeline) || target) : target}));
@@ -201,7 +222,7 @@ async function runPipelineScan(db, pipeline) {
         db.prepare(
           `INSERT INTO scan_tasks (scan_task_id, target, scan_type, target_class, parameters, created_by, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)`
-        ).run(scanTaskId, scanTarget, scanType, resolveTargetProfile(scanTarget).target_class, JSON.stringify(isProgramScan(scanType) ? {cscan_target:config.cscan_target || null,source_path:config.source_path || null,source_notes:config.source_notes || '',connection_id:config.source_connection_id || null,source_subdir:config.source_subdir || '',source_url:config.source_url || null,input_kind:config.input_kind || 'runtime',runtime_target:config.runtime_target || null} : scanType === 'port_scan' ? { discover_topology: true, pipeline_id:pipelineId } : {}), pipeline.created_by || 'pipeline', now);
+        ).run(scanTaskId, scanTarget, scanType, resolveTargetProfile(scanTarget).target_class, JSON.stringify(isProgramScan(scanType) ? {cscan_target:config.cscan_target || null,source_path:config.source_path || null,source_notes:config.source_notes || '',connection_id:config.source_connection_id || null,source_subdir:config.source_subdir || '',source_url:config.source_url || null,input_kind:config.input_kind || 'runtime',runtime_target:config.runtime_target || null} : smartWeb ? {web:config.scan_parameters.web} : scanType === 'port_scan' ? { discover_topology: true, pipeline_id:pipelineId } : {}), pipeline.created_by || 'pipeline', now);
 
         if(hasScanIntegrity(db)) db.prepare('UPDATE scan_tasks SET pipeline_id=? WHERE scan_task_id=?').run(pipelineId,scanTaskId);
         if(planned.check_id) markCheck(db,planned.check_id,'running',{scanTaskId});
@@ -215,6 +236,11 @@ async function runPipelineScan(db, pipeline) {
       const { executeScan } = await import('./scanExecutor.js');
       const scanResult = await executeScan(scanTaskId);
       scanOutcomes.push({ scan_type: scanType, status: scanResult.status || 'FAILED', error: scanResult.error || null });
+      if(smartWeb && !isCancelled(pipelineId)) {
+        const summary=db.prepare("SELECT result_data FROM scan_results WHERE scan_task_id=? AND result_type='web_scan_summary' ORDER BY id DESC LIMIT 1").get(scanTaskId);
+        const progress=summary?JSON.parse(summary.result_data):null;
+        if(!progress || !((Object.hasOwn(progress,'checks_started')?progress.checks_started:progress.checks)>0))throw new Error('智能扫描未开展 SQL 检测；保留过程记录，不继续分析或生成预案');
+      }
       if(planned.check_id) {
         markCheck(db,planned.check_id,({COMPLETED:'completed',PARTIAL:'partial',FAILED:'failed',CANCELLED:'cancelled'})[scanResult.status] || 'failed',
           {scanTaskId,reason:scanResult.error || null});
@@ -652,11 +678,20 @@ export async function runPipeline(pipelineId) {
     let pipelineConfig = {};
     try { pipelineConfig = JSON.parse(pipeline.config || '{}'); } catch {}
 
+    validateScanAgentMode(pipelineConfig,pipeline.target);
+
     // ── Step 0: Scan ────────────────────────────────────────────────────
     pipelineLog(pipelineId, '=== 步骤 0: 扫描 ===');
     const scanResult = await runPipelineScan(db, pipeline);
+    if((isWebAgent(pipelineConfig)||isScanAgent(pipelineConfig)) && db.prepare(`SELECT 1 FROM scan_tool_runs r JOIN scan_tasks s USING(scan_task_id)
+      WHERE s.pipeline_id=? AND (r.state='running' OR json_extract(r.outcome,'$.stopped')=0)`).get(pipelineId)) {
+      failPipeline(db,pipelineId,'智能扫描工具停止未确认；禁止继续分析、派发或重试');
+      return {ok:false,pipeline_id:pipelineId,status:'failed'};
+    }
     if (!scanResult.ok) {
       if (scanResult.cancelled) {
+        const unresolved=(isWebAgent(pipelineConfig)||isScanAgent(pipelineConfig)) && db.prepare("SELECT 1 FROM scan_tool_runs r JOIN scan_tasks s USING(scan_task_id) WHERE s.pipeline_id=? AND (r.state='running' OR json_extract(r.outcome,'$.stopped')=0)").get(pipelineId);
+        if(unresolved){failPipeline(db,pipelineId,'已请求取消，但工具停止未确认；禁止重复启动');return {ok:false,pipeline_id:pipelineId,status:'failed'};}
         updateStatus(db, pipelineId, 'cancelled', { result: { stopped_at: 'scan' } });
       } else {
         failPipeline(db, pipelineId, `扫描阶段失败: ${scanResult.error}`);
@@ -678,7 +713,7 @@ export async function runPipeline(pipelineId) {
 
     // Source demonstrations require an explicit object list before generation.
     // Reuse the existing task-plan approval state rather than auto-picking defects.
-    if(isProgramMode(pipelineConfig.scan_mode)) {
+    if(isProgramMode(pipelineConfig.scan_mode) && !isScanAgent(pipelineConfig)) {
       if(isCancelled(pipelineId)) return {ok:false,pipeline_id:pipelineId,status:'cancelled'};
       ensureStep(db,pipelineId,2,STEP_GENERATE);
       updateStep(db,pipelineId,2,'pending',{step_type:STEP_GENERATE,
@@ -771,6 +806,8 @@ export async function runPipeline(pipelineId) {
     failPipeline(db, pipelineId, `流水线异常: ${err.message}`);
     pipelineLog(pipelineId, `流水线异常: ${err.message}`, 'error');
     return { ok: false, pipeline_id: pipelineId, status: 'failed', error: err.message };
+  } finally {
+    clearWebCredentials(pipelineId);
   }
 }
 
@@ -782,6 +819,22 @@ export async function runPipeline(pipelineId) {
 export function cleanupOrphanedPipelines() {
   const db = getDb();
   const now = new Date().toISOString();
+
+  // Ephemeral Web sessions cannot survive a restart. Never assert a lost process stopped.
+  if(hasWebScanSchema(db)) {
+    for(const p of db.prepare("SELECT pipeline_id,config FROM pipelines WHERE status IN ('running','awaiting_approval')").all())
+      if(isWebAgent(JSON.parse(p.config||'{}')))clearWebCredentials(p.pipeline_id);
+    const interrupted=db.prepare("SELECT scan_task_id FROM scan_tasks WHERE status IN ('PENDING','RUNNING') AND (json_extract(parameters,'$.web.mode')='react_sqli' OR json_extract(parameters,'$.react_managed')=1 OR json_extract(parameters,'$.scan_orchestrator.mode')='react')").all();
+    for(const scan of interrupted) {
+      const active=db.prepare("SELECT 1 FROM scan_tool_runs WHERE scan_task_id=? AND (state='running' OR json_extract(outcome,'$.stopped')=0)").get(scan.scan_task_id);
+      const reason=active?'服务重启，临时认证丢失；工具停止状态待确认':'服务重启，临时认证丢失；未恢复扫描';
+      db.prepare("UPDATE scan_tasks SET status='FAILED',completed_at=?,error_message=? WHERE scan_task_id=?").run(now,reason,scan.scan_task_id);
+      db.prepare("UPDATE scan_tool_runs SET state='failed',completed_at=?,outcome=? WHERE scan_task_id=? AND state='running'")
+        .run(now,JSON.stringify({stopped:false,incomplete:true,error:'服务重启，停止未确认'}),scan.scan_task_id);
+      db.prepare("UPDATE task_checks SET state='not_checked',reason='服务重启，检查未完成',updated_at=? WHERE scan_task_id=? AND state IN ('running','planned')").run(now,scan.scan_task_id);
+      db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data,severity,source_tool,captured_at) VALUES (?,'web_scan_summary',?,'info','web-agent',?)").run(scan.scan_task_id,JSON.stringify({mode:'react_sqli',complete:false,reason,checks:null,pages:null,decisions:null}),now);
+    }
+  }
 
   // 1. Mark pipelines stuck in running/awaiting_approval as failed
   const stuckPipelines = db.prepare(
@@ -817,6 +870,11 @@ export function cancelPipeline(pipelineId) {
     return { ok: false, error: `Pipeline is "${pipeline.status}", not running or awaiting_approval` };
   }
 
+  let cancelConfig={};try{cancelConfig=JSON.parse(pipeline.config || '{}');}catch{}
+  const deferredWebCancel=(isWebAgent(cancelConfig)||isScanAgent(cancelConfig)) && pipelineScans(db,pipeline).some(s=>s.status==='RUNNING');
+  scanAgentControllers.get(pipelineId)?.abort();
+  clearScanSessionAuth(pipelineId);clearPostRequests(pipelineId);
+  clearWebCredentials(pipelineId);
   // Stop the currently linked scan before another check can be dispatched.
   for(const scan of pipelineScans(db,pipeline)) {
     if(['RUNNING','PENDING'].includes(scan.status)) requestScanAbort(scan.scan_task_id);
@@ -824,6 +882,10 @@ export function cancelPipeline(pipelineId) {
 
   // Remove from running set — step functions check this to abort
   runningPipelines.delete(pipelineId);
+  if(deferredWebCancel) {
+    pipelineLog(pipelineId,'已请求取消，等待模型和工具停止');
+    return {ok:true,cancellation_requested:true,status:'running'};
+  }
 
   const now = new Date().toISOString();
   db.prepare("UPDATE pipelines SET status = 'cancelled', updated_at = ? WHERE pipeline_id = ?").run(now, pipelineId);

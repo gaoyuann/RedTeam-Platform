@@ -5,6 +5,7 @@ import { resolveFindingPayload } from './findingPayloadResolver.js';
 import { compilePlaybook } from './playbookCompiler.js';
 import { validateExecutionScope } from './executionScope.js';
 import { taskScope } from './taskScope.js';
+import {payloadArtifactPlanContext} from './findingPayloadArtifacts.js';
 const parse=v=>{try{return typeof v==='string'?JSON.parse(v):v;}catch{return null;}};
 const fail=(message,status=400)=>{throw Object.assign(new Error(message),{status});};
 export function payloadPreview(payload,target) {
@@ -47,7 +48,8 @@ export async function prepareVerificationPayload(db,pipeline,actor,item,row,plan
   if(!step)fail('请先选择当前方案内的步骤');
   const result=await resolveFindingPayload(db,item.finding_id,actor,{tool_id:step.tool_id,target:plan.target,
     bindFinding:false,generate:dependencies.generatePayload,
-    constraints:{step_name:step.name,expected_evidence:step.expected_evidence,variables:step.payload_variables || {}}});
+    constraints:{step_name:step.name,expected_evidence:step.expected_evidence,variables:step.payload_variables || {},
+      collected_payloads:payloadArtifactPlanContext(db,item)}});
   const canonical=getPayloadById(result.payload.id,db);
   validateBoundPayload(db,step,canonical,result.catalog_version,plan.target,taskScope(pipeline));
   const latest=db.prepare('SELECT revision,state FROM finding_verifications WHERE id=?').get(item.id);

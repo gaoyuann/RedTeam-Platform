@@ -34,19 +34,19 @@ export function taskAnalysisIndex(db, actor, query) {
   }
   const limit = Number(limitRaw);
   const offset = Number(offsetRaw);
-  const rows = db.prepare(`SELECT p.pipeline_id, p.target, p.created_by, p.status,
+  const rows = db.prepare(`SELECT p.*,
       p.updated_at, p.config, p.analysis_result, s.status AS analysis_status, s.output_data
     FROM pipelines p LEFT JOIN pipeline_steps s ON s.id = (
       SELECT MAX(id) FROM pipeline_steps WHERE pipeline_id = p.pipeline_id AND step_type = 'analyze'
     ) WHERE (? = 'admin' OR p.created_by = ?) ORDER BY p.updated_at DESC, p.pipeline_id ASC`)
     .all(actor.role, actor.username);
-  const needle = search.toLowerCase();
+  const needle = search.trim().toLowerCase();
   const records = [];
   for (const row of rows) {
     const config = objectValue(row.config);
     const taskName = taskDisplayText(typeof config.task_name === 'string' ? config.task_name : row.pipeline_id);
     const target = taskDisplayText(row.target);
-    if (needle && ![row.pipeline_id, taskName, target, row.created_by]
+    if (needle && ![row.task_no, row.pipeline_id, taskName, target, row.created_by]
       .some(value => String(value || '').toLowerCase().includes(needle))) continue;
     const analysis = objectValue(row.analysis_result);
     const counts = Object.fromEntries(categories.map(category => [category, entryCount(analysis[category])]));
@@ -57,7 +57,7 @@ export function taskAnalysisIndex(db, actor, query) {
     const source = !available ? 'none' : output.fallback === true ? 'fallback'
       : row.analysis_status === 'completed' && Object.keys(output).length ? 'structured' : 'unknown';
     records.push({
-      pipeline_id: row.pipeline_id, task_name: taskName, target,
+      pipeline_id: row.pipeline_id, task_no: row.task_no || null, task_name: taskName, target,
       owner: row.created_by || '', status: row.status, updated_at: row.updated_at,
       analysis: { available, source, step_status: row.analysis_status || 'not_recorded', counts, total_entries: totalEntries },
     });

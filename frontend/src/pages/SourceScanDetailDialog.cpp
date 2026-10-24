@@ -12,7 +12,9 @@ QJsonObject SourceScanDetailDialog::resultData(const QJsonObject &row) {
   return data;
 }
 QString SourceScanDetailDialog::fileKey(const QJsonObject &row) {
-  return row["scan_task_id"].toString()+"\n"+resultData(row)["file"].toString();
+  QString file=resultData(row)["file"].toString();
+  if(file.startsWith("/work/src/"))file=file.mid(6);
+  return row["scan_task_id"].toString()+"\n"+file;
 }
 QString SourceScanDetailDialog::riskText(const QString &risk) {
   const QMap<QString,QString> labels{{"critical","严重"},{"high","高危"},{"medium","中危"},{"low","低危"},{"info","信息"}};
@@ -34,13 +36,13 @@ SourceScanDetailDialog::SourceScanDetailDialog(ApiClient *api,const QStringList 
   m_attack=new QPushButton(QStringLiteral("攻击测试"));m_attack->setObjectName("sourceScanAttack");m_attack->setEnabled(false);top->addWidget(m_attack);layout->addLayout(top);
   m_summary=new QLabel(QStringLiteral("正在读取扫描记录…"));m_summary->setTextFormat(Qt::PlainText);m_summary->setWordWrap(true);layout->addWidget(m_summary);
   auto *split=new QSplitter(Qt::Horizontal);split->setObjectName("sourceScanThreePanes");split->setChildrenCollapsible(false);layout->addWidget(split,1);
-  m_tree=new QTreeWidget(split);m_tree->setObjectName("sourceScanFileTree");m_tree->setHeaderLabel(QStringLiteral("报告涉及的文件"));m_tree->setMinimumWidth(130);
+  m_tree=new QTreeWidget(split);m_tree->setObjectName("sourceScanFileTree");m_tree->setHeaderLabel(QStringLiteral("源码文件与报告定位"));m_tree->setMinimumWidth(130);
   auto *middle=new QWidget(split);auto *center=new QVBoxLayout(middle);center->setContentsMargins(0,0,0,0);
   m_location=new QLabel(QStringLiteral("请选择文件或扫描发现"));m_location->setObjectName("sourceScanLocation");m_location->setTextFormat(Qt::PlainText);m_location->setWordWrap(true);center->addWidget(m_location);
   m_codeNotice=new QLabel;m_codeNotice->setTextFormat(Qt::PlainText);m_codeNotice->setWordWrap(true);center->addWidget(m_codeNotice);
   auto *tabs=new QTabWidget;tabs->setObjectName("sourceScanEvidenceTabs");
   m_evidence=new QPlainTextEdit;m_evidence->setObjectName("sourceScanEvidence");m_evidence->setReadOnly(true);tabs->addTab(m_evidence,QStringLiteral("审计依据"));
-  m_code=new QPlainTextEdit;m_code->setObjectName("sourceScanCode");m_code->setReadOnly(true);m_code->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));tabs->addTab(m_code,QStringLiteral("源码片段"));center->addWidget(tabs,1);
+  m_code=new QPlainTextEdit;m_code->setObjectName("sourceScanCode");m_code->setReadOnly(true);m_code->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));tabs->addTab(m_code,QStringLiteral("源码正文"));tabs->setCurrentWidget(m_code);center->addWidget(tabs,1);
   auto *right=new QWidget(split);right->setMinimumWidth(290);auto *rightLayout=new QVBoxLayout(right);rightLayout->setContentsMargins(0,0,0,0);
   auto *filter=new QHBoxLayout;filter->addWidget(new QLabel(QStringLiteral("当前文件的扫描发现")));filter->addStretch();
   m_severity=new QComboBox;m_severity->setObjectName("sourceScanSeverity");m_severity->addItem(QStringLiteral("全部严重度"),QString());
@@ -82,8 +84,8 @@ void SourceScanDetailDialog::refresh() {
 
 void SourceScanDetailDialog::setSnapshots(const QJsonArray &tasks) {
   ++m_snapshotRevision;
-  m_displayRows={};m_finalRows={};m_progressReport.clear();m_pending=false;m_canTest=!tasks.isEmpty();m_fresh=true;
-  QStringList statuses,progressNotes,errors;bool truncated=false;
+  m_displayRows={};m_finalRows={};m_sourceFiles.clear();m_progressReport.clear();m_pending=false;m_canTest=!tasks.isEmpty();m_fresh=true;
+  QStringList statuses,progressNotes,errors;bool truncated=false,previewParsing=false,previewError=false;
   for(const auto &value:tasks) {
     const auto task=value.toObject();const auto status=task["status"].toString();
     const bool active=QStringList{"PENDING","RUNNING"}.contains(status);m_pending=m_pending || active;
@@ -93,10 +95,15 @@ void SourceScanDetailDialog::setSnapshots(const QJsonArray &tasks) {
     if(!task["error_message"].toString().isEmpty())errors << task["error_message"].toString();
     const auto state=task["source_scan"].toObject();
     const QMap<QString,QString> phases{{"submitting","正在创建扫描任务"},{"running","正在执行源码扫描"},
-      {"waiting","核对远端任务状态"},{"parsing","正在解析完整报告"},{"importing","正在保存漏洞结果"}};
+      {"waiting","核对远端任务状态"},{"collecting_report","正在收集完整报告"},{"parsing","正在解析完整报告"},{"importing","正在保存漏洞结果"}};
     if(active && phases.contains(state["phase"].toString()))progressNotes << phases.value(state["phase"].toString());
     const auto subtaskProgress=state["subtask_progress"].toObject();
     if(active && subtaskProgress["total"].toInt()>0)progressNotes << QStringLiteral("子任务 %1/%2 完成").arg(subtaskProgress["finished"].toInt()).arg(subtaskProgress["total"].toInt());
+    for(const auto &entry:task["source_files"].toArray()) {
+      auto file=entry.toObject();file["scan_task_id"]=task["scan_task_id"];
+      const QJsonObject row{{"scan_task_id",task["scan_task_id"]},{"result_data",QJsonObject{{"file",file["path"]}}}};
+      m_sourceFiles.insert(fileKey(row),file);
+    }
     int finals=0;
     for(const auto &entry:task["results"].toArray()) {
       auto row=entry.toObject();
@@ -109,6 +116,7 @@ void SourceScanDetailDialog::setSnapshots(const QJsonArray &tasks) {
       m_finalRows.append(row);m_displayRows.append(row);++finals;
     }
     const auto preview=task["source_preview"].toObject();truncated=truncated || preview["truncated"].toBool();
+    previewParsing=previewParsing || preview["parsing"].toBool();previewError=previewError || !preview["parse_errors"].toArray().isEmpty();
     if(active || finals==0)for(const auto &entry:preview["findings"].toArray())
       m_displayRows.append(QJsonObject{{"scan_task_id",task["scan_task_id"]},{"preview",true},{"result_data",entry}});
   }
@@ -128,6 +136,8 @@ void SourceScanDetailDialog::setSnapshots(const QJsonArray &tasks) {
   if(!m_pending && !m_canTest)m_notice->setText(QStringLiteral("本次扫描未成功完成，已有过程记录仅供核对；攻击测试暂不可用。"));
   else if(!m_pending && m_finalRows.isEmpty())m_notice->setText(QStringLiteral("扫描已结束，暂无可测试漏洞；过程报告仍可查看。"));
   if(truncated)m_notice->setText(m_notice->text()+QStringLiteral(" 当前过程预览达到显示上限，最终结果以完整报告处理为准。"));
+  if(m_pending && previewParsing)m_notice->setText(m_notice->text()+QStringLiteral(" 正在整理已完成子任务的阶段发现。"));
+  if(m_pending && previewError)m_notice->setText(m_notice->text()+QStringLiteral(" 部分阶段报告暂未解析，原始报告仍可查看，最终结果将统一处理。"));
   errors.removeDuplicates();if(!errors.isEmpty())m_notice->setText(m_notice->text()+QStringLiteral("\n扫描说明：")+errors.join(QStringLiteral("；")));
   m_attack->setEnabled(m_canTest && !m_pending && !m_finalRows.isEmpty());m_refresh->setEnabled(true);
   if(m_pending && m_api)m_timer->start();else m_timer->stop();
@@ -137,7 +147,9 @@ void SourceScanDetailDialog::rebuildFiles() {
   const QSignalBlocker block(m_tree);m_tree->clear();m_files.clear();QMap<QString,QTreeWidgetItem*> nodes;
   QTreeWidgetItem *progress=nullptr;
   if(!m_progressReport.isEmpty()){progress=new QTreeWidgetItem(m_tree,{QStringLiteral("扫描过程报告")});progress->setData(0,Qt::UserRole,QStringLiteral("__progress__"));}
-  for(const auto &value:m_displayRows) {
+  QJsonArray fileRows=m_displayRows;
+  for(const auto &file:m_sourceFiles)fileRows.append(QJsonObject{{"scan_task_id",file["scan_task_id"]},{"result_data",QJsonObject{{"file",file["path"]}}}});
+  for(const auto &value:fileRows) {
     const auto row=value.toObject(),data=resultData(row);const QString file=data["file"].toString();if(file.isEmpty())continue;
     const QString key=fileKey(row);if(m_files.contains(key))continue;
     const QString task=row["scan_task_id"].toString();QTreeWidgetItem *parent=nullptr;QString prefix=task;
@@ -176,11 +188,13 @@ void SourceScanDetailDialog::updateFindings() {
     m_findings->setItem(n,1,new QTableWidgetItem(QStringLiteral("%1 · 第 %2 行%3").arg(data["title"].toString()).arg(data["start_line"].toInt()).arg(row["preview"].toBool()?QStringLiteral("（扫描中发现）"):QString())));
   }
   if(m_findings->rowCount()){m_findings->selectRow(0);showFinding(0);}
+  else loadSource();
 }
 
 void SourceScanDetailDialog::clearEvidence() {
-  m_location->setText(QStringLiteral("请选择报告中的文件"));m_code->clear();m_code->setPlaceholderText(QStringLiteral("报告尚未返回源码片段。"));
-  m_codeNotice->setText(QStringLiteral("文件树来自扫描报告，不代表完整源码目录；未提供的源码正文不会补写。"));
+  ++m_sourceRequest;
+  m_location->setText(QStringLiteral("请选择源码文件或报告定位"));m_code->clear();m_code->setPlaceholderText(QStringLiteral("报告尚未返回源码片段。"));
+  m_codeNotice->setText(QStringLiteral("文件树包含已取得的源码副本与报告定位；尚未取得的源码不会补写。"));
   m_evidence->clear();m_evidence->setPlaceholderText(QStringLiteral("等待 CScan 返回带文件、行号和依据的扫描发现。"));m_details->clear();
   if(!m_progressReport.isEmpty() && (m_selectedFile.isEmpty() || m_selectedFile=="__progress__")) {
     m_location->setText(QStringLiteral("扫描过程报告"));m_evidence->setPlainText(m_progressReport
@@ -189,6 +203,7 @@ void SourceScanDetailDialog::clearEvidence() {
 }
 
 void SourceScanDetailDialog::showFinding(int row) {
+  ++m_sourceRequest;
   if(row<0 || !m_findings->item(row,0))return;const int index=m_findings->item(row,0)->data(Qt::UserRole).toInt();
   if(index<0 || index>=m_displayRows.size())return;const auto record=m_displayRows[index].toObject(),data=resultData(record);
   const int line=data["start_line"].toInt(),end=data["end_line"].toInt(line);
@@ -199,6 +214,26 @@ void SourceScanDetailDialog::showFinding(int row) {
   m_evidence->setPlainText(data["reason"].toString());
   m_details->setPlainText(QStringLiteral("%1\n%2 · %3\n\n触发前提\n%4\n\n修复建议\n%5\n\n%6")
     .arg(data["title"].toString(),riskText(data["severity"].toString()),data["cwe"].toString(),data["preconditions"].toString(QStringLiteral("未提供")),data["suggestion"].toString(QStringLiteral("未提供")),record["preview"].toBool()?QStringLiteral("过程预览，尚未发布为可测试漏洞。") : QStringLiteral("扫描发现不等于攻击验证成立。")));
+  loadSource(line);
+}
+
+void SourceScanDetailDialog::loadSource(int line) {
+  if(!m_api || !m_sourceFiles.contains(m_selectedFile))return;
+  const auto file=m_sourceFiles.value(m_selectedFile);const int request=++m_sourceRequest;
+  const QString key=m_selectedFile;QPointer<SourceScanDetailDialog> guard(this);
+  m_location->setText(file["path"].toString());m_codeNotice->setText(QStringLiteral("正在读取已保存的源码副本…"));
+  m_api->get("/api/scan-tasks/"+QString::fromLatin1(QUrl::toPercentEncoding(file["scan_task_id"].toString()))+"/source-file?id="+QString::number(file["id"].toVariant().toLongLong()),10000,
+    [this,guard,request,key,line,file](const QJsonObject &response){
+      if(!guard || request!=m_sourceRequest || key!=m_selectedFile)return;
+      const auto data=response["data"].toObject();
+      if(response["status"].toString()!="ok" || data["sha256"]!=file["sha256"]){m_codeNotice->setText(QStringLiteral("源码副本已更新或读取失败，请刷新后重试。"));return;}
+      m_code->setPlainText(data["content"].toString());
+      m_codeNotice->setText(QStringLiteral("真实源码副本 · %1 · 尚不代表全部已审计或与部署版本一致").arg(data["captured_at"].toString()));
+      if(line>0 && line<=m_code->document()->blockCount()) {
+        QTextCursor cursor(m_code->document()->findBlockByNumber(line-1));m_code->setTextCursor(cursor);m_code->centerCursor();
+        QTextEdit::ExtraSelection selection;selection.cursor=cursor;selection.cursor.clearSelection();selection.format.setBackground(QColor("#fff2bf"));selection.format.setProperty(QTextFormat::FullWidthSelection,true);m_code->setExtraSelections({selection});
+      } else m_code->setExtraSelections({});
+    });
 }
 
 void SourceScanDetailDialog::selectFinding(qint64 id) {

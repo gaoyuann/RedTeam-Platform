@@ -7,10 +7,42 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QDialogButtonBox>
+#include <QJsonObject>
+#include <QApplication>
+#include <QClipboard>
+#include <QToolTip>
+#include <QCursor>
+#include <QRegularExpression>
 #include "Theme.h"
 
 // ── 纯视觉层小工具（不改数据流） ─────────────────────────────────────
 namespace UiUtil {
+
+inline QString taskIdentifier(const QJsonObject &task)
+{
+  const auto number = task.value("task_no").toString().trimmed();
+  return number.isEmpty() ? task.value("pipeline_id").toString() : number;
+}
+
+inline QString taskIdentifierTip(const QJsonObject &task)
+{
+  return task.value("task_no").toString().isEmpty()
+      ? QStringLiteral("%1\n任务编号尚未提供，当前显示原任务ID。").arg(taskIdentifier(task))
+      : taskIdentifier(task);
+}
+
+inline bool isTaskIdentifier(const QString &text)
+{
+  static const QRegularExpression pattern(QStringLiteral("^(TASK-[0-9]{8}-[0-9]{6,}|pipe_[a-z0-9-]+)$"), QRegularExpression::CaseInsensitiveOption);
+  return pattern.match(text.trimmed()).hasMatch();
+}
+
+inline void copyTaskIdentifier(const QString &identifier)
+{
+  if (identifier.isEmpty()) return;
+  QApplication::clipboard()->setText(identifier);
+  QToolTip::showText(QCursor::pos(), QStringLiteral("任务ID已复制"));
+}
 
 inline QString taskStatusText(const QString &status)
 {

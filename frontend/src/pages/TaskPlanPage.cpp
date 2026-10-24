@@ -436,8 +436,8 @@ void TaskPlanPage::render()
   showStep();
   const auto config = m_pipeline.value("config").isObject() ? m_pipeline.value("config").toObject()
       : QJsonDocument::fromJson(m_pipeline.value("config").toString().toUtf8()).object();
-  m_scope->setText(QStringLiteral("任务：%1 · 目标：%2\n授权范围记录：%3（授权需人工核验；后端使用结构化范围限制调用）")
-      .arg(config["task_name"].toString(m_pipeline.value("pipeline_id").toString()), m_pipeline.value("target").toString(), config["authorization_scope"].toString(QStringLiteral("未填写"))));
+  m_scope->setText(QStringLiteral("任务：%1 · 目标：%2\n任务ID：%4\n授权范围记录：%3（授权需人工核验；后端使用结构化范围限制调用）")
+      .arg(config["task_name"].toString(m_pipeline.value("pipeline_id").toString()), m_pipeline.value("target").toString(), config["authorization_scope"].toString(QStringLiteral("未填写")), UiUtil::taskIdentifier(m_pipeline)));
   if (!m_content.isEmpty()) {
     const QString sourceName = m_content["source_playbook"].toObject()["name"].toString(m_content["source_playbook_id"].toString());
     m_scope->setText(m_scope->text() + QStringLiteral("\n来源预案：%1 · 当前任务独立审阅，批准后保留本任务执行版本。").arg(sourceName));
@@ -578,7 +578,7 @@ void TaskPlanPage::transition(const QString &action)
   }
   if (action == "approve") {
     const auto prompt = QStringLiteral("批准任务 %1 的预案 v%2 并启动执行？\n目标：%3\n执行采用已提审步骤的独立快照；不会接受模型临时新增步骤。")
-        .arg(m_pipeline.value("pipeline_id").toString()).arg(m_plan.value("revision").toInt()).arg(m_pipeline.value("target").toString());
+        .arg(UiUtil::taskIdentifier(m_pipeline)).arg(m_plan.value("revision").toInt()).arg(m_pipeline.value("target").toString());
     if (QMessageBox::question(this, QStringLiteral("确认批准并执行"), prompt,
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) return;
   }

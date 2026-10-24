@@ -56,7 +56,7 @@ export function taskSummary(db, pipeline) {
     .get(pipeline.run_id, pipeline.target, pipeline.created_by) : null;
   const countForRun = table => run ? db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE run_id = ?`).get(run.run_id).count : 0;
   const plan = db.prepare('SELECT state, revision FROM task_plans WHERE pipeline_id = ?').get(pipeline.pipeline_id);
-  return { scan_task_ids: scanIds, scan_findings: scanFindings, scan_record_counts:counts, candidate_risks: candidateRisks,
+  return { task_no: pipeline.task_no || null, scan_task_ids: scanIds, scan_findings: scanFindings, scan_record_counts:counts, candidate_risks: candidateRisks,
     evidence_records: countForRun('evidence_records'), reports: countForRun('test_reports'),
     execution: run || null, finding_verifications:findingVerificationExecution(db,pipeline,{summaryOnly:true}), plan: plan || null };
 }

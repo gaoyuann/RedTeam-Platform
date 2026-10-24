@@ -22,6 +22,7 @@ export function finishToolRun(db, id, scanTaskId, toolId, result, parsed) {
         output_limit_exceeded:!!result.outputLimitExceeded,error:result.error || null,
         incomplete:!result.success || !!parsed.diagnostics.unparsed_lines || !!parsed.diagnostics.evidence_truncated,
         parser_coverage_known:parsed.diagnostics.unparsed_lines !== null && parsed.diagnostics.unparsed_lines !== undefined,
+        tool_started:typeof result.toolStarted==='boolean'?result.toolStarted:null,
         stopped:result.processStopped !== false};
       db.prepare('UPDATE scan_tool_runs SET state=?,completed_at=?,outcome=?,diagnostics=?,evidence=? WHERE tool_run_id=?')
         .run(state,new Date().toISOString(),JSON.stringify(redactScanValue(outcome)),

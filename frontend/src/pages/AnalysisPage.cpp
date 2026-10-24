@@ -168,7 +168,7 @@ void AnalysisPage::setTaskContext(const QJsonObject &pipeline)
   m_stateLabel->setText(state);
   m_stateLabel->setStyleSheet(fallback ? Theme::StatusWarningStyle : Theme::StatusInfoStyle);
   m_sourceLabel->setText(QStringLiteral("任务：%1 · 扫描作业：%2\n仅列出任务级来源；后端尚未提供逐条风险与证据的映射。")
-      .arg(pipeline["pipeline_id"].toString(), pipeline["scan_task_id"].toString().isEmpty()
+      .arg(UiUtil::taskIdentifier(pipeline), pipeline["scan_task_id"].toString().isEmpty()
           ? QStringLiteral("未关联") : pipeline["scan_task_id"].toString()));
   rebuildTable();
 }

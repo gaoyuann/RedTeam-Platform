@@ -371,6 +371,8 @@ void MainWindow::connectFlowWebSocket()
             };
             connect(m_ws, &WsClient::scanCreated, embScan, refreshVisibleScans);
             connect(m_ws, &WsClient::scanCompleted, embScan, refreshVisibleScans);
+            connect(m_ws, &WsClient::scanAgentStep, embScan, refreshVisibleScans);
+            connect(m_ws, &WsClient::connected, embScan, refreshVisibleScans);
             // Embedded scan "推荐执行" → switch to attack tab within the workbench
             connect(embScan, &ScanPage::playbookNavigateRequested, this,
                 [this](const QString &id, const QString &target) {

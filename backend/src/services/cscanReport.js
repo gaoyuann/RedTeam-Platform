@@ -31,6 +31,24 @@ function assign(finding, key, value) {
   } else finding[key] = value;
 }
 
+// Keep fenced source/payload text in its original section. A Markdown-looking
+// comment inside a script is not a new audit finding.
+export function splitCscanMarkdownSections(markdown) {
+  const sections=[];
+  let current='',fence=null;
+  for(const chunk of markdown.split(/(?<=\n)/)) {
+    const line=chunk.replace(/\r?\n$/,'');
+    const marker=line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if(fence) {
+      if(marker && marker[1][0]===fence[0] && marker[1].length>=fence.length && !marker[2].trim())fence=null;
+    } else if(marker)fence=marker[1];
+    else if(/^#{2,6}\s+/.test(line) && current) {sections.push(current);current='';}
+    current+=chunk;
+  }
+  if(current)sections.push(current);
+  return sections;
+}
+
 export function parseCscanMarkdown(markdown, snapshotId) {
   const findings = [];
   let current = null, fence = null, headers = null, lastField = null;
@@ -65,6 +83,9 @@ export function parseCscanMarkdown(markdown, snapshotId) {
     // Remove the label's paired bold markers, including **File:** form.
     const field = line.replace(/\*\*([^*]+?)\*\*/g,'$1').match(/^\s*(?:[-*]\s+)?([^:：]+?)\s*[:：]\s*(.*)$/);
     const key = field && labels.get(field[1].trim().toLowerCase());
+    // Payload metadata belongs to the preceding finding, not its evidence or
+    // remediation text. Code fences below it are already ignored above.
+    if(field && /^payload[- ]/i.test(field[1].trim())) {lastField=null;continue;}
     if(key) {
       current ||= {};
       assign(current,key,field[2]);lastField=key;

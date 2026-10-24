@@ -33,6 +33,7 @@ protected:
 
 private:
   void render();
+  void updateSnapshotTime();
   void renderDetail();
   void openVerificationHistory(int row);
   bool validSnapshot(const QJsonObject &snapshot) const;

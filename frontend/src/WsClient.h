@@ -31,6 +31,7 @@ signals:
   // Domain events — aligned with backend broadcast event names
   void scanCreated(const QJsonObject &data);      // scan:created
   void scanStarted(const QJsonObject &data);      // scan:started
+  void scanAgentStep(const QJsonObject &data);
   void scanCompleted(const QJsonObject &data);    // scan:completed
   void runCreated(const QJsonObject &data);       // run:created
   void runStarted(const QJsonObject &data);       // run:started
