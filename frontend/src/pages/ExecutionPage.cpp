@@ -58,7 +58,9 @@ ExecutionPage::ExecutionPage(ApiClient *api, const QString &role, const QString 
   // Poll timer for real-time execution updates
   m_pollTimer = new QTimer(this);
   m_pollTimer->setInterval(2000);
-  connect(m_pollTimer, &QTimer::timeout, this, &ExecutionPage::onPollRunning);
+  connect(m_pollTimer, &QTimer::timeout, this, [this]() {
+    if (isVisible()) onPollRunning();
+  });
 }
 
 void ExecutionPage::setupUI() {
@@ -703,6 +705,7 @@ void ExecutionPage::onExecute() {
 void ExecutionPage::showEvent(QShowEvent *event) {
   QWidget::showEvent(event);
   onRefreshRuns();
+  if (!m_runningRunId.isEmpty()) onPollRunning();
 }
 
 void ExecutionPage::onRefreshRuns() {

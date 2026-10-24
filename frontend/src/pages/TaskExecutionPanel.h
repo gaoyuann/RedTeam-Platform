@@ -33,6 +33,7 @@ protected:
 
 private:
   void render();
+  void updateSnapshotTime();
   void renderDetail();
   void openVerificationHistory(int row);
   bool validSnapshot(const QJsonObject &snapshot) const;
@@ -49,6 +50,7 @@ private:
   int m_contextVersion = 0;
   int m_requestVersion = 0;
   bool m_busy = false;
+  bool m_refreshFailed = false;
   QLabel *m_title;
   QLabel *m_state;
   QLabel *m_parentState;

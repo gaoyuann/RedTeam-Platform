@@ -57,6 +57,7 @@ private slots:
   void onPollStatus();
 
 private:
+  void showEvent(QShowEvent *event) override;
   void setupUI();
   void setStatusText(const QString &text);
   void openRecordDetails(QTreeWidgetItem *item);

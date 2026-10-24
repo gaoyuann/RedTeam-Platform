@@ -45,6 +45,8 @@
 #include <QDateTime>
 #include <QTimer>
 #include <QPointer>
+#include <QShowEvent>
+#include <QScrollBar>
 #include <QUrlQuery>
 #include <QUuid>
 #include <QScreen>
@@ -277,6 +279,13 @@ FlowPage::FlowPage(ApiClient *api, const QString &role,
     , m_aiPanel(nullptr)
 {
   setupUI();
+  m_detailRefreshTimer = new QTimer(this);
+  m_detailRefreshTimer->setSingleShot(true);
+  m_detailRefreshTimer->setInterval(100);
+  connect(m_detailRefreshTimer, &QTimer::timeout, this, [this]() {
+    if (!m_selectedPipelineId.isEmpty() && m_stack->currentIndex() == 1)
+      loadFlowDetail(m_selectedPipelineId);
+  });
 
   // Auto-refresh every 5s: flow list + workbench detail (if visible).
   // The workbench detail poll is a fallback for WS events, which may not
@@ -397,6 +406,7 @@ void FlowPage::setupListView()
     ++m_flowListRequestRevision;
     m_flowListFresh = false;
     m_flowTable->setRowCount(0);
+    m_renderedFlowRecords = {};
     m_searchOpenRequested = false;
     m_listState->setText(QStringLiteral("正在检索任务…"));
     m_searchTimer->start();
@@ -859,6 +869,9 @@ void FlowPage::refreshFlows()
 void FlowPage::loadFlows()
 {
   if (m_searchTimer) m_searchTimer->stop();
+  if (m_flowListBusy) { m_flowListPending = true; return; }
+  m_flowListBusy = true;
+  m_flowListPending = false;
   const int revision = ++m_flowListRequestRevision;
   m_flowListFresh = false;
   m_listState->setStyleSheet(Theme::StatusInfoStyle);
@@ -870,16 +883,29 @@ void FlowPage::loadFlows()
   const bool openFound = m_searchOpenRequested;
   m_searchOpenRequested = false;
   QString path = QStringLiteral("/api/pipelines");
+  QUrlQuery query;
+  query.addQueryItem("view", "list");
   if (!search.isEmpty()) {
-    QUrlQuery query;
     query.addQueryItem("search", QString::fromLatin1(QUrl::toPercentEncoding(search)));
     if (!filter.isEmpty() && !exact) query.addQueryItem("status", filter);
-    path += '?' + query.toString(QUrl::FullyEncoded);
   }
+  path += '?' + query.toString(QUrl::FullyEncoded);
   QPointer<FlowPage> guard(this);
   m_api->get(path, 5000, [this, guard, revision, search, filter, exact, openFound](const QJsonObject &res) {
-    if (!guard || revision != m_flowListRequestRevision) return;
+    if (!guard) return;
+    m_flowListBusy = false;
+    if (m_flowListPending) {
+      m_flowListPending = false;
+      m_flowListBusy = true;
+      QTimer::singleShot(0, this, [this]() {
+        m_flowListBusy = false;
+        loadFlows();
+      });
+    }
+    if (revision != m_flowListRequestRevision) return;
     if (res["status"].toString() != "ok" || !res["data"].isArray()) {
+      m_flowRecords = {};
+      m_renderedFlowRecords = {};
       m_flowTable->setRowCount(0);
       for (auto *card : {m_totalCard, m_runningCard, m_pendingCard, m_completedCard}) card->setValue(QStringLiteral("—"));
       m_listState->setStyleSheet(Theme::StatusErrorStyle);
@@ -889,128 +915,175 @@ void FlowPage::loadFlows()
       return;
     }
 
-    auto arr = res["data"].toArray();
-
-    int runningCount = 0;
-    int pendingCount = 0;
-    int completedCount = 0;
-    for (const auto &value : arr) {
-      const auto pipeline = value.toObject();
-      const auto status = pipeline["status"].toString();
-      if (status == "running") ++runningCount;
-      if (status == "awaiting_approval") ++pendingCount;
-      if (status == "completed") ++completedCount;
-    }
-    const auto meta = res["meta"].toObject();
-    m_taskIdentitySupported = meta["task_identity_version"].toInt() >= 1;
-    if (!m_taskIdentitySupported && !m_pendingCreateBody.isEmpty() && m_pendingCreateCanRetry) {
-      m_pendingCreateCanRetry = false;
-      m_retryCreate->hide(); m_retryCreate->setEnabled(false);
-      if (m_creationOpen->isHidden())
-        m_creationLabel->setText(QStringLiteral("创建结果未确认，请刷新列表核对是否已创建。"));
-    }
-    const auto counts = meta["counts"].toObject();
-    m_totalCard->setValue(QString::number(meta["visible_total"].toInt(arr.size())));
-    m_runningCard->setValue(QString::number(counts["running"].toInt(runningCount)));
-    m_pendingCard->setValue(QString::number(counts["awaiting_approval"].toInt(pendingCount)));
-    m_completedCard->setValue(QString::number(counts["completed"].toInt(completedCount)));
-
-    m_flowTable->setRowCount(0);
-    int row = 0;
-    for (int i = 0; i < arr.size(); i++) {
-      auto p = arr[i].toObject();
-      QString status = p["status"].toString();
-      if (!exact && !filter.isEmpty() && status != filter) continue;
-
-      QString pid = p["pipeline_id"].toString();
-      QString target = p["target"].toString();
-      QString created = p["created_at"].toString();
-      QString taskName = pipelineTaskName(p);
-      QString type = pipelineTypeText(p);
-      QString owner = p["created_by"].toString();
-      if (!search.isEmpty() && !meta["search_applied"].toBool()) {
-        const QString identifier = UiUtil::taskIdentifier(p);
-        if (exact) {
-          if (identifier.compare(search, Qt::CaseInsensitive) != 0 && pid.compare(search, Qt::CaseInsensitive) != 0) continue;
-        } else {
-          const QString haystack = identifier + " " + pid + " " + taskName + " " + target + " " + type + " " + owner;
-          if (!haystack.contains(search, Qt::CaseInsensitive)) continue;
-        }
-      }
-
-      m_flowTable->insertRow(row);
-
-      const auto identifier = UiUtil::taskIdentifier(p);
-      auto *idItem = new QTableWidgetItem(identifier);
-      idItem->setData(Qt::UserRole, pid);
-      idItem->setData(Qt::UserRole + 1, identifier);
-      idItem->setToolTip(UiUtil::taskIdentifierTip(p));
-      m_flowTable->setItem(row, TaskIdColumn, idItem);
-      auto *nameItem = new QTableWidgetItem(taskName);
-      nameItem->setToolTip(taskName);
-      m_flowTable->setItem(row, TaskNameColumn, nameItem);
-
-      auto *targetItem = new QTableWidgetItem(target);
-      targetItem->setToolTip(target);
-      m_flowTable->setItem(row, TaskTargetColumn, targetItem);
-
-      m_flowTable->setItem(row, TaskTypeColumn, new QTableWidgetItem(type));
-
-      // Status column stores pipeline_id in UserRole for row actions.
-      auto *statusItem = new QTableWidgetItem(
-        QStringLiteral("%1  %2").arg(statusIcon(status), statusText(status)));
-      statusItem->setData(Qt::UserRole, pid);
-      QColor sc = statusColor(status);
-      statusItem->setForeground(sc);
-      statusItem->setTextAlignment(Qt::AlignCenter);
-      m_flowTable->setItem(row, TaskStatusColumn, statusItem);
-
-      const QString progressText = pipelineProgressText(p);
-      auto *progressItem = new QTableWidgetItem(progressText);
-      progressItem->setTextAlignment(Qt::AlignCenter);
-      const bool progressKnown = progressText != QStringLiteral("未提供");
-      progressItem->setForeground(progressKnown && status == "completed" ? QColor("#16a34a")
-          : progressKnown ? QColor("#2563eb") : QColor("#64748b"));
-      m_flowTable->setItem(row, TaskProgressColumn, progressItem);
-
-      auto dt = QDateTime::fromString(created, Qt::ISODate);
-      QString displayTime = dt.isValid()
-        ? dt.toString("MM-dd\nHH:mm:ss") : created.left(19);
-      auto *timeItem = new QTableWidgetItem(displayTime);
-      timeItem->setToolTip(dt.isValid() ? dt.toString("yyyy-MM-dd HH:mm:ss") : created);
-      timeItem->setTextAlignment(Qt::AlignCenter);
-      m_flowTable->setItem(row, TaskTimeColumn, timeItem);
-
-      auto *ownerItem = new QTableWidgetItem(owner.isEmpty() ? QStringLiteral("—") : owner);
-      ownerItem->setToolTip(owner);
-      m_flowTable->setItem(row, TaskOwnerColumn, ownerItem);
-      auto *openItem = new QTableWidgetItem(QStringLiteral("进入"));
-      openItem->setForeground(QColor("#2563eb"));
-      openItem->setTextAlignment(Qt::AlignCenter);
-      m_flowTable->setItem(row, TaskActionColumn, openItem);
-
-      row++;
-    }
+    m_flowRecords = res["data"].toArray();
+    m_flowMeta = res["meta"].toObject();
+    m_flowSearch = search;
+    m_flowFilter = filter;
     m_flowListFresh = true;
-    UiUtil::EmptyHint::reset(m_flowTable);
-    resizeFlowColumns();
-    m_listState->setText(QStringLiteral("读取 %1 个可见任务，当前匹配 %2 个 · 双击打开任务；统计不是漏洞数量。")
-        .arg(meta["visible_total"].toInt(arr.size())).arg(row));
-    if (exact) m_listState->setText(row ? QStringLiteral("已按任务ID定位，显示全部状态中的匹配任务。")
-        : QStringLiteral("未找到可访问的任务。"));
-    if (openFound && exact && row == 1) { m_flowTable->setCurrentCell(0, 0); onOpenFlow(); }
+    renderFlows(openFound);
   });
+}
+
+void FlowPage::renderFlows(bool openFound)
+{
+  if (!m_flowListFresh) return;
+  const auto &arr = m_flowRecords;
+  const auto &meta = m_flowMeta;
+  const auto &search = m_flowSearch;
+  const auto &filter = m_flowFilter;
+  const bool exact = UiUtil::isTaskIdentifier(search);
+
+  int runningCount = 0;
+  int pendingCount = 0;
+  int completedCount = 0;
+  for (const auto &value : arr) {
+    const auto pipeline = value.toObject();
+    const auto status = pipeline["status"].toString();
+    if (status == "running") ++runningCount;
+    if (status == "awaiting_approval") ++pendingCount;
+    if (status == "completed") ++completedCount;
+  }
+  m_taskIdentitySupported = meta["task_identity_version"].toInt() >= 1;
+  if (!m_taskIdentitySupported && !m_pendingCreateBody.isEmpty() && m_pendingCreateCanRetry) {
+    m_pendingCreateCanRetry = false;
+    m_retryCreate->hide(); m_retryCreate->setEnabled(false);
+    if (m_creationOpen->isHidden())
+      m_creationLabel->setText(QStringLiteral("创建结果未确认，请刷新列表核对是否已创建。"));
+  }
+  const auto counts = meta["counts"].toObject();
+  m_totalCard->setValue(QString::number(meta["visible_total"].toInt(arr.size())));
+  m_runningCard->setValue(QString::number(counts["running"].toInt(runningCount)));
+  m_pendingCard->setValue(QString::number(counts["awaiting_approval"].toInt(pendingCount)));
+  m_completedCard->setValue(QString::number(counts["completed"].toInt(completedCount)));
+
+  const auto updateState = [this, &arr, &meta, exact]() {
+    UiUtil::EmptyHint::reset(m_flowTable);
+    m_listState->setStyleSheet(Theme::StatusInfoStyle);
+    m_listState->setText(QStringLiteral("读取 %1 个可见任务，当前匹配 %2 个 · 双击打开任务；统计不是漏洞数量。")
+        .arg(meta["visible_total"].toInt(arr.size())).arg(m_flowTable->rowCount()));
+    if (exact) m_listState->setText(m_flowTable->rowCount() ? QStringLiteral("已按任务ID定位，显示全部状态中的匹配任务。")
+        : QStringLiteral("未找到可访问的任务。"));
+  };
+  if (m_renderedFlowRecords == arr && m_renderedFlowFilter == filter && m_renderedFlowSearch == search) {
+    updateState();
+    if (openFound && exact && m_flowTable->rowCount() == 1) { m_flowTable->setCurrentCell(0, 0); onOpenFlow(); }
+    return;
+  }
+  m_renderedFlowRecords = arr;
+  m_renderedFlowFilter = filter;
+  m_renderedFlowSearch = search;
+  const QString selectedId = flowIdAtRow(m_flowTable->currentRow());
+  const int scrollValue = m_flowTable->verticalScrollBar()->value();
+  m_flowTable->setUpdatesEnabled(false);
+  m_flowTable->setRowCount(0);
+  int row = 0;
+  for (int i = 0; i < arr.size(); i++) {
+    auto p = arr[i].toObject();
+    QString status = p["status"].toString();
+    if (!exact && !filter.isEmpty() && status != filter) continue;
+
+    QString pid = p["pipeline_id"].toString();
+    QString target = p["target"].toString();
+    QString created = p["created_at"].toString();
+    QString taskName = pipelineTaskName(p);
+    QString type = pipelineTypeText(p);
+    QString owner = p["created_by"].toString();
+    if (!search.isEmpty() && !meta["search_applied"].toBool()) {
+      const QString identifier = UiUtil::taskIdentifier(p);
+      if (exact) {
+        if (identifier.compare(search, Qt::CaseInsensitive) != 0 && pid.compare(search, Qt::CaseInsensitive) != 0) continue;
+      } else {
+        const QString haystack = identifier + " " + pid + " " + taskName + " " + target + " " + type + " " + owner;
+        if (!haystack.contains(search, Qt::CaseInsensitive)) continue;
+      }
+    }
+
+    m_flowTable->insertRow(row);
+
+    const auto identifier = UiUtil::taskIdentifier(p);
+    auto *idItem = new QTableWidgetItem(identifier);
+    idItem->setData(Qt::UserRole, pid);
+    idItem->setData(Qt::UserRole + 1, identifier);
+    idItem->setToolTip(UiUtil::taskIdentifierTip(p));
+    m_flowTable->setItem(row, TaskIdColumn, idItem);
+    auto *nameItem = new QTableWidgetItem(taskName);
+    nameItem->setToolTip(taskName);
+    m_flowTable->setItem(row, TaskNameColumn, nameItem);
+
+    auto *targetItem = new QTableWidgetItem(target);
+    targetItem->setToolTip(target);
+    m_flowTable->setItem(row, TaskTargetColumn, targetItem);
+
+    m_flowTable->setItem(row, TaskTypeColumn, new QTableWidgetItem(type));
+
+    // Status column stores pipeline_id in UserRole for row actions.
+    auto *statusItem = new QTableWidgetItem(
+      QStringLiteral("%1  %2").arg(statusIcon(status), statusText(status)));
+    statusItem->setData(Qt::UserRole, pid);
+    QColor sc = statusColor(status);
+    statusItem->setForeground(sc);
+    statusItem->setTextAlignment(Qt::AlignCenter);
+    m_flowTable->setItem(row, TaskStatusColumn, statusItem);
+
+    const QString progressText = pipelineProgressText(p);
+    auto *progressItem = new QTableWidgetItem(progressText);
+    progressItem->setTextAlignment(Qt::AlignCenter);
+    const bool progressKnown = progressText != QStringLiteral("未提供");
+    progressItem->setForeground(progressKnown && status == "completed" ? QColor("#16a34a")
+        : progressKnown ? QColor("#2563eb") : QColor("#64748b"));
+    m_flowTable->setItem(row, TaskProgressColumn, progressItem);
+
+    auto dt = QDateTime::fromString(created, Qt::ISODate);
+    QString displayTime = dt.isValid()
+      ? dt.toString("MM-dd\nHH:mm:ss") : created.left(19);
+    auto *timeItem = new QTableWidgetItem(displayTime);
+    timeItem->setToolTip(dt.isValid() ? dt.toString("yyyy-MM-dd HH:mm:ss") : created);
+    timeItem->setTextAlignment(Qt::AlignCenter);
+    m_flowTable->setItem(row, TaskTimeColumn, timeItem);
+
+    auto *ownerItem = new QTableWidgetItem(owner.isEmpty() ? QStringLiteral("—") : owner);
+    ownerItem->setToolTip(owner);
+    m_flowTable->setItem(row, TaskOwnerColumn, ownerItem);
+    auto *openItem = new QTableWidgetItem(QStringLiteral("进入"));
+    openItem->setForeground(QColor("#2563eb"));
+    openItem->setTextAlignment(Qt::AlignCenter);
+    m_flowTable->setItem(row, TaskActionColumn, openItem);
+
+    if (pid == selectedId) m_flowTable->selectRow(row);
+    row++;
+  }
+  m_flowListFresh = true;
+  m_flowTable->verticalScrollBar()->setValue(scrollValue);
+  m_flowTable->setUpdatesEnabled(true);
+  resizeFlowColumns();
+  updateState();
+  if (openFound && exact && row == 1) { m_flowTable->setCurrentCell(0, 0); onOpenFlow(); }
 }
 
 // ── Load flow detail (workbench) ───────────────────────────────────────
 
 void FlowPage::loadFlowDetail(const QString &pipelineId)
 {
+  if (m_taskDetailBusy) { m_pendingDetailPipelineId = pipelineId; return; }
+  m_taskDetailBusy = true;
   const int contextRevision = m_taskContextRevision;
   const int requestRevision = ++m_taskDetailRequestRevision;
   QPointer<FlowPage> guard(this);
   m_api->get(QStringLiteral("/api/pipelines/%1").arg(pipelineId), 5000,
     [this, guard, pipelineId, contextRevision, requestRevision](const QJsonObject &res) {
+    if (!guard) return;
+    m_taskDetailBusy = false;
+    const QString pending = m_pendingDetailPipelineId;
+    m_pendingDetailPipelineId.clear();
+    if (!pending.isEmpty()) {
+      m_taskDetailBusy = true;
+      QTimer::singleShot(0, this, [this, pending]() {
+        m_taskDetailBusy = false;
+        const QString next = m_pendingDetailPipelineId.isEmpty() ? pending : m_pendingDetailPipelineId;
+        m_pendingDetailPipelineId.clear();
+        if (next == m_selectedPipelineId) loadFlowDetail(next);
+      });
+    }
     // Stale-response guard: if the user switched to a different flow while
     // this GET was in flight, skip the update to avoid overwriting the UI
     // with the wrong flow's data.
@@ -1032,9 +1105,14 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     m_logToggleBtn->setEnabled(true);
     QString target = p["target"].toString();
     QString status = p["status"].toString();
-    // Still poll for changes, but stable completed/approval views need no rebuild.
-    if (m_lastDetailPipelineId == pipelineId && m_lastDisplayedDetail == p
-        && status != "running") return;
+    // Execution and scan records can change independently of the pipeline JSON.
+    // Refresh only the visible stage; their own timers provide the fallback.
+    if (m_lastDetailPipelineId == pipelineId && m_lastDisplayedDetail == p) {
+      if (m_execTab->isVisible()) m_execTab->refreshTaskRecords();
+      // Scan events and its own active-scan timer handle new results. A detail
+      // poll must not replace already appended pages of an unchanged task.
+      return;
+    }
     m_lastDetailPipelineId = pipelineId;
     m_lastDisplayedDetail = p;
     m_aiPanel->setTaskContext(p);
@@ -1064,7 +1142,8 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     else m_scanTab->setPipelineScope(pipelineId, scopedScanIds, status);
     m_scanTab->setTarget(target);
     m_execTab->setPipelineContext(pipelineId, status, p["run_id"].toString(), target);
-    m_execTab->refreshTaskRecords();
+    if (m_execTab->isVisible()) m_execTab->refreshTaskRecords();
+    if (m_scanTab->isVisible()) m_scanTab->onRefreshTasks();
     m_evalTab->setPipelineContext(pipelineId, p["run_id"].toString(), target);
     m_execTab->setTarget(target);
     m_evalTab->setTarget(target);
@@ -1226,21 +1305,6 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
       phaseSteps.append(ps);
     }
     m_stepIndicator->setPhases(phaseSteps);
-
-    // Refresh the embedded scan tab while the scan phase is active, so it
-    // picks up new tasks / results (loadFlowDetail is called by the 5s poll
-    // timer and WS events, not just on entry).
-    for (int i = 0; i < steps.size(); i++) {
-      auto step = steps[i].toObject();
-      if (step["step_type"].toString() == "scan") {
-        QString sStatus = step["status"].toString();
-        if (sStatus == "running" || sStatus == "completed") {
-          m_scanTab->onRefreshTasks();
-          break;
-        }
-      }
-    }
-
 
     // Action visibility based on status
     bool isAwaiting = (status == "awaiting_approval");
@@ -1729,6 +1793,8 @@ void FlowPage::setReturnPage(int page, const QString &title)
 
 void FlowPage::onFilterChanged(int)
 {
+  ++m_flowListRequestRevision;
+  m_flowListFresh = false;
   loadFlows();
 }
 
@@ -1811,22 +1877,34 @@ void FlowPage::onStartFlow()
 
 void FlowPage::onPipelineCreated(const QJsonObject &)
 {
-  refreshFlows();
+  if (isVisible() && m_stack->currentIndex() == 0) refreshFlows();
 }
 
 void FlowPage::onPipelineStatus(const QJsonObject &data)
 {
   const QString pipelineId = data["pipeline_id"].toString();
   if (pipelineId == m_selectedPipelineId && m_stack->currentIndex() == 1)
-    loadFlowDetail(pipelineId);
-  refreshFlows();
+    scheduleTaskDetailRefresh();
+  if (isVisible() && m_stack->currentIndex() == 0) refreshFlows();
 }
 
 void FlowPage::onPipelineStep(const QJsonObject &data)
 {
   const QString pipelineId = data["pipeline_id"].toString();
   if (pipelineId == m_selectedPipelineId && m_stack->currentIndex() == 1)
-    loadFlowDetail(pipelineId);
+    scheduleTaskDetailRefresh();
+}
+
+void FlowPage::scheduleTaskDetailRefresh()
+{
+  if (isVisible() && !m_detailRefreshTimer->isActive()) m_detailRefreshTimer->start();
+}
+
+void FlowPage::showEvent(QShowEvent *event)
+{
+  QWidget::showEvent(event);
+  if (m_stack->currentIndex() == 0) refreshFlows();
+  else if (!m_selectedPipelineId.isEmpty()) loadFlowDetail(m_selectedPipelineId);
 }
 
 void FlowPage::onPipelineLog(const QJsonObject &data)
@@ -1863,6 +1941,8 @@ void FlowPage::clearRunContext()
   m_pendingTaskReportId.clear();
   ++m_taskContextRevision;
   ++m_taskDetailRequestRevision;
+  m_pendingDetailPipelineId.clear();
+  m_detailRefreshTimer->stop();
   m_aiPanel->clearTaskContext();
   m_analysisTab->clearTaskContext();
   m_planTab->clearTaskContext();

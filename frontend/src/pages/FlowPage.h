@@ -8,6 +8,7 @@
 #include <QPushButton>
 #include <QComboBox>
 #include <QJsonObject>
+#include <QJsonArray>
 
 class ApiClient;
 class QAction;
@@ -80,6 +81,9 @@ private slots:
   void onFilterChanged(int index);
 
 private:
+  void renderFlows(bool openFound = false);
+  void scheduleTaskDetailRefresh();
+  void showEvent(QShowEvent *event) override;
   bool eventFilter(QObject *watched, QEvent *event) override;
   void setupUI();
   void setupListView();
@@ -126,6 +130,16 @@ private:
   bool m_pendingCreateCanRetry = false;
   int m_flowListRequestRevision = 0;
   bool m_flowListFresh = false;
+  bool m_flowListBusy = false;
+  bool m_flowListPending = false;
+  QJsonArray m_flowRecords;
+  QJsonObject m_flowMeta;
+  QString m_flowSearch;
+  QString m_flowFilter;
+  QJsonArray m_renderedFlowRecords;
+  QString m_renderedFlowFilter;
+  QString m_renderedFlowSearch;
+  QTimer *m_detailRefreshTimer = nullptr;
   MetricCard *m_totalCard;
   MetricCard *m_runningCard;
   MetricCard *m_pendingCard;
@@ -167,6 +181,8 @@ private:
   QString m_lastDetailPipelineId;
   int m_taskContextRevision = 0;
   int m_taskDetailRequestRevision = 0;
+  bool m_taskDetailBusy = false;
+  QString m_pendingDetailPipelineId;
   QJsonObject m_lastDisplayedDetail;
   QString m_workbenchRunId;
   // Dedup guards: track the last run/playbook loaded into the attack tab,

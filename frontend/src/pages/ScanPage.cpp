@@ -1882,7 +1882,9 @@ void ScanPage::setupUI() {
   // ── Poll timer for running scans ──────────────────────────────────
   m_pollTimer = new QTimer(this);
   m_pollTimer->setInterval(2000);
-  connect(m_pollTimer, &QTimer::timeout, this, &ScanPage::onPollStatus);
+  connect(m_pollTimer, &QTimer::timeout, this, [this]() {
+    if (isVisible()) onPollStatus();
+  });
 
   // ── Tab switch: update delete button state ────────────────────────
   connect(m_scanTypeTabs, &QTabWidget::currentChanged, this, [this]() {
@@ -3199,6 +3201,12 @@ void ScanPage::clearDetailPanel() {
 }
 
 // ── Poll scan status ──────────────────────────────────────────────────
+void ScanPage::showEvent(QShowEvent *event) {
+  QWidget::showEvent(event);
+  if (!m_allScanResults && !m_runningTaskIds.isEmpty()) onPollStatus();
+  else onRefreshTasks();
+}
+
 void ScanPage::onPollStatus() {
   if (m_allScanResults) { if (!m_scanPageBusy) loadPipelineResults(); return; }
   if (m_runningTaskIds.isEmpty()) {

@@ -171,10 +171,18 @@ export default function (db) {
       COALESCE(SUM(status='running'),0) running, COALESCE(SUM(status='awaiting_approval'),0) awaiting_approval,
       COALESCE(SUM(status='completed'),0) completed FROM pipelines WHERE (?='admin' OR created_by=?)`)
       .get(req.user.role, req.user.sub);
+    // Compact clients retain task identity/search metadata without loading large results.
+    // Older databases may not have task_no yet; the default response is unchanged.
+    const identity = hasTaskIdentity(db);
+    const listFields = ['pipeline_id', 'target', 'status', 'config', 'created_by', 'created_at', 'updated_at'];
+    if (identity) listFields.push('task_no');
+    const compact = req.query.view === 'list';
+    const columns = compact ? listFields.join(', ') : '*';
     const found = exact ? visibleTaskLookup(db, req.user, needle) : null;
-    const visible = exact ? (found ? [found] : []) : db.prepare("SELECT * FROM pipelines WHERE (?='admin' OR created_by=?) ORDER BY created_at DESC,id DESC")
+    const visible = exact ? (found ? [found] : []) : db.prepare(`SELECT ${columns} FROM pipelines WHERE (?='admin' OR created_by=?) ORDER BY created_at DESC,id DESC`)
       .all(req.user.role, req.user.sub);
-    const rows = visible.filter(row => {
+    const rows = visible.map(row => compact && exact
+      ? Object.fromEntries(listFields.map(key => [key, row[key]])) : row).filter(row => {
       if (exact) return row.task_no?.toLowerCase() === needle || row.pipeline_id.toLowerCase() === needle;
       if (status && row.status !== status) return false;
       if (!needle) return true;
@@ -187,7 +195,7 @@ export default function (db) {
     });
     for (const row of rows) row.status_cn = statusCn(row.status);
     res.json({ status: 'ok', data: rows, meta: { total: rows.length, visible_total: totals.visible_total, exact_id: exact,
-      search_applied: true, task_identity_version: hasTaskIdentity(db) ? 1 : 0,
+      search_applied: true, task_identity_version: identity ? 1 : 0,
       counts: { running: totals.running, awaiting_approval: totals.awaiting_approval, completed: totals.completed } } });
   });
 
