@@ -7,6 +7,9 @@ else()
   message(STATUS "Qt5 WebSockets NOT found — real-time push disabled (install libqt5websockets5-dev)")
 endif()
 
+option(BUILD_UI_CHECKS "Build isolated Qt UI regression checks" OFF)
+add_subdirectory(vendor/pentagi-source-scan EXCLUDE_FROM_ALL)
+
 set(SOURCES
     src/main.cpp
     src/GlobalSearchDialog.cpp
@@ -33,6 +36,7 @@ set(SOURCES
     src/pages/PlaybookPage.cpp
     src/pages/KnowledgeGraphPage.cpp
     src/pages/FindingVerificationDialog.cpp
+    src/pages/PentagiSourceScanHost.cpp
     src/pages/ScanPage.cpp
     src/pages/SourceScanDetailDialog.cpp
     src/pages/PayloadPage.cpp
@@ -82,6 +86,7 @@ set(HEADERS
     src/pages/PlaybookPage.h
     src/pages/KnowledgeGraphPage.h
     src/pages/FindingVerificationDialog.h
+    src/pages/PentagiSourceScanHost.h
     src/pages/ScanPage.h
     src/pages/SourceScanDetailDialog.h
     src/pages/PayloadPage.h
@@ -245,4 +250,17 @@ if(BUILD_UI_CHECKS)
   target_link_libraries(RedTeam-TaskReportExportChecks Qt5::Widgets Qt5::Network Qt5::Test)
   add_test(NAME ui-task-report-export COMMAND RedTeam-TaskReportExportChecks)
   set_tests_properties(ui-task-report-export PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 45)
+endif()
+
+
+if(TARGET RedTeam-TaskReportExportChecks)
+  target_sources(RedTeam-TaskReportExportChecks PRIVATE src/pages/PentagiSourceScanHost.cpp)
+endif()
+
+if(BUILD_UI_CHECKS)
+  add_executable(PentagiSourceHostChecks src/ApiClient.cpp src/pages/SourceScanDetailDialog.cpp src/pages/FindingVerificationDialog.cpp src/pages/PentagiSourceScanHost.cpp test/pentagi_source_host_checks.cpp)
+  target_include_directories(PentagiSourceHostChecks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(PentagiSourceHostChecks PRIVATE Qt5::Widgets Qt5::Network Qt5::Test)
+  add_test(NAME pentagi-source-host COMMAND PentagiSourceHostChecks)
+  set_tests_properties(pentagi-source-host PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endif()

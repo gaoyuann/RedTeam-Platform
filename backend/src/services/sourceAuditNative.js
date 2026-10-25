@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import {scanCscanTarget,normalizeCscanReportedFinding,parseCompletedCscanReport} from './cscanNative.js';
 import {cscanTarget,cscanSourcePath,cscanNotes} from './cscanTarget.js';
 import {taskScope} from './taskScope.js';
@@ -62,12 +63,29 @@ export async function auditCscanNative(task,{db,parameters,signal,nativeScan=sca
     if(rawRecords.has(key)) db.prepare('UPDATE scan_results SET result_data=? WHERE id=?').run(JSON.stringify(raw),rawRecords.get(key));
     else rawRecords.set(key,store('raw_output',raw));
   };
+  const sourceCopies=()=>{
+    const files=new Map();
+    for(const row of db.prepare("SELECT result_data FROM scan_results WHERE scan_task_id=? AND result_type='source_file_copy' ORDER BY id").all(task.scan_task_id)) {
+      const file=JSON.parse(row.result_data);
+      if(String(file.flow_id)!==String(coverage.cscan.flow_id) || typeof file.content!=='string'
+        || createHash('sha256').update(file.content).digest('hex')!==file.sha256)continue;
+      files.set(file.path.replace(/^\/work\/src\//,''),file);
+    }
+    return files;
+  };
   const importFindings=(report)=>{
     if(report.source_access_reported==='unavailable') return;
     for(const [index,finding] of report.findings.entries()) {
       let data;
       try {
         data=normalizeCscanReportedFinding(finding,report.markdown,source);
+        const copies=sourceCopies(),key=data.file.replace(/^\/work\/src\//,'');
+        if(copies.size) {
+          const file=copies.get(key);
+          if(!file || data.end_line>file.content.split('\n').length)throw new Error('报告定位不在当前 Flow 的源码副本范围内');
+          data.source_location_verified=true;
+          data.source_sha256=file.sha256;
+        }
       } catch(error) {
         const rejected={index,source_subtask_ids:finding.source_subtask_ids || report.source_subtask_ids || [],reason:error.message};
         if(!coverage.rejected_findings.some(item=>JSON.stringify(item)===JSON.stringify(rejected))) coverage.rejected_findings.push(rejected);
@@ -140,12 +158,13 @@ export async function auditCscanNative(task,{db,parameters,signal,nativeScan=sca
       persist();return {count,outcomes};
     }
     db.transaction(()=>{importFindings(report);persist();})();
-    coverage.cscan_complete=(!agentMode || coverage.source_access_reported==='available')
+    coverage.source_copy_access_verified=sourceCopies().size>0;
+    coverage.cscan_complete=(!agentMode || coverage.source_access_reported==='available' || coverage.source_copy_access_verified)
       && !coverage.parse_errors.length && !coverage.rejected_findings.length;
     coverage.ai_complete=coverage.cscan_complete;
     coverage.cscan.state=coverage.parse_errors.length || coverage.rejected_findings.length?'report_error':'finished';
     outcomes.push({tool_id:'cscan',success:true});
-    if(agentMode && coverage.source_access_reported==='unknown') {
+    if(agentMode && coverage.source_access_reported==='unknown' && !coverage.source_copy_access_verified) {
       const reason='CScan 未明确报告已取得目标源码，源码审计尚未确认完成';
       coverage.source_errors.push(reason);outcomes.push({tool_id:'cscan-source-access',success:false,error:reason});
     }

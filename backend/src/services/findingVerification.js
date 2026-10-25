@@ -81,7 +81,7 @@ export function verificationDetail(db, pipeline, id) {
     steps:db.prepare('SELECT step_index,tool_id,success,exit_code,notes FROM execution_steps WHERE run_id=? ORDER BY id').all(a.run_id)
   };});
   const entry=findingVerificationEntry(db,pipeline,row);
-  const detail=taskDisplayValue({ ...item, task_no:pipeline.task_no || null, eligible:resultCategory(row)==='vulnerability',
+  const detail=taskDisplayValue({ execution_backend:{id:'platform-executor',dispatch:'findingVerificationRunner -> executionEngine.executeRun',transport:'target-request: Node HTTP/TCP; other tools: Docker/Podman images',pentagi_required_for_execution:false}, ...item, task_no:pipeline.task_no || null, eligible:resultCategory(row)==='vulnerability',
     ineligibility_reason:resultCategory(row)==='vulnerability' ? null : '此记录现归为信息或非漏洞记录，仅保留历史与停止操作，不能新建验证。', default_target:entry.target,entry_context:entry, finding:publicScanRecord(row), plans, attempts,
     payloads:verificationPayloadCatalog(db,item,row,plans[0]?.content),payload_artifacts:payloadArtifactView(db,item),readiness:verificationReadiness(db,pipeline,item,plans[0]), summary:verificationSummary(db,item.finding_id,pipeline.pipeline_id) });
   // Serialize only after field-level redaction; legacy readers still receive valid JSON.

@@ -1,0 +1,35 @@
+{
+  "repository": "pentagi-v3",
+  "commit": "c8980264d469f926277ace45afc262c1c244d41e",
+  "sha256": {
+    "src/models/SourceScanTypes.h": "4f10db5d42d39e4f38ab4988d16e2ed184516d616fa876a9baf7ae954980cdd3",
+    "src/models/SourceScanTypes.cpp": "d7d6d70fd6f6c0f18023d83f40c65cf77df07b6edbab1ae826af3a8591ff1276",
+    "src/models/FlowTypes.h": "760111a759c099a4c65ecac4a7d637664b70c7a41d6a2b3b5b359af6782b58a7",
+    "src/models/OpenAiTypes.h": "33706761d015230c155f48a824127e05649f9ce494ad7867b6183f237896032f",
+    "src/config/AppConfig.h": "8e7441093566a59973ab8ca58e7ca5647172f2314750057ece6cad3f4730ae8c",
+    "src/config/AppConfig.cpp": "bf6c70abd5a524327614ac94e8f88c07d91abd00a8ba4f49d385a5076c72fd19",
+    "src/config/ConfigManager.h": "65f25525c3b6cf9e75362d248f5f119566486d6ffe48c5198f7280cab8431f33",
+    "src/config/ConfigManager.cpp": "a1840f8c6e797fa83271559643827d96fa48e3963ad565542692b8ba635cf480",
+    "src/network/HttpClient.h": "858fa256f909f13b34a53177fa071207827c0bb699b130d020f411b806a2eb2c",
+    "src/network/HttpClient.cpp": "31584b56005944732498f3cbab84ac11448f0ccfd5ab5792aa5d713607ba1ed9",
+    "src/services/pentagi/PentagiService.h": "6116347aea8218bfe39f45941d9b7147c9825ddea1bcd2d0f0b9b04e89eed88d",
+    "src/services/pentagi/PentagiService.cpp": "2e84ab17dfdc9fad9fed24f1a980e78f93230006d63fe15284fd45174332fddc",
+    "src/services/openai/OpenAiCompatibleService.h": "e94dd8b8bc99cc5de97bcaf93e2670b33611dd4d70658f1f60e5bb218663eb5b",
+    "src/services/openai/OpenAiCompatibleService.cpp": "8031b4f645f6a3a8ef0279d2e5ab7a316b261b8230eaeffddd83b081d3409071",
+    "src/ui/pages/source_scan/SourceScanPage.h": "1988161f0c84d232feba3dea523ba827ec706b9903bfe4aec50a6358e10b68ab",
+    "src/ui/pages/source_scan/SourceScanPage.cpp": "18bfa7022d5fa52c3f7de6777a5aa857f14966f7914b5e5b4c7054d8aa321013",
+    "tests/SourceScanTests.cpp": "aa00134aeeaf51d819603a86d0aa5f94330a6491f95ab43b91c1cedbfac0d7db",
+    "src/services/source_scan/SourceScanService.cpp": "de2d7c9e67a8337e6ecf6ac0f4bbe84fd256d4e246d456b681ed9455d0da7cd9",
+    "src/services/source_scan/SourceScanService.h": "d2054e2308500b6b5e97cfcf6ab1cfacb3917d1947ebea842646cc51d7b6eb6e",
+    "src/services/source_scan/SourceScanStore.cpp": "0718e47c46371740e52d7ac3d559965ebc6e31b46050607c25d783ab715b5e14",
+    "src/services/source_scan/SourceScanStore.h": "53f921ae3513c6580d88dfef2aad25ab8a5d1d3baa17dc5df5250bbbd7af098b",
+    "src/services/source_scan/source_scan_schema.qrc": "e22f95d20a9f4df251d8740bbcfdb6c7cc8b5443f73fd208fda6dfd0ba7d758a",
+    "src/services/source_scan/migrations/001_initial.sql": "bc899855d8ca1319636d92260f71a24f50b26d6aaa4ee50540037715d89fa1f5"
+  },
+  "adaptations": [
+    "SourceScanDetailDialog renamed to PentagiSourceScanDetailDialog to avoid host collision (page and tests)",
+    "ConfigManager.initializeAt selects host-owned configuration directory; initialize keeps upstream behavior",
+    "SourceScanPage presentation only: host palette, spacing and source-scan explanatory text; workflow unchanged",
+    "OpenAiTypes.h: remove extra blank line at EOF for repository whitespace check"
+  ]
+}

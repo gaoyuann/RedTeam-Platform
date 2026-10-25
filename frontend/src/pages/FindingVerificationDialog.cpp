@@ -275,7 +275,7 @@ FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QStrin
   connect(m_sourceChooser,&QGroupBox::toggled,candidateBody,&QWidget::setVisible);
   m_sources=new QComboBox;m_sources->setMinimumContentsLength(16);candidateLayout->addWidget(m_sources);
   m_sourcePreview=new QPlainTextEdit;m_sourcePreview->setReadOnly(true);m_sourcePreview->setMaximumHeight(75);m_sourcePreview->hide();candidateLayout->addWidget(m_sourcePreview);
-  auto *sourceActions=new QHBoxLayout;m_useSource=new QPushButton("使用此方案");m_prepareSimple=new QPushButton("AI 生成新方案");m_adjustAI=new QPushButton("AI 辅助调整当前方案");
+  auto *sourceActions=new QHBoxLayout;m_useSource=new QPushButton("使用此方案");m_prepareSimple=new QPushButton("整理证据并生成方案");m_adjustAI=new QPushButton("AI 辅助调整当前方案");
   candidateLayout->addWidget(m_useSource);sourceActions->addWidget(m_prepareSimple);sourceActions->addWidget(m_adjustAI);sourceSection->addLayout(sourceActions);
   auto *browse=new QHBoxLayout;m_sourceSearch=new QLineEdit;m_sourceSearch->setPlaceholderText("无合适候选？搜索其他方案");auto *search=new QPushButton("浏览其他方案");
   m_sourcesPrevious=new QPushButton("上一页");m_sourcesNext=new QPushButton("下一页");browse->addWidget(m_sourceSearch,1);browse->addWidget(search);browse->addWidget(m_sourcesPrevious);browse->addWidget(m_sourcesNext);candidateLayout->addLayout(browse);
@@ -329,7 +329,7 @@ FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QStrin
   connect(m_sourcesPrevious,&QPushButton::clicked,this,[this]{m_sourceOffset=qMax(0,m_sourceOffset-20);loadSources();});
   connect(m_sourcesNext,&QPushButton::clicked,this,[this]{m_sourceOffset+=20;loadSources();});
   connect(m_useSource,&QPushButton::clicked,this,[this]{if(!allowDiscardDraft()||m_sources->currentIndex()<0)return;action("/select-template",{{"playbook_id",m_sources->currentData().toString()},{"expected_revision",m_revision}},true);});
-  connect(m_prepareSimple,&QPushButton::clicked,this,[this]{if(allowDiscardDraft())action("/generate",{{"expected_revision",m_revision},{"mode","new"}},true);});
+  connect(m_prepareSimple,&QPushButton::clicked,this,[this]{if(allowDiscardDraft())action("/prepare",{{"expected_revision",m_revision},{"mode","new"}},true);});
   connect(m_adjustAI,&QPushButton::clicked,this,[this]{if(!allowDiscardDraft())return;bool ok=false;const auto instruction=QInputDialog::getText(this,"AI 辅助调整","说明希望调整的内容",QLineEdit::Normal,{},&ok);if(ok)action("/generate",{{"expected_revision",m_revision},{"mode","adjust"},{"instruction",instruction}},true);});
   connect(m_payloads,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int){showPayloadPreview();updateButtons();});
   connect(m_bindStep,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int){showPayloadPreview();updateButtons();});
@@ -559,7 +559,7 @@ void FindingVerificationDialog::load(bool editor) {
 void FindingVerificationDialog::action(const QString &path,const QJsonObject &body,bool editor) {
   if(m_finished||m_busy||currentId().isEmpty())return;
   if(m_stale && path!="/reviews") {setStatus("请刷新最新完整计划后再操作。");return;}const auto id=currentId();const auto edits=m_editGeneration;const auto context=m_contextGeneration;m_busy=true;updateButtons();setStatus("正在处理…");QPointer<FindingVerificationDialog> self(this);
-  m_api->post(base()+"/"+id+path,body,path=="/generate"?130000:15000,[self,id,editor,edits,context,path](const QJsonObject &r){if(!self)return;self->m_busy=false;self->updateButtons();if(self->currentId()!=id || self->m_contextGeneration!=context)return;self->setStatus(r["status"]=="ok"?(r["data"].toObject()["state"]=="needs_conditions"?"方案尚缺条件，未启动验证。":"已保存；请查看当前状态与证据。"):r["error"].toObject()["message"].toString());if(path=="/payloads/prepare" && r["status"]=="ok") {
+  m_api->post(base()+"/"+id+path,body,path=="/prepare"?360000:path=="/generate"?130000:15000,[self,id,editor,edits,context,path](const QJsonObject &r){if(!self)return;self->m_busy=false;self->updateButtons();if(self->currentId()!=id || self->m_contextGeneration!=context)return;self->setStatus(r["status"]=="ok"?(r["data"].toObject()["state"]=="needs_conditions"?"方案尚缺条件，未启动验证。":"已保存；请查看当前状态与证据。"):r["error"].toObject()["message"].toString());if(path=="/payloads/prepare" && r["status"]=="ok") {
       self->m_pendingPayload=r["data"].toObject()["payload_id"].toString();
       self->setStatus(r["data"].toObject()["state"]=="generated"?"本次新生成载荷，尚未验证。请预览后手动绑定步骤。":"已找到库中载荷，请预览后手动绑定步骤。");
     }

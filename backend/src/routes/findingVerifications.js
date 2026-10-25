@@ -8,7 +8,7 @@ import { taskDisplayValue } from '../services/taskExecution.js';
 import { ensureVerification, verification, verificationDetail, verificationSources, templatePlan, saveVerificationPlan,
   confirmVerificationPlan, checkVerificationPlan, createVerificationAttempt, reviewVerification,selectVerificationTemplate,changeStepPayload,confirmAndStart,taskFinding, json } from '../services/findingVerification.js';
 import { launchVerification, cancelVerification, reconcileVerificationAttempts } from '../services/findingVerificationRunner.js';
-import {startPayloadCollection,startPythonRewrite,cancelPayloadArtifacts,payloadArtifactPlanContext} from '../services/findingPayloadArtifacts.js';
+import {startPayloadCollection,startPythonRewrite,cancelPayloadArtifacts,payloadArtifactPlanContext,waitPayloadArtifacts} from '../services/findingPayloadArtifacts.js';
 
 export default function findingVerificationRoutes(db, dependencies={}) {
   const router=Router({mergeParams:true}), generating=new Set();
@@ -77,7 +77,7 @@ export default function findingVerificationRoutes(db, dependencies={}) {
     return verificationDetail(db,req.pipeline,req.params.verificationId);
   }));
   router.post('/:verificationId/reviews',handle(req=>reviewVerification(db,req.pipeline,req.user,req.params.verificationId,req.body || {})));
-  router.post('/:verificationId/generate',handle(async req=>{
+  const generatePlan=async req=>{
     const id=req.params.verificationId,item=verification(db,req.pipeline,id);
     if(['queued','running','cancelling','unknown'].includes(item.state)) throw Object.assign(new Error('验证尚未停止，不能重新准备方案'),{status:409});
     if(generating.has(id)) throw Object.assign(new Error('此漏洞正在生成方案'),{status:409});
@@ -165,6 +165,29 @@ export default function findingVerificationRoutes(db, dependencies={}) {
       }
       throw preparationFailure('两次生成均未得到可用方案。'+lastError,422);
     } finally {generating.delete(id);}
+  };
+  router.post('/:verificationId/generate',handle(generatePlan));
+  const preparing=new Set();
+  router.post('/:verificationId/prepare',handle(async req=>{
+    const id=req.params.verificationId,item=verification(db,req.pipeline,id);
+    if(preparing.has(id))throw Object.assign(new Error('此发现正在后处理，请等待原请求'),{status:409});
+    if(item.revision!==req.body?.expected_revision || ['queued','running','cancelling','unknown'].includes(item.state))
+      throw Object.assign(new Error('方案或执行状态已变化，请刷新'),{status:409});
+    preparing.add(id);
+    try {
+      const row=taskFinding(db,req.pipeline,item.finding_id);
+      const data=json(row.result_data);
+      if(row.result_type==='source_finding' && data.evidence_origin==='cscan_report') {
+        startPayloadCollection(db,req.pipeline,item,req.user,{},dependencies);
+        await waitPayloadArtifacts(db,item);
+        const view=verificationDetail(db,req.pipeline,id).payload_artifacts;
+        const latest=view.collections?.[0];
+        if(!latest || !['ready','empty'].includes(latest.state))
+          return {state:'needs_conditions',reason:'原 Flow 载荷整理未完成，请核对原助手后继续',
+            payload_artifacts:view,retained_revision:item.revision};
+      }
+      return await generatePlan(req);
+    } finally {preparing.delete(id);}
   }));
   return router;
 }

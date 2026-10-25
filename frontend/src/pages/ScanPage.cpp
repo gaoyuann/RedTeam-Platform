@@ -1,6 +1,7 @@
 #include "FindingVerificationDialog.h"
 #include "../widgets/WorkbenchTabs.h"
 #include "ScanPage.h"
+#include "PentagiSourceScanHost.h"
 #include "SourceScanDetailDialog.h"
 #include "../widgets/RemoteSourcePicker.h"
 #include "../ApiClient.h"
@@ -1333,9 +1334,9 @@ void ScanPage::setupUI() {
     auto *tab = new QWidget;
     auto *layout = new QVBoxLayout(tab);
     auto *h = new QGridLayout;
-    h->addWidget(new QLabel("程序 / 源码地址:"), 0, 0);
+    h->addWidget(new QLabel("程序运行地址:"), 0, 0);
     m_sourceTargetInput = new QLineEdit;
-    m_sourceTargetInput->setPlaceholderText("源码路径或局域网源码地址，例如 /opt/project 或 http://主机/project/");
+    m_sourceTargetInput->setPlaceholderText("程序运行入口，例如 http://主机:端口/");
     m_sourceTargetInput->clear();
     m_sourceTargetInput->setMinimumWidth(150);
     auto *completer = new QCompleter(history, this);
@@ -1343,10 +1344,10 @@ void ScanPage::setupUI() {
     m_sourceTargetInput->setCompleter(completer);
     h->addWidget(m_sourceTargetInput, 0, 1);
     m_programInputKind = new QComboBox;
-    m_programInputKind->addItem("选择目标主机的源码文件夹", "remote_directory");
+
     m_programInputKind->addItem("程序运行入口", "runtime");
-    m_programInputKind->addItem("源码路径／地址（CScan 自行读取）", "agent");
-    m_programInputKind->setCurrentIndex(m_programInputKind->findData("agent"));
+
+    m_programInputKind->setCurrentIndex(0);
     h->addWidget(m_programInputKind, 0, 2);
     m_remoteSourcePicker=new RemoteSourcePicker(m_api,this);
     m_remoteSourcePicker->hide();
@@ -1367,7 +1368,7 @@ void ScanPage::setupUI() {
     h->addWidget(preset, 1, 1);
     connect(preset, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this,preset](int) {
       m_sourceTargetInput->setText(preset->currentData().toString());
-      m_programInputKind->setCurrentIndex(1);
+      m_programInputKind->setCurrentIndex(0);
     });
     m_sourceNotesInput = new QLineEdit;
     m_sourceNotesInput->setMaxLength(4000);
@@ -1380,7 +1381,7 @@ void ScanPage::setupUI() {
     m_sourceAdaptiveCheck = new QCheckBox("生成预案时允许 Agent 根据执行证据补充验证请求");
     m_sourceAdaptiveCheck->setChecked(true);
     h->addWidget(m_sourceAdaptiveCheck, 5, 1, 1, 2);
-    auto *hint = new QLabel("填写源码路径或局域网源码地址，可在审计说明中注明目标主机及目录。平台仅提交位置和要求，由 CScan Agent 自行访问、读取和扫描；访问失败时显示服务返回原因，不上传源码或创建挂载。");
+    auto *hint = new QLabel("此处用于程序运行测试及历史记录。源码静态审计请进入上方“源码扫描”，选择文件或目录。");
     hint->setWordWrap(true);
     hint->setStyleSheet("color:#64748b; font-size:12px;");
     h->addWidget(hint, 6, 0, 1, 3);
@@ -1867,7 +1868,11 @@ void ScanPage::setupUI() {
   rightW->setLayout(detailLayout);
   rightW->setMinimumWidth(350);
 
-  mainLayout->addWidget(rightW, 1);
+  auto *scanWorkspaces = new QTabWidget(this);
+  scanWorkspaces->setObjectName("scanWorkspaces");
+  scanWorkspaces->addTab(rightW, QStringLiteral("漏洞与历史扫描"));
+  scanWorkspaces->addTab(new PentagiSourceScanHost(m_api,scanWorkspaces), QStringLiteral("源码扫描"));
+  mainLayout->addWidget(scanWorkspaces, 1);
 
   for (auto *table : {m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable}) {
     table->verticalHeader()->hide();

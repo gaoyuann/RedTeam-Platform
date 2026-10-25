@@ -1,3 +1,4 @@
+import {createSourceFlowTask,dispatchSourceFlow} from '../services/sourceFlowWorkflow.js';
 import { hasStatistics } from '../services/findingInstances.js';
 import { publicScanRecord, summarizeScanRecords } from '../services/scanResultCatalog.js';
 import { hasScanIntegrity } from '../services/scanResultStore.js';
@@ -21,9 +22,21 @@ import {cscanTarget,cscanSourcePath,cscanNotes} from '../services/cscanTarget.js
 import {retainedCscanReport} from '../services/sourceAuditNative.js';
 import {visibleSourceScanRecords,sourceScanResultState,sourceScanPreview} from '../services/sourceScanResults.js';
 
-export default function (db) {
+export default function (db, dependencies={}) {
   const router = Router();
   router.use(requireActor(db));
+  router.post('/source-flow', (req,res,next)=>{
+    try {
+      const record=createSourceFlowTask(db,req.user,req.body);
+      if(!record.reused)void dispatchSourceFlow(db,record,dependencies.executeScan || executeScan);
+      res.status(202).json({status:'ok',data:record});
+    } catch(error) {
+      if(error.status || /目标|地址|源码|说明/.test(error.message))
+        return res.status(error.status || 400).json({status:'error',error:{message:error.message}});
+      next(error);
+    }
+  });
+
   router.param('scanTaskId', recordParam(db, 'scan'));
   const sourceAccess = (req, task) => !isProgramScan(task.scan_type) || req.user?.role === 'admin' || task.created_by === req.user?.sub;
   router.get('/program-projects', async (req,res) => {
