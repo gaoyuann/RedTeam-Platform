@@ -264,10 +264,9 @@ async function protocol(t,markdown=report) {
     res.setHeader('content-type','application/json');
     const task={id:'1',flowId:'91',status:'finished',result:markdown,subtasks:[{id:'1',status:'finished',result:''}]};
     if(body.query.includes('createFlow')) res.end(JSON.stringify({data:{createFlow:{id:'91',status:'running'}}}));
-    else if(body.query.includes('createAssistant'))res.end(JSON.stringify({data:{createAssistant:{assistant:{id:'a1',flowId:'91',status:'waiting',useAgents:false}}}}));
-    else if(body.query.includes('assistantLogs'))res.end(JSON.stringify({data:{assistantLogs:[{id:'l1',flowId:'91',assistantId:'a1',type:'assistant',message:'{"reports":[]}',appendPart:false}]}}));
-    else if(body.query.includes('assistants('))res.end(JSON.stringify({data:{assistants:[{id:'a1',flowId:'91',status:'waiting',useAgents:false}]}}));
-    else if(body.query.includes('CScanPayloadEvidence'))res.end(JSON.stringify({data:{tasks:[task],terminalLogs:[],messageLogs:[]}}));
+    else if(/Assistant|assistants\(/.test(body.query)) {
+      assert.fail('report retrieval must not use an Assistant');
+    }
     else if(body.query.includes('CScanReport')) res.end(JSON.stringify({data:{tasks:[task]}}));
     else if(body.query.includes('finishFlow')) res.end(JSON.stringify({data:{finishFlow:'success'}}));
     else if(body.query.includes('stopFlow')) res.end(JSON.stringify({data:{stopFlow:'success'}}));
@@ -296,6 +295,7 @@ test('native source scan passes the service path and requirements, consumes task
   assert.doesNotMatch(input,/findings\.json|snapshot_id|SHA256/);
   assert.match(input,/所选远端目录 \/opt\/example/);
   assert.ok(calls.some(c=>c.query.includes('CScanReport')));assert.ok(calls.at(-1).query.includes('finishFlow'));
+  assert.ok(!calls.some(c=>/Assistant|assistants\(/.test(c.query)));
 });
 
 test('source paths with spaces reach the remote Flow through legacy and agent audit inputs',async t=>{
@@ -606,4 +606,25 @@ test('API accepts a target URL without a source path and executes the remote Flo
   const changed=await request('/pipelines/'+id,{config:{cscan_target:'/var/www/other',input_kind:'agent'}},'PUT');
   assert.equal(changed.status,400);
   assert.equal(calls.filter(call=>call.query.includes('createFlow')).length,2);
+});
+
+
+test('legacy report-Assistant timeout is historical only; reparse uses the saved task snapshot without remote calls',async t=>{
+  const db=reportDb(t),task={scan_task_id:'legacy-collector',target:'/src/project'},parameters={source_path:'/src/project'};
+  await auditSources(task,{db,parameters,nativeScan:async()=>({
+    flow_id:'91',markdown:report,findings:[],source_reports:[{report_source:'parent_task_result',source_task_ids:['1'],report}],
+    parse_errors:['报告 Assistant 收集未完成，已使用保留的原任务报告'],finish_status:'acknowledged',
+  })});
+  const historical=JSON.stringify({flow_id:'91',report_source:'assistant_collection',assistant_id:'2',state:'uncertain',error_detail:'收集等待超时'});
+  db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data) VALUES (?,'raw_output',?)").run(task.scan_task_id,historical);
+  const options={db,parameters,reportOnly:true,nativeScan:()=>assert.fail('no remote scan or Assistant'),llm:()=>assert.fail('explicit retained task report needs no model')};
+  const result=await auditSources(task,options);
+  assert.ok(result.outcomes.every(row=>row.success));
+  const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
+  assert.equal(coverage.cscan_complete,true);assert.equal(coverage.cscan.state,'finished');
+  assert.deepEqual(coverage.parse_errors,[]);
+  const first=db.prepare("SELECT id FROM scan_results WHERE result_type='source_finding'").get().id;
+  await auditSources(task,options);
+  assert.deepEqual(db.prepare("SELECT id FROM scan_results WHERE result_type='source_finding'").all(),[{id:first}]);
+  assert.equal(db.prepare("SELECT result_data FROM scan_results WHERE result_type='raw_output' ORDER BY id DESC LIMIT 1").get().result_data,historical);
 });

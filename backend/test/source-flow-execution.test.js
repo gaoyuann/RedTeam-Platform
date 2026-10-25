@@ -13,7 +13,6 @@ import scanRoutes from '../src/routes/scans.js';
 import verificationRoutes from '../src/routes/findingVerifications.js';
 import {createCscanClient,cscanConfig} from '../src/services/cscanClient.js';
 import {createSourceFlowTask,dispatchSourceFlow} from '../src/services/sourceFlowWorkflow.js';
-import {collectCscanReport} from '../src/services/cscanReportCollector.js';
 import {launchVerification} from '../src/services/findingVerificationRunner.js';
 
 async function listen(t,handler) {
@@ -59,11 +58,10 @@ test('target Flow -> retained report -> original Assistant artifacts -> plan -> 
     } else if(query.includes('createAssistant')) {
       const id=String(assistants.length+1);
       assistants.push({id,flowId:'1',useAgents:false,status:'waiting'});
-      const reply=v.input.includes('[SOURCE_REPORT:')?{reports:[]}:
-        {summary:'Existing simulated observation only',scripts:[{name:'Fixture request',language:'http',
+      const reply={summary:'Existing simulated observation only',scripts:[{name:'Fixture request',language:'http',
           content:'GET /check?mode=verification',source_type:'task',source_id:'1',usage:'Only loopback fixture'}]};
       logs.set(id,[{id:'1',flowId:'1',assistantId:id,type:'input',message:v.input},
-        {id:'2',flowId:'1',assistantId:id,type:'assistant',message:JSON.stringify(reply),appendPart:false}]);
+        {id:'2',flowId:'1',assistantId:id,type:'answer',message:JSON.stringify(reply),appendPart:false}]);
       data={createAssistant:{assistant:assistants.at(-1)}};
     } else if(query.includes('assistantLogs'))data={assistantLogs:logs.get(v.assistantId) || []};
     else if(query.includes('assistants('))data={assistants};
@@ -111,11 +109,17 @@ test('target Flow -> retained report -> original Assistant artifacts -> plan -> 
   const final=await request('/api/scan-tasks/'+scan.scan_task_id);
   assert.equal(final.status,'COMPLETED',JSON.stringify(final));
   assert.equal(final.source_files.length,1);
+  assert.equal(assistants.length,0,'upstream report path does not create a report Assistant');
+  assert.ok(!calls.some(query=>/Assistant/.test(query)),'report import only reads task/subtask results');
+  const rawReport=db.prepare("SELECT result_data FROM scan_results WHERE scan_task_id=? AND result_type='raw_output'").all(scan.scan_task_id)
+    .map(row=>JSON.parse(row.result_data)).find(raw=>raw.complete);
+  assert.equal(rawReport.report,report,'complete task report is retained unchanged');
   const finding=final.results.find(row=>row.result_type==='source_finding');assert.ok(finding);
   const base='/api/pipelines/'+scan.pipeline_id+'/verifications';
   const item=await request(base,{finding_id:finding.id});
   const prepared=await request(base+'/'+item.id+'/prepare',{expected_revision:0});
   assert.equal(prepared.revision,1);assert.equal(generations,1);
+  assert.equal(assistants.length,1,'only per-finding preparation creates the original Flow Assistant');
   let detail=await request(base+'/'+item.id);
   assert.equal(detail.payload_artifacts.collections[0].state,'ready');
   assert.equal(detail.execution_backend.pentagi_required_for_execution,false);
@@ -158,17 +162,4 @@ test('source task creation requires scope acknowledgement and never replays a fa
   assert.equal(calls,1);
   assert.equal(db.prepare('SELECT status FROM scan_tasks WHERE scan_task_id=?').get(row.scan_task_id).status,'FAILED');
   assert.throws(()=>createSourceFlowTask(db,actor,{...input,authorization_confirmed:true,target:'http://127.0.0.1/other/'}),/内容已变化/);
-});
-
-test('report collection recovers a unique original Assistant and bounds waiting without a duplicate mutation',async()=>{
-  let marker,creates=0;const raw=[];
-  const client={createAssistant:async(_,input)=>{creates++;marker=input.split('\n')[0];throw new Error('private detail');},
-    assistants:async()=>[{id:'a',flowId:'1',useAgents:false,status:'waiting'}],
-    assistantLogs:async()=>[{type:'input',message:marker},{type:'assistant',message:'{"reports":[]}'}],
-    evidence:async()=>({tasks:[],terminalLogs:[],messageLogs:[]})};
-  assert.equal((await collectCscanReport(client,'1',{onRawReport:async v=>raw.push(v)})).state,'complete');
-  assert.equal(creates,1);assert.equal(raw.at(-1).recovered,true);
-  const waiting={createAssistant:async()=>({id:'a'}),assistants:async()=>[{id:'a',useAgents:false,status:'running'}],assistantLogs:async()=>[]};
-  const result=await collectCscanReport(waiting,'1',{pollMs:1,waitTimeoutMs:10,onRawReport:async v=>raw.push(v)});
-  assert.equal(result.state,'uncertain');assert.equal(raw.at(-1).error_detail,'收集等待超时');
 });

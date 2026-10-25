@@ -10,7 +10,7 @@
 | 环节 | pentagi-v3 当前源码 | 本项目实际接线 |
 | --- | --- | --- |
 | 提交目标 | VulnerabilityScanPage::buildScanInput / createScanFlow → PentagiService::createFlowWithConfiguredProvider | PentagiSourceScanHost → POST /api/scan-tasks/source-flow → sourceFlowWorkflow → executeScan → auditSources → scanCscanTarget → createCscanClient.create |
-| 状态与原报告 | loadSelectedReport → fetchFlowReport，保存报告快照 | runCscan 查询 Flow、task、subtask；scanCscanTarget 保存 raw_output；完成条件检查所有任务与子任务 |
+| 状态与原报告 | loadSelectedReport → fetchFlowReport，保存报告快照 | runCscan 查询 Flow、task、subtask；scanCscanTarget 直接保存任务/子任务 raw_output；全部完成后结构化入库，此阶段不创建 Assistant |
 | 增量与最终结构化 | processIncrementalSubtasks / analyzeSelectedFlowReport → OpenAiCompatibleService | cscanProgress / parseNativeReport → callLlm，sourceAuditNative 校验、合并并保存 source_finding |
 | 原 Flow 载荷整理 | requestPentagiPayload → createAssistant / listAssistantLogs，useAgents=false | findingPayloadArtifacts → 相同 GraphQL 协议，持久化 marker、assistant_id、来源和原文 hash |
 | Python 改写 | requestPythonPayload → OpenAiCompatibleService | findingPayloadArtifacts.startPythonRewrite；仅生成工件，不执行 |
@@ -95,3 +95,13 @@ flowchart LR
 - PR #104 首轮 CI：Backend tests 成功；Qt 构建成功，但 ui-context 的 1、1.25、1.5 三种比例在同一旧入口断言失败（source scanning defaults to passing a path or address to CScan）。原因是新增页面时移除了原程序测试入口的 agent/remote_directory 模式。已恢复两种模式和原默认项，保留原测试断言及远端目录流程；新源码页面继续走 source-flow 接口。
 - 后续完整检查发现验证准备界面的旧模拟协议只支持 /generate。现按 evidence_origin 分流：非 CScan 发现保留原 /generate，CScan 发现使用 /prepare；新增界面回归覆盖两个分支，不自动执行工具。
 - 新源码页改为首次打开时初始化，旧程序工作台不构建该页或发送其隐藏请求。完整上下文可通过全部 500 项断言；本机聚合执行约 74 秒，超过原先 60 秒总预算，故将此聚合套件预算设为 120 秒，保留每个场景自身的等待上限与全部断言。未更改产品请求或执行超时。
+
+
+## 报告流程与真实协议回归
+
+扫描报告主链路与原版一致：任务和子任务结果 → 原报告快照 → 模型结构化 → 校验入库。
+移除额外的全报告收集 Assistant；只有后续单漏洞整理才创建或复用原 Flow 的 Assistant。
+真实接口最终输出类型为 answer，正文可在 message 中；兼容 assistant/ai 和 appendPart 分片。
+终端输出、输入和思考内容不会当作最终载荷 JSON。
+历史 PARTIAL 任务仍可通过原有 reparse 接口重解析已保存的完整报告，不创建新 Flow 或助手。
+报告逐字依据和同 Flow 源码行号检查继续保留，修复流程并不将未通过校验的候选自动改成已确认。

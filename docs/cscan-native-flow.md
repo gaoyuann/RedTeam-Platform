@@ -151,13 +151,14 @@ API 创建参数示例：
 
 - 扫描默认不设总时限（`CSCAN_SCAN_TIMEOUT_MS=0`），后端持续轮询；关闭详情窗口只停止界面刷新。后端重启仍按既有中断恢复处理，不能视为自动续跑。
 - `CSCAN_MODEL_TIMEOUT_MS` 和 `CSCAN_PROGRESS_TIMEOUT_MS` 默认各 900000 毫秒（15 分钟）。完整报告总处理预算仍由 `CSCAN_TIMEOUT_MS` 控制；原文先保存，解析失败可重新解析，绝不因此自动重建扫描。即使模型忽略取消信号，外层等待也会结束。
-- 全部任务完成后，保存任务报告，再创建本 Flow 专用的 `useAgents=false` 报告 Assistant，轮询原助手至结果返回。发起前保存唯一请求标记和状态；创建或收集不确定时不重复提交。回复先保留，再与任务、子任务、终端或消息原记录逐字核验，核验通过的摘录补充到完整报告中。收集失败保留原任务报告并标记处理缺口。
+- 全部任务完成后，按 pentagi-v3 的 fetchFlowReport → saveFlowReportSnapshot → analyzeSelectedFlowReport 流程，直接读取并保存当前 Flow 的任务、子任务结果，再交给报告模型结构化；不创建全报告收集 Assistant。模型解析、来源或源码定位校验有缺口时仍标为部分完成。旧 assistant_collection 记录保留为历史证据，不再作为报告完成条件；重解析只读取已保存的完整任务报告，不发起新扫描或 Assistant。
+- Assistant 仅用于后续单个漏洞的载荷整理：同 Flow、useAgents=false、持久化请求标记、原文来源校验，识别实际 API 的 answer 回复，并兼容 assistant/ai；不把 input/terminal 当最终回复。收集默认预算为 6 分钟（对应原版 180 次、间隔 2 秒），超时保留原助手标识供继续核对，不重复提交。无有效 JSON 时明确报格式错误，不伪装成等待超时。
 - HTTP 源码目录提示 Cscan 将真实源码保存到 `/work/src`。平台只读取 `CSCAN_WORK_DIR/flow-<本次数字ID>/src`，不接受报告中任意宿主路径；不跟随软链接，不再次请求目标。每分钟尝试保存，扫描结束再保存一次。当前支持 C/C++ 扩展名；上限 500 文件、单文件 512 KiB、总计 8 MiB，只接受 UTF-8 文本。
 - `source_file_copy` 保存文件正文、SHA-256、Flow ID 和采集时间；清单保存到既有 `source_audits.manifest`，不需数据库迁移。副本表示采集时的工作目录内容，不代表工具历史读取时的完全相同版本，也不证明运行部署版本一致。非标准目录或不可读工作目录会显示缺失状态，扫描报告仍可保留。
 - 任务详情的 `source_files` 只返回元数据；`GET /api/scan-tasks/:scanTaskId/source-file?id=<记录ID>` 按任务权限返回正文，文件 ID 必须属于该任务。前端点击文件后读取，校验清单哈希，定位漏洞行；源码正文不经过报告解析模型。
 
 ### 本次实现与验证
 
-核心改动：`backend/src/services/cscanClient.js`（独立时限及源码缓存约定）、`cscanNative.js`／`cscanProgress.js`（报告等待）、`cscanReportCollector.js`（专用 Assistant 及原文核验）、`cscanSourceEvidence.js`（真实文件副本）、`sourceAuditNative.js`（副本持久化），以及 `backend/src/routes/scans.js` 和 `frontend/src/pages/SourceScanDetailDialog.{cpp,h}`（文件接口与三栏展示）。相同路径同一哈希不重复保存；文件变化时保留历史版本，详情展示最新副本。
+核心改动：`backend/src/services/cscanClient.js`（独立时限及源码缓存约定）、`cscanNative.js`／`cscanProgress.js`（任务报告读取与结构化）、`cscanSourceEvidence.js`（真实文件副本）、`sourceAuditNative.js`（副本持久化），以及 `backend/src/routes/scans.js` 和 `frontend/src/pages/SourceScanDetailDialog.{cpp,h}`（文件接口与三栏展示）。相同路径同一哈希不重复保存；文件变化时保留历史版本，详情展示最新副本。
 
 验证：`cd backend && npm run test:source`，154 通过、2 跳过；新增失败回复保留断言后 `node --test backend/test/cscan-remediation.test.js`，4 通过。现有 CMake 配置编译主程序、`RedTeam-Platform-Batch16Checks`、`RedTeam-SourceScanDetailChecks`；`ctest --test-dir build -R 'ui-context|ui-source-detail' --output-on-failure`，6 组全部通过。未用新建真实扫描作为测试，不宣称已完成全天扫描验收。

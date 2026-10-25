@@ -47,7 +47,7 @@ async function fixture(t) {
       data={callAssistant:'success'};
     } else if(call.query.includes('CScanAssistantLogs')) {
       const last=state.logs.at(-1);
-      if(!state.hold && last?.type==='input')state.logs.push({id:String(state.logs.length+1),flowId:'91',assistantId,type:'assistant',message:'',result:JSON.stringify(state.reply),appendPart:false});
+      if(!state.hold && last?.type==='input')state.logs.push({id:String(state.logs.length+1),flowId:'91',assistantId,type:'answer',message:JSON.stringify(state.reply),result:'',appendPart:false});
       data={assistantLogs:state.logs.map(row=>({...row,...(state.crossFlow?{flowId:'92'}:{})}))};
     } else if(call.query.includes('CScanAssistants'))data={assistants:state.assistants};
     else if(call.query.includes('CScanStopAssistant')) {state.stops++;data={stopAssistant:{id:assistantId,status:'finished'}};}
@@ -224,4 +224,46 @@ test('task-scoped API exposes collection and rewrite state only to its owner, an
   assert.equal((await request('')).body.data.payload_artifacts.collections[0].rewrites[0].state,'ready');
   assert.equal((await request('',undefined,'artifact_bob')).status,403);
   assert.equal(verificationDetail(f.db,f.pipeline,f.item.id).attempts.length,0);
+});
+
+
+test('answer message fragments are consumed without treating terminal or input logs as a final reply',async t=>{
+  const f=await fixture(t);f.state.hold=true;
+  f.collect();await until(()=>f.state.creates===1);
+  const text=JSON.stringify(result),cut=Math.floor(text.length/2);
+  const log=(id,type,message,appendPart=false)=>({id,flowId:'91',assistantId:'10',type,message,result:'',appendPart});
+  f.state.logs.push(log('2','terminal','not a JSON answer'),log('3','answer',text.slice(0,cut)),log('4','answer',text.slice(cut),true));
+  f.state.assistants[0].status='finished';
+  await waitPayloadArtifacts(f.db,f.item);
+  assert.equal(f.view().collections[0].state,'ready');
+  assert.equal(f.view().collections[0].scripts[0].content,original);
+  assert.equal(f.state.creates,1);
+});
+
+test('non-JSON answer reports a format error promptly and is not mislabeled as a timeout',async t=>{
+  const f=await fixture(t);f.state.hold=true;
+  f.collect();await until(()=>f.state.creates===1);
+  f.state.logs.push({id:'2',flowId:'91',assistantId:'10',type:'answer',message:'The requested materials are unavailable.',result:'',appendPart:false});
+  f.state.assistants[0].status='finished';
+  await waitPayloadArtifacts(f.db,f.item);
+  const collection=f.view().collections[0];
+  assert.equal(collection.state,'error');assert.match(collection.error_message,/JSON/);
+  assert.doesNotMatch(collection.error_message,/超时/);
+  assert.equal(collection.scripts.length,0);
+  assert.equal(f.state.creates,1);
+});
+
+test('input and terminal output cannot satisfy a final answer; a later real answer resumes the same request',async t=>{
+  const f=await fixture(t);f.state.hold=true;
+  startPayloadCollection(f.db,f.pipeline,f.item,actor,{}, {...f.dependencies,collectionTimeoutMs:80});
+  await until(()=>f.state.creates===1);
+  f.state.logs.push({id:'2',flowId:'91',assistantId:'10',type:'terminal',message:JSON.stringify(result),result:JSON.stringify(result),appendPart:false});
+  f.state.assistants[0].status='finished';
+  await waitPayloadArtifacts(f.db,f.item);
+  assert.equal(f.view().collections[0].state,'uncertain');
+  assert.equal(f.view().collections[0].scripts.length,0);
+  f.state.logs.push({id:'3',flowId:'91',assistantId:'10',type:'answer',message:JSON.stringify(result),result:'',appendPart:false});
+  f.collect();await waitPayloadArtifacts(f.db,f.item);
+  assert.equal(f.view().collections[0].state,'ready');
+  assert.equal(f.state.creates,1);assert.equal(f.state.continuations,0);
 });
