@@ -329,7 +329,13 @@ FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QStrin
   connect(m_sourcesPrevious,&QPushButton::clicked,this,[this]{m_sourceOffset=qMax(0,m_sourceOffset-20);loadSources();});
   connect(m_sourcesNext,&QPushButton::clicked,this,[this]{m_sourceOffset+=20;loadSources();});
   connect(m_useSource,&QPushButton::clicked,this,[this]{if(!allowDiscardDraft()||m_sources->currentIndex()<0)return;action("/select-template",{{"playbook_id",m_sources->currentData().toString()},{"expected_revision",m_revision}},true);});
-  connect(m_prepareSimple,&QPushButton::clicked,this,[this]{if(allowDiscardDraft())action("/prepare",{{"expected_revision",m_revision},{"mode","new"}},true);});
+  connect(m_prepareSimple,&QPushButton::clicked,this,[this]{
+    if(!allowDiscardDraft())return;
+    const auto value=m_detail["finding"].toObject()["result_data"];
+    const auto finding=value.isObject()?value.toObject():QJsonDocument::fromJson(value.toString().toUtf8()).object();
+    const QString path=finding["evidence_origin"]=="cscan_report"?"/prepare":"/generate";
+    action(path,{{"expected_revision",m_revision},{"mode","new"}},true);
+  });
   connect(m_adjustAI,&QPushButton::clicked,this,[this]{if(!allowDiscardDraft())return;bool ok=false;const auto instruction=QInputDialog::getText(this,"AI 辅助调整","说明希望调整的内容",QLineEdit::Normal,{},&ok);if(ok)action("/generate",{{"expected_revision",m_revision},{"mode","adjust"},{"instruction",instruction}},true);});
   connect(m_payloads,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int){showPayloadPreview();updateButtons();});
   connect(m_bindStep,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int){showPayloadPreview();updateButtons();});

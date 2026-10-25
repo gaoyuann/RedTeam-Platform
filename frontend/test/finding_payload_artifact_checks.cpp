@@ -17,7 +17,7 @@ static void verify(bool condition,const char *message) {if(!condition)qFatal("%s
 static bool waitFor(const std::function<bool()> &ready) {for(int i=0;i<300;i++){QCoreApplication::processEvents();if(ready())return true;QTest::qWait(10);}return false;}
 int main(int argc,char **argv) {
   QApplication app(argc,argv);
-  QTcpServer server;bool collected=false,rewritten=false;int collections=0,rewrites=0,executions=0;QJsonObject rewriteBody;
+  QTcpServer server;bool collected=false,rewritten=false;int collections=0,rewrites=0,executions=0,preparations=0,generations=0;QJsonObject rewriteBody;
   QObject::connect(&server,&QTcpServer::newConnection,&server,[&](){
     while(auto *socket=server.nextPendingConnection())QObject::connect(socket,&QTcpSocket::readyRead,socket,[&,socket](){
       const auto bytes=socket->property("buffer").toByteArray()+socket->readAll();socket->setProperty("buffer",bytes);
@@ -30,6 +30,8 @@ int main(int argc,char **argv) {
         if(path.endsWith("/payloads/collect")){++collections;collected=true;verify(input["expected_revision"].toInt()==0,"collection retains the current plan revision");}
         else if(path.endsWith("/payloads/python")){++rewrites;rewritten=true;rewriteBody=input;}
         else if(path.endsWith("/verifications")){const int finding=input["finding_id"].toInt();data={{"id",finding==101?"fv1":"fv2"},{"finding_id",finding},{"state","needs_conditions"}};}
+        else if(path.endsWith("/prepare")){++preparations;verify(path.contains("/fv1/"),"only CScan findings use the original-Flow postprocessor");}
+        else if(path.endsWith("/generate")){++generations;verify(path.contains("/fv2/"),"non-CScan findings retain the existing plan-generation interface");}
         else ++executions;
       } else if(path.contains("/sources"))data={{"items",QJsonArray()},{"total",0}};
       else {
@@ -67,8 +69,17 @@ int main(int argc,char **argv) {
   original->selectAll();python->selectAll();QTest::qWait(2200);
   verify(original->textCursor().hasSelection() && python->textCursor().hasSelection(),"periodic refresh preserves code selection for review and copying");
   verify(dialog.findChild<QLabel*>("findingArtifactStatus")->text().contains(QStringLiteral("不表示漏洞已验证")),"displayed scripts remain explicitly unverified");
+  QPushButton *prepare=nullptr;
+  for(auto *button:dialog.findChildren<QPushButton*>())if(button->text()==QStringLiteral("整理证据并生成方案"))prepare=button;
+  verify(prepare && waitFor([&]{return prepare->isEnabled();}),"the preparation action is available for the source finding");
+  prepare->click();
+  verify(waitFor([&]{return preparations==1 && prepare->isEnabled();}),"CScan preparation is routed through the original Flow collection endpoint");
   for(int row=0;row<items->rowCount();row++)if(items->item(row,0)->data(Qt::UserRole)=="fv2")items->setCurrentCell(row,0);
   verify(waitFor([&]{return dialog.findChild<QGroupBox*>("findingPayloadArtifacts")->isHidden() && original->toPlainText().isEmpty() && python->toPlainText().isEmpty();}),"switching findings clears old private script content");
+  verify(waitFor([&]{return prepare->isEnabled();}),"legacy finding preparation remains available");
+  prepare->click();
+  verify(waitFor([&]{return generations==1;}),"legacy findings continue using the existing generator");
+  verify(preparations==1 && generations==1,"source postprocessing and existing program generation remain distinct");
   verify(collections==1 && rewrites==1 && executions==0,"collecting and rewriting never dispatch execution");
   return 0;
 }

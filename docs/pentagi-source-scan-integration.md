@@ -43,7 +43,7 @@ flowchart LR
 - GET /api/scan-tasks/:id：状态、报告、源码清单、最终发现和阶段预览；正文使用既有 /source-file?id= 获取，支持 .c 文件的同 Flow 副本。
 - POST /api/pipelines/:id/verifications：选中 finding_id，建立逐发现验证记录。
 - POST .../verifications/:verificationId/prepare：expected_revision；自动核对/收集原 Flow 载荷，再调用现有结构化方案生成器。失败保留旧方案与收集记录；缺运行入口返回 needs_conditions。
-- 既有 /generate 继续兼容；/prepare 是新界面的准备入口。既有 /payloads/collect、/payloads/python、/payloads/cancel 保留。
+- 原程序/网络发现继续走既有 /generate；仅 CScan 发现通过 /prepare 先整理原 Flow。既有 /payloads/collect、/payloads/python、/payloads/cancel 保留。
 - POST .../:verificationId/start：revision、fingerprint、confirmed=true、request_id；生成独立机械执行 run。同一启动请求返回原 attempt。
 - GET .../:verificationId：冻结方案、attempt、原始步骤、脱敏证据、自动判据与人工意见；execution_backend 明确标识 platform-executor。
 - /cancel 复用原执行器取消机制。
@@ -92,3 +92,6 @@ flowchart LR
 - 云端只读预检：CScan API 可鉴权；平台 LLM 地址、模型、密钥存在（未触发模型推理）；CScan 工作目录可读；Docker 可用；rt-recon、rt-vuln-scan、rt-web 镜像存在。Podman 不可用，当前可使用 Docker。
 - 仍需逐任务明确运行入口、部署版本和认证条件；本地改动未部署，未对任何真实漏洞目标运行载荷。
 - PR 对齐最新 main 后，三栏入口测试曾在提交回调前点击仍禁用的按钮，预期第三次提交未发生；已改为等待回调重新启用按钮后再点击，保留请求去重断言。命令：ctest --test-dir build -R 'pentagi-source-host|ui-finding-payload-artifacts|ui-task-report-export' --output-on-failure。
+- PR #104 首轮 CI：Backend tests 成功；Qt 构建成功，但 ui-context 的 1、1.25、1.5 三种比例在同一旧入口断言失败（source scanning defaults to passing a path or address to CScan）。原因是新增页面时移除了原程序测试入口的 agent/remote_directory 模式。已恢复两种模式和原默认项，保留原测试断言及远端目录流程；新源码页面继续走 source-flow 接口。
+- 后续完整检查发现验证准备界面的旧模拟协议只支持 /generate。现按 evidence_origin 分流：非 CScan 发现保留原 /generate，CScan 发现使用 /prepare；新增界面回归覆盖两个分支，不自动执行工具。
+- 新源码页改为首次打开时初始化，旧程序工作台不构建该页或发送其隐藏请求。完整上下文可通过全部 500 项断言；本机聚合执行约 74 秒，超过原先 60 秒总预算，故将此聚合套件预算设为 120 秒，保留每个场景自身的等待上限与全部断言。未更改产品请求或执行超时。

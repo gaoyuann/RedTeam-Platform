@@ -187,7 +187,8 @@ if(BUILD_UI_CHECKS)
     add_test(NAME ui-context-${UI_SCALE} COMMAND RedTeam-Platform-Batch16Checks)
     set_tests_properties(ui-context-${UI_SCALE} PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${UI_SCALE}"
-      TIMEOUT 60
+      # Aggregate suite: 500+ assertions; per-scenario bounded waits stay unchanged.
+      TIMEOUT 120
     )
   endforeach()
 endif()
