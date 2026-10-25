@@ -39,6 +39,7 @@ export function cscanConfig(env = process.env) {
     collectAssistant: true,
     requestTimeoutMs: integer('CSCAN_REQUEST_TIMEOUT_MS', 15000, 100, 120000),
     createTimeoutMs: integer('CSCAN_CREATE_TIMEOUT_MS', 300000, 100, 600000),
+    assistantTimeoutMs: integer('CSCAN_ASSISTANT_TIMEOUT_MS', 600000, 100, 600000),
     pollMs: integer('CSCAN_POLL_MS', 3000, 10, 60000),
   };
 }
@@ -246,13 +247,13 @@ export async function createCscanClient(config = cscanConfig(), {fetchImpl = glo
     assistantLogs:(id,assistantId,options)=>request('query CScanAssistantLogs($id:ID!,$assistantId:ID!){assistantLogs(flowId:$id,assistantId:$assistantId){id type message result appendPart flowId assistantId}}',
       {id,assistantId},options).then(data=>checkedRows(data.assistantLogs,id,assistantId)),
     createAssistant:(id,input,options)=>request('mutation CScanCreateAssistant($id:ID!,$provider:String!,$input:String!){createAssistant(flowId:$id,modelProvider:$provider,input:$input,useAgents:false){assistant{id title status flowId useAgents}}}',
-      {id,provider:config.provider,input},options).then(data=>{
+      {id,provider:config.provider,input},{timeoutMs:config.assistantTimeoutMs ?? 600000,...options}).then(data=>{
       const assistant=data.createAssistant?.assistant;
       if(!assistant?.id || String(assistant.flowId)!==String(id) || assistant.useAgents!==false)throw new Error('CScan Assistant 创建响应无效');
       return assistant;
     }),
     callAssistant:(id,assistantId,input,options)=>request('mutation CScanCallAssistant($id:ID!,$assistantId:ID!,$input:String!){callAssistant(flowId:$id,assistantId:$assistantId,input:$input,useAgents:false)}',
-      {id,assistantId,input},options).then(data=>{if(data.callAssistant!=='success')throw new Error('CScan 未确认 Assistant 询问');return true;}),
+      {id,assistantId,input},{timeoutMs:config.assistantTimeoutMs ?? 600000,...options}).then(data=>{if(data.callAssistant!=='success')throw new Error('CScan 未确认 Assistant 询问');return true;}),
     stopAssistant:(id,assistantId,options)=>request('mutation CScanStopAssistant($id:ID!,$assistantId:ID!){stopAssistant(flowId:$id,assistantId:$assistantId){id status}}',
       {id,assistantId},options).then(data=>{
       if(String(data.stopAssistant?.id)!==String(assistantId) || !['finished','failed','waiting'].includes(data.stopAssistant.status))throw new Error('CScan 未确认 Assistant 停止');

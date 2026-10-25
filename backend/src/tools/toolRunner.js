@@ -188,6 +188,7 @@ export async function runTool(toolId, args, options = {}) {
   }
 
   if(options.signal?.aborted) return cancelled();
+  if(options.requireContainer && (engine==='host' || !image))return {success:false,exitCode:-1,stdout:'',stderr:'验证工具需要已配置的 Docker/Podman 工具镜像',executionMode:'blocked',processStopped:true,toolStarted:false};
   if (engine === 'host' || !image) {
     if (options.privateOutputDir) args = args.map(arg => arg.replace('/tmp/redteam-private/', resolve(options.privateOutputDir) + '/'));
     if (SAST_TOOLS.has(toolId)) args = args.map(arg => arg === '--project=/src/project/.rt-compile-commands.json'

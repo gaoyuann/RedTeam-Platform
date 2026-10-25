@@ -250,7 +250,7 @@ export async function executeRun(runId) {
       error,
       runId
     );
-    return { ok: false, runId, status: 'FAILED', error, checks: preflight.checks };
+    return { ok: false, runId, status: 'FAILED', error, checks: preflight.checks, processStopped:true };
   }
 
   // Persist preflight data
@@ -506,7 +506,7 @@ export async function executeRun(runId) {
             }
             targetContext.dvwa_session_verified = result.success;
           } else {
-            result = await runTool(step.tool_id, args, { timeout: getToolTimeout(step.tool_id), signal: controller.signal, target: run.target });
+            result = await runTool(step.tool_id, args, { timeout: getToolTimeout(step.tool_id), signal: controller.signal, target: run.target, requireContainer:!!findingVerification });
           }
         } catch (err) {
           result = { success: false, exitCode: -1, stdout: '', stderr: err.message, executionMode: 'error', processStopped: findingVerification ? false : undefined };

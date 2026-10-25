@@ -1,6 +1,7 @@
 #include "FindingVerificationDialog.h"
 #include "../widgets/WorkbenchTabs.h"
 #include "ScanPage.h"
+#include "PentagiSourceScanHost.h"
 #include "SourceScanDetailDialog.h"
 #include "../widgets/RemoteSourcePicker.h"
 #include "../ApiClient.h"
@@ -1367,7 +1368,7 @@ void ScanPage::setupUI() {
     h->addWidget(preset, 1, 1);
     connect(preset, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this,preset](int) {
       m_sourceTargetInput->setText(preset->currentData().toString());
-      m_programInputKind->setCurrentIndex(1);
+      m_programInputKind->setCurrentIndex(m_programInputKind->findData("runtime"));
     });
     m_sourceNotesInput = new QLineEdit;
     m_sourceNotesInput->setMaxLength(4000);
@@ -1380,7 +1381,7 @@ void ScanPage::setupUI() {
     m_sourceAdaptiveCheck = new QCheckBox("生成预案时允许 Agent 根据执行证据补充验证请求");
     m_sourceAdaptiveCheck->setChecked(true);
     h->addWidget(m_sourceAdaptiveCheck, 5, 1, 1, 2);
-    auto *hint = new QLabel("填写源码路径或局域网源码地址，可在审计说明中注明目标主机及目录。平台仅提交位置和要求，由 CScan Agent 自行访问、读取和扫描；访问失败时显示服务返回原因，不上传源码或创建挂载。");
+    auto *hint = new QLabel("可提交源码地址、选择远端源码目录或指定程序运行入口；源码读取由远端 CScan 完成。也可进入上方“源码扫描”创建关联验证任务的源码审计。");
     hint->setWordWrap(true);
     hint->setStyleSheet("color:#64748b; font-size:12px;");
     h->addWidget(hint, 6, 0, 1, 3);
@@ -1867,7 +1868,19 @@ void ScanPage::setupUI() {
   rightW->setLayout(detailLayout);
   rightW->setMinimumWidth(350);
 
-  mainLayout->addWidget(rightW, 1);
+  auto *scanWorkspaces = new QTabWidget(this);
+  scanWorkspaces->setObjectName("scanWorkspaces");
+  scanWorkspaces->addTab(rightW, QStringLiteral("漏洞与历史扫描"));
+  auto *sourceSlot=new QWidget(scanWorkspaces);
+  sourceSlot->setObjectName("sourceFlowWorkspaceSlot");
+  scanWorkspaces->addTab(sourceSlot, QStringLiteral("源码扫描"));
+  connect(scanWorkspaces,&QTabWidget::currentChanged,this,[this,scanWorkspaces,sourceSlot](int index){
+    if(index!=scanWorkspaces->indexOf(sourceSlot) || sourceSlot->layout())return;
+    auto *layout=new QVBoxLayout(sourceSlot);
+    layout->setContentsMargins(0,0,0,0);
+    layout->addWidget(new PentagiSourceScanHost(m_api,sourceSlot));
+  });
+  mainLayout->addWidget(scanWorkspaces, 1);
 
   for (auto *table : {m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable}) {
     table->verticalHeader()->hide();

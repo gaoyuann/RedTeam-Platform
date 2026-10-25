@@ -1040,6 +1040,8 @@ int main(int argc, char **argv)
   }
   sourceOnly = true;
   ScanPage sourcePage(&api, "user", "fixture-user");
+  verify(sourcePage.findChild<QWidget*>("sourceFlowWorkspaceSlot") && !sourcePage.findChild<QWidget*>("pentagiSourceScanHost"),
+    "new source workspace stays lazy while the existing program workbench is used");
   verify(sourcePage.m_programInputKind->currentData().toString() == "agent",
       "source scanning defaults to passing a path or address to CScan");
   {
