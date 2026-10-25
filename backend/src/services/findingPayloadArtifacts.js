@@ -148,7 +148,7 @@ async function collect(db,pipeline,item,row,snapshot,client,signal,options) {
     signal.throwIfAborted();
     if(!current)fail('Assistant 已不可访问');
     if(current.status==='failed')fail('Assistant 收集失败，历史结果仍保留');
-    const outputs=logs.filter(log=>!baseline.has(signature(log)) && ['assistant','ai'].includes(log.type))
+    const outputs=logs.filter(log=>!baseline.has(signature(log)) && ['answer','assistant','ai'].includes(log.type))
       .sort((a,b)=>String(a.id).localeCompare(String(b.id),undefined,{numeric:true}));
     if(terminal(current.status) && outputs.length) {
       let text='';
@@ -206,7 +206,7 @@ export function startPayloadCollection(db,pipeline,item,actor,input={},dependenc
     if(db.prepare('SELECT state FROM finding_payload_collections WHERE id=?').get(current.id)?.state==='cancelled')return;
     const state=current.dispatch_started && (!error.status || error.status===409)?'uncertain':'error';
     update(db,current.id,{state,error_message:aborted?'收集等待超时，可继续核对原 Assistant；不会重复创建':error.status?taskDisplayText(error.message):'Assistant 收集请求失败，可继续核对原请求'});
-  },{timeoutMs:dependencies.collectionTimeoutMs || 180000,recordId:current.id});
+  },{timeoutMs:dependencies.collectionTimeoutMs ?? 360000,recordId:current.id});
   return payloadArtifactView(db,item);
 }
 

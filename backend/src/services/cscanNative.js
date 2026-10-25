@@ -3,7 +3,6 @@ import {runCscan,createCscanClient,cscanConfig} from './cscanClient.js';
 import {cscanTarget,cscanRemotePath,cscanNotes} from './cscanTarget.js';
 import {parseCscanMarkdown,splitCscanMarkdownSections} from './cscanReport.js';
 import {callLlm} from './llmClient.js';
-import {collectCscanReport} from './cscanReportCollector.js';
 import {createCscanProgressParser} from './cscanProgress.js';
 
 // Match PentagiService::fetchFlowReport: consume the service's task results,
@@ -50,19 +49,14 @@ export async function scanCscanTarget(target, {notes='',sourceLocation='',scope=
       rawReport=await client.report(id,{signal:options.signal});
       const raw={flow_id:id,report:rawReport,report_source:'task_result',complete:true,source_reports:sourceReports};
       await onRawReport(raw);
-      let collection;
-      if(config.collectAssistant) {
-        await onProgress?.({state:'collecting_report',scan_complete:true});
-        collection=await collectCscanReport(client,id,{signal:options.signal,pollMs:config.pollMs,onRawReport});
-        if(collection.markdown)rawReport+='\n\n'+collection.markdown;
-        await onRawReport({...raw,report:rawReport,collection});
-      }
-      return {markdown:rawReport,report_source:'task_result',source_reports:sourceReports,collection};
+      // PentagiService::fetchFlowReport reads task/subtask results directly.
+      // Keep this snapshot before parsing; Assistant belongs to per-finding
+      // artifact collection, never to completion of the scan report.
+      return {markdown:rawReport,report_source:'task_result',source_reports:sourceReports};
     }});} finally {progress.close();}
   await onProgress?.({state:'parsing',scan_complete:true,finish_status:report.finish_status});
   const parsed=await parseCompletedCscanReport(report.markdown,target,{llm,signal,timeoutMs:config.timeoutMs,
     sourceReports:report.source_reports,modelTimeoutMs:config.modelTimeoutMs ?? 900000});
-  if(report.collection?.error)parsed.parse_errors.push(report.collection.error);
   return {...report,...parsed,source_target:target};
 }
 

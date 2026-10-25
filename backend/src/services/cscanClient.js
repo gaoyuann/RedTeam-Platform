@@ -36,7 +36,6 @@ export function cscanConfig(env = process.env) {
     scanTimeoutMs: integer('CSCAN_SCAN_TIMEOUT_MS', 0, 0, 2147483647),
     modelTimeoutMs: integer('CSCAN_MODEL_TIMEOUT_MS', 900000, 100, 7200000),
     progressTimeoutMs: integer('CSCAN_PROGRESS_TIMEOUT_MS', 900000, 100, 7200000),
-    collectAssistant: true,
     requestTimeoutMs: integer('CSCAN_REQUEST_TIMEOUT_MS', 15000, 100, 120000),
     createTimeoutMs: integer('CSCAN_CREATE_TIMEOUT_MS', 300000, 100, 600000),
     assistantTimeoutMs: integer('CSCAN_ASSISTANT_TIMEOUT_MS', 600000, 100, 600000),
