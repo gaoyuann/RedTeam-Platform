@@ -104,4 +104,4 @@ flowchart LR
 真实接口最终输出类型为 answer，正文可在 message 中；兼容 assistant/ai 和 appendPart 分片。
 终端输出、输入和思考内容不会当作最终载荷 JSON。
 历史 PARTIAL 任务仍可通过原有 reparse 接口重解析已保存的完整报告，不创建新 Flow 或助手。
-报告逐字依据和同 Flow 源码行号检查继续保留，修复流程并不将未通过校验的候选自动改成已确认。
+报告结构化说明 reason 与来源原文 report_excerpt 分开保存；evidence_match=verbatim 表示逐字匹配，summary 表示模型整理，二者都保持 needs_review、runtime_verified=false。逐字匹配不再作为发现入库门槛。同 Flow 源码路径、行号范围、缺失名称/说明的检查继续保留。任务/子任务关联可通过解析输入的原文章节回溯，不依赖模型复述的文字一致性。旧记录没有新增字段时仍按原方式读取；重解析继续复用原始报告和发现 ID。

@@ -394,7 +394,7 @@ test('native report retains subtask evidence when the final task summary has no 
   assert.ok(calls.some(query=>query.includes('subtasks{id status result}')));
 });
 
-test('native report AI only structures returned evidence and rejects invented citations without claiming source verification',async t=>{
+test('native report AI keeps summaries distinct from citations without claiming source verification',async t=>{
   const prose='The unchecked copy is located in src/input.c at line 12. Destination capacity is not checked.';
   const {config}=await protocol(t,prose);
   const result=await scanCscanTarget('/src/project',{config,llm:async messages=>{
@@ -404,7 +404,14 @@ test('native report AI only structures returned evidence and rejects invented ci
   const data=normalizeCscanReportedFinding(result.findings[0],result.markdown,'/src/project');
   assert.equal(data.source_location_verified,false);assert.equal(data.source_sha256,null);assert.equal(data.snapshot_id,null);
   assert.equal(data.runtime_verified,false);assert.equal(data.code,'');
-  assert.throws(()=>normalizeCscanReportedFinding({...result.findings[0],reason:'invented evidence'},prose,'/src/project'),/未出现/);
+  const summary=normalizeCscanReportedFinding({...result.findings[0],reason:'A reformulated explanation'},prose,'/src/project');
+  assert.equal(summary.evidence_match,'summary');
+  assert.equal(summary.report_excerpt,prose);
+  assert.equal(summary.verification_status,'needs_review');
+  assert.equal(summary.runtime_verified,false);
+  assert.throws(()=>normalizeCscanReportedFinding({...result.findings[0],reason:''},prose,'/src/project'),/缺少依据/);
+  assert.throws(()=>normalizeCscanReportedFinding({...result.findings[0],title:''},prose,'/src/project'),/缺少名称/);
+  assert.throws(()=>normalizeCscanReportedFinding({...result.findings[0],file:'absent.c'},prose,'/src/project'),/文件未出现/);
   assert.throws(()=>normalizeCscanReportedFinding({...result.findings[0],file:'/etc/passwd'},prose,'/src/project'),/超出|源码路径/);
   assert.throws(()=>normalizeCscanReportedFinding({...result.findings[0],file:'/src/project/../private'},prose,'/src/project'),/源码路径/);
 });
@@ -627,4 +634,24 @@ test('legacy report-Assistant timeout is historical only; reparse uses the saved
   await auditSources(task,options);
   assert.deepEqual(db.prepare("SELECT id FROM scan_results WHERE result_type='source_finding'").all(),[{id:first}]);
   assert.equal(db.prepare("SELECT result_data FROM scan_results WHERE result_type='raw_output' ORDER BY id DESC LIMIT 1").get().result_data,historical);
+});
+
+test('paraphrased findings import with original report provenance and stable IDs on reparse',async t=>{
+  const db=reportDb(t),task={scan_task_id:'summary-import',target:'/src/project'};
+  const raw='Source-Access: available\n## Input review\nsrc/input.c line 12 copies input without a capacity check.';
+  const model=async()=>({ok:true,content:'Result:\n'+JSON.stringify({findings:[{file:'src/input.c',start_line:12,title:'Unchecked copy',reason:'The copy lacks bounds validation.'}]})});
+  const {parseCompletedCscanReport}=await import('../src/services/cscanNative.js');
+  const source_reports=[{report:raw,source_task_ids:['t1'],source_subtask_ids:['s1']}];
+  const parsed=await parseCompletedCscanReport(raw,task.target,{llm:model,sourceReports:source_reports});
+  const result=await auditSources(task,{db,parameters:{source_path:task.target},nativeScan:async()=>({...parsed,flow_id:'15',source_reports})});
+  assert.ok(result.outcomes.every(item=>item.success));
+  const row=db.prepare("SELECT id,result_data FROM scan_results WHERE result_type='source_finding'").get();
+  const finding=JSON.parse(row.result_data);
+  assert.equal(finding.reason,'The copy lacks bounds validation.');
+  assert.equal(finding.evidence_match,'summary');
+  assert.ok(raw.includes(finding.report_evidence[0].report_excerpt));
+  assert.deepEqual(finding.source_subtask_ids,['s1']);
+  assert.equal(finding.runtime_verified,false);
+  await auditSources(task,{db,parameters:{source_path:task.target},reportOnly:true,llm:model});
+  assert.deepEqual(db.prepare("SELECT id FROM scan_results WHERE result_type='source_finding'").all(),[{id:row.id}]);
 });
