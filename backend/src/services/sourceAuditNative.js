@@ -44,7 +44,7 @@ export async function auditCscanNative(task,{db,parameters,signal,nativeScan=sca
     .run(task.scan_task_id,'cscan-report:'+task.scan_task_id,'cscan',JSON.stringify({kind:'service_report',source_target:source,source_location:sourceLocation,files:[]}),JSON.stringify(coverage),new Date().toISOString());
   const id=retained?db.prepare("SELECT id FROM scan_results WHERE scan_task_id=? AND result_type='source_coverage' ORDER BY id LIMIT 1").get(task.scan_task_id)?.id:store('source_coverage',coverage);
   if(!id) throw new Error('CScan 覆盖记录缺失');
-  coverage.source_errors=[];coverage.parse_errors=[];coverage.rejected_findings=[];
+  coverage.source_errors=[];coverage.parse_errors=[];coverage.rejected_findings=[];coverage.location_warnings=[];
   coverage.cscan_complete=false;coverage.ai_complete=false;
   const persist=()=>{
     db.prepare('UPDATE source_audits SET analysis=? WHERE scan_task_id=?').run(JSON.stringify(coverage),task.scan_task_id);
@@ -82,9 +82,17 @@ export async function auditCscanNative(task,{db,parameters,signal,nativeScan=sca
         const copies=sourceCopies(),key=data.file.replace(/^\/work\/src\//,'');
         if(copies.size) {
           const file=copies.get(key);
-          if(!file || data.end_line>file.content.split('\n').length)throw new Error('报告定位不在当前 Flow 的源码副本范围内');
-          data.source_location_verified=true;
-          data.source_sha256=file.sha256;
+          if(!file || data.end_line>file.content.split('\n').length) {
+            data.location_status=file?'line_out_of_range':'file_not_in_snapshot';
+            data.location_warning=file?'报告行号超出源码副本范围，待核对':'报告文件未匹配源码副本，待核对';
+            coverage.location_warnings.push({file:data.file,start_line:data.start_line,end_line:data.end_line,
+              available_lines:file?file.content.split('\n').length:null,status:data.location_status,
+              source_task_ids:finding.source_task_ids || [],source_subtask_ids:finding.source_subtask_ids || []});
+          } else {
+            data.source_location_verified=true;
+            data.source_sha256=file.sha256;
+            data.location_status='verified';
+          }
         }
       } catch(error) {
         const rejected={index,source_subtask_ids:finding.source_subtask_ids || report.source_subtask_ids || [],reason:error.message};
@@ -99,7 +107,7 @@ export async function auditCscanNative(task,{db,parameters,signal,nativeScan=sca
         const existing=evidence.find(item=>item.reason===data.reason);
         if(existing) existing.source_subtask_ids=[...new Set([...existing.source_subtask_ids,...(finding.source_subtask_ids || report.source_subtask_ids || [])])];
         else evidence.push({reason:data.reason,report_excerpt:data.report_excerpt,evidence_match:data.evidence_match,preconditions:data.preconditions,source_subtask_ids:finding.source_subtask_ids || report.source_subtask_ids || []});
-        const merged={...(previous?.data || data),cscan_flow_id:report.flow_id,source_target:source,tool:'cscan',tools:['cscan'],
+        const merged={...(previous?.data || data),source_location_verified:data.source_location_verified,source_sha256:data.source_sha256,location_status:data.location_status || 'unverified',location_warning:data.location_warning || null,cscan_flow_id:report.flow_id,source_target:source,tool:'cscan',tools:['cscan'],
           source_subtask_ids:ids,source_task_ids:taskIds,report_evidence:evidence,
           suggestion:previous?.data.suggestion || data.suggestion,
           analyses:evidence.map(item=>({tool:'cscan',reason:item.reason,preconditions:item.preconditions,source_subtask_ids:item.source_subtask_ids}))};
