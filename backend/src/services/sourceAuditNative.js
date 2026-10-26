@@ -98,7 +98,7 @@ export async function auditCscanNative(task,{db,parameters,signal,nativeScan=sca
         const evidence=structuredClone(previous?.data.report_evidence || []);
         const existing=evidence.find(item=>item.reason===data.reason);
         if(existing) existing.source_subtask_ids=[...new Set([...existing.source_subtask_ids,...(finding.source_subtask_ids || report.source_subtask_ids || [])])];
-        else evidence.push({reason:data.reason,preconditions:data.preconditions,source_subtask_ids:finding.source_subtask_ids || report.source_subtask_ids || []});
+        else evidence.push({reason:data.reason,report_excerpt:data.report_excerpt,evidence_match:data.evidence_match,preconditions:data.preconditions,source_subtask_ids:finding.source_subtask_ids || report.source_subtask_ids || []});
         const merged={...(previous?.data || data),cscan_flow_id:report.flow_id,source_target:source,tool:'cscan',tools:['cscan'],
           source_subtask_ids:ids,source_task_ids:taskIds,report_evidence:evidence,
           suggestion:previous?.data.suggestion || data.suggestion,

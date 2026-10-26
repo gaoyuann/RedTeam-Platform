@@ -94,15 +94,18 @@ test('a successful empty extraction is cached without repeated model calls',asyn
   await delay(5);assert.equal(calls,1);assert.deepEqual(writes[0].progress_analysis.findings,[]);
 });
 
-test('fabricated paths and evidence are rejected; repeated valid findings merge their source IDs',async t=>{
+test('absent paths are rejected; summaries remain provisional and repeated findings merge source IDs',async t=>{
   let calls=0;
   const {progress,writes}=parser(t,{parse:async()=>{
     if(++calls>1)throw new Error('fixture outage after a partial extraction');
-    return {findings:[finding,{...finding,file:'invented.c'},{...finding,reason:'invented evidence'}],parse_errors:[]};
+    return {findings:[finding,{...finding,file:'invented.c'},{...finding,reason:'A summarized explanation'}],parse_errors:[]};
   }});
   progress.observe(raw());progress.start();await until(()=>writes.length===1);
   const analysis=writes[0].progress_analysis;
-  assert.equal(analysis.findings.length,1);assert.ok(analysis.parse_errors.length);
+  assert.equal(analysis.findings.length,2);assert.ok(analysis.parse_errors.length);
+  assert.equal(analysis.findings[1].evidence_match,'summary');
+  assert.equal(analysis.findings[1].runtime_verified,false);
+  assert.equal(analysis.findings[1].report_excerpt,prose);
   const other={...writes[0],source_subtask_ids:['s2']};
   const task={scan_type:'source_scan',status:'RUNNING',target:'/src/project'};
   const preview=sourceScanPreview(task,[writes[0],other].map(value=>({result_type:'raw_output',result_data:JSON.stringify(value)})));
@@ -111,7 +114,7 @@ test('fabricated paths and evidence are rejected; repeated valid findings merge 
   const stale={...writes[0],report:'New report without file evidence'};
   assert.equal(sourceScanPreview(task,[{result_type:'raw_output',result_data:JSON.stringify(stale)}]).findings.length,0);
   progress.observe(raw());progress.start();await until(()=>writes.length===2);
-  assert.equal(writes[1].progress_analysis.findings.length,1,'a failed retry preserves already validated preview evidence');
+  assert.equal(writes[1].progress_analysis.findings.length,2,'a failed retry preserves provisional summaries and their source report');
 });
 
 test('a changed report discards late results for its previous content',async t=>{
