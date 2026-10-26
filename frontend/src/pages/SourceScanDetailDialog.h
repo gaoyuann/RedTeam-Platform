@@ -31,7 +31,7 @@ private:
   void showFinding(int row);
   void showAttackTable();
   void clearEvidence();
-  void loadSource(int line=0);
+  void loadSource(int line=0,int endLine=0);
   static QJsonObject resultData(const QJsonObject &row);
   static QString fileKey(const QJsonObject &row);
   static QString riskText(const QString &risk);

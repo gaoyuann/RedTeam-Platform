@@ -27,7 +27,7 @@ int main(int argc,char **argv) {
   QObject::connect(&view,&SourceScanDetailDialog::testRequested,&view,[&](const QList<qint64> &ids){emitted=ids;++testRequests;});
   auto a=finding(901,"src/input.c",12),b=finding(902,"src/reader.cpp",25,"medium");
   view.setSnapshots({task("source-1","RUNNING",QJsonArray{QJsonObject{{"result_type","raw_output"},{"result_data",QJsonObject{{"report",QStringLiteral("正在核对源码访问条件，尚未形成漏洞结论。")}}}}})});
-  verify(tree->topLevelItemCount()==1 && evidence->toPlainText().contains(QStringLiteral("访问条件")) && !attack->isEnabled(),"unstructured progress remains readable without inventing file findings");
+  verify(tree->topLevelItemCount()==0 && view.findChild<QPlainTextEdit*>("sourceScanRawReport")->toPlainText().contains(QStringLiteral("访问条件")) && !attack->isEnabled(),"unstructured progress remains readable without inventing file findings");
   auto running=task("source-1","RUNNING",QJsonArray{a});
   running["source_scan"]=QJsonObject{{"phase","parsing"},{"subtask_progress",QJsonObject{{"finished",1},{"total",2}}}};
   running["source_preview"]=QJsonObject{{"findings",QJsonArray{a["result_data"],b["result_data"]}},{"parsing",true},{"parse_errors",QJsonArray{QStringLiteral("阶段模型暂不可用")}}};
@@ -35,7 +35,7 @@ int main(int argc,char **argv) {
   verify(view.findChild<QLabel*>("sourceScanNotice")->text().contains(QStringLiteral("过程预览")),"preview remains marked as provisional while processing reports");
   verify(view.findChild<QLabel*>("sourceScanNotice")->text().contains(QStringLiteral("正在整理")) && view.findChild<QLabel*>("sourceScanNotice")->text().contains(QStringLiteral("原始报告仍可查看")),"background extraction and partial parser failures remain visible with existing previews");
   verify(!attack->isEnabled(),"an active scan cannot open the attack selector");
-  verify(list->rowCount()==1 && evidence->toPlainText().contains("<b>"),"progress findings are browsable as literal text");
+  verify(list->rowCount()==2 && evidence->toPlainText().contains("<b>"),"progress findings are browsable as literal text");
   verify(code->toPlainText().isEmpty(),"missing source code is not invented from report prose");
   verify(testRequests==0,"viewing progress must not request testing");
   view.setSnapshots({task("source-1","COMPLETED",QJsonArray{a,b})});
@@ -43,8 +43,8 @@ int main(int argc,char **argv) {
   QTreeWidgetItem *reader=nullptr;
   for(QTreeWidgetItemIterator it(tree);*it;++it)if((*it)->data(0,Qt::UserRole).toString().endsWith("src/reader.cpp"))reader=*it;
   verify(reader,"file tree contains report paths");tree->setCurrentItem(reader);
-  verify(list->rowCount()==1 && view.findChild<QLabel*>("sourceScanLocation")->text().contains("reader.cpp"),"file selection links its findings and evidence");
-  severity->setCurrentIndex(severity->findData("high"));verify(list->rowCount()==0,"severity filter applies to current file");
+  verify(list->rowCount()==2 && view.findChild<QLabel*>("sourceScanLocation")->text().contains("reader.cpp"),"file selection keeps all task findings available");
+  severity->setCurrentIndex(severity->findData("high"));verify(list->rowCount()==1,"severity filter applies across all files");
   attack->click();auto *selection=view.findChild<QDialog*>("sourceScanAttackSelection");verify(selection,"attack action opens selection window");
   auto *all=selection->findChild<QTableWidget*>("sourceScanAttackTable");auto *prepare=selection->findChild<QPushButton*>("sourceScanPrepareTest");
   verify(all->rowCount()==2,"attack table contains all files regardless of scan-view filters");
@@ -92,6 +92,20 @@ int main(int argc,char **argv) {
   auto *copyCode=complete.findChild<QPlainTextEdit*>("sourceScanCode");
   verify(waitFor([&](){return copyCode->toPlainText().contains("int main()");}),"files without findings load their actual complete saved body");
   verify(complete.findChild<QTableWidget*>("sourceScanFindings")->rowCount()==0,"a saved source file does not invent findings");
+
+  auto matched=finding(3001,"clean.c",2);
+  auto unmatched=finding(3002,"missing.c",1,"medium");
+  copied["results"]=QJsonArray{matched,unmatched};
+  complete.setSnapshots({copied});complete.selectFinding(3001);
+  verify(waitFor([&](){return copyCode->extraSelections().size()==2;}),"relative report path matches /work/src snapshot and highlights range");
+  verify(copyCode->textCursor().blockNumber()==1,"finding navigates to requested source line");
+  verify(complete.findChild<QLabel*>("sourceScanSummary")->text().contains(QStringLiteral("源码快照 1 个文件")),"unmatched report paths do not inflate snapshot count");
+  complete.selectFinding(3002);
+  verify(copyCode->toPlainText().isEmpty() && copyCode->extraSelections().isEmpty(),"unmatched finding clears previous source and highlights");
+  complete.setSnapshots({copied});
+  verify(complete.findChild<QLabel*>("sourceScanLocation")->text()=="missing.c","refresh preserves selected finding");
+  complete.selectFinding(3001);
+  verify(waitFor([&](){return !copyCode->toPlainText().isEmpty();}),"matched file remains selectable after unmatched result");
   fail=true;complete.refresh();verify(waitFor([&](){return complete.findChild<QPushButton*>("sourceScanRefresh")->isEnabled();}),"refresh failure completes");
   verify(!completeAttack->isEnabled(),"failed refresh cannot authorize testing against stale data");
   return 0;
