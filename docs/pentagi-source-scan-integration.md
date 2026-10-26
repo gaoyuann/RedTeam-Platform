@@ -105,3 +105,9 @@ flowchart LR
 终端输出、输入和思考内容不会当作最终载荷 JSON。
 历史 PARTIAL 任务仍可通过原有 reparse 接口重解析已保存的完整报告，不创建新 Flow 或助手。
 报告结构化说明 reason 与来源原文 report_excerpt 分开保存；evidence_match=verbatim 表示逐字匹配，summary 表示模型整理，二者都保持 needs_review、runtime_verified=false。逐字匹配不再作为发现入库门槛。同 Flow 源码路径、行号范围、缺失名称/说明的检查继续保留。任务/子任务关联可通过解析输入的原文章节回溯，不依赖模型复述的文字一致性。旧记录没有新增字段时仍按原方式读取；重解析继续复用原始报告和发现 ID。
+
+### 报告完成与定位核验分离
+
+完成任务报告按来源记录分别结构化，task/subtask ID 由平台直接携带，模型不能指定来源；相同原文只解析一次并合并来源。旧快照缺少来源记录时仍可解析，保留 Flow 关联，不伪造子任务 ID。
+
+有效分析结果先保存为 needs_review。源码副本缺文件或行号超范围时记录 location_status、location_warning 和覆盖信息中的 location_warnings，不丢弃候选、不单独将报告处理标成失败；source_location_verified 仍为 false，且不绑定已核实源码哈希。非法路径、无效行号、必填字段缺失、模型/解析失败仍明确失败。完成状态只说明报告处理结束，不证明全项目覆盖或真实漏洞验证成立。

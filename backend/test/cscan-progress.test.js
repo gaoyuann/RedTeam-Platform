@@ -56,7 +56,7 @@ test('completed prose subtasks become model-derived previews while polling conti
   const task={scan_task_id:'progress',scan_type:'source_scan',status:'RUNNING',target:'/src/project'};
   job=auditSources(task,{db,signal:controller.signal,parameters:{source_path:task.target},
     nativeScan:(target,options)=>scanCscanTarget(target,{...options,client,config:{pollMs:2,timeoutMs:5000},llm:async messages=>{
-      const input=JSON.parse(messages[1].content);assert.equal(input.report_phase,'progress');assert.equal(input.report,prose);
+      const input=JSON.parse(messages[1].content);assert.ok(['progress','final'].includes(input.report_phase));assert.equal(input.report,prose);
       modelCalls++;return model.promise;
     }})});
   await until(()=>modelCalls===1);
@@ -73,7 +73,7 @@ test('completed prose subtasks become model-derived previews while polling conti
   const result=await job;
   assert.ok(result.outcomes.every(item=>item.success),JSON.stringify(result.outcomes));
   assert.equal(rows().filter(row=>row.result_type==='source_finding').length,1);
-  assert.equal(modelCalls,1,'the final explicit report does not require a second model extraction');
+  assert.equal(modelCalls,2,'final parsing uses the original subtask report with its own provenance');
 });
 
 test('progress failures retry at most three times per report version and new report content can be parsed',async t=>{

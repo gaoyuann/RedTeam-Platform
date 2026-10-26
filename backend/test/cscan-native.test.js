@@ -655,3 +655,40 @@ test('paraphrased findings import with original report provenance and stable IDs
   await auditSources(task,{db,parameters:{source_path:task.target},reportOnly:true,llm:model});
   assert.deepEqual(db.prepare("SELECT id FROM scan_results WHERE result_type='source_finding'").all(),[{id:row.id}]);
 });
+
+test('report sources carry IDs despite aggregate formatting and overlapping filenames',async()=>{
+  const {parseCompletedCscanReport}=await import('../src/services/cscanNative.js');
+  const a='src/a.c first report',b='src/a.c unrelated second report';
+  const result=await parseCompletedCscanReport('Aggregate formatting differs','/src/project',{
+    sourceReports:[{report:a,source_task_ids:['t1'],source_subtask_ids:['s1']},{report:b,source_task_ids:['t2'],source_subtask_ids:['s2']}],
+    llm:async messages=>{
+      const input=JSON.parse(messages[1].content);
+      return {ok:true,content:JSON.stringify({findings:[{file:'src/a.c',start_line:1,title:input.report===a?'First':'Second',reason:'Rephrased analysis',source_subtask_ids:['forged']}]})};
+    }});
+  assert.equal(result.findings.length,2);
+  assert.deepEqual(result.findings.map(f=>f.source_task_ids),[['t1'],['t2']]);
+  assert.deepEqual(result.findings.map(f=>f.source_subtask_ids),[['s1'],['s2']]);
+});
+
+test('location mismatch preserves candidates and warnings without asserting verified source',async t=>{
+  const {createHash}=await import('node:crypto');
+  const db=reportDb(t),content='one line',sha256=createHash('sha256').update(content).digest('hex');
+  const findings=[{file:'a.c',start_line:8,end_line:10,title:'Range',reason:'summary'},
+    {file:'missing.c',start_line:1,end_line:1,title:'Missing',reason:'summary'}];
+  const task={scan_task_id:'location-review',target:'/src/project'};
+  const result=await auditSources(task,{db,parameters:{source_path:task.target},nativeScan:async(_,options)=>{
+    await options.onProgress({flow_id:'15'});
+    await options.onSourceEvidence({flow_id:'15',files:[{path:'/work/src/a.c',content,sha256}]});
+    return {flow_id:'15',markdown:'a.c and missing.c reported',findings,source_access_reported:'available'};
+  }});
+  assert.ok(result.outcomes.every(o=>o.success));
+  const saved=db.prepare("SELECT result_data FROM scan_results WHERE result_type='source_finding'").all().map(r=>JSON.parse(r.result_data));
+  assert.equal(saved.length,2);
+  assert.deepEqual(saved.map(f=>f.location_status),['line_out_of_range','file_not_in_snapshot']);
+  assert.ok(saved.every(f=>f.source_location_verified===false && f.source_sha256===null && f.runtime_verified===false && f.verification_status==='needs_review'));
+  const coverage=JSON.parse(db.prepare('SELECT analysis FROM source_audits').get().analysis);
+  assert.equal(coverage.cscan_complete,true);
+  assert.equal(coverage.rejected_findings.length,0);
+  assert.equal(coverage.location_warnings.length,2);
+  assert.equal(coverage.location_warnings[0].available_lines,1);
+});

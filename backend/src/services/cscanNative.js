@@ -75,13 +75,31 @@ export async function parseCompletedCscanReport(markdown,target,{llm=callLlm,sig
   });
   try {
     if(controller.signal.aborted) throw new Error('CScan 报告解析已取消');
-    const parsed=await Promise.race([parseNativeReport(markdown,target,{llm,signal:controller.signal,modelTimeoutMs}),stopped]);
-    if(controller.signal.aborted) throw new Error(signal?.aborted?'CScan 报告解析已取消':'CScan 报告解析超时');
-    return {...parsed,findings:parsed.findings.map(finding=>{
-      const sources=sourceReports.filter(raw=>raw.report.includes(finding.file) && (raw.report.includes(finding.reason) || (finding.report_excerpt && raw.report.includes(finding.report_excerpt))));
-      return {...finding,source_task_ids:[...new Set(sources.flatMap(raw=>raw.source_task_ids || []))],
-        source_subtask_ids:[...new Set(sources.flatMap(raw=>raw.source_subtask_ids || []))]};
-    })};
+    const parse=async()=>{
+      // Carry provenance from the input record, never infer it from model text.
+      const groups=new Map();
+      for(const raw of sourceReports || []) {
+        if(typeof raw?.report!=='string' || !raw.report.trim())continue;
+        const group=groups.get(raw.report) || {report:raw.report,tasks:new Set(),subtasks:new Set()};
+        for(const id of raw.source_task_ids || [])group.tasks.add(id);
+        for(const id of raw.source_subtask_ids || [])group.subtasks.add(id);
+        groups.set(raw.report,group);
+      }
+      if(!groups.size)return parseNativeReport(markdown,target,{llm,signal:controller.signal,modelTimeoutMs});
+      const findings=[],parse_errors=[];
+      for(const group of groups.values()) {
+        if(controller.signal.aborted)throw new Error('CScan 报告解析已取消');
+        const part=await parseNativeReport(group.report,target,{llm,signal:controller.signal,modelTimeoutMs});
+        parse_errors.push(...part.parse_errors);
+        findings.push(...part.findings.map(finding=>({...finding,
+          source_task_ids:[...group.tasks],source_subtask_ids:[...group.subtasks]})));
+        if(findings.length>1000)throw new Error('CScan 报告发现数量超过限制');
+      }
+      return {markdown,findings,parse_errors,source_access_reported:sourceAccess(markdown)};
+    };
+    const parsed=await Promise.race([parse(),stopped]);
+    if(controller.signal.aborted)throw new Error(signal?.aborted?'CScan 报告解析已取消':'CScan 报告解析超时');
+    return parsed;
   } catch(error) {
     if(controller.signal.aborted) throw new Error(signal?.aborted?'CScan 报告解析已取消':'CScan 报告解析超时');
     throw error;
