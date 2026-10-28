@@ -1,6 +1,7 @@
 import { isIP } from 'net';
 import { parseTargetRequest } from '../tools/targetRequest.js';
 import { isTargetInScope, scopeBlockReason } from './taskScope.js';
+import {CODE_TOOL,parseCodeInvocation} from './verificationCodeArtifact.js';
 
 const URL_FLAGS = {
   nuclei: ['-u', '-target'], sqlmap: ['-u', '--url'], gobuster: ['-u', '--url'],
@@ -45,6 +46,13 @@ function networkToolTarget(toolId,args) {
 }
 
 export function validateExecutionScope({ target, toolId, args, scope }) {
+  if(toolId===CODE_TOOL) {
+    try {
+      parseCodeInvocation(args);
+      if(!scope || !isTargetInScope(scope,target))throw new Error('载荷所属源码目标不在任务范围内');
+      return {allowed:true};
+    }catch(error){return {allowed:false,reason:error.message};}
+  }
   if (toolId === 'target-request') {
     try {
       const request=parseTargetRequest(args, target);

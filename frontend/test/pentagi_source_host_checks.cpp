@@ -1,3 +1,4 @@
+#include <QPointer>
 #include <QtTest>
 #include <QtWidgets>
 #include <QtNetwork>
@@ -69,6 +70,11 @@ private slots:
         QTRY_COMPARE(submissions,1);
         QCOMPARE(posted["target"].toString(),target->text());
         QVERIFY(!posted["request_id"].toString().isEmpty());
+        auto *tasks=host.findChild<QTableWidget*>("sourceFlowTasks");
+        QTRY_VERIFY(tasks && tasks->rowCount()>0);
+        QVERIFY(!host.findChild<QPlainTextEdit*>("sourceScanCode"));
+        tasks->setCurrentCell(0,0);
+        host.findChild<QPushButton*>("sourceFlowOpenDetails")->click();
         QTRY_VERIFY(host.findChild<QPlainTextEdit*>("sourceScanCode"));
         auto *code=host.findChild<QPlainTextEdit*>("sourceScanCode");
         QTRY_VERIFY(code->toPlainText().contains("int main()"));
@@ -77,9 +83,14 @@ private slots:
         auto *split=host.findChild<QSplitter*>("sourceScanThreePanes");
         QVERIFY(tree && table && split);
         QCOMPARE(split->count(),3);
+        QVERIFY(code->window()!=&host);
+        QPointer<QWidget> detail=code->window();
+        host.findChild<QPushButton*>("sourceFlowOpenDetails")->click();
+        QCOMPARE(code->window(),detail.data());
+
         QCOMPARE(table->rowCount(),1);
-        QVERIFY(tree->mapTo(&host,QPoint()).x()<code->mapTo(&host,QPoint()).x());
-        QVERIFY(code->mapTo(&host,QPoint()).x()<table->mapTo(&host,QPoint()).x());
+        QVERIFY(tree->mapToGlobal(QPoint()).x()<code->mapToGlobal(QPoint()).x());
+        QVERIFY(code->mapToGlobal(QPoint()).x()<table->mapToGlobal(QPoint()).x());
         table->setCurrentCell(0,1);
         QTRY_COMPARE(code->textCursor().blockNumber(),1);
         create->click();

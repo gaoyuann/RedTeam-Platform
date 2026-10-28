@@ -33,7 +33,7 @@ PentagiSourceScanHost::PentagiSourceScanHost(ApiClient *api, QWidget *parent)
     auto *refresh=new QPushButton(QStringLiteral("刷新任务"),this);
     bar->addWidget(refresh);
     layout->addLayout(bar);
-    m_notice=new QLabel(QStringLiteral("提交目标后自动获取源码、审计并整理报告；验证方案生成后可查看步骤并执行。"),this);
+    m_notice=new QLabel(QStringLiteral("提交目标后自动获取源码、审计并整理报告。双击任务或点击“打开源码扫描详情”查看源码和发现。"),this);
     m_notice->setObjectName("sourceFlowNotice");
     m_notice->setWordWrap(true);
     layout->addWidget(m_notice);
@@ -43,18 +43,17 @@ PentagiSourceScanHost::PentagiSourceScanHost(ApiClient *api, QWidget *parent)
     m_tasks->horizontalHeader()->setSectionResizeMode(0,QHeaderView::Stretch);
     m_tasks->setColumnWidth(1,100);
     m_tasks->setColumnWidth(2,160);
-    m_tasks->setMaximumHeight(130);
+
     m_tasks->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_tasks->setSelectionBehavior(QAbstractItemView::SelectRows);
-    layout->addWidget(m_tasks);
-    m_workspace=new QStackedWidget(this);
-    auto *empty=new QLabel(QStringLiteral("开始或选择扫描任务，查看目录树、源码和漏洞。"),this);
-    empty->setAlignment(Qt::AlignCenter);
-    m_workspace->addWidget(empty);
-    layout->addWidget(m_workspace,1);
+    layout->addWidget(m_tasks,1);
+    auto *open=new QPushButton(QStringLiteral("打开源码扫描详情"),this);
+    open->setObjectName("sourceFlowOpenDetails");
+    layout->addWidget(open);
+    connect(open,&QPushButton::clicked,this,[this]{openTask(m_tasks->currentRow());});
     connect(m_create,&QPushButton::clicked,this,[this]{create();});
     connect(refresh,&QPushButton::clicked,this,[this]{reload();});
-    connect(m_tasks,&QTableWidget::cellClicked,this,[this](int row,int){openTask(row);});
+    connect(m_tasks,&QTableWidget::cellDoubleClicked,this,[this](int row,int){openTask(row);});
     auto *timer=new QTimer(this);
     timer->setInterval(5000);
     connect(timer,&QTimer::timeout,this,[this]{if(isVisible())reload();});
@@ -105,26 +104,28 @@ void PentagiSourceScanHost::reload() {
             self->m_tasks->setItem(i,1,new QTableWidgetItem(names.value(row["status"].toString(),row["status"].toString())));
             self->m_tasks->setItem(i,2,new QTableWidgetItem(row["created_at"].toString()));
         }
-        if(self->m_currentScan.isEmpty() && !rows.isEmpty())self->openTask(0);
+
     });
 }
 void PentagiSourceScanHost::openTask(int row) {
     if(!m_tasks->item(row,0))return;
     const auto task=m_tasks->item(row,0)->data(Qt::UserRole).toJsonObject();
     const QString id=task["scan_task_id"].toString(),pipeline=task["pipeline_id"].toString();
-    if(id.isEmpty() || id==m_currentScan)return;
-    m_currentScan=id;
-    while(m_workspace->count()>1) {
-        auto *old=m_workspace->widget(1);
-        m_workspace->removeWidget(old);
-        old->deleteLater();
-    }
-    auto *detail=new SourceScanDetailDialog(m_api,{id},task["target"].toString(),m_workspace);
-    detail->setWindowFlags(Qt::Widget);
-    detail->setAttribute(Qt::WA_DeleteOnClose,false);
-    detail->setMinimumSize(0,360);
-    m_workspace->addWidget(detail);
-    m_workspace->setCurrentWidget(detail);
+    if(id.isEmpty())return;
+    showScanDetails({id},task["target"].toString(),pipeline);
+}
+void PentagiSourceScanHost::showScanDetails(const QStringList &ids,const QString &target,const QString &pipeline) {
+    if(ids.isEmpty())return;
+    const auto key=ids.join(",");
+    if(key==m_currentScan && m_detail){m_detail->show();m_detail->raise();m_detail->activateWindow();return;}
+    m_currentScan=key;
+    m_notice->setText(QStringLiteral("正在查看所选扫描结果：")+target);
+
+    if(m_detail)m_detail->close();
+    auto *detail=new SourceScanDetailDialog(m_api,ids,target,this);
+    m_detail=detail;
+    detail->setAttribute(Qt::WA_DeleteOnClose);
+    detail->show();
     connect(detail,&SourceScanDetailDialog::testRequested,this,[this,pipeline](const QList<qint64> &findings){
         if(pipeline.isEmpty()) {
             m_notice->setText(QStringLiteral("此历史扫描缺少任务归属，请从任务页查看或新建源码扫描。"));

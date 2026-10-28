@@ -8,6 +8,7 @@ import {getEngine} from '../src/tools/containerEngine.js';
 import {cscanConfig,createCscanClient} from '../src/services/cscanClient.js';
 import {IMAGE_MAP} from '../src/tools/toolRunner.js';
 import {cscanSourcePath} from '../src/services/cscanTarget.js';
+import {loadCscanEnvironment} from '../src/services/cscanEnvironment.js';
 
 // Read-only preflight. --api additionally authenticates to CScan without creating a Flow.
 // Never pull/build images, contact a target/model, or modify runtime data.
@@ -52,6 +53,7 @@ for(const directory of sourceKind==='service'?['data']:['data','data/output','da
   } catch {check(directory,false,directory+' cannot be created or written by the backend account');}
 }
 try {
+  loadCscanEnvironment();
   const config=cscanConfig();
   if(args.includes('--source-path')) {
     const target=cscanSourcePath(option('--source-path'));

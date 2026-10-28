@@ -1,6 +1,21 @@
 // Build a bounded public observation before any text redaction/truncation.
 // Never expose response bodies, request credentials or response Cookie values.
 export function verificationObservation(evidence) {
+  if(evidence.tool_id==='source-code-runner') {
+    let value;try{value=JSON.parse(evidence.raw_stdout);}catch{return null;}
+    if(value?.format!=='local-code-observation-v1')return null;
+    const out={};
+    for(const key of ['format','mode','artifact_id','artifact_hash','phase','language','entrypoint'])if(typeof value[key]==='string')out[key]=value[key].slice(0,200);
+    out.complete=value.complete===true;
+    for(const key of ['compile','run']) {
+      const item=value[key] || {};out[key]={};
+      for(const field of ['ok','started','timed_out','truncated'])if(typeof item[field]==='boolean')out[key][field]=item[field];
+      if(Number.isInteger(item.exit_code))out[key].exit_code=item.exit_code;
+      if(['none','asan_ubsan'].includes(item.diagnostics))out[key].diagnostics=item.diagnostics;
+      for(const field of ['stdout','stderr'])if(typeof item[field]==='string')out[key][field]=item[field].slice(0,32768);
+    }
+    return out;
+  }
   if(evidence.tool_id!=='target-request' || /credential|password|session|cookie/i.test(evidence.evidence_type || ''))return null;
   let value;try{value=JSON.parse(evidence.raw_stdout);}catch{return null;}
   if(!value || typeof value!=='object' || Array.isArray(value))return null;

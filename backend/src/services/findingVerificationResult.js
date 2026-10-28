@@ -2,10 +2,12 @@ import {taskScope,isTargetInScope} from './taskScope.js';
 import {createHash} from 'node:crypto';
 import {builtinVerificationPlans,evaluateFindingRule,directoryEvidenceCriteria} from './findingVerificationRules.js';
 import {verificationObservation} from './findingVerificationEvidence.js';
+import {sourceResponseSupported} from './sourceResponseRule.js';
+import {codeRuleSupported} from './sourceCodeRule.js';
 const parse=(v,f=null)=>{try{return typeof v==='string'?JSON.parse(v):v??f;}catch{return f;}};
 const hash=v=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
-const titles={headers:'确认指定防护响应头配置缺陷',cookie:'确认指定 Cookie 安全属性缺失',directory:'确认指定目录索引暴露'};
-const registered=r=>r && builtinVerificationPlans.some(p=>p.id===r.id&&p.kind===r.kind)
+const titles={headers:'确认指定防护响应头配置缺陷',cookie:'确认指定 Cookie 安全属性缺失',directory:'确认指定目录索引暴露',source_response:'复现源码发现对应的响应差异',local_code:'复现已绑定载荷的本地模拟输出差异'};
+const registered=r=>codeRuleSupported(r) || sourceResponseSupported(r) || r && builtinVerificationPlans.some(p=>p.id===r.id&&p.kind===r.kind)
   && (r.kind==='directory'?[1,2].includes(r.version):r.version===1);
 function accessOnly(plan) {
   return !plan.assessment_rule && Array.isArray(plan.steps) && plan.steps.length>0 && plan.steps.every(s=>{
@@ -40,16 +42,17 @@ export function normalizeVerificationObjectiveDraft(value) {
 export function buildVerificationContract(plan,findingId) {
   const rule=registered(plan.assessment_rule)?plan.assessment_rule:null;
   const steps=plan.steps || [],draft=normalizeVerificationObjectiveDraft(plan.objective_draft);
-  return {schema_version:1,object:{finding_id:findingId,target:plan.target},
+  return {schema_version:1,object:{finding_id:findingId,target:plan.target,...(rule?.kind==='local_code'?{execution_mode:'local_simulation',artifact_id:plan.code_payload?.id,artifact_hash:plan.code_payload?.hash}:{})},
     objective:{id:rule?.id || (draft?`objective_${hash({finding_id:findingId,target:plan.target,...draft}).slice(0,24)}`:'unavailable_effect'),
-      category:rule?'configuration_exposure':draft?.category || (accessOnly(plan)?'accessibility':'effect'),
+      category:rule?(['source_response','local_code'].includes(rule.kind)?'effect':'configuration_exposure'):draft?.category || (accessOnly(plan)?'accessibility':'effect'),
       label:rule?titles[rule.kind]:draft?.label || (accessOnly(plan)?'页面可访问性检查（不证明其他安全影响）':'效果验证目标尚未具备受支持判据')},
     operations:steps.map(s=>({step_id:s.step_id,step_index:s.step_index,tool_id:s.tool_id,name:s.name})),
     capability:{automatic:!!rule,reason:rule?null:'尚无适用的验证方案或自动效果判据'},
-    criterion:rule?{id:rule.id,version:rule.version,step_id:rule.step_id,required_evidence:['same_attempt','same_entry','complete_response'],supports_negative:true}:null,
+    criterion:rule?{id:rule.id,version:rule.version,step_id:rule.step_id,required_evidence:rule.kind==='local_code'?['same_attempt','same_artifact','complete_run']:['same_attempt','same_entry','complete_response'],supports_negative:true}:null,
     limitations:rule?.limitations || '现有操作不能证明其他安全影响；人工意见不替代自动验证结论。'};
 }
-export const legacyConclusion=result=>({achieved:'confirmed',not_achieved:'not_verified',inconclusive:'inconclusive'}[result.status] || 'pending');
+export const legacyConclusion=result=>result.object?.execution_mode==='local_simulation' && ['achieved','not_achieved'].includes(result.status)
+  ? 'inconclusive' : ({achieved:'confirmed',not_achieved:'not_verified',inconclusive:'inconclusive'}[result.status] || 'pending');
 
 // Pure read projection: a saved assessment and its original evidence are both required.
 export function projectVerificationResult(db,item,attempt,assessment) {
@@ -88,7 +91,9 @@ export function projectVerificationResult(db,item,attempt,assessment) {
   });
   for(const e of eligible) {
     const o=verificationObservation(e);
-    if(o)base.observed_facts.push({evidence_id:e.id,url:o.url,method:o.method,status_code:o.status_code,complete:o.complete,received_bytes:o.received_bytes});
+    if(o)base.observed_facts.push(o.mode==='local_simulation'
+      ? {evidence_id:e.id,execution_mode:o.mode,artifact_id:o.artifact_id,artifact_hash:o.artifact_hash,phase:o.phase,complete:o.complete,exit_code:o.run?.exit_code}
+      : {evidence_id:e.id,url:o.url,method:o.method,status_code:o.status_code,complete:o.complete,received_bytes:o.received_bytes});
   }
   if(!contract) {
     if(accessOnly(plan) && eligible.length && base.observed_facts.length===eligible.length) {
@@ -126,7 +131,7 @@ export function projectVerificationResult(db,item,attempt,assessment) {
     const latest=eligible.find(e=>e.step_index===s.step_index && e.tool_id===s.tool_id),data=parse(latest?.evidence_data,{});
     return data.success!==true || data.exit_code!==0;
   }))return finish('inconclusive','required_evidence_failed','必要步骤的执行证据缺失或明确失败，不能确认目标达成');
-  if(referenced.some(e=>typeof parse(e.raw_stdout,{})?.response!=='string'))
+  if(rule.kind!=='local_code' && referenced.some(e=>typeof parse(e.raw_stdout,{})?.response!=='string'))
     return finish('inconclusive','response_body_missing','缺少完整 HTML 观察，不能排除认证页或可靠核对检查对象');
   // A complete HTTP transfer is not necessarily a complete document. Keep the
   // saved rule result intact, but do not promote no-content or partial pages.

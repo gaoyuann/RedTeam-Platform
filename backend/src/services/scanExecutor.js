@@ -639,5 +639,10 @@ export async function executeScan(scanTaskId, {reportOnly=false,budget} = {}) {
   } finally {
     scanAbortFlags.delete(scanTaskId);
     runningScans.delete(scanTaskId);
+    // Payload collection is separate from scan success and must not delay it.
+    try {
+      const {enqueueSourcePayloads}=await import('./sourcePayloadQueue.js');
+      await enqueueSourcePayloads(db,scanTaskId,{defer:true});
+    } catch {console.warn('[CScan] 自动载荷收集排队失败');}
   }
 }

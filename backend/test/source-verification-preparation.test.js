@@ -1,0 +1,97 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import express from 'express';
+import {fileURLToPath} from 'node:url';
+import {setTimeout as delay} from 'node:timers/promises';
+import {getDb,closeDb} from '../src/db/connection.js';
+import {runMigrations} from '../src/db/migrate.js';
+import routes from '../src/routes/findingVerifications.js';
+import {evaluateSourceResponse} from '../src/services/sourceResponseRule.js';
+
+test('source payload generation -> saved input -> real HTTP comparison -> evidence; runtime changes invalidate',async t=>{
+  const db=getDb(':memory:');t.after(closeDb);
+  await runMigrations(db,fileURLToPath(new URL('../src/db/migrations/',import.meta.url)));
+  const servers=[];t.after(async()=>{for(const s of servers){s.closeAllConnections();await new Promise(r=>s.close(r));}});
+  const listen=async handler=>{const s=http.createServer(handler);servers.push(s);await new Promise(r=>s.listen(0,'127.0.0.1',r));return 'http://127.0.0.1:'+s.address().port;};
+  let mode='positive',calls=0,generations=0,outputOverride=null;
+  const target=await listen((req,res)=>{calls++;if(mode==='failure'){res.destroy();return;}res.setHeader('content-type','text/plain');res.end(mode==='baseline-match'||(mode==='positive'&&req.url.includes('probe'))?'fixture-specific-response':'normal fixture response');});
+  db.prepare("INSERT INTO users(username,password,role,is_active) VALUES('source_alice','fixture','user',1)").run();
+  db.prepare("INSERT INTO pipelines(pipeline_id,target,status,created_by,scan_task_id,config) VALUES('sp',?,'completed','source_alice','ss','{}')").run(target+'/');
+  db.prepare("INSERT INTO scan_tasks(scan_task_id,target,scan_type,status,created_by,pipeline_id,parameters) VALUES('ss',?,'source_scan','COMPLETED','source_alice','sp','{}')").run(target+'/source/');
+  db.prepare('UPDATE pipelines SET config=? WHERE pipeline_id=?').run(JSON.stringify({task_scope:{includes:[target+'/']}}),'sp');
+  const findingId=Number(db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data,severity,source_tool) VALUES('ss','source_finding',?,'high','cscan')").run(JSON.stringify({evidence_origin:'cscan_report',title:'Fixture response comparison',file:'main.c',start_line:1,reason:'Fixture input returns a different response',cscan_flow_id:'1'})).lastInsertRowid);
+  const output={name:'Fixture differential check',missing_conditions:[],baseline:{url:target+'/check?normal',method:'GET'},probe:{url:target+'/check?probe',method:'GET'},expected_response:'fixture-specific-response',rationale:'main.c:1 fixture branch comparison',cleanup:'Read-only fixture requests'};
+  const contexts=[];
+  const app=express();app.use(express.json(),(req,res,next)=>{req.user={sub:'source_alice',role:'user'};next();});
+  app.use('/api/pipelines/:id/verifications',routes(db,{llm:async messages=>{generations++;contexts.push(JSON.parse(messages[1].content));return {ok:true,content:JSON.stringify(outputOverride || output)};}}));
+  app.use((e,req,res,next)=>res.status(e.status||500).json({error:{message:e.message}}));
+  const api=await listen(app),base='/api/pipelines/sp/verifications';
+  const request=async(path,body,status=200)=>{const r=await fetch(api+path,{method:body===undefined?'GET':'POST',headers:{'content-type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});const value=await r.json();assert.equal(r.status,status,JSON.stringify(value));return value.data;};
+  const item=await request(base,{finding_id:findingId}),path=base+'/'+item.id;
+  assert.equal((await request(path+'/source-payload',{expected_revision:0})).state,'needs_conditions');
+  assert.equal(generations,0);assert.equal(calls,0);
+  await request(path+'/source-runtime',{expected_revision:0,runtime_target:'http://outside.invalid/',runtime_version:'v1'},422);
+  await request(path+'/source-runtime',{expected_revision:0,runtime_target:target+'/check',runtime_version:'v1'});
+  outputOverride={missing_conditions:['Requires a native process runner']};
+  assert.equal((await request(path+'/source-payload',{expected_revision:0})).state,'needs_conditions');
+  outputOverride={...output,probe:{url:'http://outside.invalid/',method:'GET'}};
+  await request(path+'/source-payload',{expected_revision:0},422);
+  outputOverride=null;
+  assert.equal((await request(path+'/source-payload',{expected_revision:0})).state,'prepared');
+  assert.equal(calls,0,'generation must not send target requests');
+  let detail=await request(path),plan=detail.plans[0];
+  assert.equal(plan.content.source_payload.origin,'generated');
+  assert.equal(plan.content.source_payload.probe.url,output.probe.url);
+  assert.equal(detail.readiness.ready,true,JSON.stringify(detail.readiness));
+  assert.equal(plan.content.verification_contract.capability.automatic,true);
+  const execute=async(key)=>{
+    const body={revision:plan.revision,fingerprint:plan.fingerprint,confirmed:true,request_id:key};
+    const a=await request(path+'/start',body);assert.equal((await request(path+'/start',body)).id,a.id);
+    for(let i=0;i<800;i++){detail=await request(path);if(detail.attempts[0]?.stop_confirmed)return detail.attempts[0];await delay(10);}
+    assert.fail('attempt did not finish');
+  };
+  let attempt=await execute('source_positive_01');
+  assert.equal(attempt.state,'completed');assert.equal(attempt.evidence.length,2);
+  assert.equal(attempt.summary.result.status,'achieved',JSON.stringify(attempt.summary));
+  assert.match(attempt.summary.result.objective.label,/响应差异/);
+  const stored=db.prepare('SELECT * FROM finding_verification_attempts WHERE id=?').get(attempt.id);
+  const linked={...stored,fingerprint:plan.fingerprint},content={...plan.content,finding_id:findingId};
+  const evidence=db.prepare('SELECT * FROM evidence_records WHERE run_id=? ORDER BY step_index').all(attempt.run_id);
+  const assess=rows=>evaluateSourceResponse(content.assessment_rule,rows,linked,content).conclusion;
+  assert.equal(assess(evidence),'confirmed');
+  for(const invalid of [{complete:false},{truncated:true},{status_code:401},{status_code:206},{url:target+'/other'}]) {
+    const altered=structuredClone(evidence);altered[1].raw_stdout=JSON.stringify({...JSON.parse(altered[1].raw_stdout),...invalid});
+    assert.equal(assess(altered),'inconclusive');
+  }
+  const matchingBaseline=structuredClone(evidence);
+  matchingBaseline[0].raw_stdout=JSON.stringify({...JSON.parse(matchingBaseline[0].raw_stdout),response:'fixture-specific-response'});
+  assert.equal(assess(matchingBaseline),'inconclusive','baseline match cannot prove an input effect');
+  const wrongLink=structuredClone(evidence),data=JSON.parse(wrongLink[1].evidence_data);data.finding_verification.attempt_id='other';wrongLink[1].evidence_data=JSON.stringify(data);
+  assert.equal(assess(wrongLink),'inconclusive','evidence from another attempt cannot be used');
+  mode='negative';attempt=await execute('source_negative_01');
+  assert.equal(attempt.summary.result.status,'not_achieved',JSON.stringify(attempt.summary));
+  mode='failure';attempt=await execute('source_failure_01');
+  assert.equal(attempt.state,'failed');assert.equal(attempt.summary.result.status,'inconclusive');
+  await request(path+'/source-runtime',{expected_revision:1,runtime_target:target+'/check',runtime_version:'v2'});
+  detail=await request(path);assert.ok(detail.readiness.reasons.some(x=>x.includes('版本已变化')));
+  await request(path+'/start',{revision:1,fingerprint:plan.fingerprint,confirmed:true,request_id:'source_stale_01'},409);
+  await request(path+'/source-payload',{expected_revision:0},409);
+  db.prepare("INSERT INTO finding_payload_collections(id,verification_id,flow_id,request_marker,state,source_fingerprint,scripts,created_by,created_at,updated_at) VALUES('fixture_collection',?,'1','fixture-marker','ready','fixture',?,'source_alice',datetime('now'),datetime('now'))")
+    .run(item.id,JSON.stringify([{id:'fixture-script',source_hash:'fixture-hash',content:'GET /check?probe',name:'Saved fixture',language:'http'}]));
+  await request(path+'/source-payload',{expected_revision:1});
+  detail=await request(path);assert.equal(detail.plans[0].content.source_payload.origin,'adapted_existing');
+  assert.equal(contexts.at(-1).existing_payloads.scripts[0].id,'fixture-script');
+  assert.equal(detail.readiness.ready,false,'new plan must not reset attempt budget');
+  const second=Number(db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data,severity,source_tool) SELECT scan_task_id,result_type,result_data,severity,source_tool FROM scan_results WHERE id=?").run(findingId).lastInsertRowid);
+  const other=await request(base,{finding_id:second}),otherPath=base+'/'+other.id;
+  db.prepare("INSERT INTO finding_payload_collections(id,verification_id,flow_id,request_marker,state,source_fingerprint,scripts,created_by,created_at,updated_at) SELECT 'fixture_second',?,flow_id,'fixture-second-marker',state,source_fingerprint,scripts,created_by,created_at,updated_at FROM finding_payload_collections WHERE id='fixture_collection'").run(other.id);
+  await request(otherPath+'/source-payload',{expected_revision:0});
+  const otherDetail=await request(otherPath),otherPlan=otherDetail.plans[0];mode='positive';
+  assert.equal(otherPlan.content.source_payload.origin,'adapted_existing');
+  await request(otherPath+'/start',{revision:1,fingerprint:otherPlan.fingerprint,confirmed:true,request_id:'adapted_payload_01'});
+  let last;
+  for(let i=0;i<800;i++){last=await request(otherPath);if(last.attempts[0]?.stop_confirmed)break;await delay(10);}
+  assert.equal(last.attempts[0]?.summary.result.status,'achieved','adapted saved payload also executes and returns evidence');
+  assert.deepEqual(db.pragma('foreign_key_check'),[]);
+});

@@ -64,10 +64,11 @@ int main(int argc,char **argv) {
  auto wait=[&](std::function<bool()> f){for(int i=0;i<150;i++){if(f())return true;QTest::qWait(20);}return false;};
  if(!wait([&]{return dialog.m_sources->count()==1&&!dialog.m_loading;}))return 2;dialog.m_timer->stop();
  if(requests.value("POST /api/pipelines/p/verifications/v/generate")||revision!=0||dialog.m_sources->currentIndex()!=-1)return 3;
- dialog.m_sources->setCurrentIndex(0);if(!dialog.m_sourcePreview->toPlainText().contains("配置检查"))return 4;dialog.m_useSource->click();
+ dialog.m_sourceChooser->setChecked(true);dialog.m_sources->setCurrentIndex(0);if(!dialog.m_sourcePreview->toPlainText().contains("配置检查")||!dialog.m_useSource->isVisible()||!dialog.m_useSource->isEnabled())return 4;dialog.m_useSource->click();
  if(!wait([&]{return dialog.m_revision==1&&!dialog.m_loading&&!dialog.m_busy;}))return 5;
  if(!dialog.m_planSummary->toPlainText().contains("内置定向方案") || !dialog.m_planSummary->toPlainText().contains("GET http://fixture.invalid/item") || dialog.m_planSummary->toPlainText().contains("{{entry}}"))return 6;
- if(dialog.m_bindStep->currentIndex()!=-1)return 7;dialog.m_bindStep->setCurrentIndex(0);dialog.m_resolvePayload->click();
+ dialog.m_sourceChooser->setChecked(true);auto *advancedPayload=dialog.findChild<QGroupBox*>("findingAdvancedPayload");if(!advancedPayload||!advancedPayload->isVisible())return 7;advancedPayload->setChecked(true);
+ if(dialog.m_bindStep->currentIndex()!=-1||!dialog.m_bindStep->isVisible())return 7;dialog.m_bindStep->setCurrentIndex(0);dialog.m_resolvePayload->click();
  if(!wait([&]{return dialog.m_payloads->count()==1&&!dialog.m_loading&&!dialog.m_busy;}))return 8;
  if(bound||dialog.m_revision!=1||!dialog.m_payloadPreview->toPlainText().contains("本次新生成"))return 9;
  if(!dialog.m_payloadPreview->toPlainText().contains("GET"))return 10;
@@ -86,7 +87,7 @@ int main(int argc,char **argv) {
  QTimer::singleShot(0,[]{auto *box=QApplication::activeModalWidget();if(box)if(auto *yes=box->findChild<QPushButton*>("confirmFindingExecution"))yes->click();});dialog.m_startSimple->click();
  if(!wait([&]{return dialog.m_detail["summary"].toObject()["conclusion"]=="confirmed"&&!dialog.m_loading;}))return 13;
  const auto started=bodies.value("/api/pipelines/p/verifications/v/start");if(started["fingerprint"]!="fp2"||!started["confirmed"].toBool())return 14;
- dialog.m_tabs->setCurrentIndex(1);if(!dialog.m_evidence->toPlainText().contains("已保存自动判断")||!dialog.m_evidence->toPlainText().contains("实际消费载荷"))return 15;
+ dialog.m_tabs->setCurrentWidget(dialog.findChild<QWidget*>("findingResultsPage"));if(!dialog.m_evidence->toPlainText().contains("已保存自动判断")||!dialog.m_evidence->toPlainText().contains("实际消费载荷"))return 15;
  dialog.m_evidenceTable->item(0,0)->setCheckState(Qt::Checked);dialog.m_note->setPlainText("需要结合应用部署要求复核");dialog.m_conclusion->setCurrentIndex(dialog.m_conclusion->findData("inconclusive"));
  dialog.m_resultDetails->setCurrentIndex(1);for(auto *button:dialog.findChildren<QPushButton*>())if(button->text()=="保存人工意见"){qobject_cast<QScrollArea*>(dialog.m_resultDetails->widget(1))->ensureWidgetVisible(button,0,0);QTest::qWait(20);if(!button->isVisible())return 20;QTest::mouseClick(button,Qt::LeftButton);}
  if(!wait([&]{return reviewed && dialog.m_detail["attempts"].toArray().first().toObject()["reviews"].toArray().size()==1 && dialog.m_resultConclusion->text().contains("目标已达成")&&!dialog.m_loading;}))return 16;

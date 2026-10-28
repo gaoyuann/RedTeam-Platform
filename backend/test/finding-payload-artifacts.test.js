@@ -11,6 +11,8 @@ import {ensureVerification,verificationDetail} from '../src/services/findingVeri
 import routes from '../src/routes/findingVerifications.js';
 import {startPayloadCollection,startPythonRewrite,cancelPayloadArtifacts,payloadArtifactView,waitPayloadArtifacts} from '../src/services/findingPayloadArtifacts.js';
 import {loadFindingContext} from '../src/services/findingPayload.js';
+import {enqueueSourcePayloads,resumeSourcePayloads} from '../src/services/sourcePayloadQueue.js';
+import {decodeCollectedPayload} from '../src/services/findingPayloadArtifacts.js';
 
 const actor={sub:'artifact_alice',role:'user'};
 const original="printf 'fixture input'";
@@ -81,6 +83,53 @@ test('Assistant collection uses the same source Flow, persists provenance, reuse
   assert.equal(f.state.creates,1);assert.equal(f.state.continuations,1);
   assert.equal(f.view().collections.length,2,'refresh keeps previous collection and rewrite history');
   assert.ok(f.state.calls.every(call=>!call.query.includes('createFlow')&&!call.query.includes('stopFlow')));
+});
+
+test('collection preserves safe connection failures before dispatch and hides unknown error details',async t=>{
+  const f=await fixture(t);
+  for(const [message,expected] of [
+    ['请配置 CSCAN_TOKEN_FILE 或 CSCAN_API_TOKEN','请配置 CSCAN_TOKEN_FILE 或 CSCAN_API_TOKEN'],
+    ['CScan API 连接失败','CScan API 连接失败'],
+    ['CScan HTTP 401','CScan HTTP 401'],
+    ['unexpected private-token-value','Assistant 收集请求失败，可继续核对原请求'],
+  ]) {
+    const client={assistants:async()=>{throw new Error(message);}};
+    startPayloadCollection(f.db,f.pipeline,f.item,actor,{}, {...f.dependencies,cscanClient:client});
+    await waitPayloadArtifacts(f.db,f.item);
+    const collection=f.view().collections[0];
+    assert.equal(collection.state,'error');assert.equal(collection.error_message,expected);
+    assert.equal(collection.assistant_id,null);assert.equal(f.state.creates,0);
+  }
+});
+
+test('final answer JSON surrounded by prose is collected, but competing blocks are rejected',async t=>{
+  const f=await fixture(t);f.state.hold=true;f.collect();await until(()=>f.state.creates===1);
+  const answer='Existing materials only.\n```json\n'+JSON.stringify(result)+'\n```\nNot executed.';
+  f.state.logs.push({id:'99',flowId:'91',assistantId:'10',type:'answer',message:answer,result:'',appendPart:false});
+  await waitPayloadArtifacts(f.db,f.item);assert.equal(f.view().collections[0].state,'ready');
+  assert.throws(()=>decodeCollectedPayload(answer+'\n```json\n{}\n```'));
+});
+
+test('automatic collection persists once, skips failed scans and resumes its durable queue',async t=>{
+  const f=await fixture(t);
+  f.db.prepare("UPDATE scan_tasks SET status='FAILED' WHERE scan_task_id='as'").run();
+  await enqueueSourcePayloads(f.db,'as',f.dependencies);assert.equal(f.state.creates,0);
+  f.db.prepare("UPDATE scan_tasks SET status='COMPLETED' WHERE scan_task_id='as'").run();
+  await Promise.all([enqueueSourcePayloads(f.db,'as',f.dependencies),enqueueSourcePayloads(f.db,'as',f.dependencies)]);
+  assert.equal(f.state.creates,1);assert.equal(f.view().collections[0].state,'ready');
+  assert.equal(f.db.prepare('SELECT state FROM source_payload_queue').get().state,'completed');
+  f.db.prepare("UPDATE source_payload_queue SET state='pending',last_finding_id=0").run();
+  await resumeSourcePayloads(f.db,f.dependencies);assert.equal(f.state.creates,1);assert.equal(f.state.continuations,0);
+});
+
+test('a mistaken parent citation resolves only to verbatim related Flow evidence',async t=>{
+  const f=await fixture(t);
+  f.state.taskReport='src/input.c: fixture parent report';
+  f.state.reply={...result,scripts:[{...result.scripts[0],source_type:'task',source_id:'t1'}]};
+  f.collect();await waitPayloadArtifacts(f.db,f.item);
+  const row=f.view().collections[0];assert.equal(row.state,'ready');
+  assert.equal(row.scripts[0].source_type,'subtask');assert.equal(row.scripts[0].source_id,'s1');
+  assert.equal(row.scripts[0].source_reference_corrected,true);
 });
 
 test('a lost creation response is reconciled by its saved marker without creating a second assistant',async t=>{
@@ -266,4 +315,16 @@ test('input and terminal output cannot satisfy a final answer; a later real answ
   f.collect();await waitPayloadArtifacts(f.db,f.item);
   assert.equal(f.view().collections[0].state,'ready');
   assert.equal(f.state.creates,1);assert.equal(f.state.continuations,0);
+});
+
+test('long source findings remain valid JSON after display redaction',async t=>{
+  const f=await fixture(t);
+  const data={...finding,reason:'long evidence '.repeat(400),password:'fixture-sensitive'};
+  f.db.prepare('UPDATE scan_results SET result_data=? WHERE id=?').run(JSON.stringify(data),f.item.finding_id);
+  const detail=verificationDetail(f.db,f.pipeline,f.item.id);
+  const shown=JSON.parse(detail.finding.result_data);
+  assert.equal(shown.title,finding.title);
+  assert.equal(shown.evidence_origin,'cscan_report');
+  assert.equal(shown.password,'[已隐藏]');
+  assert.ok(shown.reason.length<=2000);
 });
