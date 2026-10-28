@@ -1,4 +1,6 @@
 import { parseResultData } from './scanResultCatalog.js';
+import {sourceResponseSupported,evaluateSourceResponse} from './sourceResponseRule.js';
+import {codeRuleSupported,evaluateCodeRule} from './sourceCodeRule.js';
 
 export const builtinVerificationPlans = [
   {id:'f08-web-headers-v1',kind:'headers',version:1,name:'Web 防护响应头检查',description:'复核指定 HTML 入口的防护响应头配置',
@@ -125,6 +127,8 @@ export function directoryEvidenceCriteria(rule,evidence,attempt,plan) {
   return result;
 }
 export function evaluateFindingRule(rule, evidence, attempt, plan) {
+  if(codeRuleSupported(rule))return evaluateCodeRule(rule,evidence,attempt,plan);
+  if(sourceResponseSupported(rule))return evaluateSourceResponse(rule,evidence,attempt,plan);
   const out={rule_id:rule.id,rule_version:rule.version,conclusion:'inconclusive',evidence_ids:[],reason:'缺少符合方案归属的完整响应',limitations:rule.limitations};
   if(!supportedRule(rule))return {...out,reason:'不支持此规则版本，需要人工复核'};
   if(attempt.state!=='completed' || !attempt.stop_confirmed)return {...out,reason:'执行未完整完成或实际停止未确认'};

@@ -13,7 +13,25 @@ const fail=(message,status=409)=>{throw Object.assign(new Error(message),{status
 const clean=value=>String(value || '').replace(/\x1b\[[0-9;]*m/g,'').replace(/\r\n/g,'\n');
 const signature=log=>String(log.id)+':'+hash(String(log.message || '')+'\n'+String(log.result || ''));
 const terminal=status=>['waiting','finished','done','success'].includes(status);
+// Only expose known client diagnostics; arbitrary upstream errors may contain secrets.
+function collectionError(error) {
+  const message=String(error?.message || '');
+  const safe=new Set(['请配置 CSCAN_TOKEN_FILE 或 CSCAN_API_TOKEN','CScan 凭据文件无法读取',
+    'CScan API 连接失败','CScan API 请求超时','CScan GraphQL 请求失败',
+    'CScan API 返回了无效 JSON','CScan API 响应超过大小限制',
+    'CScan 响应与本次 Flow 或 Assistant 不匹配','CScan API 地址无效']);
+  if(safe.has(message) || /^CScan HTTP \d{3}$/.test(message)) return message;
+  return error.status?taskDisplayText(message):'Assistant 收集请求失败，可继续核对原请求';
+}
 const decode=value=>JSON.parse(String(value || '').trim().replace(/^```(?:json)?\s*/,'').replace(/```\s*$/,''));
+export function decodeCollectedPayload(value) {
+  try {return decode(value);} catch {}
+  // Final answers may explain the result around one explicit JSON block.
+  // Never parse tool output, infer missing JSON, or choose among competing blocks.
+  const blocks=[...String(value || '').matchAll(/^```json\s*\r?\n([\s\S]*?)^```\s*$/gm)];
+  if(blocks.length!==1)throw new Error('ambiguous collection JSON');
+  return JSON.parse(blocks[0][1]);
+}
 function jobs(db) {let value=jobsByDb.get(db);if(!value){value=new Map();jobsByDb.set(db,value);}return value;}
 function context(db,pipeline,item,actor) {
   if(actor && actor.role!=='admin' && actor.sub!==pipeline.created_by)fail('没有任务权限',403);
@@ -80,12 +98,16 @@ function validateScripts(response,sources) {
   for(const value of response.scripts) {
     if(!value || Array.isArray(value) || typeof value.content!=='string')fail('Assistant 返回的载荷条目格式无效',422);
     const content=clean(value?.content).trim();
-    const source=sources.find(row=>row.type===value?.source_type && row.id===String(value?.source_id));
+    const declared=sources.find(row=>row.type===value?.source_type && row.id===String(value?.source_id));
+    // Assistants sometimes cite a parent subtask while the verbatim material is
+    // in its tool/message logs. Reconcile only against already related Flow evidence.
+    const source=declared?.text.includes(content)?declared:declared && sources.find(row=>row.text.includes(content));
     if(!content || Buffer.byteLength(content)>32768 || !source?.text.includes(content))fail('Assistant 载荷缺少本 Flow 中与当前漏洞关联的原文依据，未采纳',422);
     const safeContent=taskDisplayText(content),sourceHash=hash(safeContent),id='script_'+sourceHash.slice(0,20);
     if(seen.has(id))continue;seen.add(id);bytes+=Buffer.byteLength(safeContent);
     if(bytes>128*1024)fail('Assistant 载荷超过保存上限，未截断保存',422);
     scripts.push({id,source_hash:sourceHash,content:safeContent,source_type:source.type,source_id:source.id,
+      source_reference_corrected:source.type!==value.source_type || source.id!==String(value.source_id),
       name:String(value.name || '收集到的载荷').slice(0,200),language:String(value.language || '').slice(0,60),
       purpose:String(value.purpose || '').slice(0,2000),usage:String(value.usage || '').slice(0,2000),
       safety_notes:String(value.safety_notes || '').slice(0,2000),redacted:safeContent!==content,runtime_verified:false});
@@ -154,7 +176,7 @@ async function collect(db,pipeline,item,row,snapshot,client,signal,options) {
       let text='';
       for(const log of outputs)text=log.appendPart?text+String(log.result || log.message || ''):String(log.result || log.message || '');
       if(Buffer.byteLength(text)>256*1024)fail('Assistant 回复超过上限，未截断解析',422);
-      let response;try{response=decode(text);}catch{fail('Assistant 未返回有效的载荷 JSON',422);}
+      let response;try{response=decodeCollectedPayload(text);}catch{fail('Assistant 未返回有效的载荷 JSON',422);}
       const sources=Array.isArray(response.scripts) && response.scripts.length
         ?evidenceSources(await client.evidence(row.flow_id,{signal}),snapshot.data):[];
       const scripts=validateScripts(response,sources);
@@ -205,7 +227,7 @@ export function startPayloadCollection(db,pipeline,item,actor,input={},dependenc
   },(error,aborted)=>{
     if(db.prepare('SELECT state FROM finding_payload_collections WHERE id=?').get(current.id)?.state==='cancelled')return;
     const state=current.dispatch_started && (!error.status || error.status===409)?'uncertain':'error';
-    update(db,current.id,{state,error_message:aborted?'收集等待超时，可继续核对原 Assistant；不会重复创建':error.status?taskDisplayText(error.message):'Assistant 收集请求失败，可继续核对原请求'});
+    update(db,current.id,{state,error_message:aborted?'收集等待超时，可继续核对原 Assistant；不会重复创建':collectionError(error)});
   },{timeoutMs:dependencies.collectionTimeoutMs ?? 360000,recordId:current.id});
   return payloadArtifactView(db,item);
 }

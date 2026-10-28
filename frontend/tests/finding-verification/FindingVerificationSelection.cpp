@@ -58,7 +58,7 @@ int main(int argc,char **argv) {
   auto wait=[&](std::function<bool()> condition){for(int i=0;i<150;i++){if(condition())return true;QTest::qWait(10);}return false;};
   if(!wait([&]{return dialog.m_revision==1&&!dialog.m_loading;}))return fail(2,"initial detail failed");dialog.m_timer->stop();
   if(mode=="selection-existing-read") {
-    if(writes||dialog.m_attempts->currentData()!="attempt-older"||dialog.m_tabs->currentIndex()!=1)return fail(17,"opening existing history wrote data or selected the wrong attempt");
+    if(writes||dialog.m_attempts->currentData()!="attempt-older"||dialog.m_tabs->currentWidget()->objectName()!="findingResultsPage")return fail(17,"opening existing history wrote data or selected the wrong attempt");
     dialog.m_attempts->setCurrentIndex(0);dialog.load(false);
     if(!wait([&]{return !dialog.m_loading;}))return fail(18,"existing history poll did not settle");
     if(writes||dialog.m_attempts->currentData()!="attempt-old")return fail(19,"initial attempt selection overrode later manual history choice");
@@ -94,7 +94,7 @@ int main(int argc,char **argv) {
     if(mode=="selection-deferred-run")addStarted();
     dialog.load(false);if(!wait([&]{return !dialog.m_loading;}))return fail(12,"matching detail did not settle");
   }
-  if(dialog.m_attempts->currentData()!="attempt-new"||!dialog.m_pendingAttemptRunId.isEmpty()||dialog.m_tabs->currentIndex()!=1||dialog.m_resultDetails->currentIndex()!=0||!dialog.m_resultConclusion->text().contains("等待结果"))return fail(13,"successful start did not select its matching run result");
+  if(dialog.m_attempts->currentData()!="attempt-new"||!dialog.m_pendingAttemptRunId.isEmpty()||dialog.m_tabs->currentWidget()->objectName()!="findingResultsPage"||dialog.m_resultDetails->currentIndex()!=0||!dialog.m_resultConclusion->text().contains("等待结果"))return fail(13,"successful start did not select its matching run result");
   if(!dialog.m_note->toPlainText().isEmpty()||!dialog.m_conclusion->currentData().toString().isEmpty())return fail(14,"new attempt inherited optional opinion input");
   // A new draft version cannot restore a per-finding execution budget.
   state="completed";auto finished=attempts.first().toObject();finished["state"]="completed";attempts[0]=finished;++revision;dialog.load(true);

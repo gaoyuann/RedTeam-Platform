@@ -23,6 +23,7 @@ import { discoverTargetProfile, loadTargetProfile } from './targetDiscovery.js';
 import { validateVariablePlan } from './executionVariables.js';
 import { ensureNucleiTemplates, getRequiredNucleiTemplateIds, inspectNucleiTemplates } from './nucleiTemplates.js';
 import {normalizeEvidenceCriteria} from './sourceEvidenceCriteria.js';
+import {CODE_TOOL,codeImage,assertCodePlan,codeHash} from './verificationCodeArtifact.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = dirname(__filename);
@@ -62,6 +63,35 @@ export async function runPreflightChecks({ playbookId, target, db, scanTaskIds =
   try {source=JSON.parse(db.prepare('SELECT metadata FROM playbooks WHERE playbook_id=?').get(playbookId)?.metadata || '{}').source_verification;} catch {}
   let finding;
   try {finding=JSON.parse(db.prepare('SELECT metadata FROM playbooks WHERE playbook_id=?').get(playbookId)?.metadata || '{}').finding_verification;} catch {}
+  const codeSteps=db.prepare('SELECT * FROM playbook_steps WHERE playbook_id=? ORDER BY step_index').all(playbookId);
+  if(codeSteps.some(s=>s.tool_id===CODE_TOOL)) {
+    let reason,engine;
+    try {
+      if(!finding || !runId)throw new Error('本地载荷必须关联逐漏洞验证尝试');
+      const item=db.prepare('SELECT * FROM finding_verifications WHERE id=? AND pipeline_id=?').get(finding.verification_id,finding.pipeline_id);
+      const pipeline=db.prepare('SELECT * FROM pipelines WHERE pipeline_id=? AND created_by=?').get(finding.pipeline_id,owner);
+      const attempt=db.prepare('SELECT 1 FROM finding_verification_attempts WHERE id=? AND run_id=? AND verification_id=? AND revision=?')
+        .get(finding.attempt_id,runId,item?.id,finding.revision);
+      const frozen=db.prepare('SELECT content,fingerprint FROM finding_verification_plans WHERE verification_id=? AND revision=?').get(item?.id,finding.revision);
+      if(!item || !pipeline || !attempt || !frozen)throw new Error('本地验证归属或冻结方案缺失');
+      const plan=JSON.parse(frozen.content);
+      if(plan.target!==target || frozen.fingerprint!==finding.fingerprint || codeHash(plan)!==frozen.fingerprint
+        || JSON.stringify(plan.scope)!==JSON.stringify(taskScope(pipeline)))throw new Error('本地验证方案或范围已变化');
+      assertCodePlan(db,item,plan);
+      if(codeSteps.length!==plan.steps.length || codeSteps.some((s,i)=>s.tool_id!==plan.steps[i].tool_id || s.args_template!==plan.steps[i].args_template))throw new Error('执行步骤与冻结载荷不一致');
+      for(const step of codeSteps) {
+        const check=validateExecutionScope({target,toolId:step.tool_id,args:JSON.parse(step.args_template),scope:taskScope(pipeline)});
+        if(!check.allowed)throw new Error(check.reason);
+      }
+      engine=await getEngine();
+      if(!['docker','podman'].includes(engine))throw new Error('需要 Docker/Podman 隔离执行环境，不在宿主机运行生成代码');
+      const image=codeImage(plan.code_payload.execution.language);
+      const resources=await inspectRuntimeResources({engine,toolIds:[CODE_TOOL],imageMap:{[CODE_TOOL]:image},binMap:{}});
+      if(!resources.passed)throw new Error('当前引擎中缺少现有工具镜像 '+image+'，本次未执行；请核对工具环境');
+    }catch(error){reason=error.message;}
+    return {passed:!reason,checks:[{name:'local_code_environment',passed:!reason,message:reason || '冻结载荷、所属范围与隔离镜像检查通过'},
+      {name:'target_class_compatibility',passed:true,target_profile:resolveTargetProfile(target),message:'本地模拟验证，不连接或探测实际目标'}]};
+  }
   if(finding) {
     const steps=db.prepare('SELECT * FROM playbook_steps WHERE playbook_id=? ORDER BY step_index').all(playbookId);
     if(steps.length && steps.every(s=>s.tool_id==='target-request')) {

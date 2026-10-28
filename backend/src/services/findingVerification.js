@@ -16,6 +16,11 @@ import { getPayloadById } from './payloadLoader.js';
 import { findingPayloadMatches } from './findingPayloads.js';
 import { compilePlaybook } from './playbookCompiler.js';
 import {payloadArtifactView} from './findingPayloadArtifacts.js';
+import {makeSourceResponseRule} from './sourceResponseRule.js';
+import {verificationCodeHistory} from './findingVerificationCode.js';
+import {currentFindingPayload} from './currentFindingPayload.js';
+import {assertCodePlan} from './verificationCodeArtifact.js';
+import {makeCodeRule} from './sourceCodeRule.js';
 
 export const json = (value, fallback = {}) => { try { return typeof value === 'string' ? JSON.parse(value) : value ?? fallback; } catch { return fallback; } };
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
@@ -82,8 +87,11 @@ export function verificationDetail(db, pipeline, id) {
   };});
   const entry=findingVerificationEntry(db,pipeline,row);
   const detail=taskDisplayValue({ execution_backend:{id:'platform-executor',dispatch:'findingVerificationRunner -> executionEngine.executeRun',transport:'target-request: Node HTTP/TCP; other tools: Docker/Podman images',pentagi_required_for_execution:false}, ...item, task_no:pipeline.task_no || null, eligible:resultCategory(row)==='vulnerability',
-    ineligibility_reason:resultCategory(row)==='vulnerability' ? null : '此记录现归为信息或非漏洞记录，仅保留历史与停止操作，不能新建验证。', default_target:entry.target,entry_context:entry, finding:publicScanRecord(row), plans, attempts,
+    ineligibility_reason:resultCategory(row)==='vulnerability' ? null : '此记录现归为信息或非漏洞记录，仅保留历史与停止操作，不能新建验证。', default_target:entry.target,entry_context:entry, finding:{...publicScanRecord(row),result_data:json(publicScanRecord(row).result_data)}, plans, attempts,
     payloads:verificationPayloadCatalog(db,item,row,plans[0]?.content),payload_artifacts:payloadArtifactView(db,item),readiness:verificationReadiness(db,pipeline,item,plans[0]), summary:verificationSummary(db,item.finding_id,pipeline.pipeline_id) });
+  detail.finding.result_data=JSON.stringify(detail.finding.result_data);
+  detail.verification_code=verificationCodeHistory(db,item.id);
+  detail.current_payload=currentFindingPayload(detail.payload_artifacts,detail.verification_code);
   // Serialize only after field-level redaction; legacy readers still receive valid JSON.
   for(const attempt of detail.attempts)for(const evidence of attempt.evidence)if(evidence.observation)evidence.raw_stdout=JSON.stringify(evidence.observation);
   return detail;
@@ -105,6 +113,8 @@ export function verificationReadiness(db,pipeline,item,record) {
   const content=readablePlanContent(record.content);
   if(content.read_error)return {ready:false,reasons:[content.read_error],revision:record.revision,fingerprint:record.fingerprint};
   const reasons=[...scopeConditions(taskScope(pipeline)),...(content.missing_conditions || []),...(content.blockers || [])];
+  try{assertCodePlan(db,item,content);}catch(error){reasons.push(error.message);}
+  if(sourceRuntimeChanged(db,item,content))reasons.push('程序运行入口或版本已变化，请重新生成验证载荷');
   if(resultCategory(taskFinding(db,pipeline,item.finding_id,{requireVulnerability:false}))!=='vulnerability')reasons.push('此记录仅保留历史，不可新建验证');
   if(content.verification_contract?.schema_version!==1)reasons.push('旧方案需保存新版本并重新确认');
   if(!content.success_criteria)reasons.push('缺少成功判据');if(!content.cleanup)reasons.push('缺少清理说明');
@@ -173,7 +183,7 @@ function normalizePlan(db,pipeline,item,input,actor,{allowBlocked=false}={}) {
   if(plan.steps.some(s=>s.consumption==='pending'))plan.missing_conditions=[...new Set([...plan.missing_conditions,'需要为指定步骤手动选择载荷'])];
   return plan;
 }
-export function saveVerificationPlan(db,pipeline,actor,id,input,{provenance,allowBlocked=false}={}) {
+export function saveVerificationPlan(db,pipeline,actor,id,input,{provenance,allowBlocked=false,sourcePayload,codePayload}={}) {
   return db.transaction(()=>{
     const item=verification(db,pipeline,id);
     if(['queued','running','cancelling','unknown'].includes(item.state)) fail(409,'验证活动尚未结束，不能修改计划');
@@ -195,6 +205,15 @@ export function saveVerificationPlan(db,pipeline,actor,id,input,{provenance,allo
     const candidate=entry.target===content.target?findingRule(finding,content.target):null;
     const compatible=compiledRuleStep(db,content,candidate);
     if(compatible)content.assessment_rule=compatible;
+    if(sourcePayload) {
+      content.source_payload=sourcePayload;
+      content.assessment_rule=makeSourceResponseRule(content,sourcePayload.expected_response);
+    }
+    if(codePayload) {
+      content.code_payload=codePayload;
+      content.assessment_rule=makeCodeRule(content);
+    }
+    assertCodePlan(db,item,content);
     content.verification_contract=buildVerificationContract(content,item.finding_id);
     const blockers=[...(content.blockers || [])];
     if(!content.success_criteria)blockers.push('缺少成功判据');if(!content.cleanup)blockers.push('缺少清理说明');
@@ -208,12 +227,21 @@ export function saveVerificationPlan(db,pipeline,actor,id,input,{provenance,allo
     return {revision,state:conditions.length?'needs_conditions':'draft'};
   })();
 }
+function sourceRuntimeChanged(db,item,content) {
+  if(!content.source_payload)return false;
+  const params=json(db.prepare('SELECT parameters FROM scan_tasks WHERE scan_task_id=?').get(item.scan_task_id)?.parameters);
+  const row=db.prepare('SELECT result_data FROM scan_results WHERE id=?').get(item.finding_id);
+  return params.runtime_target!==content.target || params.runtime_version!==content.source_payload.runtime_version
+    || !row || createHash('sha256').update(row.result_data).digest('hex')!==content.source_payload.finding_hash;
+}
 export function checkVerificationPlan(db,pipeline,actor,id,revision) {
   const item=verification(db,pipeline,id);
   if(revision!==item.revision) fail(409,'计划版本已变化');
   const record=dbSafe(db,'SELECT * FROM finding_verification_plans WHERE verification_id=? AND revision=?',id,revision);
   if(!record) fail(409,'尚未保存计划');
   const content=json(record.content);
+  assertCodePlan(db,item,content);
+  if(sourceRuntimeChanged(db,item,content))fail(409,'程序运行入口或版本已变化，请重新生成验证载荷');
   if(content.verification_contract?.schema_version!==1)fail(409,'旧方案缺少验证目标契约，请保存新版本并重新确认');
   if(JSON.stringify(content.verification_contract)!==JSON.stringify(buildVerificationContract(content,item.finding_id)))fail(409,'验证目标契约不一致，请保存新版本并重新确认');
   if(fingerprint(content)!==record.fingerprint) fail(409,'计划快照不一致');

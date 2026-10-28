@@ -34,6 +34,17 @@ BACKEND_PORT=3002
 HEALTH_URL="http://127.0.0.1:$BACKEND_PORT/api/health"
 MAX_WAIT=30
 
+# Load connection settings only into the backend, without executing an env file.
+# Explicit selection wins; keep the existing local development setup compatible.
+if [ -z "${REDTEAM_CSCAN_ENV_FILE:-}" ]; then
+  for candidate in "${XDG_CONFIG_HOME:-$HOME/.config}/redteam/cscan.env" "$BASE_DIR/.codex/local-demo/cscan.env"; do
+    if [ -f "$candidate" ]; then
+      export REDTEAM_CSCAN_ENV_FILE="$candidate"
+      break
+    fi
+  done
+fi
+
 echo "=== RedTeam Platform Start ==="
 echo "Mode: $([ -x "$SCRIPT_DIR/bin/RedTeam-Platform" ] && echo 'portable' || echo 'development')"
 
@@ -143,6 +154,13 @@ fi
 # ── 2. Start backend ──────────────────────────────────────────────────
 echo "[1/3] Starting Node.js backend..."
 cd "$BACKEND_DIR"
+
+if [ -n "${REDTEAM_CSCAN_ENV_FILE:-}" ]; then
+  echo "[CScan] Checking connection and credentials..."
+  if ! "$NODE_BIN" scripts/check-source-environment.js --api; then
+    echo "[CScan] Connection unavailable. Saved reports remain viewable; remote collection requires a working tunnel and credentials."
+  fi
+fi
 
 # Set data directory for SQLite
 export REDTEAM_DATA_DIR="$DATA_DIR"

@@ -5,6 +5,8 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import {loadCscanEnvironment} from './services/cscanEnvironment.js';
+import {resumeSourcePayloads} from './services/sourcePayloadQueue.js';
 
 import { getDb } from './db/connection.js';
 import { runMigrations } from './db/migrate.js';
@@ -38,6 +40,7 @@ import { recoverCscanAudits } from './services/sourceAudit.js';
 // ── Config ──────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..', '..');
+loadCscanEnvironment();
 const PORT = process.env.PORT || 3002;
 const MIGRATIONS_DIR = resolve(__dirname, 'db', 'migrations');
 
@@ -152,6 +155,12 @@ async function start() {
   // Clean up pipelines/steps stuck 'running' from a crash/kill before this boot
   cleanupOrphanedPipelines();
   await recoverCscanAudits(db);
+  void resumeSourcePayloads(db).catch(()=>console.warn('[CScan] 自动载荷收集恢复失败'));
+  const payloadQueueTimer=setInterval(()=>{
+    void resumeSourcePayloads(db).catch(()=>console.warn('[CScan] 自动载荷收集未完成'));
+  },5000);
+  payloadQueueTimer.unref();
+  server.once('close',()=>clearInterval(payloadQueueTimer));
 
   server.listen(PORT, HOST, () => {
     console.log(`[Server] RedTeam Backend running on http://${HOST}:${PORT}`);

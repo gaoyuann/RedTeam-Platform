@@ -1,6 +1,7 @@
 import { StringDecoder } from 'node:string_decoder';
 import { spawn } from 'child_process';
 import { runTargetRequest } from './targetRequest.js';
+import {runSourceCode} from './sourceCodeRunner.js';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getEngine } from './containerEngine.js';
@@ -31,6 +32,7 @@ const IMAGE_MAP = {
   // ── Source code audit (C/C++) ────────────────────────────────────────
   cppcheck: 'rt-sast-c', flawfinder: 'rt-sast-c',
   'target-request': 'builtin',
+  'source-code-runner': 'builtin', // dispatcher selects rt-web / rt-sast-c by frozen language
 };
 
 // ── Tool → Binary name inside container ─────────────────────────────────
@@ -164,6 +166,7 @@ export async function runTool(toolId, args, options = {}) {
   const cancelled=()=>({success:false,exitCode:-1,stdout:'',stderr:'操作员手动中止',aborted:true,processStopped:true,toolStarted:false});
   if(options.signal?.aborted) return cancelled();
   if (toolId === 'target-request') return runTargetRequest(args, options);
+  if (toolId === 'source-code-runner') return runSourceCode(args, options);
   if (SAST_TOOLS.has(toolId) && !options.sourceDir) return {success:false,exitCode:1,stdout:'',stderr:'源码工具必须从源码审计任务运行',error:'缺少任务源码快照',toolStarted:false};
   if (VIRTUAL_TOOLS.has(toolId)) {
     return { success: false, exitCode: -1, stdout: '', stderr: `Tool ${toolId} is virtual (HTTP-based), use dedicated handler`, executionMode: 'virtual',toolStarted:false };

@@ -70,7 +70,7 @@ int main(int argc,char **argv) {
   if(!wait([&]{return !dialog.m_loading;}))return 15;
   if(dialog.m_evidenceTable->item(0,0)->checkState()!=Qt::Checked)return 16;
   if(!dialog.m_conclusion->currentData().toString().isEmpty())return 21;
-  auto saveReview=[&]{dialog.m_tabs->setCurrentIndex(1);dialog.m_resultDetails->setCurrentIndex(1);for(auto *button:dialog.findChildren<QPushButton*>())if(button->text()=="保存人工意见"){qobject_cast<QScrollArea*>(dialog.m_resultDetails->widget(1))->ensureWidgetVisible(button,0,0);QTest::qWait(20);QTest::mouseClick(button,Qt::LeftButton);}};
+  auto saveReview=[&]{dialog.m_tabs->setCurrentWidget(dialog.findChild<QWidget*>("findingResultsPage"));dialog.m_resultDetails->setCurrentIndex(1);for(auto *button:dialog.findChildren<QPushButton*>())if(button->text()=="保存人工意见"){qobject_cast<QScrollArea*>(dialog.m_resultDetails->widget(1))->ensureWidgetVisible(button,0,0);QTest::qWait(20);QTest::mouseClick(button,Qt::LeftButton);}};
   saveReview();
   QTest::qWait(40);if(requests.value("POST /api/pipelines/p/verifications/v1/reviews")!=0)return 22;
   dialog.m_conclusion->setCurrentIndex(dialog.m_conclusion->findData("confirmed"));dialog.m_note->setPlainText("未提交的上一尝试说明");
@@ -84,8 +84,8 @@ int main(int argc,char **argv) {
   if(bodies.value("POST /api/pipelines/p/verifications/v1/reviews")["evidence_ids"].toArray()!=QJsonArray{77})return 18;
   dialog.m_timer->stop();dialog.grab().save("finding-verification-smoke.png");
   dialog.resize(1024,600);QTest::qWait(40);dialog.grab().save("finding-verification-narrow.png");
-  dialog.findChild<QTabWidget*>()->setCurrentIndex(1);QTest::qWait(40);dialog.grab().save("finding-verification-plan.png");
-  dialog.findChild<QTabWidget*>()->setCurrentIndex(1);QTest::qWait(40);dialog.grab().save("finding-verification-evidence.png");
+  dialog.m_tabs->setCurrentIndex(0);QTest::qWait(40);dialog.grab().save("finding-verification-plan.png");
+  dialog.m_tabs->setCurrentWidget(dialog.findChild<QWidget*>("findingResultsPage"));QTest::qWait(40);dialog.grab().save("finding-verification-evidence.png");
   // A late reply must not dereference a destroyed dialog.
   auto *late=new FindingVerificationDialog(&api,"p",{124});delete late;QTest::qWait(100);
   return 0;

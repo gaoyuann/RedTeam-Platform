@@ -111,6 +111,9 @@ test('target Flow -> retained report -> original Assistant artifacts -> plan -> 
   assert.equal(final.source_files.length,1);
   assert.equal(assistants.length,0,'upstream report path does not create a report Assistant');
   assert.ok(!calls.some(query=>/Assistant/.test(query)),'report import only reads task/subtask results');
+  await until(()=>db.prepare('SELECT 1 FROM source_payload_queue WHERE scan_task_id=?').get(scan.scan_task_id));
+  assert.equal(db.prepare('SELECT state FROM source_payload_queue WHERE scan_task_id=?').get(scan.scan_task_id).state,'pending',
+    'completed source scans durably enqueue collection separately from report import');
   const rawReport=db.prepare("SELECT result_data FROM scan_results WHERE scan_task_id=? AND result_type='raw_output'").all(scan.scan_task_id)
     .map(row=>JSON.parse(row.result_data)).find(raw=>raw.complete);
   assert.equal(rawReport.report,report,'complete task report is retained unchanged');

@@ -3,6 +3,9 @@ import { parseVerificationGeneration } from '../services/findingVerificationGene
 import { Router } from 'express';
 import { requireActor } from '../middleware/recordAccess.js';
 import { taskScope } from '../services/taskScope.js';
+import {prepareSourceVerification,setSourceRuntime} from '../services/sourceVerificationPreparation.js';
+import {generateVerificationCode} from '../services/findingVerificationCode.js';
+import {prepareVerificationCode} from '../services/verificationCodePlan.js';
 import { callLlm } from '../services/llmClient.js';
 import { taskDisplayValue } from '../services/taskExecution.js';
 import { ensureVerification, verification, verificationDetail, verificationSources, templatePlan, saveVerificationPlan,
@@ -59,6 +62,10 @@ export default function findingVerificationRoutes(db, dependencies={}) {
     return cancelPayloadArtifacts(db,req.pipeline,item,req.user,dependencies);
   }));
   router.post('/:verificationId/plans',handle(req=>saveVerificationPlan(db,req.pipeline,req.user,req.params.verificationId,req.body || {})));
+  router.post('/:verificationId/source-runtime',handle(req=>setSourceRuntime(db,req.pipeline,req.user,req.params.verificationId,req.body || {})));
+  router.post('/:verificationId/source-payload',handle(req=>prepareSourceVerification(db,req.pipeline,req.user,req.params.verificationId,req.body || {},dependencies)));
+  router.post('/:verificationId/verification-code',handle(req=>generateVerificationCode(db,req.pipeline,req.user,req.params.verificationId,req.body || {},dependencies)));
+  router.post('/:verificationId/code-plan',handle(req=>prepareVerificationCode(db,req.pipeline,req.user,req.params.verificationId,req.body || {})));
   router.post('/:verificationId/preflight',handle(req=>{
     const {content,record}=checkVerificationPlan(db,req.pipeline,req.user,req.params.verificationId,req.body?.revision);
     return {revision:record.revision,prerequisites:content.prerequisites,success_criteria:content.success_criteria,

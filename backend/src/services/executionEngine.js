@@ -21,6 +21,7 @@ import { establishDvwaSession } from './dvwaSession.js';
 import { validateStepVariables, isDvwaSessionProducer } from './executionVariables.js';
 import {evaluateEvidenceCriteria,sameComparisonRequest} from './sourceEvidenceCriteria.js';
 import {parseSourceDiagnostics} from './sourceDiagnostics.js';
+import {CODE_TOOL,assertCodePlan,codeHash} from './verificationCodeArtifact.js';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -61,6 +62,7 @@ const EVIDENCE_TYPE_MAP = {
   arjun: 'param_discovery', 'web-brute': 'param_discovery',
   'system-tools': 'command_execution',
   'target-request': 'application_observation',
+  'source-code-runner': 'local_code_observation',
 };
 
 // ── Recommendation builder ─────────────────────────────────────────────
@@ -166,7 +168,7 @@ function recordEvidence(db, runId, stepIndex, toolId, result, target, expectedMi
         payload_version: payloadInfo.version, payload_source: payloadInfo.source,
         payload_consumption: payloadInfo.consumption } : {}),
     }),
-    (result.stdout || '').slice(0, toolId==='target-request' ? 524288 : MAX_OUTPUT_LENGTH),
+    (result.stdout || '').slice(0, ['target-request',CODE_TOOL].includes(toolId) ? 524288 : MAX_OUTPUT_LENGTH),
     (result.stderr || '').slice(0, MAX_OUTPUT_LENGTH),
     target || null,
     JSON.stringify(mitreHits),
@@ -202,6 +204,22 @@ export async function executeRun(runId) {
     : db.prepare('SELECT * FROM pipelines WHERE run_id=? AND target=? AND created_by=?').get(runId,run.target,run.user_sub);
   if (findingVerification && !pipeline) return {ok:false,error:'验证任务归属失效',processStopped:true};
   const scope=pipeline ? taskScope(pipeline) : null;
+  let codeArtifact;
+  if(findingVerification) {
+    const frozen=db.prepare('SELECT content,fingerprint FROM finding_verification_plans WHERE verification_id=? AND revision=?')
+      .get(findingVerification.verification_id,findingVerification.revision);
+    if(frozen) {
+      let content;
+      try{content=JSON.parse(frozen.content);}catch{return {ok:false,error:'冻结验证方案格式无效，未执行任何步骤',processStopped:true};}
+      if(content.code_payload) {
+        const item=db.prepare('SELECT * FROM finding_verifications WHERE id=?').get(findingVerification.verification_id);
+        try {
+          if(codeHash(content)!==frozen.fingerprint || frozen.fingerprint!==findingVerification.fingerprint)throw new Error('载荷方案指纹不一致');
+          assertCodePlan(db,item,content);codeArtifact=content.code_payload;
+        }catch(error){return {ok:false,error:error.message,processStopped:true};}
+      }
+    }
+  }
 
   let sourceVerification;
   try {sourceVerification=JSON.parse(db.prepare('SELECT metadata FROM playbooks WHERE playbook_id=?').get(run.playbook_id)?.metadata || '{}').source_verification;} catch {}
@@ -506,7 +524,8 @@ export async function executeRun(runId) {
             }
             targetContext.dvwa_session_verified = result.success;
           } else {
-            result = await runTool(step.tool_id, args, { timeout: getToolTimeout(step.tool_id), signal: controller.signal, target: run.target, requireContainer:!!findingVerification });
+            result = await runTool(step.tool_id, args, { timeout: getToolTimeout(step.tool_id), signal: controller.signal, target: run.target, requireContainer:!!findingVerification,
+              ...(step.tool_id===CODE_TOOL?{codeArtifact}: {}) });
           }
         } catch (err) {
           result = { success: false, exitCode: -1, stdout: '', stderr: err.message, executionMode: 'error', processStopped: findingVerification ? false : undefined };
@@ -526,7 +545,7 @@ export async function executeRun(runId) {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         runId, step.step_index, step.step_id, source, step.tool_id, JSON.stringify(redactToolArgs(args, step.tool_id)),
         startedAt, new Date().toISOString(), result.success ? 1 : 0, result.exitCode ?? -1,
-        (result.stdout || '').slice(0, step.tool_id==='target-request' ? 524288 : MAX_OUTPUT_LENGTH), (result.stderr || '').slice(0, MAX_OUTPUT_LENGTH), result.executionMode || null, durationMs,
+        (result.stdout || '').slice(0, ['target-request',CODE_TOOL].includes(step.tool_id) ? 524288 : MAX_OUTPUT_LENGTH), (result.stderr || '').slice(0, MAX_OUTPUT_LENGTH), result.executionMode || null, durationMs,
       ).lastInsertRowid);
       attempts++;
       step.execution_finished = true;
@@ -551,7 +570,9 @@ export async function executeRun(runId) {
         sourceVerification ? {...JSON.parse(step.evidence_config || '{"finding_ids":[]}'),scan_task_id:sourceVerification.scan_task_id,
           source_versions:sourceVerification.reproducibility?.source_versions || [],deployment_version_verified:false} : null,
         findingVerification ? {...findingVerification, tool_started:toolStarted && result.toolStarted!==false && !['blocked','error'].includes(result.executionMode),payload_consumed:!!(toolStarted && result.toolStarted!==false && step.payload_data && !['blocked','error'].includes(result.executionMode)),consumption:JSON.parse(step.evidence_config || '{}').consumption,
-          payload_version:JSON.parse(step.evidence_config || '{}').payload_version} : null);
+          payload_version:JSON.parse(step.evidence_config || '{}').payload_version,
+          ...(step.tool_id===CODE_TOOL && codeArtifact?{artifact_id:codeArtifact.id,artifact_hash:codeArtifact.hash,
+            artifact_consumed:result.artifactConsumed===true,execution_mode:'local_simulation'}:{})} : null);
       db.prepare(`INSERT INTO audit_log (type, execution_id, run_id, tool_id, args, user_role, target, execution_mode, success, exit_code, duration_ms, output_size, reasons, timestamp)
         VALUES ('tool_execution', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         String(attemptId), runId, step.tool_id, JSON.stringify(redactToolArgs(args, step.tool_id)), run.user_role || null, run.target,

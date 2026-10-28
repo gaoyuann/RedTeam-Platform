@@ -25,6 +25,7 @@ data/*.db:ro
 # ── Data: large/downloaded content ──────────
 data/nuclei-templates/
 data/output/
+data/import-backups/
 data/source-scan/connections.json
 data/source-scan/snapshots/
 

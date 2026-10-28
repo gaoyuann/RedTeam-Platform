@@ -33,6 +33,8 @@ private:
   void showSourcePreview();
   void showPayloadPreview();
   void renderPayloadArtifacts();
+  void showVerificationCode();
+  void generateVerificationCode();
   void showCollectedScript();
   void updateQueue();
   void startChecked();
@@ -74,6 +76,14 @@ private:
   QGroupBox *m_artifactBox;
   QComboBox *m_artifactCollections, *m_collectedScripts;
   QPlainTextEdit *m_collectedCode, *m_pythonCode;
+  QPlainTextEdit *m_sourceRequestCode;
+  QPlainTextEdit *m_verificationCode;
+  QLabel *m_currentPayloadStatus;
+  QLabel *m_prepareFeedback;
+  QJsonArray m_currentPayloadItems;
+  QComboBox *m_verificationCodeHistory;
+  QPushButton *m_generateVerificationCode, *m_prepareCode;
+  QPushButton *m_sourceRuntime, *m_generateSourcePayload;
   QLabel *m_artifactStatus, *m_artifactUsage;
   QPushButton *m_collectArtifacts, *m_rewritePython, *m_stopArtifacts;
   QJsonArray m_collectionRecords, m_scriptRecords;
