@@ -218,7 +218,7 @@ QString stepInputSummary(const QJsonObject &step,const QString &target) {
 QString payloadSummary(const QJsonObject &step) {
   const QString mode=step["consumption"].toString(), id=step["payload_id"].toString();
   if(mode=="independent" && !id.isEmpty()) {
-    const auto name=step["payload_snapshot"].toObject()["name"];
+    const auto name=step["payload_snapshot"].toObject().value("name");
     const QString label=name.isObject()?name.toObject()["zh"].toString(id):name.toString(id);
     return QString("已绑定 %1（%2，版本 %3）").arg(label,id,readable(step["payload_version"]));
   }
@@ -399,8 +399,7 @@ FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QStrin
   connect(m_useSource,&QPushButton::clicked,this,[this]{if(!allowDiscardDraft()||m_sources->currentIndex()<0)return;action("/select-template",{{"playbook_id",m_sources->currentData().toString()},{"expected_revision",m_revision}},true);});
   connect(m_prepareSimple,&QPushButton::clicked,this,[this]{
     if(!allowDiscardDraft())return;
-    const auto value=m_detail["finding"].toObject()["result_data"];
-    const auto finding=value.isObject()?value.toObject():QJsonDocument::fromJson(value.toString().toUtf8()).object();
+    const auto finding=findingObject(m_detail["finding"].toObject().value("result_data"));
     const QString path=finding["evidence_origin"]=="cscan_report"?"/source-payload":"/generate";
     action(path,{{"expected_revision",m_revision},{"mode","new"}},true);
   });
@@ -931,7 +930,7 @@ void FindingVerificationDialog::showPayloadPreview() {
   if(plans.isEmpty())text<<"请先选择方案，才能核对步骤所需载荷。";
   else for(const auto &v:plans.first().toObject()["content"].toObject()["steps"].toArray()) {
     const auto step=v.toObject();const auto mode=step["consumption"].toString();
-    const auto name=step["payload_snapshot"].toObject()["name"];const auto label=name.isObject()?name.toObject()["zh"].toString():name.toString();
+    const auto name=step["payload_snapshot"].toObject().value("name");const auto label=name.isObject()?name.toObject()["zh"].toString():name.toString();
     text<<step["name"].toString()+"："+(mode=="independent"?"已绑定 "+label:mode=="internal"?"工具内部生成输入":mode=="pending"?"需要手动选择载荷":"无需独立载荷");
   }
   const int i=m_payloads->currentIndex();

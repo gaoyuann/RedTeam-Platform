@@ -21,7 +21,7 @@ static void verify(bool condition,const char *message) {if(!condition)qFatal("%s
 static bool waitFor(const std::function<bool()> &ready) {for(int i=0;i<300;i++){QCoreApplication::processEvents();if(ready())return true;QTest::qWait(10);}return false;}
 int main(int argc,char **argv) {
   QApplication app(argc,argv);
-  QTcpServer server;bool collected=false,rewritten=false;int collections=0,rewrites=0,executions=0,preparations=0,generations=0,codePlans=0;QJsonObject rewriteBody,codePlanInput;bool codeGenerated=false;QJsonObject codeInput;
+  QTcpServer server;bool collected=false,rewritten=false,sourceAsString=false;int collections=0,rewrites=0,executions=0,preparations=0,generations=0,codePlans=0;QJsonObject rewriteBody,codePlanInput;bool codeGenerated=false;QJsonObject codeInput;
   const QString generatedCode=QString("/* fixture */\n").repeated(250)+"int main(void) { return 0; }";
   QObject::connect(&server,&QTcpServer::newConnection,&server,[&](){
     while(auto *socket=server.nextPendingConnection())QObject::connect(socket,&QTcpSocket::readyRead,socket,[&,socket](){
@@ -54,7 +54,7 @@ int main(int argc,char **argv) {
         if(first && collected)payloadItems.append(QJsonObject{{"id","scan:pc1:script1"},{"name","Fixture script"},{"origin","scan"},{"code","printf fixture"}});
         if(first && codeGenerated)payloadItems.append(QJsonObject{{"id","generated:vc1:repro.c"},{"name","repro.c"},{"origin","generated"},{"code",generatedCode},{"artifact_id","vc1"},{"execution_supported",true}});
         data={{"current_payload",QJsonObject{{"state",payloadItems.isEmpty()?"missing":"available"},{"items",payloadItems}}},{"id",first?"fv1":"fv2"},{"finding_id",first?101:102},{"revision",0},{"state","needs_conditions"},{"eligible",true},
-          {"finding",QJsonObject{{"result_data",first?QJsonValue(finding):QJsonValue(QString::fromUtf8(QJsonDocument(finding).toJson(QJsonDocument::Compact)))}}},
+          {"finding",QJsonObject{{"result_data",first&&!sourceAsString?QJsonValue(finding):QJsonValue(QString::fromUtf8(QJsonDocument(finding).toJson(QJsonDocument::Compact)))}}},
           {"verification_code",first&&codeGenerated?QJsonArray{QJsonObject{{"id","vc1"},{"state","ready"},{"result",QJsonObject{{"files",QJsonArray{QJsonObject{{"filename","repro.c"},{"language","c"},{"source",generatedCode}}}},{"run_conditions",QJsonArray{"Local fixture"}},{"model_inferences",QJsonArray{"Suspected input issue"}}}}}}:QJsonArray()},
           {"plans",QJsonArray()},{"attempts",QJsonArray()},{"payloads",QJsonObject{{"matches",QJsonArray()}}},
           {"payload_artifacts",QJsonObject{{"supported",true},{"collections",records}}},{"readiness",QJsonObject{{"ready",false}}}};
@@ -123,15 +123,18 @@ int main(int argc,char **argv) {
   workflow->setCurrentIndex(0);
   verify(waitFor([&]{return dialog.findChild<QPushButton*>("findingSourceRuntime")->isVisible();}),"runtime settings remain accessible on the test page after simplifying payloads");
   verify(dialog.findChild<QLabel*>("findingPrepareFeedback")->isVisible() && dialog.findChild<QLabel*>("findingPrepareFeedback")->text().contains(QStringLiteral("尚未接入")),"missing execution environment is explained next to preparation");
+  sourceAsString=true;
   prepare->click();
   verify(waitFor([&]{return preparations==1 && prepare->isEnabled();}),"CScan preparation generates bounded inputs independently of collection");
+  prepare->click();
+  verify(waitFor([&]{return preparations==2 && prepare->isEnabled();}),"legacy JSON-string source findings also use bounded source preparation");
   for(int row=0;row<items->rowCount();row++)if(items->item(row,0)->data(Qt::UserRole)=="fv2")items->setCurrentCell(row,0);
   verify(waitFor([&]{return dialog.findChild<QGroupBox*>("findingPayloadArtifacts")->isHidden() && original->toPlainText().isEmpty() && python->toPlainText().isEmpty();}),"switching findings clears old private script content");
   verify(waitFor([&]{return items->item(items->currentRow(),3)->text()=="Other fixture";}),"legacy JSON-string finding keeps its title");
   verify(waitFor([&]{return prepare->isEnabled();}),"legacy finding preparation remains available");
   prepare->click();
   verify(waitFor([&]{return generations==1;}),"legacy findings continue using the existing generator");
-  verify(preparations==1 && generations==1,"source postprocessing and existing program generation remain distinct");
+  verify(preparations==2 && generations==1,"source postprocessing and existing program generation remain distinct");
   verify(collections==1 && rewrites==1 && executions==0,"collecting and rewriting never dispatch execution");
   return 0;
 }
