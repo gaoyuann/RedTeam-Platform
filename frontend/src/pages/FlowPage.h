@@ -54,7 +54,7 @@ public:
   void openTaskReport(const QString &pipelineId, const QString &reportId);
   void openTaskAnalysis(const QString &pipelineId);
   void setReturnPage(int page, const QString &title);
-  void createTestForTarget(const QString &target);
+  void createTestForTarget(const QString &target, const QJsonObject &topologySource = {});
 
 signals:
   void returnPageRequested(int page);
@@ -75,7 +75,7 @@ private slots:
   void onCancelFlow();
   void onDeleteFlow();
   void onApproveFlow();
-  void createFlow(bool quickMode, const QString &initialTarget = {});
+  void createFlow(bool quickMode, const QString &initialTarget = {}, const QJsonObject &topologySource = {});
   void onStartFlow();
   void onBackToList();
   void onFilterChanged(int index);
@@ -152,6 +152,7 @@ private:
   QLabel *m_taskIdLabel = nullptr;
   QPushButton *m_copyTaskId = nullptr;
   QLabel *m_statusLabel;
+  QPushButton *m_originTopologyButton = nullptr;
   QPushButton *m_startBtn;
   QPushButton *m_approveBtn;
   QPushButton *m_resultBtn;

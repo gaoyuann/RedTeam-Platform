@@ -9,6 +9,8 @@ import { normalizeTopologyTarget } from '../services/nmapTopology.js';
 import { scopeBlockReason, scopeBlockingConditions, taskScope } from '../services/taskScope.js';
 import { resolveTargetProfile } from '../services/targetProfileResolver.js';
 import { requireActor } from '../middleware/recordAccess.js';
+import {topologyLinkedTasks} from '../services/topologyLinkedTasks.js';
+import {appendDeclaredTopologyEntries} from '../services/topologyWebEntries.js';
 
 const SYSTEM_PROMPT =
   '你是一个网络拓扑结构化分析助手。请严格输出 JSON，不要输出 markdown，不要输出解释。' +
@@ -52,6 +54,18 @@ function buildUserPrompt(target, results) {
 export default function (db) {
   const router = Router();
   router.use(requireActor(db));
+
+  router.get('/linked-tasks', (req,res) => {
+    const {pipeline_id,scan_task_id,node_id}=req.query;
+    if (typeof node_id !== 'string' || !node_id || Boolean(pipeline_id)===Boolean(scan_task_id)
+      || pipeline_id && typeof pipeline_id!=='string' || scan_task_id && typeof scan_task_id!=='string')
+      return res.status(400).json({status:'error',error:{message:'拓扑来源无效'}});
+    const parent=pipeline_id ? db.prepare('SELECT created_by FROM pipelines WHERE pipeline_id=?').get(pipeline_id)
+      : db.prepare('SELECT created_by FROM scan_tasks WHERE scan_task_id=?').get(scan_task_id);
+    if (!parent || req.user.role!=='admin' && parent.created_by!==req.user.sub)
+      return res.status(404).json({status:'error',error:{message:'来源拓扑不存在或不可访问'}});
+    res.json({status:'ok',data:topologyLinkedTasks(db,req.user,{pipeline_id,scan_task_id,node_id})});
+  });
 
   // Read-only projection of this pipeline's existing results. No scan or LLM call.
   router.get('/from-pipeline/:id', (req, res) => {
@@ -179,7 +193,8 @@ export default function (db) {
 
       // ── Step 2: Try LLM enhancement ──────────────────────────────────
       let topology = null;
-      if (results.length > 0 && !['topology_scan','source_scan','program_scan'].includes(task.scan_type)) {
+      let parameters={};try {parameters=JSON.parse(task.parameters || '{}');} catch {}
+      if (results.length > 0 && !parameters.discovery_only && !['topology_scan','source_scan','program_scan'].includes(task.scan_type)) {
         const userPrompt = buildUserPrompt(task.target, results);
 
         try {
@@ -210,6 +225,7 @@ export default function (db) {
 
       // Keep observed hosts, services and edges regardless of model output.
       topology = mergeTopologyEnhancement(ruleBased, topology);
+      appendDeclaredTopologyEntries(topology,[task],results);
       topology.flowId = task.scan_task_id;
       topology.target = task.target;
       topology.generatedAt = new Date().toISOString();

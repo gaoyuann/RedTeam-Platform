@@ -37,12 +37,14 @@ public:
 
     /// Pre-fill the target input (used when embedded in FlowPage workbench)
     void setTarget(const QString &target);
+    QJsonObject selectedTargetContext() const;
     void setPipelineContext(const QString &pipelineId, const QString &target,
                             const QStringList &scanIds, bool scanFinished);
 
 signals:
     void testTargetRequested(const QString &target);
     void nodeFindingsRequested(const QString &pipelineId, const QList<qint64> &findingIds);
+    void linkedTaskRequested(const QString &pipelineId);
 
 public slots:
     void onScanStarted(const QJsonObject &data);
@@ -68,6 +70,7 @@ private slots:
     void onScanSelectedNode();
     void onTestSelectedNode();
     void onVerifySelectedNode();
+    void refreshLinkedTasks();
 
 private:
     void setupUI();
@@ -208,6 +211,8 @@ private:
     QPushButton *m_nodeTestButton;
     QPushButton *m_nodeVerifyButton;
     QLabel *m_nodeActionHint;
+    QListWidget *m_linkedTasksList = nullptr;
+    int m_linkedTasksRevision = 0;
     QComboBox *m_edgeSourceCombo;
     QComboBox *m_edgeTargetCombo;
     QLineEdit *m_edgeLabelEdit;

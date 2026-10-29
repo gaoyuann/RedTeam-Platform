@@ -1,7 +1,7 @@
 import {putPostRequests,clearPostRequests} from '../services/scanPostRequests.js';
 import {isTargetInScope} from '../services/taskScope.js';
 import {putScanSessionAuth,clearScanSessionAuth} from '../services/scanSessionAuth.js';
-import {defaultScanAgent,isScanAgent,scanAgentBusy,isSourceTask,validateScanAgentMode} from '../services/scanAgentConfig.js';
+import {defaultScanAgent,isScanAgent,isDiscoveryTask,scanAgentBusy,isSourceTask,validateScanAgentMode} from '../services/scanAgentConfig.js';
 import {validateWebScanConfig,isWebAgent,hasWebScanSchema,putWebCredentials,clearWebCredentials,webTargetBusy} from '../services/webScanConfig.js';
 import { hasStatistics } from '../services/findingInstances.js';
 import { hasScanIntegrity } from '../services/scanResultStore.js';
@@ -23,6 +23,7 @@ import { sourceTarget, httpSourceConnection, resolveSourceConnection } from '../
 import { normalizeTaskScope, scopeBlockingConditions, scopeConditions, taskScope } from '../services/taskScope.js';
 import {cscanTarget,cscanRemotePath,cscanSourcePath,cscanNotes} from '../services/cscanTarget.js';
 import {sourceSubdir} from '../services/sourceRemoteDirectory.js';
+import {resolveTopologyTaskSource} from '../services/topologyTaskSource.js';
 
 // ── Validation helpers ────────────────────────────────────────────────────
 const asyncRoute = handler => (req,res,next) => Promise.resolve().then(()=>handler(req,res,next)).catch(next);
@@ -314,7 +315,7 @@ export default function (db) {
         const parsed = typeof config === 'string' ? JSON.parse(config) : config;
         // Only allow known config keys
         const sanitized = {};
-        const allowedKeys = ['auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id', 'source_subdir', 'cscan_target', 'source_path', 'source_notes', 'input_kind', 'runtime_target', 'task_scope'];
+        const allowedKeys = ['task_mode', 'auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id', 'source_subdir', 'cscan_target', 'source_path', 'source_notes', 'input_kind', 'runtime_target', 'task_scope'];
         for (const key of allowedKeys) {
           if (parsed[key] !== undefined) sanitized[key] = parsed[key];
         }
@@ -326,7 +327,7 @@ export default function (db) {
 
     const requestId = req.body.request_id;
     validateCreationRequest(requestId);
-    const hash = creationHash({ target, config: JSON.parse(configJson) });
+    const hash = creationHash({ target, config: JSON.parse(configJson), ...(req.body.topology_source ? {topology_source:req.body.topology_source} : {}) });
     const known = existingCreation(db, req.user.sub, requestId, hash);
     if (known) return res.json({ status: 'ok', data: { ...known, status_cn: statusCn(known.status), config: JSON.parse(known.config || '{}') }, reused: true,
       meta: { task_identity_version: 1 } });
@@ -336,10 +337,14 @@ export default function (db) {
     try {
       const program=await normalizeProgramConfig(JSON.parse(configJson),target);
       target=program.target;
-      program.config=defaultScanAgent(program.config,target);
+      // Only NEW tasks receive the discovery default. Historical tasks keep
+      // their recorded dispatch mode, including on restart or update.
+      program.config=defaultScanAgent({...(!isProgramMode(program.config.scan_mode)?{task_mode:'discovery'}:{}),...program.config},target);
       validateWebScanConfig(program.config,target);
+      const source=resolveTopologyTaskSource(db,req.user,req.body.topology_source,target,program.config);
+      if (source) program.config.topology_source=source;
       configJson=JSON.stringify({...program.config,task_scope:normalizeTaskScope(program.config,target),topology_origin:captureTopologyOrigin(req)});
-    } catch(error) {return res.status(400).json({status:'error',error:{message:error.message}});}
+    } catch(error) {return res.status(error.status || 400).json({status:'error',error:{message:error.message}});}
     try {
       const created = insertNumberedTask(db, { target, config: JSON.parse(configJson), owner: req.user.sub, ownerRole: req.user.role, now,
         requestId, hash, checkLimits: () => checkPipelineLimits(db, req.user.sub) });
@@ -404,7 +409,7 @@ export default function (db) {
       try {
         const previous=JSON.parse(pipeline.config || '{}');
         const requested=JSON.parse(configStr);
-        for(const key of ['retry_of_pipeline_id','retry_request_id','scan_orchestrator']) if(previous[key]) requested[key]=previous[key];
+        for(const key of ['retry_of_pipeline_id','retry_request_id','scan_orchestrator','task_mode','topology_source']) if(previous[key]) requested[key]=previous[key];
         if(requested.task_scope === undefined) requested.task_scope=previous.task_scope;
         const normalized=await normalizeProgramConfig(requested,pipeline.target);
         // Recompute only for editable tasks. Historical runtime tasks retain
@@ -503,9 +508,10 @@ export default function (db) {
     try {
       validateScanAgentMode(startConfig,pipeline.target);
       validateWebScanConfig(startConfig,pipeline.target);
+      if ((isDiscoveryTask(startConfig) || isScanAgent(startConfig)) && scanAgentBusy(db,pipeline.target,pipeline.pipeline_id))
+        return res.status(409).json({status:'error',error:{message:'目标存在活动任务或停止未确认工具'}});
       if(isScanAgent(startConfig)) {
         if(!hasWebScanSchema(db))return res.status(409).json({status:'error',error:{message:'ReAct 扫描所需迁移尚未安装'}});
-        if(scanAgentBusy(db,pipeline.target,pipeline.pipeline_id))return res.status(409).json({status:'error',error:{message:'目标存在活动任务或停止未确认工具'}});
         if(req.body?.authentication){
           if(req.user.sub!==pipeline.created_by)return res.status(403).json({status:'error',error:{message:'临时会话须由任务所有者提供'}});
           putScanSessionAuth(pipeline.pipeline_id,pipeline.created_by,pipeline.target,req.body.authentication);
@@ -553,14 +559,14 @@ export default function (db) {
     const original=db.prepare('SELECT * FROM pipelines WHERE pipeline_id=?').get(req.params.id);
     if(!original || original.created_by!==req.user.sub) return res.status(403).json({status:'error',error:{message:'只能重试自己的任务'}});
     const config=JSON.parse(original.config || '{}');
-    if(!(isWebAgent(config)||isScanAgent(config)) || !['completed','failed','cancelled'].includes(original.status))
+    if(!(isDiscoveryTask(config)||isWebAgent(config)||isScanAgent(config)) || !['completed','failed','cancelled'].includes(original.status))
       return res.status(409).json({status:'error',error:{message:'原智能扫描任务尚未结束或模式不适用'}});
     if(!hasWebScanSchema(db))return res.status(409).json({status:'error',error:{message:'AI Web 扫描迁移尚未安装'}});
     const requestId=req.body?.request_id;
     if(typeof requestId!=='string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(requestId))return res.status(400).json({status:'error',error:{message:'需要有效重试请求编号'}});
     const known=db.prepare("SELECT * FROM pipelines WHERE created_by=? AND json_extract(config,'$.retry_of_pipeline_id')=? AND json_extract(config,'$.retry_request_id')=?").get(req.user.sub,original.pipeline_id,requestId);
     if(known)return res.status(200).json({status:'ok',data:{...known,config:JSON.parse(known.config)}});
-    if(isScanAgent(config)?scanAgentBusy(db,original.target):webTargetBusy(db,original.target))
+    if(isDiscoveryTask(config)||isScanAgent(config)?scanAgentBusy(db,original.target):webTargetBusy(db,original.target))
       return res.status(409).json({status:'error',error:{message:'该应用仍有活动扫描或工具停止未确认'}});
     const limitErr=checkPipelineLimits(db,req.user.sub);
     if(limitErr)return res.status(429).json({status:'error',error:{message:limitErr}});

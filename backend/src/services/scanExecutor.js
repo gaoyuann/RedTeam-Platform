@@ -599,8 +599,10 @@ export async function executeScan(scanTaskId, {reportOnly=false,budget} = {}) {
     totalResults = db.prepare('SELECT COUNT(*) n FROM scan_results WHERE scan_task_id=?').get(scanTaskId).n;
     if (scanAbortFlags.get(scanTaskId)) throw new Error('扫描被操作员中止');
     if (!outcomes.some(outcome => outcome.success)) throw new Error(outcomes.map(outcome => `${outcome.tool_id}: ${outcome.error}`).join('; ') || 'No scan tool succeeded');
-    const finalStatus = outcomes.some(outcome => !outcome.success) ? 'PARTIAL' : 'COMPLETED';
-    const warnings = outcomes.filter(outcome => !outcome.success).map(outcome => `${outcome.tool_id}: ${outcome.error || outcome.warning || 'scan failed'}`).join('; ');
+    const discoveryIncomplete=parameters.discovery_only && db.prepare("SELECT 1 FROM scan_results WHERE scan_task_id=? AND result_type='scan_warning'").get(scanTaskId);
+    const finalStatus = outcomes.some(outcome => !outcome.success) || discoveryIncomplete ? 'PARTIAL' : 'COMPLETED';
+    const warnings = outcomes.filter(outcome => !outcome.success).map(outcome => `${outcome.tool_id}: ${outcome.error || outcome.warning || 'scan failed'}`).join('; ')
+      || (discoveryIncomplete ? '资产探测存在未完成项，请查看探测记录；已保留可用主机与服务' : '');
     const completedAt = new Date().toISOString();
     const findings = db.prepare('SELECT * FROM scan_results WHERE scan_task_id = ?').all(scanTaskId);
     const discovered = buildDiscoveredProfile(task.target, findings);
