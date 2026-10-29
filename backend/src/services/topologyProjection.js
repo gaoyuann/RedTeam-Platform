@@ -10,6 +10,7 @@ import {isProgramMode, isProgramScan, programExecutionTarget} from './programSca
 import { pipelineScans } from './scanResultQuery.js';
 import { hasScanCoverage } from './scanCoverage.js';
 import { scopeBlockReason, scopeBlockingConditions, taskScope } from './taskScope.js';
+import { appendDeclaredTopologyEntries } from './topologyWebEntries.js';
 
 function text(value, length = 200) {
   return typeof value === 'string' || typeof value === 'number' ? sanitizeTaskLog(value).slice(0, length) : '';
@@ -389,5 +390,9 @@ export function pipelineTopology(db, pipeline) {
     const verification=verificationSummary(db,risk.findingId,pipeline.pipeline_id);
     if(verification) risk.verification={...verification,status:verification.conclusion,runId:verification.run_id};
   }
-  return annotateTaskGraph(db, pipeline, graph, results);
+  appendDeclaredTopologyEntries(annotateTaskGraph(db, pipeline, graph, results),scans,results);
+  graph.metadata.sourceFingerprint=createHash('sha256').update(JSON.stringify({
+    base:graph.metadata.sourceFingerprint,webEntries:graph.nodes.map(node=>[node.id,node.entries]),
+  })).digest('hex');
+  return graph;
 }

@@ -164,6 +164,7 @@ test('isolated task closes the loop without crossing owner, target, or evidence 
     created_by: 'bob',
     config: {
       task_name: '闭环隔离任务',
+      task_mode: 'assessment',
       auto_execute: true,
       authorization_confirmed: true,
       authorization_scope: '仅限 fixture.invalid 的课堂授权',

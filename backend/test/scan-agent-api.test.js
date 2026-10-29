@@ -13,14 +13,14 @@ await mock.module('../src/services/llmClient.js',{namedExports:{callLlm:async(_m
 const {default:routes}=await import('../src/routes/pipelines.js');
 const {scanSessionAuth}=await import('../src/services/scanSessionAuth.js');
 const {cancelPipeline}=await import('../src/services/pipelineEngine.js');
-test('new comprehensive API task actually enters model dispatch and cancellation converges without tools',async t=>{
+test('explicit assessment API task enters model dispatch and cancellation converges without tools',async t=>{
  const db=getDb(':memory:');t.after(closeDb);await runMigrations(db,fileURLToPath(new URL('../src/db/migrations/',import.meta.url)));
  db.prepare("INSERT INTO users(username,password,role) VALUES ('owner','unused','user')").run();
  const app=express();app.use(express.json());app.use((req,res,next)=>{req.user={sub:'owner',role:'user'};next();});app.use('/api/pipelines',routes(db));
  const server=http.createServer(app);await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)));
  const base=`http://127.0.0.1:${server.address().port}/api/pipelines`;
  const post=async(path,body)=>{const r=await fetch(base+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});return {code:r.status,data:(await r.json()).data};};
- const created=await post('',{target:'http://fixture.test/',config:{test_type:'comprehensive'}});assert.equal(created.code,201);
+ const created=await post('',{target:'http://fixture.test/',config:{task_mode:'assessment',test_type:'comprehensive'}});assert.equal(created.code,201);
  assert.deepEqual(created.data.config.scan_orchestrator,{version:1,mode:'react'});assert.equal(created.data.config.require_approval,true);
  const id=created.data.pipeline_id;
  for(const url of [undefined,null,'', '/lookup','http://fixture.test/lookup#x']){
@@ -45,7 +45,7 @@ test('new comprehensive API task actually enters model dispatch and cancellation
  const retry=await post('/'+id+'/retry-scan',{request_id:'general-retry-001'});assert.equal(retry.code,201);assert.notEqual(retry.data.pipeline_id,id);
  assert.equal(retry.data.config.scan_orchestrator.mode,'react');
  assert.equal((await post('/'+id+'/retry-scan',{request_id:'general-retry-001'})).data.pipeline_id,retry.data.pipeline_id);
- const editable=await post('',{target:'http://mode.test/',config:{test_type:'web'}});assert.equal(editable.code,201);
+ const editable=await post('',{target:'http://mode.test/',config:{task_mode:'assessment',test_type:'web'}});assert.equal(editable.code,201);
  const modeId=editable.data.pipeline_id;
  const put=async config=>{const res=await fetch(base+'/'+modeId,{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({config})});return res.status;};
  assert.equal(await put({test_type:'source',source_path:'/src/demo',input_kind:'source',task_scope:{includes:['http://mode.test/','/src/demo'],excludes:[]}}),200);

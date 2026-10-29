@@ -1,6 +1,6 @@
 import {clearPostRequests} from './scanPostRequests.js';
 import {clearScanSessionAuth} from './scanSessionAuth.js';
-import {isScanAgent,validateScanAgentMode} from './scanAgentConfig.js';
+import {isScanAgent,isDiscoveryTask,validateScanAgentMode} from './scanAgentConfig.js';
 import {runScanAgent} from './scanAgent.js';
 import {isWebAgent,clearWebCredentials,hasWebScanSchema} from './webScanConfig.js';
 import { pipelineScans } from './scanResultQuery.js';
@@ -180,8 +180,9 @@ async function runPipelineScan(db, pipeline) {
   }
   const sourceMode=isProgramMode(config.scan_mode) || target.startsWith('tcp://');
   const smartWeb=isWebAgent(config);
-  const useCoverage=!smartWeb && config.input_kind!=='remote_directory' && !config.cscan_target && !config.source_path && Boolean(config.task_scope) && hasScanCoverage(db);
-  const initialTypes = smartWeb ? ['web_scan'] : config.input_kind==='remote_directory' || config.source_path || config.cscan_target?.startsWith('/') ? ['source_scan'] : sourceMode ? [config.scan_mode==='source_assisted' ? 'source_scan' : 'program_scan', 'port_scan']
+  const discoveryOnly=isDiscoveryTask(config);
+  const useCoverage=!discoveryOnly && !smartWeb && config.input_kind!=='remote_directory' && !config.cscan_target && !config.source_path && Boolean(config.task_scope) && hasScanCoverage(db);
+  const initialTypes = discoveryOnly ? ['port_scan'] : smartWeb ? ['web_scan'] : config.input_kind==='remote_directory' || config.source_path || config.cscan_target?.startsWith('/') ? ['source_scan'] : sourceMode ? [config.scan_mode==='source_assisted' ? 'source_scan' : 'program_scan', 'port_scan']
     : useCoverage ? ['port_scan'] : isWebLike ? ['port_scan', 'app_discovery', 'web_scan'] : ['port_scan'];
   const initialScans=initialTypes.map(scan_type=>({scan_type,target:sourceMode && scan_type==='port_scan'
     ? programNetworkTarget(programExecutionTarget(pipeline) || target) : target}));
@@ -222,7 +223,7 @@ async function runPipelineScan(db, pipeline) {
         db.prepare(
           `INSERT INTO scan_tasks (scan_task_id, target, scan_type, target_class, parameters, created_by, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)`
-        ).run(scanTaskId, scanTarget, scanType, resolveTargetProfile(scanTarget).target_class, JSON.stringify(isProgramScan(scanType) ? {cscan_target:config.cscan_target || null,source_path:config.source_path || null,source_notes:config.source_notes || '',connection_id:config.source_connection_id || null,source_subdir:config.source_subdir || '',source_url:config.source_url || null,input_kind:config.input_kind || 'runtime',runtime_target:config.runtime_target || null} : smartWeb ? {web:config.scan_parameters.web} : scanType === 'port_scan' ? { discover_topology: true, pipeline_id:pipelineId } : {}), pipeline.created_by || 'pipeline', now);
+        ).run(scanTaskId, scanTarget, scanType, resolveTargetProfile(scanTarget).target_class, JSON.stringify(isProgramScan(scanType) ? {cscan_target:config.cscan_target || null,source_path:config.source_path || null,source_notes:config.source_notes || '',connection_id:config.source_connection_id || null,source_subdir:config.source_subdir || '',source_url:config.source_url || null,input_kind:config.input_kind || 'runtime',runtime_target:config.runtime_target || null} : smartWeb ? {web:config.scan_parameters.web} : scanType === 'port_scan' ? { discover_topology: true, pipeline_id:pipelineId, ...(discoveryOnly ? {discovery_only:true} : {}) } : {}), pipeline.created_by || 'pipeline', now);
 
         if(hasScanIntegrity(db)) db.prepare('UPDATE scan_tasks SET pipeline_id=? WHERE scan_task_id=?').run(pipelineId,scanTaskId);
         if(planned.check_id) markCheck(db,planned.check_id,'running',{scanTaskId});
@@ -291,7 +292,7 @@ async function runPipelineScan(db, pipeline) {
 
     pipelineLog(pipelineId, `扫描阶段完成，共 ${totalResults} 条发现`);
 
-    return { ok: true, scanTaskIds, totalResults };
+    return { ok: true, scanTaskIds, totalResults, completeness:stepOutput.completeness };
   } catch (err) {
     completeCoverage(db,pipelineId,`扫描阶段异常：${err.message}`);
     updateStep(db, pipelineId, 0, 'failed', {
@@ -683,20 +684,32 @@ export async function runPipeline(pipelineId) {
     // ── Step 0: Scan ────────────────────────────────────────────────────
     pipelineLog(pipelineId, '=== 步骤 0: 扫描 ===');
     const scanResult = await runPipelineScan(db, pipeline);
-    if((isWebAgent(pipelineConfig)||isScanAgent(pipelineConfig)) && db.prepare(`SELECT 1 FROM scan_tool_runs r JOIN scan_tasks s USING(scan_task_id)
+    if((isDiscoveryTask(pipelineConfig)||isWebAgent(pipelineConfig)||isScanAgent(pipelineConfig)) && hasScanIntegrity(db) && db.prepare(`SELECT 1 FROM scan_tool_runs r JOIN scan_tasks s USING(scan_task_id)
       WHERE s.pipeline_id=? AND (r.state='running' OR json_extract(r.outcome,'$.stopped')=0)`).get(pipelineId)) {
       failPipeline(db,pipelineId,'智能扫描工具停止未确认；禁止继续分析、派发或重试');
       return {ok:false,pipeline_id:pipelineId,status:'failed'};
     }
     if (!scanResult.ok) {
       if (scanResult.cancelled) {
-        const unresolved=(isWebAgent(pipelineConfig)||isScanAgent(pipelineConfig)) && db.prepare("SELECT 1 FROM scan_tool_runs r JOIN scan_tasks s USING(scan_task_id) WHERE s.pipeline_id=? AND (r.state='running' OR json_extract(r.outcome,'$.stopped')=0)").get(pipelineId);
+        const unresolved=(isDiscoveryTask(pipelineConfig)||isWebAgent(pipelineConfig)||isScanAgent(pipelineConfig)) && hasScanIntegrity(db) && db.prepare("SELECT 1 FROM scan_tool_runs r JOIN scan_tasks s USING(scan_task_id) WHERE s.pipeline_id=? AND (r.state='running' OR json_extract(r.outcome,'$.stopped')=0)").get(pipelineId);
         if(unresolved){failPipeline(db,pipelineId,'已请求取消，但工具停止未确认；禁止重复启动');return {ok:false,pipeline_id:pipelineId,status:'failed'};}
         updateStatus(db, pipelineId, 'cancelled', { result: { stopped_at: 'scan' } });
       } else {
         failPipeline(db, pipelineId, `扫描阶段失败: ${scanResult.error}`);
       }
       return { ok: scanResult.ok !== false, pipeline_id: pipelineId, status: 'failed', error: scanResult.error };
+    }
+
+    // Discovery is a finished collection task, not a paused vulnerability run.
+    // It never dispatches analysis, playbook generation or execution. Node scans
+    // create separate tasks with their own immutable target and scope.
+    if (isDiscoveryTask(pipelineConfig)) {
+      if (isCancelled(pipelineId)) return {ok:false,pipeline_id:pipelineId,status:'cancelled'};
+      updateStatus(db,pipelineId,'completed',{result:{task_mode:'discovery',next_action:'select_topology_target',
+        scan_task_ids:scanResult.scanTaskIds,completeness:scanResult.completeness}});
+      runningPipelines.delete(pipelineId);
+      pipelineLog(pipelineId,'资产探测结束，请在拓扑中选择主机或服务发起扫描；未执行漏洞检测');
+      return {ok:true,pipeline_id:pipelineId,status:'completed'};
     }
 
     // ── Step 1: Analyze ─────────────────────────────────────────────────
@@ -871,7 +884,7 @@ export function cancelPipeline(pipelineId) {
   }
 
   let cancelConfig={};try{cancelConfig=JSON.parse(pipeline.config || '{}');}catch{}
-  const deferredWebCancel=(isWebAgent(cancelConfig)||isScanAgent(cancelConfig)) && pipelineScans(db,pipeline).some(s=>s.status==='RUNNING');
+  const deferredWebCancel=(isDiscoveryTask(cancelConfig)||isWebAgent(cancelConfig)||isScanAgent(cancelConfig)) && pipelineScans(db,pipeline).some(s=>s.status==='RUNNING');
   scanAgentControllers.get(pipelineId)?.abort();
   clearScanSessionAuth(pipelineId);clearPostRequests(pipelineId);
   clearWebCredentials(pipelineId);

@@ -148,7 +148,7 @@ SourceScanDetailDialog::SourceScanDetailDialog(ApiClient *api,const QStringList 
   auto *layout=new QVBoxLayout(this);auto *top=new QHBoxLayout;
   auto *heading=new QLabel(QStringLiteral("源码扫描 · ")+target);heading->setTextFormat(Qt::PlainText);heading->setWordWrap(true);heading->setStyleSheet("font-size:18px;font-weight:600;");top->addWidget(heading,1);
   m_refresh=new QPushButton(QStringLiteral("刷新扫描进度"));m_refresh->setObjectName("sourceScanRefresh");top->addWidget(m_refresh);
-  m_attack=new QPushButton(QStringLiteral("攻击测试"));m_attack->setObjectName("sourceScanAttack");m_attack->setEnabled(false);top->addWidget(m_attack);layout->addLayout(top);
+  m_attack=new QPushButton(QStringLiteral("准备当前漏洞测试"));m_attack->setObjectName("sourceScanAttack");m_attack->setEnabled(false);top->addWidget(m_attack);layout->addLayout(top);
   m_summary=new QLabel(QStringLiteral("正在读取扫描记录…"));m_summary->setObjectName("sourceScanSummary");m_summary->setTextFormat(Qt::PlainText);m_summary->setWordWrap(true);layout->addWidget(m_summary);
   auto *split=new QSplitter(Qt::Horizontal);split->setObjectName("sourceScanThreePanes");split->setChildrenCollapsible(false);layout->addWidget(split,1);
   m_tree=new QTreeWidget(split);m_tree->setObjectName("sourceScanFileTree");m_tree->setHeaderLabel(QStringLiteral("文件树 · 扫描时快照"));m_tree->setMinimumWidth(130);
@@ -169,14 +169,14 @@ SourceScanDetailDialog::SourceScanDetailDialog(ApiClient *api,const QStringList 
   auto *report=new QPlainTextEdit(detailTabs);report->setObjectName("sourceScanRawReport");report->setReadOnly(true);detailTabs->addTab(report,QStringLiteral("原始报告"));
   vertical->setStretchFactor(0,3);vertical->setStretchFactor(1,2);rightLayout->addWidget(vertical,1);
   split->setStretchFactor(0,0);split->setStretchFactor(1,3);split->setStretchFactor(2,2);split->setSizes({210,640,450});
-  m_notice=new QLabel(QStringLiteral("文件与依据随扫描报告返回而更新；扫描结束后可进入攻击测试选择漏洞。"));m_notice->setObjectName("sourceScanNotice");m_notice->setTextFormat(Qt::PlainText);m_notice->setWordWrap(true);layout->addWidget(m_notice);
+  m_notice=new QLabel(QStringLiteral("文件与依据随扫描报告返回而更新；扫描结束后可选择发现并准备测试。"));m_notice->setObjectName("sourceScanNotice");m_notice->setTextFormat(Qt::PlainText);m_notice->setWordWrap(true);layout->addWidget(m_notice);
   connect(m_tree,&QTreeWidget::currentItemChanged,this,[this](QTreeWidgetItem *item,QTreeWidgetItem*){
     if(!item || !item->data(0,Qt::UserRole).isValid())return;m_selectedFile=item->data(0,Qt::UserRole).toString();m_code->clear();m_code->setExtraSelections({});loadSource();
   });
   connect(m_findings,&QTableWidget::currentCellChanged,this,[this](int row,int,int,int){showFinding(row);});
   connect(m_severity,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](){updateFindings();});
   connect(m_refresh,&QPushButton::clicked,this,&SourceScanDetailDialog::refresh);
-  connect(m_attack,&QPushButton::clicked,this,&SourceScanDetailDialog::showAttackTable);
+  connect(m_attack,&QPushButton::clicked,this,&SourceScanDetailDialog::prepareSelectedFinding);
   m_timer=new QTimer(this);m_timer->setInterval(5000);connect(m_timer,&QTimer::timeout,this,[this](){if(isVisible())refresh();});
   connect(this,&QDialog::finished,this,[this](){++m_request;m_timer->stop();});
   clearEvidence();
@@ -200,7 +200,6 @@ void SourceScanDetailDialog::refresh() {
 }
 
 void SourceScanDetailDialog::setSnapshots(const QJsonArray &tasks) {
-  ++m_snapshotRevision;
   m_displayRows={};m_finalRows={};m_sourceFiles.clear();m_progressReport.clear();m_pending=false;m_canTest=!tasks.isEmpty();m_fresh=true;
   QStringList statuses,progressNotes,errors;bool truncated=false,previewParsing=false,previewError=false;
   for(const auto &value:tasks) {
@@ -257,7 +256,8 @@ void SourceScanDetailDialog::setSnapshots(const QJsonArray &tasks) {
   if(m_pending && previewParsing)m_notice->setText(m_notice->text()+QStringLiteral(" 正在整理已完成子任务的阶段发现。"));
   if(m_pending && previewError)m_notice->setText(m_notice->text()+QStringLiteral(" 部分阶段报告暂未解析，原始报告仍可查看，最终结果将统一处理。"));
   errors.removeDuplicates();if(!errors.isEmpty())m_notice->setText(m_notice->text()+QStringLiteral("\n扫描说明：")+errors.join(QStringLiteral("；")));
-  m_attack->setEnabled(m_canTest && !m_pending && !m_finalRows.isEmpty());m_refresh->setEnabled(true);
+  if(m_requestedFinding>0)selectFinding(m_requestedFinding);
+  updateTestButton();m_refresh->setEnabled(true);
   if(m_pending && m_api)m_timer->start();else m_timer->stop();
 }
 
@@ -315,6 +315,7 @@ void SourceScanDetailDialog::updateFindings() {
   }
   if(m_findings->rowCount()){m_findings->selectRow(selectedRow);showFinding(selectedRow);}
   else loadSource();
+  updateTestButton();
 }
 
 void SourceScanDetailDialog::clearEvidence() {
@@ -343,6 +344,7 @@ void SourceScanDetailDialog::showFinding(int row) {
   m_details->appendPlainText(QStringLiteral("\n依据\n")+data["reason"].toString());
   m_details->moveCursor(QTextCursor::Start);
   loadSource(line,end);
+  updateTestButton();
 }
 
 void SourceScanDetailDialog::loadSource(int line,int endLine) {
@@ -369,33 +371,33 @@ void SourceScanDetailDialog::loadSource(int line,int endLine) {
 }
 
 void SourceScanDetailDialog::selectFinding(qint64 id) {
+  m_requestedFinding=id;
   for(const auto &value:m_displayRows) {
     const auto row=value.toObject();if(row["id"].toVariant().toLongLong()!=id)continue;
+    m_requestedFinding=0;
     m_selectedFile=fileKey(row);m_severity->setCurrentIndex(0);rebuildFiles();
     for(int i=0;i<m_findings->rowCount();++i)if(m_displayRows[m_findings->item(i,0)->data(Qt::UserRole).toInt()].toObject()["id"].toVariant().toLongLong()==id){m_findings->selectRow(i);showFinding(i);return;}
   }
 }
 
-void SourceScanDetailDialog::showAttackTable() {
-  if(!m_fresh || m_pending || !m_canTest || m_finalRows.isEmpty())return;
-  auto *dialog=new QDialog(this);dialog->setObjectName("sourceScanAttackSelection");dialog->setAttribute(Qt::WA_DeleteOnClose);dialog->setWindowTitle(QStringLiteral("选择漏洞进行攻击测试"));dialog->resize(1050,620);
-  if(auto *screen=QGuiApplication::primaryScreen())dialog->resize(dialog->size().boundedTo(screen->availableGeometry().size()-QSize(24,48)));
-  auto *layout=new QVBoxLayout(dialog);auto *hint=new QLabel(QStringLiteral("全部已保存漏洞 · 勾选后进入测试准备，实际执行仍需确认。"));hint->setWordWrap(true);layout->addWidget(hint);
-  auto *table=new QTableWidget(0,5);table->setObjectName("sourceScanAttackTable");table->setHorizontalHeaderLabels({"选择","严重性","漏洞名称","源码位置","CWE"});table->setEditTriggers(QAbstractItemView::NoEditTriggers);table->verticalHeader()->hide();table->horizontalHeader()->setSectionResizeMode(2,QHeaderView::Stretch);table->horizontalHeader()->setSectionResizeMode(3,QHeaderView::Stretch);layout->addWidget(table,1);
-  for(const auto &value:m_finalRows) {
-    const auto row=value.toObject(),data=resultData(row);const int n=table->rowCount();table->insertRow(n);
-    auto *check=new QTableWidgetItem;check->setFlags(Qt::ItemIsEnabled|Qt::ItemIsUserCheckable);check->setCheckState(Qt::Unchecked);check->setData(Qt::UserRole,row["id"].toVariant());
-    if(data["severity"].toString()=="info" || row["id"].toVariant().toLongLong()<=0)check->setFlags(Qt::NoItemFlags);
-    table->setItem(n,0,check);table->setItem(n,1,new QTableWidgetItem(riskText(data["severity"].toString())));table->setItem(n,2,new QTableWidgetItem(data["title"].toString()));table->setItem(n,3,new QTableWidgetItem(QStringLiteral("%1:%2").arg(data["file"].toString()).arg(data["start_line"].toInt())));table->setItem(n,4,new QTableWidgetItem(data["cwe"].toString()));
-  }
-  auto *buttons=new QDialogButtonBox(QDialogButtonBox::Cancel);auto *prepare=buttons->addButton(QStringLiteral("准备测试"),QDialogButtonBox::AcceptRole);prepare->setObjectName("sourceScanPrepareTest");prepare->setEnabled(false);layout->addWidget(buttons);
-  connect(table,&QTableWidget::itemChanged,dialog,[table,prepare](){bool selected=false;for(int i=0;i<table->rowCount();++i)selected=selected || table->item(i,0)->checkState()==Qt::Checked;prepare->setEnabled(selected);});
-  connect(buttons,&QDialogButtonBox::rejected,dialog,&QDialog::close);
-  const int snapshot=m_snapshotRevision;
-  connect(prepare,&QPushButton::clicked,dialog,[this,dialog,table,hint,snapshot](){
-    if(!m_fresh || m_pending || !m_canTest || snapshot!=m_snapshotRevision){hint->setText(QStringLiteral("扫描状态或结果已变化，请关闭本窗口并重新选择漏洞。"));return;}
-    QList<qint64> ids;for(int i=0;i<table->rowCount();++i)if(table->item(i,0)->flags().testFlag(Qt::ItemIsEnabled) && table->item(i,0)->checkState()==Qt::Checked)ids<<table->item(i,0)->data(Qt::UserRole).toLongLong();
-    if(ids.isEmpty())return;dialog->close();emit testRequested(ids);
-  });
-  dialog->show();
+qint64 SourceScanDetailDialog::selectedTestFinding() const {
+  if(!m_fresh || m_pending || !m_canTest)return 0;
+  const auto *item=m_findings->item(m_findings->currentRow(),0);
+  if(!item)return 0;
+  const int index=item->data(Qt::UserRole).toInt();
+  if(index<0 || index>=m_displayRows.size())return 0;
+  const auto row=m_displayRows[index].toObject(),data=resultData(row);
+  const auto severity=data["severity"].toString(row["severity"].toString()).trimmed().toLower();
+  if(row["preview"].toBool() || severity=="info" || severity=="inf")return 0;
+  return row["id"].toVariant().toLongLong();
+}
+
+void SourceScanDetailDialog::updateTestButton() {
+  m_attack->setEnabled(selectedTestFinding()>0);
+  m_attack->setToolTip(QStringLiteral("准备右侧当前选中的漏洞；打开测试窗口不会执行测试。批量选择可在扫描发现列表中完成。"));
+}
+
+void SourceScanDetailDialog::prepareSelectedFinding() {
+  const qint64 id=selectedTestFinding();
+  if(id>0)emit testRequested({id});
 }

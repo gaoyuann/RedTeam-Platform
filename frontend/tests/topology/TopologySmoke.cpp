@@ -447,5 +447,16 @@ int main(int argc, char **argv) {
     if(page.m_nodeVerifyButton->isEnabled())return 59;
     page.showOverviewDetail();
     if(page.m_nodeTestButton->isEnabled() || page.m_nodeVerifyButton->isEnabled())return 60;
+    // A virtual host and subpath must survive IP-based discovery and selection.
+    auto application=host;application.hostName="site.example.test";
+    application.services.clear();auto tls=web;tls.port="8443";tls.service="ssl/http";application.services.append(tls);
+    const QString originalUrl="https://site.example.test:8443/app/lookup?item=one%20two";
+    application.entries=QJsonArray{QJsonObject{{"kind","web_url"},{"state","declared"},{"value",originalUrl}},
+      QJsonObject{{"kind","web_url"},{"state","observed"},{"value","https://other.invalid:8443/"}}};
+    page.m_topologyDocument.nodes={application};page.m_selectedNodeId=application.id;
+    page.showNodeDetail(application);
+    if(page.m_nodeTestTargetCombo->count()!=2 || page.m_nodeTestTargetCombo->currentData().toString()!=originalUrl)return 62;
+    page.m_nodeTestButton->click();
+    if(selectedTarget!=originalUrl)return 63;
     return 0;
 }

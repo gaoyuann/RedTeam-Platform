@@ -12,11 +12,16 @@
 - 刷新保留所选发现。异步源码请求通过序号和文件键防止旧响应覆盖新选择。
 - 原始报告与依据放在右侧标签页，代码区保持固定；报告预览上限 64000 字符并显示截断提示。
 - 扫描发现仍是待复核记录；浏览页面不会创建或执行验证任务。原有显式测试准备入口保留。
+- “漏洞与历史扫描”直接展示已保存的源码漏洞，保留文件行号、CWE、测试状态与验证结论；不再隐藏列表只留下详情按钮。信息级发现单独分组，不参与测试勾选。
+- 点击列表中的源码漏洞打开同一个三栏详情弹窗，并在异步加载完成后定位该发现；已有弹窗可复用，切换扫描来源后按新范围打开。
+- 详情中的“准备当前漏洞测试”直接进入当前发现的逐漏洞测试窗口，不再弹出重复的漏洞选择表。批量准备使用扫描发现列表的勾选入口；实际执行仍需单独确认。
+- 扫描和报告处理期间不将阶段发现呈现为可测试漏洞；详情仍可查看过程预览。失败、取消或刷新失败时，详情测试入口不可用。
 
 ## 验证
 
 ```sh
-cmake --build build --target PentagiSourceHostChecks RedTeam-SourceScanDetailChecks -j2
+cmake --build build --target RedTeam-Platform RedTeam-Platform-Batch16Checks PentagiSourceHostChecks RedTeam-SourceScanDetailChecks -j2
+ctest --test-dir build -R '^(ui-context-|ui-source-detail-|pentagi-source-host)' --output-on-failure
 QT_QPA_PLATFORM=offscreen QT_SCALE_FACTOR=1 build/frontend/RedTeam-SourceScanDetailChecks
 QT_QPA_PLATFORM=offscreen QT_SCALE_FACTOR=1.5 build/frontend/RedTeam-SourceScanDetailChecks
 QT_QPA_PLATFORM=offscreen QT_SCALE_FACTOR=2 build/frontend/RedTeam-SourceScanDetailChecks

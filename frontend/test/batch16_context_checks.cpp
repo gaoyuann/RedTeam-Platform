@@ -1761,6 +1761,7 @@ int main(int argc, char **argv)
       "full task submits exactly once without requiring a name or scope input");
     auto body = QJsonDocument::fromJson(createServer.requestBodies.value("POST /api/pipelines")).object();
     auto config = body["config"].toObject();
+    verify(config["task_mode"]=="discovery", "initial network input creates discovery rather than vulnerability assessment");
     const auto scope = config["task_scope"].toObject();
     verify(config["task_name"].toString().contains(target) && config["authorization_scope"] == target
         && config["authorization_confirmed"].toBool() && config["require_approval"].toBool()
@@ -1891,6 +1892,35 @@ int main(int argc, char **argv)
     app.setFont(previousFont);
   }
   {
+    MockServer discoveryServer;discoveryServer.listen(QHostAddress::LocalHost,0);
+    auto discovery=taskRecord("discovery-fixture");discovery["run_id"]="";
+    discovery["config"]=QJsonObject{{"task_mode","discovery"},{"authorization_confirmed",true}};
+    discovery["result"]=QJsonObject{{"next_action","select_topology_target"}};
+    discovery["steps"]=QJsonArray{QJsonObject{{"step_type","scan"},{"status","completed"}}};
+    auto child=taskRecord("selected-host");child["run_id"]="";
+    child["config"]=QJsonObject{{"task_mode","assessment"},{"topology_source",QJsonObject{{"pipeline_id","discovery-fixture"},{"node_id","host-B"}}}};
+    discoveryServer.handler=[&](const QString &,const QString &requestPath)->MockReply {
+      const QString path=QUrl(requestPath).path();
+      if(path=="/api/pipelines/discovery-fixture")return {success(discovery)};
+      if(path=="/api/pipelines/selected-host")return {success(child)};
+      return {success(QJsonArray{})};
+    };
+    ApiClient discoveryApi(QStringLiteral("http://127.0.0.1:%1").arg(discoveryServer.serverPort()));
+    FlowPage discoveryFlow(&discoveryApi,"user","fixture-user");discoveryFlow.show();
+    discoveryFlow.openTaskAnalysis("discovery-fixture");
+    verify(awaitCondition([&]{return discoveryFlow.m_lastDisplayedDetail["pipeline_id"]=="discovery-fixture";}),"discovery task opens its own topology context");
+    verify(discoveryFlow.m_stageTabs->currentWidget()==discoveryFlow.m_topoTab
+      && discoveryFlow.m_statusLabel->text().contains(QStringLiteral("请在拓扑选择目标")),"finished discovery guides the user to select a topology target");
+    verify(!discoveryFlow.m_stageTabs->isTabEnabled(discoveryFlow.m_stageTabs->indexOf(discoveryFlow.m_analysisTab))
+      && !discoveryFlow.m_stageTabs->isTabEnabled(discoveryFlow.m_stageTabs->indexOf(discoveryFlow.m_execTab)),"discovery cannot enter analysis or execution tabs");
+    discoveryFlow.openTaskAnalysis("selected-host");
+    verify(awaitCondition([&]{return discoveryFlow.m_lastDisplayedDetail["pipeline_id"]=="selected-host";}),"selected host owns a separate workbench");
+    verify(!discoveryFlow.m_originTopologyButton->isHidden()
+      && discoveryFlow.m_stageTabs->isTabEnabled(discoveryFlow.m_stageTabs->indexOf(discoveryFlow.m_analysisTab)),"node assessment retains analysis and provides its origin link");
+    discoveryFlow.m_originTopologyButton->click();
+    verify(awaitCondition([&]{return discoveryFlow.m_lastDisplayedDetail["pipeline_id"]=="discovery-fixture";}),"origin button returns to the discovery topology");
+  }
+  {
     MockServer nodeServer;nodeServer.listen(QHostAddress::LocalHost,0);
     nodeServer.handler=[](const QString &method,const QString &requestPath)->MockReply {
       const QString path=QUrl(requestPath).path();
@@ -1906,11 +1936,15 @@ int main(int argc, char **argv)
     ApiClient nodeApi(QStringLiteral("http://127.0.0.1:%1").arg(nodeServer.serverPort()));
     FlowPage nodeFlow(&nodeApi,"user","fixture-user");
     const QString observedService="http://192.0.2.40:8089/";
+    TopologyNodeRecord selectedNode;selectedNode.id="host-B";selectedNode.ip="192.0.2.40";selectedNode.deviceType="host";
+    nodeFlow.m_topoTab->m_pipelineId="discovery-parent";
+    nodeFlow.m_topoTab->m_topologyDocument.nodes={selectedNode};nodeFlow.m_topoTab->m_selectedNodeId=selectedNode.id;
     QTimer::singleShot(0,&nodeFlow,[&]() {
       auto *dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());
       verify(dialog && dialog->objectName()=="topologyTargetTaskDialog","node action opens an explicit target confirmation form");
       if(dialog) {
         verify(dialog->findChild<QLineEdit*>("taskTargetInput")->text()==observedService,"node task preserves the exact discovered service URL");
+        verify(dialog->findChild<QLineEdit*>("taskTargetInput")->isReadOnly(),"node target cannot drift away from its source selection");
         verify(!dialog->findChild<QCheckBox*>("taskAuthorizationCheck")->isChecked(),"node task requires fresh explicit authorization");
         verify(!dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->isEnabled(),"node scan cannot start before target authorization");
         dialog->reject();
@@ -1929,6 +1963,8 @@ int main(int argc, char **argv)
       && nodeFlow.m_selectedPipelineId=="node-followup";}),"confirmed node target creates and starts exactly one task then opens its workbench");
     const auto body=QJsonDocument::fromJson(nodeServer.requestBodies.value("POST /api/pipelines")).object();
     const auto config=body["config"].toObject();
+    verify(config["task_mode"]=="assessment" && body["topology_source"].toObject()["pipeline_id"]=="discovery-parent"
+      && body["topology_source"].toObject()["node_id"]=="host-B","node assessment carries its exact parent and selected node");
     verify(body["target"].toString()==observedService && config["test_type"].toString()=="web"
       && config["task_scope"].toObject()["includes"].toArray()==QJsonArray{observedService},
       "new node task is scoped to the chosen Web service rather than the whole subnet");
@@ -1991,6 +2027,11 @@ int main(int argc, char **argv)
       {"result_data",QString::fromUtf8(QJsonDocument(QJsonObject{{"engine","cscan"},{"input_mode","remote_agent"},
         {"cscan",QJsonObject{{"state",phase},{"subtask_progress",QJsonObject{{"finished",1},{"total",2}}}}}}).toJson(QJsonDocument::Compact))}};};
     const QJsonObject raw{{"id",902},{"result_type","raw_output"},{"severity","info"},{"result_data","{\"report\":\"retained report\"}"}};
+    sourceServer.handler=[finding](const QString &,const QString &path) {
+      if(path=="/api/scan-tasks/source-fixture")return MockReply{success(QJsonObject{
+        {"scan_task_id","source-fixture"},{"scan_type","source_scan"},{"status","COMPLETED"},{"results",QJsonArray{finding}}})};
+      return MockReply{success(QJsonArray())};
+    };
     for(const auto &phase:{QString("running"),QString("parsing"),QString("importing")}) {
       const QJsonArray records{coverage(phase),finding,raw};
       sourcePage.updateStatusLabel(QJsonObject{{"status","RUNNING"},{"target","http://fixture.invalid/source/"},{"scan_type","source_scan"},{"results",records}});
@@ -1999,17 +2040,37 @@ int main(int argc, char **argv)
       verify(sourcePage.m_statusLabel->text().contains(phase=="parsing"?QStringLiteral("解析"):phase=="importing"?QStringLiteral("导入"):QStringLiteral("运行中")),"source phase remains visible while attackable findings are withheld");
     }
     const QJsonArray finalRecords{coverage("finished"),finding,raw};
-    sourcePage.updateStatusLabel(QJsonObject{{"status","COMPLETED"},{"target","http://fixture.invalid/source/"},{"scan_type","source_scan"},{"results",finalRecords}});
+    sourcePage.m_pipelineId="source-pipeline";
+    sourcePage.updateStatusLabel(QJsonObject{{"scan_task_id","source-fixture"},{"status","COMPLETED"},{"target","http://fixture.invalid/source/"},{"scan_type","source_scan"},{"results",finalRecords}});
     sourcePage.renderGroupedResults(finalRecords);
-    verify(sourcePage.m_resultTree->topLevelItemCount()==1 && sourcePage.m_resultTree->isHidden() && !sourcePage.m_sourceDetailButton->isHidden(),"source scans enter the three-pane detail instead of exposing the attack table inline");
+    verify(sourcePage.m_resultTree->topLevelItemCount()==1 && !sourcePage.m_resultTree->isHidden() && !sourcePage.m_sourceDetailButton->isHidden(),"source scans expose the saved vulnerability list alongside the source evidence dialog entry");
     auto *row=sourcePage.m_resultTree->topLevelItem(0)->child(0);
     verify(row->text(1)=="Unchecked copy" && row->text(3)=="CWE-120" && row->text(5)=="src/input.c:12","source table exposes title, category and source location");
+    verify(!sourcePage.m_resultTree->isColumnHidden(7) && !sourcePage.m_openCheckedFindings->isHidden(),"source findings expose verification conclusions and the batch preparation entry");
+    sourcePage.setCurrentFindingsChecked(true);
+    verify(sourcePage.selectableFindingItems().size()==1 && row->checkState(0)==Qt::Checked && sourcePage.m_openCheckedFindings->isEnabled(),"saved source findings can be selected directly without opening a second list");
+    sourcePage.openRecordDetails(row);
+    auto *detail=sourcePage.findChild<QDialog*>("sourceScanDetail");
+    verify(detail && awaitCondition([&] {
+      auto *findings=detail->findChild<QTableWidget*>("sourceScanFindings");
+      return findings && findings->rowCount()==1 && findings->item(findings->currentRow(),0)->data(Qt::UserRole+1).toString().contains("|901|");
+    }),"clicking a source finding opens its evidence dialog and selects it after loading");
+    sourcePage.openRecordDetails(row);
+    verify(sourcePage.findChild<QDialog*>("sourceScanDetail")==detail,"clicking the same source finding reuses the evidence dialog");
+    bool readOnly=true;
+    for(auto it=sourceServer.requests.cbegin();it!=sourceServer.requests.cend();++it)
+      if(!it.key().startsWith("GET "))readOnly=false;
+    verify(readOnly,"opening source evidence and selecting list rows create no verification or execution requests");
     sourcePage.m_showAllRecords->click();
     verify(sourcePage.m_sourceRecordsMode && sourcePage.m_resultTree->topLevelItemCount()>1,"raw reports and progress remain available in explicit records view");
     for(QTreeWidgetItemIterator it(sourcePage.m_resultTree);*it;++it)
-      verify((*it)->data(0,Qt::UserRole).toString()!="source_finding","records view cannot bypass the explicit all-vulnerabilities attack selector");
+      verify((*it)->data(0,Qt::UserRole).toString()!="source_finding","records view keeps diagnostic records separate from the vulnerability list");
     sourcePage.m_showAllRecords->click();
-    verify(!sourcePage.m_sourceRecordsMode && sourcePage.m_resultTree->isHidden(),"returning from records restores source browsing rather than the attack table");
+    verify(!sourcePage.m_sourceRecordsMode && !sourcePage.m_resultTree->isHidden()
+      && sourcePage.m_resultTree->topLevelItem(0)->child(0)->checkState(0)==Qt::Checked,"returning from records restores the visible source vulnerability list and selection");
+    auto informational=finding;informational["id"]=903;informational["severity"]="info";
+    sourcePage.renderGroupedResults({finding,informational});
+    verify(sourcePage.m_resultTree->topLevelItemCount()==2 && sourcePage.selectableFindingItems().size()==1,"information findings remain in their own group and cannot be selected for testing");
     sourcePage.clearDetailPanel();
     verify(!sourcePage.m_sourceResultsView && sourcePage.m_sourceRecords.isEmpty(),"switching task clears source presentation state");
   }

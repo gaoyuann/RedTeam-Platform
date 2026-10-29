@@ -61,7 +61,7 @@ private:
   void setupUI();
   void setStatusText(const QString &text);
   void openRecordDetails(QTreeWidgetItem *item);
-  void openSourceScanDetails();
+  void openSourceScanDetails(qint64 findingId = 0);
   QPointer<SourceScanDetailDialog> m_sourceDetail;
   QPushButton *m_sourceDetailButton = nullptr;
   QStringList m_sourceTaskIds;

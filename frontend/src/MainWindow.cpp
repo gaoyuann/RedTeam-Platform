@@ -256,10 +256,15 @@ QWidget *MainWindow::createModulePage(int index)
     }
     case 2: {
         auto *assetTopology=new TopologyPage(m_api,m_role,m_username,this);
-        connect(assetTopology,&TopologyPage::testTargetRequested,this,[this](const QString &target) {
+        connect(assetTopology,&TopologyPage::testTargetRequested,this,[this,assetTopology](const QString &target) {
             if(m_dongleLocked) return;
             switchToPage(1);
-            m_flowPage->createTestForTarget(target);
+            m_flowPage->createTestForTarget(target,assetTopology->selectedTargetContext());
+        });
+        connect(assetTopology,&TopologyPage::linkedTaskRequested,this,[this](const QString &pipelineId) {
+            if(m_dongleLocked) return;
+            switchToPage(1);
+            m_flowPage->openTaskAnalysis(pipelineId);
         });
 
         return assetTopology;

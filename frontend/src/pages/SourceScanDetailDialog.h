@@ -29,7 +29,9 @@ private:
   void rebuildFiles();
   void updateFindings();
   void showFinding(int row);
-  void showAttackTable();
+  void prepareSelectedFinding();
+  qint64 selectedTestFinding() const;
+  void updateTestButton();
   void clearEvidence();
   void loadSource(int line=0,int endLine=0);
   static QJsonObject resultData(const QJsonObject &row);
@@ -42,7 +44,8 @@ private:
   QMap<QString,QTreeWidgetItem*> m_files;
   QMap<QString,QJsonObject> m_received,m_sourceFiles;
   QString m_error;
-  int m_request=0,m_outstanding=0,m_snapshotRevision=0,m_sourceRequest=0;
+  int m_request=0,m_outstanding=0,m_sourceRequest=0;
+  qint64 m_requestedFinding=0;
   bool m_pending=true,m_fresh=false,m_canTest=false;
   QLabel *m_summary,*m_notice,*m_location,*m_codeNotice;
   QPushButton *m_refresh,*m_attack;

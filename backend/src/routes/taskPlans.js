@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { getTaskPlan, getTaskPlanSources, createTaskPlan, saveTaskPlan, addTaskPlanSuggestion, transitionTaskPlan } from '../services/taskPlan.js';
+import {isDiscoveryTask} from '../services/scanAgentConfig.js';
 
 export default function taskPlanRoutes(db, loadResume = async () => (await import('../services/pipelineEngine.js')).resumePipelineAfterApproval) {
   const router = Router({ mergeParams: true });
@@ -8,6 +9,8 @@ export default function taskPlanRoutes(db, loadResume = async () => (await impor
     if (!pipeline) return res.status(404).json({ status: 'error', error: { message: '任务不存在' } });
     if (req.user.role !== 'admin' && pipeline.created_by !== req.user.sub)
       return res.status(403).json({ status: 'error', error: { message: '没有权限访问此任务预案' } });
+    if (req.method !== 'GET' && isDiscoveryTask(JSON.parse(pipeline.config || '{}')))
+      return res.status(409).json({status:'error',error:{message:'资产探测仅采集拓扑，请先选择节点创建扫描任务'}});
     next();
   });
   router.get('/', (req, res) => res.json({ status: 'ok', data: getTaskPlan(db, req.params.id) }));

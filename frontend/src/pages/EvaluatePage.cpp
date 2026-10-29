@@ -21,6 +21,9 @@
 #include <QFileDialog>
 #include <QFile>
 #include <QFileInfo>
+#include <QSaveFile>
+#include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QStackedWidget>
 #include <QDir>
 #include <QPointer>
@@ -909,18 +912,28 @@ void EvaluatePage::onOpenInWps() {
       // 下载期间用户切换了报告：不写缓存、不打开，交给当前选中报告的状态
       if (m_selectedReportId != reportId) return;
 
-      // Save to temp location (sanitize filename to prevent path traversal)
-      QString tempDir = QDir::tempPath();
-      QString defaultName = QString("report_temp.%1").arg(format);
-      QString saveName = filename.isEmpty() ? defaultName : QFileInfo(filename).fileName();
-      QString savePath = tempDir + "/" + saveName;
-      QFile file(savePath);
-      if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        QMessageBox::warning(this, "保存失败", QString("无法写入临时文件：%1").arg(savePath));
+      // Keep each WPS copy in the application's dedicated report cache.
+      const QString cache = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+      const QString cacheRoot = QDir(cache).filePath("report-exports");
+      if (cache.isEmpty() || !QDir().mkpath(cacheRoot)) {
+        QMessageBox::warning(this, "保存失败", "无法创建报告缓存目录，请使用导出报告选择保存位置。");
         return;
       }
-      file.write(data);
-      file.close();
+      QTemporaryDir exportDir(QDir(cacheRoot).filePath("legacy-XXXXXX"));
+      if (!exportDir.isValid()) {
+        QMessageBox::warning(this, "保存失败", "无法创建本次报告的缓存目录。");
+        return;
+      }
+      QString defaultName = QString("report_temp.%1").arg(format);
+      QString saveName = filename.isEmpty() ? defaultName : QFileInfo(filename).fileName();
+      QString savePath = exportDir.filePath(saveName);
+      QSaveFile file(savePath);
+      if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size() || !file.commit()) {
+        QMessageBox::warning(this, "保存失败", QString("无法保存报告缓存：%1").arg(savePath));
+        return;
+      }
+      // WPS opens asynchronously; keep the completed copy after this callback.
+      exportDir.setAutoRemove(false);
       m_lastExportPath = savePath;
       m_lastExportFormat = format;
       m_lastExportReportId = reportId;
