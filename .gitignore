@@ -26,6 +26,7 @@ data/*.db:ro
 data/nuclei-templates/
 data/output/
 data/import-backups/
+data/reports/
 data/source-scan/connections.json
 data/source-scan/snapshots/
 
