@@ -187,17 +187,140 @@ int main(int argc, char **argv)
   };
 
   const QString screenshotDirectory = qEnvironmentVariable("REDTEAM_RIBBON_SCREENSHOT_DIR");
-  const auto saveRibbonScreenshot = [&](MainWindow &window, const QString &name) {
+  const auto saveRibbonScreenshot = [&](MainWindow &window, const QString &name, const QSize &size = QSize(1600, 1000)) {
     if (screenshotDirectory.isEmpty()) return;
     QDir().mkpath(screenshotDirectory);
-    const QString originalStyle = app.styleSheet();
-    app.setStyleSheet(Theme::GlobalStyle);
-    window.resize(1600, 1000);
+    window.resize(size);
     QTest::qWait(80);
     const QString scale = qEnvironmentVariable("QT_SCALE_FACTOR", "1");
     verify(window.grab().save(screenshotDirectory + "/" + name + "-" + scale + ".png"), "optional local Qt review screenshot is saved");
-    app.setStyleSheet(originalStyle);
   };
+  {
+    const QString reviewOriginalStyle = app.styleSheet();
+    if (!screenshotDirectory.isEmpty()) app.setStyleSheet(Theme::GlobalStyle + Theme::ButtonStyle + Theme::ItemViewStyle);
+    MockServer ribbonServer;
+    QJsonArray sceneRows;
+    const QStringList sceneCodes{"data-exfiltration", "tampering-deception", "device-control"};
+    for (int i = 0; i < sceneCodes.size(); ++i) {
+      auto row = findingExecutionRecord("R").value("verification_runs").toObject().value("items").toArray().first().toObject();
+      row["attempt_id"] = QString("scene-%1").arg(i); row["finding_id"] = 700 + i;
+      row["finding_name"] = sceneCodes[i];
+      row["classification"] = QJsonObject{{"state", "classified"}, {"categories", QJsonArray{sceneCodes[i]}}};
+      sceneRows.append(row);
+    }
+    QJsonArray scanRows, sources, scanTasks;
+    const QStringList types{"port_scan", "vuln_scan", "web_scan", "brute_force"};
+    const QStringList results{"open_port", "vulnerability", "web_vuln", "credential"};
+    for (int i = 0; i < 4; ++i) {
+      const QString id = "scope-" + types[i];
+      sources.append(QJsonObject{{"scan_task_id", id}, {"scan_type", types[i]}, {"status", "COMPLETED"}, {"target", "R.invalid"}});
+      scanRows.append(QJsonObject{{"id", 700 + i}, {"scan_task_id", id}, {"result_type", results[i]},
+        {"severity", i == 0 ? "info" : "high"}, {"source_tool", "fixture"},
+        {"result_data", QString::fromUtf8(QJsonDocument(QJsonObject{{"title", types[i]}, {"port", 443}}).toJson(QJsonDocument::Compact))}});
+      auto scan = sources.last().toObject(); scan["created_at"] = "2026-10-30T12:00:00Z"; scan["results"] = QJsonArray{scanRows.last()}; scanTasks.append(scan);
+    }
+    ribbonServer.handler = [&](const QString &method, const QString &path) -> MockReply {
+      const auto route = QUrl(path).path();
+      if (route == "/api/pipelines") return {success(QJsonArray{taskRecord("R")})};
+      if (route == "/api/pipelines/R") {
+        auto task = taskRecord("R"); QJsonArray ids; for (const auto &source : sources) ids.append(source.toObject()["scan_task_id"]);
+        task["summary"] = QJsonObject{{"scan_task_ids", ids}};
+        task["steps"] = QJsonArray{QJsonObject{{"step_type", "scan"}, {"status", "completed"}}};
+        return {success(task)};
+      }
+      if (route == "/api/pipelines/R/plan") return {success(QJsonObject{{"pipeline_id", "R"}, {"state", "approved"}, {"revision", 1},
+        {"content", QJsonObject{{"name", "访问边界验证预案"}, {"notes", "依据当前任务发现，核对权限与访问边界。"},
+          {"steps", QJsonArray{QJsonObject{{"step_id", "review"}, {"name", "核对业务访问边界"}, {"tool_id", "target-request"}, {"args_template", QJsonArray{"fixture"}}}}}}}})};
+      if (route == "/api/topology/from-pipeline/R") return {success(QJsonObject{{"topology", QJsonObject{
+        {"target", "R.invalid"}, {"summary", "当前测试网络"}, {"nodes", QJsonArray{
+          QJsonObject{{"id", "gateway"}, {"displayName", "业务网关"}, {"ip", "192.0.2.1"}, {"deviceType", "router"}, {"status", "online"}},
+          QJsonObject{{"id", "web"}, {"displayName", "业务门户"}, {"ip", "192.0.2.18"}, {"deviceType", "server"}, {"status", "online"}},
+          QJsonObject{{"id", "db"}, {"displayName", "数据服务"}, {"ip", "192.0.2.52"}, {"deviceType", "server"}, {"status", "online"}}}},
+        {"edges", QJsonArray{QJsonObject{{"id", "edge1"}, {"sourceId", "gateway"}, {"targetId", "web"}},
+          QJsonObject{{"id", "edge2"}, {"sourceId", "gateway"}, {"targetId", "db"}}}}}}})};
+      if (route == "/api/pipelines/R/execution") {
+        auto snapshot = findingExecutionRecord("R", true);
+        auto child = snapshot["verification_runs"].toObject(); child["items"] = sceneRows;
+        child["total"] = 3; child["returned"] = 3; snapshot["verification_runs"] = child;
+        return {success(snapshot)};
+      }
+      if (route == "/api/pipelines/R/results" && path.contains("view=scans"))
+        return {success(QJsonObject{{"scan_records", scanRows}, {"scan_sources", sources},
+          {"page", QJsonObject{{"total", 4}, {"has_more", false}, {"next_after", 703}, {"through", 703}}}})};
+      if (route == "/api/pipelines/R/results") return {success(resultsRecord("R"))};
+      if (route == "/api/pipelines/R/verifications" && method == "POST") return {success(QJsonObject{{"id", "payload-R"}, {"state", "needs_plan"}})};
+      if (route == "/api/pipelines/R/verifications/payload-R") return {success(QJsonObject{{"id", "payload-R"}, {"pipeline_id", "R"},
+        {"finding_id", 701}, {"revision", 0}, {"state", "needs_plan"}, {"finding", scanRows[1]}})};
+      if (route == "/api/scan-tasks") return {success(scanTasks)};
+      if (route == "/api/reports/index") return {success(QJsonObject{{"total", 0}, {"items", QJsonArray()}})};
+      return {success(QJsonArray())};
+    };
+    ApiClient ribbonApi(QStringLiteral("http://127.0.0.1:%1").arg(ribbonServer.serverPort()));
+    MainWindow shell(&ribbonApi, "admin", "fixture-user");
+    shell.m_dongleTimer->stop(); shell.m_ws->disconnectFromServer(); shell.show();
+    verify(!shell.findChild<QPushButton *>("ribbonTaskCenter") && !shell.findChild<QPushButton *>("ribbonHome"), "title has no extra task or workbench navigation");
+    shell.openRibbonFeature("plans.task");
+    verify(shell.m_taskGate->isVisible() && shell.m_featureTitle->text() == QStringLiteral("漏洞利用预案"), "task-dependent feature presents its own page and explicit task selection");
+    shell.m_chooseTaskButton->click();
+    verify(awaitCondition([&]() {return shell.m_flowPage->m_flowListFresh && shell.m_flowPage->m_flowTable->rowCount() == 1;}), "feature task selector loads the actual task list");
+    shell.m_flowPage->onFlowDoubleClicked(0);
+    verify(awaitCondition([&]() {return shell.m_flowPage->taskContextReady() && shell.m_activeFeature == "plans.task";}), "selecting a task returns to the requested feature");
+    verify(!shell.m_taskGate->isVisible() && shell.m_flowPage->m_stageTabs->currentWidget() == shell.m_flowPage->m_planTab, "task selection opens the visible plan content");
+    for (const auto &id : QStringList{"scans.ports", "scans.system", "scans.web", "scans.passwords"}) {
+      shell.openRibbonFeature(id);
+      auto *scan = shell.m_flowPage->m_scanTab;
+      verify(awaitCondition([&]() {return !scan->m_scanPageBusy && scan->m_resultTree->topLevelItemCount() == 1 && scan->m_resultTree->topLevelItem(0)->childCount() == 1;}), "scan ribbon filters the visible records for the selected type");
+      verify(scan->findChild<QFrame *>("scanTasksPanel")->isVisible(), "scan task records are visible without opening a hidden manager");
+      verify(shell.m_featureTitle->text() == ModuleRibbon::feature(id)->title, "visible page title follows the clicked leaf");
+    }
+    for (int i = 0; i < 3; ++i) {
+      const QString id = QStringList{"attacks.data", "attacks.tampering", "attacks.control"}[i];
+      shell.openRibbonFeature(id);
+      auto *monitor = shell.m_flowPage->m_execTab->m_taskMonitor;
+      verify(awaitCondition([&]() {return monitor->m_verifications->rowCount() == 1;}), "attack scene switches the actual execution record view");
+      verify(monitor->m_verifications->item(0, 0)->text() == sceneCodes[i], "scene view uses saved classification instead of keeping the previous scene");
+      verify(shell.m_activeFeature == id, "task stage events do not overwrite the clicked attack feature");
+    }
+    shell.openRibbonFeature("plans.task");
+    shell.m_flowPage->m_planTab->findChild<QPushButton *>("planPayloadWorkspace")->click();
+    verify(awaitCondition([&]() {return shell.m_flowPage->m_scanTab->findChild<QDialog *>("scanAuxPayloadPicker") != nullptr;}), "plan payload action opens an explicit finding selection dialog");
+    auto *payloadPicker = shell.m_flowPage->m_scanTab->findChild<QDialog *>("scanAuxPayloadPicker");
+    auto *payloadCandidates = payloadPicker->findChild<QTableWidget *>();
+    verify(awaitCondition([&]() { return payloadCandidates->rowCount() == 2; }), "payload selection loads task candidates independently of the active scan filter");
+    payloadPicker->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Open)->click();
+    verify(awaitCondition([&]() { return !shell.m_flowPage->m_scanTab->findChildren<FindingVerificationDialog *>().isEmpty(); }), "explicit payload selection opens the existing per-finding workspace");
+    auto *payloadWorkspace = shell.m_flowPage->m_scanTab->findChildren<FindingVerificationDialog *>().first();
+    verify(awaitCondition([&]() { return payloadWorkspace->currentId() == "payload-R"; })
+      && payloadWorkspace->m_tabs->currentIndex() == 1, "payload entry loads the selected finding and visibly selects the payload code page");
+    payloadWorkspace->close();
+    int clicked = 0;
+    for (const auto &feature : ModuleRibbon::features()) {
+      if (!feature.implemented) continue;
+      shell.openRibbonFeature(feature.id);
+      verify(shell.m_activeFeature == feature.id && shell.m_featureTitle->text() == feature.title, "each implemented leaf preserves matching navigation and visible page identity");
+      const auto checked = shell.m_ribbon->findChildren<QToolButton *>();
+      int checkedCount = 0; for (auto *button : checked) if (button->isChecked()) ++checkedCount;
+      verify(checkedCount == 1, "exactly one leaf button is selected");
+      saveRibbonScreenshot(shell, QString("feature-%1-%2").arg(++clicked, 2, 10, QLatin1Char('0')).arg(feature.id));
+    }
+    for (const int width : {1024, 1366}) {
+      for (const auto &id : QStringList{"resources.llm", "plans.task", "scans.web", "topology.edit", "system.users"}) {
+        shell.openRibbonFeature(id);
+        shell.resize(width, 800); QTest::qWait(30);
+        verify(shell.width() <= width && shell.m_featureTitle->isVisible(), "business page does not expand the requested window width");
+        verify(shell.m_featureHeader->geometry().right() < shell.width(), "feature heading stays inside the window");
+        saveRibbonScreenshot(shell, QString("width-%1-%2").arg(width).arg(id), QSize(width, 800));
+      }
+    }
+    for (auto it = ribbonServer.requests.cbegin(); it != ribbonServer.requests.cend(); ++it)
+      verify(it.key().startsWith("GET ") || (it.key() == "POST /api/pipelines/R/verifications" && it.value() == 1),
+        "only explicit per-finding workspace creation may write; navigation never generates or executes");
+    app.setStyleSheet(reviewOriginalStyle);
+  }
+  if (qEnvironmentVariableIsSet("REDTEAM_RIBBON_REVIEW_ONLY")) {
+    std::cout << "TOTAL " << checks << " ribbon review checks passed" << std::endl;
+    return 0;
+  }
   {
     MockServer startupServer;
     startupServer.handler = [](const QString &, const QString &path) -> MockReply {
@@ -217,12 +340,15 @@ int main(int argc, char **argv)
     shell.m_dongleTimer->stop(); shell.m_ws->disconnectFromServer(); shell.show();
     verify(awaitCondition([&]() { return shell.m_dashboardPage->m_pendingResponses == 0; }),
       "initial shell dashboard finishes loading");
-    verify(shell.m_stackWidget->count() == 10 && !shell.m_flowPage && !shell.m_analysisPage,
+    verify(shell.m_stackWidget->count() == 12 && !shell.m_flowPage && !shell.m_analysisPage,
       "startup preserves navigation slots while deferring unused modules");
-    for (int index = 1; index < 7; ++index)
+    for (int index = 1; index < 7; ++index) {
+      if (index == 2) continue; // Asset discovery is the composition graph's initial function.
       verify(shell.m_stackWidget->widget(index)->property("deferredModule").toBool(), "unopened module retains a lightweight placeholder");
-    verify(!startupServer.requests.value("GET /api/scan-tasks")
-      && !startupServer.requests.value("GET /api/playbooks?includeGenerated=true")
+    }
+    verify(shell.m_activeFeature == "resources.discovery" && shell.m_stackWidget->currentIndex() == 2,
+      "initial page is the composition graph asset discovery function");
+    verify(!startupServer.requests.value("GET /api/playbooks?includeGenerated=true")
       && !startupServer.requests.value("GET /api/users")
       && !startupServer.requests.value("GET /api/config"),
       "startup sends no requests for unopened task or administration modules");
@@ -1426,9 +1552,10 @@ int main(int argc, char **argv)
   auto *platformTitle = window.findChild<QLabel *>("platformTitle");
   verify(platformTitle && platformTitle->text() == QStringLiteral("信息系统安全智能化测试平台")
     && window.windowTitle() == platformTitle->text(), "title row uses the requested platform name");
-  verify(window.findChild<QPushButton *>("ribbonTaskCenter") && window.m_ribbon,
-    "task center and grouped ribbon remain reachable");
-  const int expectedHosts[] = {2, 1, 2, 1, 1, 9, 1};
+  verify(!window.findChild<QPushButton *>("ribbonTaskCenter") && !window.findChild<QPushButton *>("ribbonHome")
+    && !window.findChild<QPushButton *>("ribbonKnowledge") && window.m_ribbon,
+    "only composition graph module navigation is present in the title area");
+  const int expectedHosts[] = {2, 1, 2, 10, 11, 9, 1};
   for (int row = 0; row < 7; ++row) {
     window.m_navList->scrollToItem(window.m_navList->item(row));
     QCoreApplication::processEvents();
@@ -1452,7 +1579,7 @@ int main(int argc, char **argv)
   }
   window.setDongleLocked(true, "fixture lock");
   verify(!window.m_navList->isEnabled() && !window.m_ribbon->isEnabled()
-    && !window.findChild<QPushButton *>("ribbonTaskCenter")->isEnabled(), "lock disables tabs, features and task shortcuts");
+    && !window.m_contextBar->isEnabled(), "lock disables tabs, features and context controls");
   window.switchToPage(5);
   verify(window.m_stackWidget->currentIndex() == 7, "locked navigation cannot leave lock page");
   window.setDongleLocked(false);

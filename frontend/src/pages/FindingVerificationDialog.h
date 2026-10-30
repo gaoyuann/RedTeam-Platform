@@ -21,6 +21,7 @@ class FindingVerificationDialog : public QDialog {
 public:
   FindingVerificationDialog(ApiClient *api, const QString &pipeline, const QList<qint64> &findings, QWidget *parent=nullptr,
       const QString &existingVerificationId={}, const QString &existingAttemptId={});
+  void showPayloadWorkspace();
 protected:
   void done(int result) override;
   void resizeEvent(QResizeEvent *event) override;

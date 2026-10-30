@@ -1,5 +1,8 @@
 #include "ModuleRibbon.h"
 #include <QFrame>
+#include <QButtonGroup>
+#include <QSignalBlocker>
+#include <QFontMetrics>
 #include <QVariant>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -31,7 +34,7 @@ const QVector<RibbonFeature> &ModuleRibbon::features()
         {"topology.discover", "网络拓扑探测", "拓扑发现", "search", 2},
         {"topology.edit", "网络拓扑编辑", "拓扑编绘", "settings", 2},
         {"topology.display", "网络拓扑展示", "拓扑视图", "topology", 2},
-        {"topology.annotate", "网络拓扑信息标注", "拓扑编绘", "reports", 2},
+        {"topology.annotate", "网络拓扑信息标注", "信息标注", "reports", 2},
         {"scans.system", "系统漏洞扫描", "漏洞检测", "search", 3},
         {"scans.web", "Web漏洞扫描", "漏洞检测", "search", 3},
         {"scans.ports", "端口扫描", "服务检测", "topology", 3},
@@ -64,7 +67,7 @@ const RibbonFeature *ModuleRibbon::feature(const QString &id)
 }
 
 ModuleRibbon::ModuleRibbon(bool administrator, QWidget *parent)
-    : QWidget(parent), m_administrator(administrator), m_pages(new QStackedWidget(this))
+    : QWidget(parent), m_administrator(administrator), m_pages(new QStackedWidget(this)), m_selection(new QButtonGroup(this))
 {
     setObjectName(QStringLiteral("moduleRibbon"));
     setAttribute(Qt::WA_StyledBackground, true);
@@ -79,7 +82,8 @@ ModuleRibbon::ModuleRibbon(bool administrator, QWidget *parent)
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     root->addWidget(m_pages);
-    setFixedHeight(120);
+    setFixedHeight(112);
+    m_selection->setExclusive(true);
     for (int module = 0; module < moduleNames().size(); ++module) {
         auto *scroll = new QScrollArea(m_pages);
         scroll->setObjectName(QStringLiteral("ribbonScroll%1").arg(module));
@@ -111,14 +115,23 @@ ModuleRibbon::ModuleRibbon(bool administrator, QWidget *parent)
                 auto *button = new QToolButton(group);
                 button->setObjectName(QStringLiteral("ribbon.%1").arg(entry.id));
                 button->setProperty("featureId", entry.id);
-                button->setText(entry.title == QStringLiteral("大语言模型LLM部署配置") ? QStringLiteral("LLM部署配置")
-                    : entry.title == QStringLiteral("测试报告自动智能生成") ? QStringLiteral("报告智能生成") : entry.title);
+                QString label = entry.title;
+                if (label == QStringLiteral("大语言模型LLM部署配置")) label = QStringLiteral("大语言模型LLM\n部署配置");
+                else if (label.endsWith(QStringLiteral("部署配置"))) label.insert(label.size() - 4, '\n');
+                else if (label.endsWith(QStringLiteral("攻击测试"))) label.insert(label.size() - 4, '\n');
+                else if (label == QStringLiteral("测试报告自动智能生成")) label = QStringLiteral("测试报告\n自动智能生成");
+                else if (label.size() > 7) label.insert(4, '\n');
+                button->setText(label);
                 button->setAccessibleName(entry.title);
                 button->setIcon(QIcon(QStringLiteral(":/icons/shell/%1.svg").arg(entry.icon)));
-                button->setIconSize(QSize(25, 25));
+                button->setIconSize(QSize(24, 24));
                 button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
                 button->setCheckable(true);
-                button->setMinimumHeight(68);
+                int textWidth = 0;
+                for (const auto &line : label.split('\n')) textWidth = qMax(textWidth, button->fontMetrics().horizontalAdvance(line));
+                button->setFixedWidth(qMax(108, textWidth + 24));
+                button->setFixedHeight(78);
+                m_selection->addButton(button);
                 button->setEnabled(canOpen(entry.id));
                 button->setToolTip(!entry.implemented ? entry.title + QStringLiteral(" · 暂未实现")
                     : entry.adminOnly && !administrator ? entry.title + QStringLiteral(" · 仅管理员可用") : entry.title);
@@ -159,5 +172,10 @@ void ModuleRibbon::setActiveFeature(const QString &id)
 {
     const auto *entry = feature(id);
     if (entry) setModule(entry->module);
-    for (auto *button : m_buttons) button->setChecked(button->property("featureId").toString() == id);
+    m_selection->setExclusive(false);
+    for (auto *button : m_buttons) {
+        const QSignalBlocker blocker(button);
+        button->setChecked(button->property("featureId").toString() == id && canOpen(id));
+    }
+    m_selection->setExclusive(true);
 }

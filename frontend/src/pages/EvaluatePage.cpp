@@ -30,6 +30,7 @@
 #include <QDialog>
 #include <QGridLayout>
 #include <QShowEvent>
+#include <QTabBar>
 
 EvaluatePage::EvaluatePage(ApiClient *api, const QString &role, const QString &username, QWidget *parent)
     : QWidget(parent), m_api(api), m_previewMode(false) {
@@ -1484,6 +1485,7 @@ void EvaluatePage::showCaptureWorkspace(bool analysis)
 {
   if (!m_pipelineId.isEmpty()) return;
   m_tabs->setCurrentIndex(3);
+  m_tabs->tabBar()->hide();
   if (auto *details = findChild<QTabWidget *>(QStringLiteral("captureWorkspaceDetails")))
-    details->setCurrentIndex(analysis ? 1 : 0);
+  { details->setCurrentIndex(analysis ? 1 : 0); details->tabBar()->hide(); }
 }

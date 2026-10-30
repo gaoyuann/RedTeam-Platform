@@ -6,6 +6,7 @@
 
 class QStackedWidget;
 class QToolButton;
+class QButtonGroup;
 
 // Stable feature IDs route to existing Qt pages; unavailable features have no action.
 struct RibbonFeature {
@@ -35,5 +36,6 @@ signals:
 private:
     bool m_administrator;
     QStackedWidget *m_pages;
+    QButtonGroup *m_selection;
     QVector<QToolButton *> m_buttons;
 };

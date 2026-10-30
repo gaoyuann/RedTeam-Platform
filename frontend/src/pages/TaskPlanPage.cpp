@@ -7,6 +7,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFormLayout>
+#include <QFrame>
 #include <QHeaderView>
 #include <QInputDialog>
 #include <QJsonArray>
@@ -79,11 +80,14 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   layout->setSpacing(8);
   auto *header = new QHBoxLayout;
   auto *title = new QLabel(QStringLiteral("任务预案 · 编辑与审阅"), this);
+  title->setObjectName("planPageTitle");
   title->setStyleSheet(QStringLiteral("font-size:20px; font-weight:700; color:#172033;"));
   header->addWidget(title, 1);
   m_refresh = new QPushButton(QStringLiteral("刷新预案"), this);
   m_refresh->setObjectName(QStringLiteral("planRefreshButton"));
   header->addWidget(m_refresh);
+  header->addStretch();
+  m_refresh->setMaximumWidth(132);
   layout->addLayout(header);
   auto *optional = new QLabel(QStringLiteral("可选，用于批量编排；逐漏洞测试可直接从漏洞列表开始。"), this);
   optional->setObjectName("optionalPlanHint");
@@ -117,6 +121,12 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   m_generateSource->hide();
   layout->addWidget(m_generateSource);
   connect(m_generateSource, &QPushButton::clicked, this, &TaskPlanPage::sourceVerificationRequested);
+  auto *payloadWorkspace = new QPushButton(QStringLiteral("载荷生成与管理"), this);
+  payloadWorkspace->setObjectName(QStringLiteral("planPayloadWorkspace"));
+  payloadWorkspace->setToolTip(QStringLiteral("选择当前任务漏洞，打开关联载荷代码与生成记录；不会自动生成或执行。"));
+  connect(payloadWorkspace, &QPushButton::clicked, this, &TaskPlanPage::payloadWorkspaceRequested);
+  payloadWorkspace->setMaximumWidth(160);
+  header->addWidget(payloadWorkspace);
 
   auto *form = new QFormLayout;
   m_name = new QLineEdit(this);
@@ -129,7 +139,12 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   m_notes->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   m_notes->setPlaceholderText(QStringLiteral("填写验证目标、人工确认点和停止条件；备注不作为自动执行规则。"));
   form->addRow(QStringLiteral("约束 / 备注："), m_notes);
-  layout->addLayout(form);
+  auto *formCard = new QFrame(this);
+  formCard->setObjectName("planFormCard");
+  formCard->setMaximumWidth(1120);
+  formCard->setLayout(form);
+  formCard->setStyleSheet("QFrame#planFormCard { background:white; border:1px solid #dfe6f0; border-radius:6px; padding:12px; }");
+  layout->addWidget(formCard);
 
   auto *tabs = new WorkbenchTabs(this);
   auto *stepsPage = new QWidget(tabs);

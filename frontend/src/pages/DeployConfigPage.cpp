@@ -251,8 +251,9 @@ void DeployConfigPage::setupUI() {
   });
 
   // ── Refresh ───────────────────────────────────────────────────────
-  m_refreshBtn = new QPushButton("刷新全部");
-  layout->addWidget(m_refreshBtn);
+  m_refreshBtn = new QPushButton("刷新配置状态");
+  m_refreshBtn->setFixedWidth(132);
+  layout->addWidget(m_refreshBtn, 0, Qt::AlignLeft);
   connect(m_refreshBtn, &QPushButton::clicked, this, &DeployConfigPage::onRefresh);
 
   // Reuse each existing form as a section, without duplicating API or submit logic.
@@ -288,8 +289,15 @@ void DeployConfigPage::setupUI() {
   for (auto it = sectionLayouts.cbegin(); it != sectionLayouts.cend(); ++it)
     m_sections.value(it.key())->setLayout(it.value());
   layout->addStretch();
+  container->setMaximumWidth(1120);
+  scrollArea->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+  scrollArea->setStyleSheet("QScrollArea { background:#f3f5f9; border:0; }");
+  container->setObjectName("deploymentFormCard");
+  container->setStyleSheet("QWidget#deploymentFormCard { background:white; }");
+  container->setAttribute(Qt::WA_StyledBackground, true);
   scrollArea->setWidget(container);
   auto *outerLayout = new QVBoxLayout(this);
+  outerLayout->setContentsMargins(24, 0, 24, 20);
   outerLayout->addWidget(scrollArea);
 }
 
@@ -732,6 +740,8 @@ void DeployConfigPage::showSection(const QString &section)
   for (auto it = m_sections.cbegin(); it != m_sections.cend(); ++it) {
     const bool relatedImages = it.key() == "images" && (requested == "runtime" || requested == "tools");
     it.value()->setVisible(it.key() == requested || relatedImages || it.key() == "refresh");
+    if (it.key() == requested && it.value()->layout()->count() > 0)
+      if (auto *heading = qobject_cast<QLabel *>(it.value()->layout()->itemAt(0)->widget())) heading->hide();
   }
   setProperty("activeSection", requested);
 }

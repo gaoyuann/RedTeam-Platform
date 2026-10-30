@@ -6,6 +6,7 @@
 #include "../UiUtil.h"
 #include "../ApiClient.h"
 #include <QVBoxLayout>
+#include <QTabBar>
 #include <QHBoxLayout>
 #include <QPushButton>
 #include <QHeaderView>
@@ -553,5 +554,5 @@ void SystemPage::selectSection(const QString &section)
   const QMap<QString, QString> names{{"users", "用户管理"}, {"permissions", "权限管理"}, {"license", "加密锁校验"}};
   const QString title = names.value(section);
   for (int i = 0; i < m_tabs->count(); ++i)
-    if (!title.isEmpty() && m_tabs->tabText(i) == title) { m_tabs->setCurrentIndex(i); return; }
+    if (!title.isEmpty() && m_tabs->tabText(i) == title) { m_tabs->setCurrentIndex(i); m_tabs->tabBar()->hide(); return; }
 }

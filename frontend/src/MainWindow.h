@@ -21,6 +21,8 @@ class ModuleRibbon;
 class DeployConfigPage;
 class EvaluatePage;
 class QFrame;
+class ScanPage;
+class ExecutionPage;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -51,6 +53,20 @@ private:
     void showTaskCenter();
     void openTaskStage(int stage);
     void updateTaskContext();
+    void updateFeaturePresentation();
+    void chooseTaskForFeature();
+    QString featureDescription(const QString &id) const;
+    QWidget *m_featureHeader = nullptr;
+    QLabel *m_featureTitle = nullptr;
+    QLabel *m_featureDescription = nullptr;
+    QLabel *m_featurePath = nullptr;
+    QWidget *m_taskGate = nullptr;
+    QLabel *m_taskGateMessage = nullptr;
+    QPushButton *m_chooseTaskButton = nullptr;
+    ScanPage *m_standaloneScan = nullptr;
+    ExecutionPage *m_standaloneExecution = nullptr;
+    QString m_pendingTaskFeature;
+    bool m_selectingFeatureTask = false;
     ModuleRibbon *m_ribbon = nullptr;
     QFrame *m_contextBar = nullptr;
     QLabel *m_contextLabel = nullptr;

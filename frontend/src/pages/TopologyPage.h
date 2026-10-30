@@ -38,6 +38,8 @@ public:
     /// Pre-fill the target input (used when embedded in FlowPage workbench)
     void setTarget(const QString &target);
     void selectWorkspaceMode(const QString &mode);
+    void refreshAssetTable();
+    bool eventFilter(QObject *object, QEvent *event) override;
     QJsonObject selectedTargetContext() const;
     void setPipelineContext(const QString &pipelineId, const QString &target,
                             const QStringList &scanIds, bool scanFinished);
@@ -184,6 +186,8 @@ private:
     QLabel *m_statusLabel;
     QGraphicsScene *m_graphScene;
     QGraphicsView *m_graphView;
+    QTableWidget *m_assetTable = nullptr;
+    QLabel *m_emptyCanvas = nullptr;
 
     // Right panel
     QListWidget *m_nodeListWidget;

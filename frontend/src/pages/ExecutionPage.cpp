@@ -1338,7 +1338,10 @@ void ExecutionPage::showCellDetail(const QString &title, const QString &content)
 void ExecutionPage::selectAttackCategory(int category)
 {
   // A task executes its approved plan; navigation must never replace that plan.
-  if (!m_pipelineId.isEmpty() || category < 0 || category > 3) return;
+  if (category < 0 || category > 3) return;
+  const QStringList categories{QString(), "data-exfiltration", "tampering-deception", "device-control"};
+  m_taskMonitor->setScenarioCategory(categories.value(category));
+  if (!m_pipelineId.isEmpty()) return;
   if (auto *button = m_catGroup->button(category)) button->setChecked(true);
   onAttackCategoryChanged(category);
 }

@@ -27,6 +27,7 @@ signals:
   void planChanged();
   void executionStarted();
   void sourceVerificationRequested();
+  void payloadWorkspaceRequested();
 
 private:
   void refresh(bool discard = false);

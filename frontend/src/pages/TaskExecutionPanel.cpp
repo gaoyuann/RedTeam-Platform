@@ -143,9 +143,14 @@ TaskExecutionPanel::TaskExecutionPanel(ApiClient *api, const QString &role, cons
   m_gate->setStyleSheet("color:#475569;padding:4px 0;");
   parentContent->addWidget(m_gate);
   auto *notice = label(this);
-  notice->setText(QStringLiteral("只读监控；取消任务请使用工作台顶部按钮。后端暂无可靠的暂停/恢复/手动重试接口，本页不提供这些操作。工具成功、规则命中和 MITRE 标签不等于漏洞已验证；模拟模式必须另行核验。"));
+  notice->setText(QStringLiteral("选择执行记录查看步骤、证据与结果；停止任务请使用当前任务操作。工具成功与漏洞验证结论分别展示。"));
   notice->setStyleSheet("color:#64748b;font-size:12px;");
   outer->addWidget(notice);
+  m_scenarioSummary = label(this);
+  m_scenarioSummary->setObjectName("executionScenarioSummary");
+  m_scenarioSummary->setStyleSheet("font-size:12px;color:#6c83a5;padding:8px 0;");
+  m_scenarioSummary->hide();
+  outer->addWidget(m_scenarioSummary);
   auto *splitter = new QSplitter(Qt::Horizontal, this);
   m_tabs = new WorkbenchTabs(splitter);
   auto makeTable = [this](const QString &title, const QStringList &headers, const QString &hint) {
@@ -248,6 +253,8 @@ void TaskExecutionPanel::clearTaskContext()
   m_completedRunId.clear();
   m_detailKey.clear();
   m_snapshot = {};
+  m_scenarioSummary->setText(m_scenarioCategory.isEmpty() ? QString() : QStringLiteral("正在读取当前任务的场景记录…"));
+  m_scenarioSummary->setVisible(!m_scenarioCategory.isEmpty());
   m_busy = false;
   m_refreshFailed = false;
   m_timer->stop();
@@ -463,7 +470,22 @@ void TaskExecutionPanel::render()
     else { table->clearSelection(); table->setCurrentCell(-1, -1); }
     table->blockSignals(false);
   }
-  const auto childRows=verifications.value("items").toArray();
+  QJsonArray childRows;
+  int unclassified = 0;
+  const auto allChildRows = verifications.value("items").toArray();
+  for (const auto &value : allChildRows) {
+    const auto classification = value.toObject().value("classification").toObject();
+    if (classification.value("state").toString() != "classified") ++unclassified;
+    if (m_scenarioCategory.isEmpty() || (classification.value("state").toString() == "classified"
+        && classification.value("categories").toArray().contains(m_scenarioCategory))) childRows.append(value);
+  }
+  m_scenarioSummary->setVisible(!m_scenarioCategory.isEmpty());
+  if (!m_scenarioCategory.isEmpty()) {
+    m_state->setToolTip(m_state->text());
+    m_state->setText(QStringLiteral("本场景已加载 %1 条关联执行记录").arg(childRows.size()));
+  }
+  if (!m_scenarioCategory.isEmpty()) m_scenarioSummary->setText(QStringLiteral("当前场景：匹配已保存分类的执行记录 %1 条；另有 %2 条未分类或分类已过期。仅筛选本次返回记录，分类不代表验证成立。")
+    .arg(childRows.size()).arg(unclassified));
   const auto *selected=m_verifications->item(m_verifications->currentRow(),0);
   const QString selectedId=selected?selected->data(Qt::UserRole).toJsonObject().value("attempt_id").toString():QString();
   {const QSignalBlocker block(m_verifications);m_verifications->setRowCount(childRows.size());int selectedRow=-1;
@@ -561,4 +583,15 @@ void TaskExecutionPanel::openVerificationHistory(int index)
   });
   dialog->setAttribute(Qt::WA_DeleteOnClose);
   dialog->show();
+}
+
+void TaskExecutionPanel::setScenarioCategory(const QString &category)
+{
+  m_scenarioCategory = category;
+  m_tabs->setCurrentWidget(m_verifications);
+  if (!m_snapshot.isEmpty()) render();
+  else {
+    m_scenarioSummary->setVisible(!category.isEmpty());
+    m_scenarioSummary->setText(QStringLiteral("正在读取当前场景的执行记录；未分类记录不会自动归入场景。"));
+  }
 }

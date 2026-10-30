@@ -51,6 +51,7 @@ public:
   void requestWorkspaceStage(int stage);
   bool hasSelectedTask() const;
   int workspaceStage() const;
+  bool taskContextReady() const;
   QString taskContextSummary() const;
 
   /// Open the workbench in "direct execution" mode — no pipeline selected,
@@ -65,6 +66,7 @@ public:
 signals:
   void returnPageRequested(int page);
   void taskContextChanged();
+  void taskListRequested();
   void workspaceStageChanged(int stage);
 
 public slots:
@@ -115,6 +117,7 @@ private:
   // Internal stack: [0]=list, [1]=workbench
   QStackedWidget *m_stack;
   int m_requestedStage = -1;
+  bool m_ribbonNavigation = false;
 
   // List view
   QWidget *m_listView;

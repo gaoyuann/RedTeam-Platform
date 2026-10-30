@@ -509,6 +509,7 @@ void FlowPage::setupWorkbenchView()
 
   // Top bar
   auto *topBar = new QFrame(m_workbenchView);
+  topBar->setObjectName("taskWorkspaceActions");
   topBar->setObjectName("flowToolbar");
   topBar->setStyleSheet("QFrame#flowToolbar { background:#ffffff; border-bottom:1px solid #dbe3ef; }");
   auto *topLayout = new QHBoxLayout(topBar);
@@ -621,7 +622,7 @@ void FlowPage::setupWorkbenchView()
   m_aiToggleBtn = new QPushButton(QStringLiteral("AI 协作"), topBar);
   m_aiToggleBtn->setObjectName(QStringLiteral("taskAiToggleButton"));
   m_aiToggleBtn->setCheckable(true);
-  m_aiToggleBtn->setChecked(true);
+  m_aiToggleBtn->setChecked(false);
   m_aiToggleBtn->setToolTip(QStringLiteral("显示或收起任务级 AI 协作面板"));
   UiUtil::styleToolbarButton(m_aiToggleBtn);
   topLayout->addWidget(m_aiToggleBtn);
@@ -637,6 +638,7 @@ void FlowPage::setupWorkbenchView()
 
   // Six user-facing phases map to the existing four backend execution steps.
   auto *progressFrame = new QFrame(m_workbenchView);
+  progressFrame->setObjectName(QStringLiteral("taskPhaseNavigation"));
   progressFrame->setStyleSheet("background:#f8fbff;");
   auto *progressLayout = new QHBoxLayout(progressFrame);
   progressLayout->setContentsMargins(14, 6, 14, 6);
@@ -713,6 +715,7 @@ void FlowPage::setupWorkbenchView()
   workspace->addWidget(m_stageTabs);
   m_aiPanel = new TaskAiPanel(m_api, workspace);
   workspace->addWidget(m_aiPanel);
+  m_aiPanel->setVisible(m_aiToggleBtn->isChecked());
   workspace->setChildrenCollapsible(false);
   workspace->setStretchFactor(0, 4);
   workspace->setStretchFactor(1, 1);
@@ -785,6 +788,9 @@ void FlowPage::setupWorkbenchView()
     selectSource();
   });
   connect(m_planTab, &TaskPlanPage::sourceVerificationRequested, this, selectSource);
+  connect(m_planTab, &TaskPlanPage::payloadWorkspaceRequested, this, [this]() {
+    m_scanTab->openPayloadWorkspace();
+  });
   connect(m_planTab, &TaskPlanPage::planChanged, this, [this]() {
     if (!m_selectedPipelineId.isEmpty()) loadFlowDetail(m_selectedPipelineId);
     refreshFlows();
@@ -1848,6 +1854,7 @@ void FlowPage::onBackToList()
   clearRunContext();
   m_stack->setCurrentIndex(0);
   if (returnPage >= 0) emit returnPageRequested(returnPage);
+  else if (m_ribbonNavigation) emit taskListRequested();
   else refreshFlows();
 }
 
@@ -2158,7 +2165,17 @@ void FlowPage::jumpToExecution(const QString &playbookId, const QString &target)
 
 void FlowPage::setRibbonNavigation(bool enabled)
 {
+  m_ribbonNavigation = enabled;
   m_stageTabs->tabBar()->setVisible(!enabled);
+  if (auto *phases = findChild<QFrame *>(QStringLiteral("taskPhaseNavigation"))) phases->setVisible(!enabled);
+  if (enabled) {
+    m_targetLabel->hide(); m_taskIdLabel->hide(); m_copyTaskId->hide();
+    if (auto *actions = findChild<QFrame *>("taskWorkspaceActions")) actions->setMaximumHeight(46);
+    m_scanTab->enableRibbonWorkspace();
+    if (auto *title = m_planTab->findChild<QLabel *>("planPageTitle")) title->hide();
+    m_aiToggleBtn->setChecked(false);
+    m_aiPanel->hide();
+  }
 }
 
 void FlowPage::showTaskList()
@@ -2204,3 +2221,5 @@ QString FlowPage::taskContextSummary() const
 }
 
 int FlowPage::workspaceStage() const { return m_stageTabs->currentIndex(); }
+
+bool FlowPage::taskContextReady() const { return !m_selectedPipelineId.isEmpty() && m_lastDetailPipelineId == m_selectedPipelineId && !m_lastDisplayedDetail.isEmpty(); }
