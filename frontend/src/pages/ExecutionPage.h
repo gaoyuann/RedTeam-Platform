@@ -31,6 +31,8 @@ public:
   /// Pre-fill the target input (used when embedded in FlowPage workbench)
   void setTarget(const QString &target);
   void selectAttackCategory(int category);
+  int attackCategory() const { return m_currentCategory; }
+  void enableRibbonWorkspace();
 
   /// Load and display a specific run by ID (used by FlowPage workbench
   /// when a pipeline's execute step produces a run).
@@ -47,6 +49,7 @@ signals:
   void runCompleted(const QString &runId);
   void runSelected(const QString &runId);
   void findingVerificationChanged(const QString &pipelineId);
+  void categoryViewChanged(int category);
 
 public slots:
   void onRefreshRuns();
@@ -65,6 +68,8 @@ private slots:
 private:
   void setupUI();
   void loadPlaybooks();
+  void renderRunList();
+  void resetExecutionView(bool scopeChanged);
   void loadPlaybooksByGroup(const QStringList &groups);
   void loadRunDetails(const QString &runId);
   void applyRunDetails(const QString &runId, const QJsonObject &data, int selectionRevision);
@@ -96,6 +101,17 @@ private:
   QRadioButton *m_catTamper;
   QRadioButton *m_catDeviceCtrl;
   QButtonGroup *m_catGroup;
+  QWidget *m_categoryPanel = nullptr;
+  QLabel *m_runScopeNote = nullptr;
+  QLabel *m_catalogueStatus = nullptr;
+  QJsonArray m_allRuns;
+  int m_currentCategory = 0;
+  int m_playbookRequest = 0;
+  bool m_catalogueFresh = false;
+  bool m_launching = false;
+  bool m_previewLoading = false;
+  bool m_previewReady = false;
+  int m_previewRequest = 0;
 
   // Evidence display
   QLabel *m_evidenceLabel;

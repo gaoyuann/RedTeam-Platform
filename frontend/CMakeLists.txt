@@ -61,6 +61,7 @@ set(HEADERS
     src/GlobalSearchDialog.h
     src/MainWindow.h
     src/widgets/ModuleRibbon.h
+    src/widgets/ActiveStackedWidget.h
     src/SimpleMainWindow.h
     src/ApiClient.h
     src/ReportFileActions.h

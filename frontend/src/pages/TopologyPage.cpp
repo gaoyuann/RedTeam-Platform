@@ -27,6 +27,7 @@
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QFrame>
+#include <QDialog>
 #include <QGraphicsEllipseItem>
 #include <QGraphicsRectItem>
 #include <QGraphicsLineItem>
@@ -1408,6 +1409,7 @@ void TopologyPage::setupUI() {
     auto *updateTopologyButton = new QPushButton(QStringLiteral("更新拓扑"));
     UiUtil::styleToolbarButton(updateTopologyButton);
     updateTopologyButton->setToolTip(QStringLiteral("用当前任务的已有扫描证据更新拓扑，不重新扫描；已保存的展示修改会被替换"));
+    updateTopologyButton->setObjectName("topologyUpdateButton");
     toolbar->addWidget(updateTopologyButton);
     connect(updateTopologyButton, &QPushButton::clicked, this, [this]() {
         if (m_documentDirty || m_editorDirty) {
@@ -1432,6 +1434,11 @@ void TopologyPage::setupUI() {
     toolbar->addWidget(zoomOutButton);
     toolbar->addWidget(resetViewButton);
     toolbar->addWidget(zoomInButton);
+    editButton->setObjectName("topologyEditMenu");
+    zoomOutButton->setObjectName("topologyZoomOut");
+    zoomInButton->setObjectName("topologyZoomIn");
+    resetViewButton->setObjectName("topologyFitView");
+    infoButton->setObjectName("topologyInfoButton");
     toolbar->addWidget(editButton);
     toolbar->addWidget(m_saveTopologyButton);
     rootLayout->addLayout(toolbar);
@@ -3422,12 +3429,20 @@ QString TopologyPage::nodeDisplayTitle(const TopologyNodeRecord &node) const {
 void TopologyPage::selectWorkspaceMode(const QString &mode)
 {
     setProperty("workspaceMode", mode);
+    for (const auto &name : {"topologyZoomOut", "topologyZoomIn", "topologyFitView", "topologyEditMenu", "topologySourcesButton", "topologyInspectorButton", "topologyInfoButton"})
+        if (auto *button = findChild<QPushButton *>(name)) button->setVisible(mode != "assets");
+    m_saveTopologyButton->setVisible(mode != "assets");
+    m_nodeActionHint->setVisible(mode != "assets");
+    m_nodeTestTargetCombo->setVisible(mode != "assets");
+    m_nodeTestButton->setVisible(mode != "assets");
+    m_nodeVerifyButton->setVisible(mode != "assets");
+    if (auto *button = findChild<QPushButton *>("topologyUpdateButton")) button->setText(mode == "assets" ? QStringLiteral("刷新资产清单") : QStringLiteral("更新拓扑"));
     auto *sideTabs = findChild<QTabWidget *>(QStringLiteral("topologySideTabs"));
-    if (sideTabs) sideTabs->setVisible(mode != "display");
+    if (sideTabs) { sideTabs->setVisible(mode != "display"); sideTabs->tabBar()->setVisible(mode != "assets"); }
     if (mode == "assets" && !m_assetTable) {
-        m_assetTable = new QTableWidget(0, 6, m_graphView->parentWidget());
+        m_assetTable = new QTableWidget(0, 7, m_graphView->parentWidget());
         m_assetTable->setObjectName("discoveredAssetTable");
-        m_assetTable->setHorizontalHeaderLabels({"资产名称", "地址", "设备类型", "操作系统", "服务 / 端口", "状态"});
+        m_assetTable->setHorizontalHeaderLabels({"资产名称", "地址", "设备类型", "操作系统", "服务 / 端口", "状态", "来源"});
         m_assetTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
         m_assetTable->setSelectionBehavior(QAbstractItemView::SelectRows);
         m_assetTable->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -3438,6 +3453,18 @@ void TopologyPage::selectWorkspaceMode(const QString &mode)
         UiUtil::EmptyHint::attach(m_assetTable, QStringLiteral("尚未发现资产；在左侧填写范围并开始探测，或选择已有记录。"));
         connect(m_assetTable, &QTableWidget::cellClicked, this, [this](int row, int) {
             if (auto *item = m_assetTable->item(row, 0)) syncSelectionToNode(item->data(Qt::UserRole).toString());
+        });
+        connect(m_assetTable, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
+            if (row < 0 || row >= m_assetTable->rowCount()) return;
+            auto *dialog = new QDialog(this); dialog->setAttribute(Qt::WA_DeleteOnClose);
+            dialog->setObjectName("assetDetailsDialog"); dialog->setWindowTitle(QStringLiteral("资产详情")); dialog->resize(600, 420);
+            auto *layout = new QVBoxLayout(dialog); auto *text = new QPlainTextEdit(dialog); text->setReadOnly(true);
+            QStringList lines;
+            for (int column = 0; column < m_assetTable->columnCount(); ++column)
+                lines << m_assetTable->horizontalHeaderItem(column)->text() + QStringLiteral("：") + m_assetTable->item(row, column)->text();
+            text->setPlainText(lines.join("\n\n")); layout->addWidget(text);
+            auto *close = new QPushButton(QStringLiteral("关闭"), dialog); connect(close, &QPushButton::clicked, dialog, &QDialog::close);
+            layout->addWidget(close, 0, Qt::AlignRight); dialog->show();
         });
     }
     if (m_assetTable) m_assetTable->setVisible(mode == "assets");
@@ -3480,7 +3507,10 @@ void TopologyPage::refreshAssetTable()
         m_assetTable->insertRow(index);
         QStringList services;
         for (const auto &service : node.services) services << service.port + "/" + service.protocol + " " + service.service;
-        const QStringList cells{nodeDisplayTitle(node), node.ip, deviceNames.value(node.deviceType, node.deviceType), node.osName, services.join("; "), nodeStatusLabel(node.status)};
+        const QString origin = node.tags.contains("configured-gateway") || node.tags.contains("default-gateway") ? QStringLiteral("配置网关")
+            : node.provenance.value("source").toString() == "manual" ? QStringLiteral("人工维护")
+            : !node.scan.isEmpty() || node.provenance.contains("scan_task_id") ? QStringLiteral("扫描记录") : QStringLiteral("来源待核对");
+        const QStringList cells{nodeDisplayTitle(node), node.ip, deviceNames.value(node.deviceType, node.deviceType), node.osName, services.join("; "), nodeStatusLabel(node.status), origin};
         for (int column = 0; column < cells.size(); ++column) {
             auto *item = new QTableWidgetItem(cells[column].isEmpty() ? QStringLiteral("未识别") : cells[column]);
             item->setData(Qt::UserRole, node.id); item->setToolTip(cells[column].toHtmlEscaped()); m_assetTable->setItem(index, column, item);
@@ -3488,11 +3518,11 @@ void TopologyPage::refreshAssetTable()
         ++index;
     }
     if (property("workspaceMode").toString() == "assets") {
-        if (m_canvasTitleLabel->text() != QStringLiteral("已发现资产")) {
+        if (m_canvasTitleLabel->text() != QStringLiteral("资产清单")) {
             m_canvasTitleLabel->setProperty("graphTitle", m_canvasTitleLabel->text());
             m_statsLabel->setProperty("graphStats", m_statsLabel->text());
         }
-        m_canvasTitleLabel->setText(QStringLiteral("已发现资产"));
+        m_canvasTitleLabel->setText(QStringLiteral("资产清单"));
         m_statsLabel->setText(QStringLiteral("资产 %1 台").arg(index));
     }
 }

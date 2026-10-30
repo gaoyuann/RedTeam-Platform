@@ -98,3 +98,19 @@ public:
                   " background:#ffffff; padding:0; }");
   }
 };
+
+// Pages with long inactive forms should not stretch the visible tab's layout.
+class ActiveWorkbenchTabs : public WorkbenchTabs {
+public:
+  explicit ActiveWorkbenchTabs(QWidget *parent = nullptr, bool compact = true) : WorkbenchTabs(parent, compact) {
+    connect(this, &QTabWidget::currentChanged, this, [this]() { updateGeometry(); });
+  }
+  QSize minimumSizeHint() const override {
+    if (!currentWidget()) return QSize(0, 0);
+    const int tabs = tabBar()->isVisible() ? tabBar()->sizeHint().height() : 0;
+    return currentWidget()->minimumSizeHint().expandedTo(currentWidget()->minimumSize()) + QSize(4, tabs + 4);
+  }
+  QSize sizeHint() const override {
+    return currentWidget() ? currentWidget()->sizeHint().expandedTo(minimumSizeHint()) : minimumSizeHint();
+  }
+};

@@ -16,6 +16,7 @@
 #include "../UiUtil.h"
 #include "../widgets/MetricCard.h"
 #include "../widgets/WorkbenchTabs.h"
+#include "../widgets/ActiveStackedWidget.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
@@ -223,18 +224,17 @@ static QString statusBadgeStyle(const QString &status)
 
 // ── FlowPage ───────────────────────────────────────────────────────────
 
-// Other stages have large minimum sizes; they must not push scan pagination offscreen.
-class ScanWorkspaceTabs final : public WorkbenchTabs {
+// Hidden stages must not impose minimum sizes on the visible workspace.
+class TaskWorkspaceTabs final : public WorkbenchTabs {
 public:
   using WorkbenchTabs::WorkbenchTabs;
   QSize minimumSizeHint() const override {
-    if (currentWidget() && currentWidget()->objectName() == "scanPage")
-      return currentWidget()->minimumSizeHint() + QSize(4, tabBar()->sizeHint().height() + 4);
-    return WorkbenchTabs::minimumSizeHint();
+    if (!currentWidget()) return QSize(0, 0);
+    const int tabs = tabBar()->isVisible() ? tabBar()->sizeHint().height() : 0;
+    return currentWidget()->minimumSizeHint().expandedTo(currentWidget()->minimumSize()) + QSize(4, tabs + 4);
   }
   QSize sizeHint() const override {
-    if (currentWidget() && currentWidget()->objectName() == "scanPage") return minimumSizeHint();
-    return WorkbenchTabs::sizeHint();
+    return currentWidget() ? currentWidget()->sizeHint().expandedTo(minimumSizeHint()) : minimumSizeHint();
   }
 };
 
@@ -316,7 +316,7 @@ void FlowPage::setupUI()
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(0);
 
-  m_stack = new QStackedWidget(this);
+  m_stack = new ActiveStackedWidget(this);
   layout->addWidget(m_stack);
 
   setupListView();
@@ -616,6 +616,7 @@ void FlowPage::setupWorkbenchView()
   connect(m_reportAction, &QAction::triggered, [this]() {
     m_stageTabs->setCurrentWidget(m_evalTab);
     m_evalTab->showReports();         // 切到"测试报告"子页 + 刷新
+    emit taskReportOpened();
   });
   topLayout->addWidget(m_moreBtn);
 
@@ -655,7 +656,7 @@ void FlowPage::setupWorkbenchView()
   layout->addWidget(progressFrame);
 
   // Task workbench tabs preserve the selected pipeline context.
-  m_stageTabs = new ScanWorkspaceTabs(m_workbenchView, false);
+  m_stageTabs = new TaskWorkspaceTabs(m_workbenchView, false);
   m_topoTab = new TopologyPage(m_api, m_role, m_username, m_stageTabs);
   connect(m_topoTab,&TopologyPage::testTargetRequested,this,[this](const QString &target) {
     createTestForTarget(target,m_topoTab->selectedTargetContext());
@@ -2090,6 +2091,7 @@ void FlowPage::onRunCompleted(const QString &runId)
 
 void FlowPage::switchToStageTab(int idx)
 {
+  if (idx == 1) m_scanTab->showAllTaskResults();
   if (m_stageTabs && idx >= 0 && idx < m_stageTabs->count())
     m_stageTabs->setCurrentIndex(idx);
 }
@@ -2172,6 +2174,7 @@ void FlowPage::setRibbonNavigation(bool enabled)
     m_targetLabel->hide(); m_taskIdLabel->hide(); m_copyTaskId->hide();
     if (auto *actions = findChild<QFrame *>("taskWorkspaceActions")) actions->setMaximumHeight(46);
     m_scanTab->enableRibbonWorkspace();
+    m_execTab->enableRibbonWorkspace();
     if (auto *title = m_planTab->findChild<QLabel *>("planPageTitle")) title->hide();
     m_aiToggleBtn->setChecked(false);
     m_aiPanel->hide();

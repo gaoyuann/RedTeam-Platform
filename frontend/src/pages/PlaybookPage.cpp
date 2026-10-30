@@ -44,7 +44,7 @@ void PlaybookPage::setupUI() {
   resourceHint->setContentsMargins(16, 10, 16, 10);
   outerLayout->addWidget(resourceHint);
 
-  m_tabs = new WorkbenchTabs(this);
+  m_tabs = new ActiveWorkbenchTabs(this);
 
   // ── Tab 0: Playbook 库 ───────────────────────────────────────────
   m_playbookTab = new QWidget(m_tabs);

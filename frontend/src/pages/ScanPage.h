@@ -31,6 +31,8 @@ public:
   void selectScanType(const QString &type);
   void openPayloadWorkspace();
   void enableRibbonWorkspace();
+  QString selectedScanFeature() const;
+  void showAllTaskResults();
   void setPipelineScope(const QString &pipelineId, const QStringList &taskIds, const QString &state = {});
   void setTaskScope(const QStringList &taskIds);
   void clearTaskScope();
@@ -39,6 +41,7 @@ public:
 signals:
   void sourceGenerationStatus(const QString &message, bool error);
   void taskSelectionRequested();
+  void workspaceViewChanged(bool sourceExtension);
   void sourcePlaybookGenerated(const QString &playbookId);
   void playbookNavigateRequested(const QString &playbookId, const QString &target = "");
   /// 从扫描结果漏洞一键发起攻击（演示动线：扫描 → 漏洞列表 → 攻击）

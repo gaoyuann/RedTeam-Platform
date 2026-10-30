@@ -8,6 +8,8 @@
 #include <QComboBox>
 #include <QFormLayout>
 #include <QFrame>
+#include <QGroupBox>
+#include <QScrollArea>
 #include <QHeaderView>
 #include <QInputDialog>
 #include <QJsonArray>
@@ -92,7 +94,7 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   auto *optional = new QLabel(QStringLiteral("可选，用于批量编排；逐漏洞测试可直接从漏洞列表开始。"), this);
   optional->setObjectName("optionalPlanHint");
   optional->setWordWrap(true);
-  optional->setStyleSheet(Theme::StatusInfoStyle);
+  optional->setStyleSheet("font-size:12px;color:#7187a5;padding:2px 0;");
   layout->addWidget(optional);
   m_status = new QLabel(this);
   m_status->setObjectName(QStringLiteral("planStatusLabel"));
@@ -103,7 +105,11 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   m_scope->setTextFormat(Qt::PlainText);
   m_scope->setWordWrap(true);
   m_scope->setStyleSheet(QStringLiteral("color:#64748b; font-size:12px;"));
-  layout->addWidget(m_scope);
+  auto *scopeBox = new QGroupBox(QStringLiteral("任务来源与范围"), this);
+  scopeBox->setCheckable(true); scopeBox->setChecked(false);
+  auto *scopeLayout = new QVBoxLayout(scopeBox); scopeLayout->addWidget(m_scope);
+  m_scope->hide(); connect(scopeBox, &QGroupBox::toggled, m_scope, &QWidget::setVisible);
+  layout->addWidget(scopeBox);
   auto *sourceRow = new QHBoxLayout;
   sourceRow->addWidget(new QLabel(QStringLiteral("来源预案："), this));
   m_source = new QComboBox(this);
@@ -240,6 +246,20 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   footer->setWordWrap(true);
   footer->setStyleSheet(QStringLiteral("font-size:12px; color:#64748b;"));
   layout->addWidget(footer);
+  // Scroll editable content while keeping save/review actions visible.
+  auto *body = new QWidget(this);
+  auto *bodyLayout = new QVBoxLayout;
+  bodyLayout->setContentsMargins(0, 0, 0, 0);
+  while (layout->count() && layout->itemAt(0)->layout() != actions) {
+    auto *item = layout->takeAt(0);
+    if (auto *nested = item->layout()) { nested->setParent(nullptr); bodyLayout->addLayout(nested); }
+    else bodyLayout->addItem(item);
+  }
+  body->setLayout(bodyLayout);
+  auto *editorScroll = new QScrollArea(this);
+  editorScroll->setObjectName("planEditorScroll");
+  editorScroll->setFrameShape(QFrame::NoFrame); editorScroll->setWidgetResizable(true);
+  editorScroll->setWidget(body); layout->insertWidget(0, editorScroll, 1);
 
   connect(m_refresh, &QPushButton::clicked, this, [this]() { refresh(true); });
   connect(m_create, &QPushButton::clicked, this, [this]() {

@@ -779,6 +779,7 @@ void ScanPage::setPipelineScope(const QString &pipelineId, const QStringList &ta
 {
   if(m_pipelineId!=pipelineId) {
     resetFindingClassification();
+    m_ribbonScanType.clear();
     m_checkedFindings.clear();
     const QSignalBlocker categoryBlock(m_resultCategory);
     m_resultCategory->setCurrentIndex(m_resultCategory->findData("vulnerability"));
@@ -798,6 +799,12 @@ void ScanPage::setPipelineScope(const QString &pipelineId, const QStringList &ta
   m_aggregateControls->show();
   m_moreResultsButton->show();
   loadPipelineResults();
+}
+
+static bool ribbonScanTypeMatches(const QString &selected, const QString &actual)
+{
+  if (selected.isEmpty() || selected == actual) return true;
+  return selected == "web_scan" && QStringList{"web_scan_nikto", "web_scan_sqlmap", "web_parameter_scan", "api_fuzz", "auth_audit"}.contains(actual);
 }
 
 void ScanPage::loadPipelineResults(bool append)
@@ -887,6 +894,7 @@ void ScanPage::loadPipelineResults(bool append)
     bool otherFindingSource = false;
     for (const auto &value : data["scan_sources"].toArray()) {
       const auto source = value.toObject();
+      if (!ribbonScanTypeMatches(m_ribbonScanType, source["scan_type"].toString())) continue;
       if (!selectedSource.isEmpty() && source["scan_task_id"].toString() != selectedSource) continue;
       if (source["scan_type"].toString() != "source_scan" && !source["source_scan"].isObject()) {
         otherFindingSource = otherFindingSource || !QStringList{"port_scan","topology_scan"}.contains(source["scan_type"].toString());
@@ -1040,6 +1048,7 @@ void ScanPage::clearTaskScope()
   if (m_showAllRecords) m_showAllRecords->hide();
   m_scopedTasks = true;
   m_scopeTaskIds.clear();
+  m_ribbonScanType.clear();
   m_scanSourceTypes.clear();
   m_selectInitialScopeTask = false;
   m_selectedTaskId.clear();
@@ -1529,6 +1538,7 @@ void ScanPage::setupUI() {
   connect(typePicker, QOverload<int>::of(&QComboBox::currentIndexChanged), m_scanTypeTabs, &QTabWidget::setCurrentIndex);
   connect(m_scanTypeTabs, &QTabWidget::currentChanged, typePicker, &QComboBox::setCurrentIndex);
   auto *taskTitle = new QLabel(QStringLiteral("扫描任务"));
+  taskTitle->setProperty("duplicateFeatureTitle", true);
   taskTitle->setObjectName("scanPanelTitle");
   auto *taskHint = new QLabel(QStringLiteral("按类型查看任务与扫描结果"));
   taskHint->setObjectName("scanPanelHint");
@@ -1593,6 +1603,7 @@ void ScanPage::setupUI() {
   auto *heading = new QHBoxLayout;
   auto *pageTitle = new QLabel(QStringLiteral("扫描发现"));
   pageTitle->setObjectName("scanPanelTitle");
+  pageTitle->setProperty("duplicateFeatureTitle", true);
   heading->addWidget(pageTitle);
   heading->addStretch();
   m_compactStatus = new QLabel(QStringLiteral("请选择扫描任务"));
@@ -1949,6 +1960,10 @@ void ScanPage::setupUI() {
   sourceSlot->setObjectName("sourceFlowWorkspaceSlot");
   scanWorkspaces->addTab(sourceSlot, QStringLiteral("源码扫描"));
   connect(scanWorkspaces,&QTabWidget::currentChanged,this,[this,scanWorkspaces,sourceSlot](int index){
+    const bool source = index == scanWorkspaces->indexOf(sourceSlot);
+    if (property("ribbonWorkspace").toBool())
+      if (auto *tasks = findChild<QFrame *>("scanTasksPanel")) tasks->setVisible(!source);
+    emit workspaceViewChanged(source);
     if(index!=scanWorkspaces->indexOf(sourceSlot) || sourceSlot->layout())return;
     auto *layout=new QVBoxLayout(sourceSlot);
     layout->setContentsMargins(0,0,0,0);
@@ -2098,8 +2113,7 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
     const auto row=value.toObject();
     if (m_allScanResults && !m_ribbonScanType.isEmpty()) {
       const QString sourceType = m_scanSourceTypes.value(row["scan_task_id"].toString());
-      const bool webChild = m_ribbonScanType == "web_scan" && QStringList{"web_scan", "web_scan_nikto", "web_scan_sqlmap", "web_parameter_scan", "api_fuzz", "auth_audit"}.contains(sourceType);
-      if (sourceType != m_ribbonScanType && !webChild) continue;
+      if (!ribbonScanTypeMatches(m_ribbonScanType, sourceType)) continue;
     }
     if (m_sourceResultsView && !m_sourceRecordsMode && row["result_type"].toString() != "source_finding") continue;
     if (m_sourceResultsView && m_sourceRecordsMode && (isProgramFinding(row["result_type"].toString()) || isVerificationRecord(row))) continue;
@@ -2816,6 +2830,7 @@ void ScanPage::onRefreshTasks() {
     if (!m_allScanResults && m_scopedTasks && m_selectInitialScopeTask && m_selectedTaskId.isEmpty()) {
       const QList<QTableWidget*> tables{m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable, m_sourceScanTable};
       for (int tab = 0; tab < tables.size(); ++tab) {
+        if (!m_ribbonScanType.isEmpty() && tab != m_scanTypeTabs->currentIndex()) continue;
         if (tables[tab]->rowCount() == 0) continue;
         m_scanTypeTabs->setCurrentIndex(tab);
         tables[tab]->selectRow(0);
@@ -3896,5 +3911,25 @@ void ScanPage::enableRibbonWorkspace()
   if (auto *types = findChild<QComboBox *>("scanTypePicker")) types->hide();
   tasks->show();
   if (auto *manage = findChild<QPushButton *>("manageScanTasks")) manage->hide();
+  for (auto *label : findChildren<QLabel *>()) {
+    if (label->property("duplicateFeatureTitle").toBool()
+        || label->text() == QStringLiteral("按类型查看任务与扫描结果")) label->hide();
+  }
+  m_compactStatus->setStyleSheet("font-size:12px;color:#b87727;");
+  m_listTitle->setStyleSheet("font-size:13px;font-weight:600;color:#2c4668;padding:2px 0;");
   setProperty("ribbonWorkspace", true);
+}
+
+QString ScanPage::selectedScanFeature() const
+{
+  const QMap<QString, QString> names{{"port_scan", "scans.ports"}, {"vuln_scan", "scans.system"}, {"web_scan", "scans.web"}, {"brute_force", "scans.passwords"}};
+  return names.value(m_ribbonScanType);
+}
+
+void ScanPage::showAllTaskResults()
+{
+  if (m_ribbonScanType.isEmpty()) return;
+  m_ribbonScanType.clear();
+  if (!m_pipelineId.isEmpty()) loadPipelineResults();
+  else if (m_scopedTasks) { m_selectInitialScopeTask = true; onRefreshTasks(); }
 }

@@ -67,6 +67,7 @@ signals:
   void returnPageRequested(int page);
   void taskContextChanged();
   void taskListRequested();
+  void taskReportOpened();
   void workspaceStageChanged(int stage);
 
 public slots:

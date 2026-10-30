@@ -26,6 +26,9 @@
 #include <QRegularExpression>
 #include <QMessageBox>
 #include <QShowEvent>
+#include <QPointer>
+#include <QSet>
+#include <QUrl>
 
 // ── Helper: create a table item with truncated display text and the full
 //    text stored in Qt::UserRole for double-click expansion. ─────────────
@@ -70,7 +73,7 @@ void ExecutionPage::setupUI() {
   mainLayout->setContentsMargins(12, 8, 12, 8);
 
   // ── Tab widget ─────────────────────────────────────────────────────
-  m_tabWidget = new WorkbenchTabs(this);
+  m_tabWidget = new ActiveWorkbenchTabs(this);
 
   // ── Tab 1: 执行记录 ────────────────────────────────────────────────
   auto *tab1 = new QWidget;
@@ -106,7 +109,9 @@ void ExecutionPage::setupUI() {
   catH->addWidget(m_catTamper);
   catH->addWidget(m_catDeviceCtrl);
   catH->addStretch();
-  standaloneLayout->addLayout(catH);
+  m_categoryPanel = new QWidget;
+  m_categoryPanel->setLayout(catH);
+  standaloneLayout->addWidget(m_categoryPanel);
   connect(m_catGroup, QOverload<int>::of(&QButtonGroup::buttonClicked),
           this, &ExecutionPage::onAttackCategoryChanged);
 
@@ -117,6 +122,10 @@ void ExecutionPage::setupUI() {
   m_playbookCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
   m_playbookCombo->setMinimumContentsLength(12);
   h1->addWidget(m_playbookCombo, 1);
+  auto *refreshPlaybooks = new QPushButton(QStringLiteral("刷新预案"));
+  refreshPlaybooks->setObjectName("refreshExecutionPlaybooks");
+  connect(refreshPlaybooks, &QPushButton::clicked, this, &ExecutionPage::loadPlaybooks);
+  h1->addWidget(refreshPlaybooks);
   h1->addWidget(new QLabel("目标:"));
   m_targetInput = new QLineEdit;
   m_targetInput->setPlaceholderText("例: 192.168.1.1");
@@ -133,11 +142,33 @@ void ExecutionPage::setupUI() {
   m_execBtn->setProperty("primary", true);
   h1->addWidget(m_execBtn);
   standaloneLayout->addLayout(h1);
+  m_catalogueStatus = new QLabel;
+  m_catalogueStatus->setObjectName("executionCatalogueStatus");
+  m_catalogueStatus->setTextFormat(Qt::PlainText); m_catalogueStatus->setWordWrap(true);
+  m_catalogueStatus->setStyleSheet("font-size:12px;color:#7088a8;");
+  standaloneLayout->addWidget(m_catalogueStatus);
   connect(m_execBtn, &QPushButton::clicked, this, &ExecutionPage::onExecute);
+  connect(m_playbookCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+    m_execBtn->setEnabled(m_pipelineId.isEmpty() && m_catalogueFresh && index >= 0 && !m_launching && !m_previewLoading);
+    if (m_catalogueStatus && m_catalogueFresh && index >= 0)
+      m_catalogueStatus->setText(QStringLiteral("已选择预案：%1").arg(m_playbookCombo->currentText()));
+  });
+  connect(m_playbookCombo, QOverload<int>::of(&QComboBox::activated), this, [this](int index) {
+    if (m_pipelineId.isEmpty() && m_catalogueFresh && index >= 0) {
+      ++m_playbookRequest;
+      ++m_previewRequest; m_previewLoading = false; m_previewReady = false;
+      m_execBtn->setEnabled(!m_launching);
+    }
+  });
 
   // ── Run list ──────────────────────────────────────────────────────
   auto *runLabel = new QLabel("执行记录"); runLabel->setStyleSheet(Theme::SectionStyle);
   tab1Layout->addWidget(runLabel);
+  m_runScopeNote = new QLabel;
+  m_runScopeNote->setObjectName("standaloneRunScope");
+  m_runScopeNote->setWordWrap(true);
+  m_runScopeNote->setStyleSheet("font-size:12px;color:#768da9;");
+  tab1Layout->addWidget(m_runScopeNote);
   m_runTable = new QTableWidget(0, 5);
   UiUtil::EmptyHint::attach(m_runTable, QStringLiteral("暂无攻击执行记录"));
   m_runTable->setHorizontalHeaderLabels({"执行编号", "预案", "目标", "状态", "创建时间"});
@@ -242,7 +273,7 @@ void ExecutionPage::setupUI() {
   m_evidenceTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
   rightLayout->addWidget(m_evidenceTable, 1);
 
-  auto *detailTabs = new WorkbenchTabs;
+  auto *detailTabs = new ActiveWorkbenchTabs;
   detailTabs->setObjectName("executionDetailTabs");
   auto *stepsPage = new QWidget;
   auto *stepsLayout = new QVBoxLayout(stepsPage);
@@ -347,11 +378,23 @@ void ExecutionPage::setupUI() {
 
 // ── Load all playbooks ───────────────────────────────────────────────
 void ExecutionPage::loadPlaybooks() {
-  m_api->get("/api/playbooks?includeGenerated=true", 5000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
+  const int request = ++m_playbookRequest;
+  const QPointer<ExecutionPage> guard(this);
+  m_catalogueFresh = false; m_execBtn->setEnabled(false);
+  m_catalogueStatus->setText(QStringLiteral("正在读取预案目录…"));
+  m_api->get("/api/playbooks?includeGenerated=true", 5000, [this, guard, request](const QJsonObject &res) {
+    if (!guard || request != m_playbookRequest) return;
+    if (res["status"].toString() != "ok" || !res["data"].isArray()) {
+      m_catalogueStatus->setText(QStringLiteral("预案目录读取失败，请点击“刷新预案”重试；已有列表暂时保留。"));
+      m_execBtn->setEnabled(false); return;
+    }
+    m_catalogueFresh = true;
     m_allPlaybooks = res["data"].toArray();
-    // Populate combo with all
-    loadPlaybooksByGroup(QStringList());
+    const QString selected = m_playbookCombo->currentData().toString();
+    if (m_pipelineId.isEmpty()) onAttackCategoryChanged(m_currentCategory);
+    else loadPlaybooksByGroup(QStringList());
+    const int previous = m_playbookCombo->findData(selected);
+    if (previous >= 0) m_playbookCombo->setCurrentIndex(previous);
   });
 }
 
@@ -361,6 +404,16 @@ void ExecutionPage::setTarget(const QString &target) {
 }
 
 void ExecutionPage::selectPlaybook(const QString &playbookId, const QString &target) {
+  const int request = ++m_playbookRequest;
+  const int context = m_contextRevision;
+  const QPointer<ExecutionPage> guard(this);
+  if (m_pipelineId.isEmpty()) {
+    m_currentCategory = 0;
+    m_catAll->setChecked(true);
+    loadPlaybooksByGroup(QStringList());
+    m_taskMonitor->setScenarioCategory({});
+    emit categoryViewChanged(0);
+  }
   // Pre-fill target
   m_targetInput->setText(target);
 
@@ -374,11 +427,20 @@ void ExecutionPage::selectPlaybook(const QString &playbookId, const QString &tar
     }
   }
 
-  // Not found — reload playbooks then select
+  // Not found — reload playbooks then select.
+  m_execBtn->setEnabled(false);
+  m_catalogueStatus->setText(QStringLiteral("正在读取所选预案…"));
+  const int requestedCategory = m_currentCategory;
   m_api->get("/api/playbooks?includeGenerated=true", 5000,
-    [this, playbookId](const QJsonObject &res) {
-      if (res["status"].toString() != "ok") return;
+    [this, guard, request, context, requestedCategory, playbookId](const QJsonObject &res) {
+      if (!guard || request != m_playbookRequest || context != m_contextRevision) return;
+      if (res["status"].toString() != "ok" || !res["data"].isArray()) {
+        m_catalogueFresh = false; m_execBtn->setEnabled(false);
+        m_catalogueStatus->setText(QStringLiteral("所选预案读取失败，请刷新后重试。")); return;
+      }
+      m_catalogueFresh = true;
       m_allPlaybooks = res["data"].toArray();
+      if (m_pipelineId.isEmpty() && requestedCategory != m_currentCategory) { onAttackCategoryChanged(m_currentCategory); return; }
       m_catAll->setChecked(true);
       loadPlaybooksByGroup(QStringList());
 
@@ -389,6 +451,9 @@ void ExecutionPage::selectPlaybook(const QString &playbookId, const QString &tar
           return;
         }
       }
+      m_playbookCombo->setCurrentIndex(-1);
+      m_execBtn->setEnabled(false);
+      m_catalogueStatus->setText(QStringLiteral("所选预案不可用或已删除，请刷新并重新选择。"));
     });
 }
 
@@ -457,9 +522,12 @@ void ExecutionPage::showExecutionError(const QString &message) {
   m_cortexPanel->setStatus(QStringLiteral("FAILED"));
 }
 
-void ExecutionPage::clearRunContext() {
+void ExecutionPage::clearRunContext() { resetExecutionView(true); }
+
+void ExecutionPage::resetExecutionView(bool scopeChanged) {
   m_taskMonitor->clearTaskContext();
-  ++m_contextRevision;
+  if (scopeChanged) { ++m_contextRevision; m_launching = false; }
+  ++m_previewRequest; m_previewLoading = false; m_previewReady = false;
   m_pollTimer->stop();
   m_runningRunId.clear();
   m_runningPlaybookId.clear();
@@ -476,8 +544,8 @@ void ExecutionPage::clearRunContext() {
   m_lastReactAction.clear();
   m_pollErrorCount = 0;
   m_stopBtn->setEnabled(false);
-  m_execBtn->setEnabled(m_pipelineId.isEmpty());
-  m_execBtn->setText(QStringLiteral("执行"));
+  m_execBtn->setEnabled(m_pipelineId.isEmpty() && !m_launching && m_catalogueFresh);
+  m_execBtn->setText(m_launching ? QStringLiteral("提交中…") : QStringLiteral("执行"));
   m_stepTable->setRowCount(0);
   m_evidenceTable->setRowCount(0);
   m_programReport->clear();
@@ -501,12 +569,20 @@ void ExecutionPage::loadPlaybooksByGroup(const QStringList &groups) {
 
 // ── Attack category changed ─────────────────────────────────────────
 void ExecutionPage::onAttackCategoryChanged(int id) {
+  if (id < 0 || id > 3) return;
+  const bool changed = m_currentCategory != id;
+  if (changed && m_pipelineId.isEmpty()) { resetExecutionView(false); m_tabWidget->setCurrentIndex(0); }
+  m_currentCategory = id;
   switch (id) {
     case 0: loadPlaybooksByGroup(QStringList()); break;
     case 1: loadPlaybooksByGroup({"data-exfiltration", "credential-access"}); break;
     case 2: loadPlaybooksByGroup({"tampering-deception"}); break;
     case 3: loadPlaybooksByGroup({"device-control", "internal-network-exploitation", "impact-demonstration"}); break;
   }
+  m_execBtn->setEnabled(m_pipelineId.isEmpty() && m_catalogueFresh && m_playbookCombo->count() > 0 && !m_launching && !m_previewLoading);
+  if (m_pipelineId.isEmpty()) renderRunList();
+  if (changed && m_pipelineId.isEmpty() && m_allRuns.isEmpty()) onRefreshRuns();
+  if (changed) emit categoryViewChanged(id);
 }
 
 // A pipeline owns its execution; independent runs remain in the standalone view.
@@ -531,6 +607,7 @@ void ExecutionPage::setPipelineContext(const QString &pipelineId, const QString 
   m_execBtn->setText(QStringLiteral("执行"));
   m_pipelineHint->setText(QStringLiteral("逐漏洞测试可从漏洞列表直接开始；双击下方记录查看历史。全局预案为可选批量编排，状态见主预案详情。"));
   if (changed) {
+    m_launching = false; m_previewLoading = false; m_previewReady = false; ++m_previewRequest;
     ++m_contextRevision;
     ++m_runSelectionRevision;
     ++m_runDetailsRequestRevision;
@@ -555,6 +632,7 @@ void ExecutionPage::setPipelineContext(const QString &pipelineId, const QString 
     m_statusLabel->setText(QStringLiteral("选择执行记录查看详情"));
     onRefreshRuns();
   }
+  m_execBtn->setEnabled(!scoped && m_catalogueFresh && !m_launching && m_playbookCombo->currentIndex() >= 0);
   if (scoped && runId.isEmpty()) {
     m_statusLabel->setText(QStringLiteral("查看本任务的执行记录；逐漏洞测试不要求先执行全局预案。"));
     m_statusLabel->setStyleSheet(Theme::StatusInfoStyle);
@@ -563,7 +641,7 @@ void ExecutionPage::setPipelineContext(const QString &pipelineId, const QString 
 
 // ── Execute ─────────────────────────────────────────────────────────
 void ExecutionPage::onExecute() {
-  if (!m_pipelineId.isEmpty()) return;
+  if (!m_pipelineId.isEmpty() || m_launching || m_previewLoading) return;
   QString playbookId = m_playbookCombo->currentData().toString();
   QString target = m_targetInput->text().trimmed();
   if (playbookId.isEmpty() || target.isEmpty()) {
@@ -579,6 +657,33 @@ void ExecutionPage::onExecute() {
     auto p = m_allPlaybooks[i].toObject();
     if (p["playbook_id"].toString() == playbookId) { selPlaybook = p; break; }
   }
+  if (!m_previewReady || selPlaybook.isEmpty() || !selPlaybook["steps"].isArray()) {
+    const int request = ++m_previewRequest; const int context = m_contextRevision;
+    const int category = m_currentCategory; const QPointer<ExecutionPage> guard(this);
+    m_previewLoading = true; m_execBtn->setEnabled(false);
+    m_catalogueStatus->setText(QStringLiteral("正在读取当前预案的实际步骤…"));
+    m_api->get("/api/playbooks/" + QString::fromLatin1(QUrl::toPercentEncoding(playbookId)), 5000,
+      [this, guard, request, context, category, playbookId, target](const QJsonObject &response) {
+        if (!guard || request != m_previewRequest) return;
+        m_previewLoading = false;
+        m_execBtn->setEnabled(m_catalogueFresh && m_pipelineId.isEmpty() && !m_launching && m_playbookCombo->currentIndex() >= 0);
+        if (context != m_contextRevision || category != m_currentCategory || !isVisible()
+            || playbookId != m_playbookCombo->currentData() || target != m_targetInput->text().trimmed()) {
+          m_catalogueStatus->setText(QStringLiteral("当前选择已变化，未提交执行。")); return;
+        }
+        const auto detail = response["data"].toObject();
+        if (response["status"] != "ok" || detail["playbook_id"].toString() != playbookId || !detail["steps"].isArray()) {
+          m_catalogueStatus->setText(QStringLiteral("预案步骤读取失败，未提交执行；可重试。")); return;
+        }
+        for (int i = 0; i < m_allPlaybooks.size(); ++i)
+          if (m_allPlaybooks[i].toObject()["playbook_id"].toString() == playbookId) { m_allPlaybooks[i] = detail; break; }
+        m_previewReady = true;
+        onExecute();
+      });
+    return;
+  }
+  m_previewReady = false;
+  const int confirmationContext = m_contextRevision;
   if (!selPlaybook.isEmpty()) {
     QString pbName = selPlaybook["name"].toString();
     QString pbDesc = selPlaybook["description"].toString();
@@ -591,44 +696,46 @@ void ExecutionPage::onExecute() {
     for (const auto &v : mitreArr) mitreList << v.toString();
     QString teaching = selPlaybook["teaching_objective"].toString();
 
-    // 基于 target_type 推断预期流程
-    QString flow;
-    if (ttList.contains("dvwa") || ttList.contains("web_url") || ttList.contains("web")) {
-      flow = "1. 侦察 (whatweb)：识别 Web 服务、框架、版本\n"
-             "2. 目录枚举 (gobuster/ffuf)：发现隐藏路径和攻击面\n"
-             "3. 漏洞扫描 (nikto/nuclei)：检测已知漏洞和配置问题\n"
-             "4. 注入测试 (sqlmap)：验证 SQL 注入等注入点\n"
-             "5. 认证测试 (hydra)：暴力破解弱密码\n"
-             "6. 利用验证：基于发现验证攻击路径";
-    } else {
-      flow = "1. 端口扫描 (nmap)：发现开放端口和服务\n"
-             "2. 服务识别：指纹识别运行的服务\n"
-             "3. 漏洞扫描：检测已知漏洞\n"
-             "4. 利用：基于发现验证攻击路径";
+    const auto actualSteps = selPlaybook["steps"].toArray();
+    if (actualSteps.isEmpty()) {
+      m_catalogueStatus->setText(QStringLiteral("预案没有可执行步骤，请先编辑预案。")); return;
     }
-
+    QStringList stepLines;
+    for (int i = 0; i < actualSteps.size() && i < 100; ++i) {
+      const auto step = actualSteps[i].toObject();
+      stepLines << QStringLiteral("%1. %2 · 工具：%3").arg(i + 1)
+        .arg(step["name"].toString(QStringLiteral("未命名步骤")), step["tool_id"].toString(QStringLiteral("未指定")));
+    }
+    if (actualSteps.size() > 100) stepLines << QStringLiteral("共 %1 步，仅预览前100步。").arg(actualSteps.size());
+    const QString flow = stepLines.join('\n').toHtmlEscaped();
+    pbName = pbName.toHtmlEscaped(); pbDesc = pbDesc.toHtmlEscaped();
+    pbDiff = pbDiff.toHtmlEscaped(); teaching = teaching.toHtmlEscaped();
+    for (auto &value : ttList) value = value.toHtmlEscaped();
+    for (auto &value : mitreList) value = value.toHtmlEscaped();
     QString planHtml = QString(
       "<h3>%1</h3>"
       "<p><b>描述：</b>%2</p>"
       "<p><b>目标：</b>%3 &nbsp;&nbsp; <b>难度：</b>%4 &nbsp;&nbsp; <b>目标类型：</b>%5</p>"
       "<p><b>MITRE 技术：</b>%6</p>"
       "%7"
-      "<p><b>预期执行流程：</b></p>"
+      "<p><b>已保存的预案步骤：</b></p>"
       "<pre style='font-family:monospace;background:#f5f5f5;padding:8px;'>%8</pre>"
       "<p style='color:#888;font-size:11px;'>⚠ ReAct 引擎会根据每步结果动态调整后续步骤，实际执行可能与此计划不同。</p>"
       "<p><b>是否开始执行？</b></p>")
       .arg(pbName, pbDesc.isEmpty() ? QStringLiteral("（无描述）") : pbDesc,
-           target, pbDiff.isEmpty() ? QStringLiteral("未标注") : pbDiff,
+           target.toHtmlEscaped(), pbDiff.isEmpty() ? QStringLiteral("未标注") : pbDiff,
            ttList.isEmpty() ? QStringLiteral("未指定") : ttList.join(", "),
            mitreList.isEmpty() ? QStringLiteral("未标注") : mitreList.join(", "),
            teaching.isEmpty() ? QString() : QString("<p><b>教学目标：</b>%1</p>").arg(teaching),
            flow);
 
     auto *msg = new QMessageBox(this);
+    msg->setAttribute(Qt::WA_DeleteOnClose);
     msg->setIcon(QMessageBox::Question);
     msg->setWindowTitle(QStringLiteral("执行计划确认"));
     msg->setText(planHtml);
     msg->setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+    msg->setDefaultButton(QMessageBox::No); msg->setEscapeButton(QMessageBox::No);
     msg->button(QMessageBox::Yes)->setText(QStringLiteral("开始执行"));
     msg->button(QMessageBox::No)->setText(QStringLiteral("取消"));
     if (msg->exec() != QMessageBox::Yes) {
@@ -636,6 +743,11 @@ void ExecutionPage::onExecute() {
     }
   }
 
+  if (confirmationContext != m_contextRevision || !m_pipelineId.isEmpty() || !isVisible()
+      || playbookId != m_playbookCombo->currentData() || target != m_targetInput->text().trimmed()) {
+    m_catalogueStatus->setText(QStringLiteral("当前选择已变化，未提交执行。")); return;
+  }
+  m_launching = true;
   m_execBtn->setEnabled(false);
   m_execBtn->setText("创建中...");
   m_tabWidget->setCurrentIndex(1);
@@ -658,10 +770,14 @@ void ExecutionPage::onExecute() {
   body["playbook_id"] = playbookId;
   body["target"] = target;
   const int contextRevision = m_contextRevision;
-  m_api->post("/api/runs", body, 5000, [this, playbookId, contextRevision](const QJsonObject &res) {
+  const int launchCategory = m_currentCategory;
+  const QPointer<ExecutionPage> guard(this);
+  m_api->post("/api/runs", body, 5000, [this, guard, playbookId, target, launchCategory, contextRevision](const QJsonObject &res) {
+    if (!guard) return;
     if (contextRevision != m_contextRevision) return;
     if (res["status"].toString() != "ok") {
-      m_execBtn->setEnabled(true);
+      m_launching = false;
+      m_execBtn->setEnabled(m_catalogueFresh && m_playbookCombo->currentIndex() >= 0);
       m_execBtn->setText("执行");
       m_statusLabel->setText("创建执行任务失败：" + res["error"].toObject()["message"].toString());
       m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
@@ -669,7 +785,8 @@ void ExecutionPage::onExecute() {
     }
     QString runId = res["data"].toObject()["run_id"].toString();
     if (runId.isEmpty()) {
-      m_execBtn->setEnabled(true);
+      m_launching = false;
+      m_execBtn->setEnabled(m_catalogueFresh && m_playbookCombo->currentIndex() >= 0);
       m_execBtn->setText("执行");
       m_statusLabel->setText("创建执行任务失败：服务端未返回执行编号。");
       m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
@@ -677,9 +794,11 @@ void ExecutionPage::onExecute() {
     }
 
     QJsonObject empty;
-    m_api->post("/api/runs/" + runId + "/execute", empty, 5000, [this, runId, playbookId, contextRevision](const QJsonObject &execRes) {
+    m_api->post("/api/runs/" + runId + "/execute", empty, 5000, [this, guard, runId, playbookId, target, launchCategory, contextRevision](const QJsonObject &execRes) {
+      if (!guard) return;
       if (contextRevision != m_contextRevision) return;
-      m_execBtn->setEnabled(true);
+      m_launching = false;
+      m_execBtn->setEnabled(m_catalogueFresh && m_playbookCombo->currentIndex() >= 0);
       m_execBtn->setText("执行");
       if (execRes["status"].toString() != "ok") {
         m_statusLabel->setText("启动执行失败：" + execRes["error"].toObject()["message"].toString());
@@ -687,7 +806,8 @@ void ExecutionPage::onExecute() {
         onRefreshRuns();
         return;
       }
-      m_targetInput->clear();
+      if (m_currentCategory != launchCategory) { onRefreshRuns(); return; }
+      if (m_targetInput->text().trimmed() == target) m_targetInput->clear();
       // Track this run for real-time polling + auto-highlight
       m_runningRunId = runId;
       m_runningPlaybookId = playbookId;
@@ -714,13 +834,37 @@ void ExecutionPage::onRefreshRuns() {
     return;
   }
   const int contextRevision = m_contextRevision;
-  m_api->get("/api/runs", 5000, [this, contextRevision](const QJsonObject &res) {
-    if (contextRevision != m_contextRevision || res["status"].toString() != "ok") return;
+  const QPointer<ExecutionPage> guard(this);
+  m_api->get("/api/runs", 5000, [this, guard, contextRevision](const QJsonObject &res) {
+    if (!guard) return;
+    if (contextRevision != m_contextRevision) return;
+    if (res["status"].toString() != "ok" || !res["data"].isArray()) {
+      m_runScopeNote->setText(QStringLiteral("执行记录读取失败，请重试；当前保留先前读取的记录。")); return;
+    }
     QJsonArray arr;
     for (const auto &value : res["data"].toArray()) {
       if (m_pipelineId.isEmpty() || value.toObject()["run_id"].toString() == m_pipelineRunId)
         arr.append(value);
     }
+    m_allRuns = arr;
+    renderRunList();
+  });
+}
+
+void ExecutionPage::renderRunList()
+{
+    QSet<QString> allowed, known;
+    for (const auto &value : m_allPlaybooks) known.insert(value.toObject()["playbook_id"].toString());
+    for (int i = 0; i < m_playbookCombo->count(); ++i) allowed.insert(m_playbookCombo->itemData(i).toString());
+    QJsonArray arr; int unknown = 0;
+    for (const auto &value : m_allRuns) {
+        const auto row = value.toObject();
+        const QString book = row["playbook_id"].toString();
+        if (!known.contains(book)) ++unknown;
+        if (!m_currentCategory || allowed.contains(book)) arr.append(value);
+    }
+    m_runScopeNote->setText(m_currentCategory ? QStringLiteral("当前场景已加载 %1 条执行记录；另有 %2 条缺少预案类别信息，不自动归入场景。").arg(arr.size()).arg(unknown)
+        : QStringLiteral("已加载 %1 条执行记录").arg(arr.size()));
     const bool sortingEnabled = m_runTable->isSortingEnabled();
     m_runTable->setSortingEnabled(false);
     m_runTable->setRowCount(arr.size());
@@ -762,7 +906,6 @@ void ExecutionPage::onRefreshRuns() {
         break;
       }
     }
-  });
 }
 
 // ── Run clicked: load steps + evidence ──────────────────────────────
@@ -784,6 +927,7 @@ void ExecutionPage::onRunClicked(int row, int) {
 // ── Load run details by ID (shared by onRunClicked and onExecute) ────
 void ExecutionPage::onRunReact(const QJsonObject &data) {
   const QString runId = data.value(QStringLiteral("run_id")).toString();
+  if (m_pipelineId.isEmpty() && m_runningRunId.isEmpty() && m_loadedRunId.isEmpty()) return;
   if (!m_pipelineId.isEmpty()) {
     if (!runId.isEmpty() && runId == m_pipelineRunId) m_taskMonitor->refresh();
     return;
@@ -1339,9 +1483,19 @@ void ExecutionPage::selectAttackCategory(int category)
 {
   // A task executes its approved plan; navigation must never replace that plan.
   if (category < 0 || category > 3) return;
+  const bool changed = m_currentCategory != category;
+  if (changed && m_pipelineId.isEmpty()) { resetExecutionView(false); m_tabWidget->setCurrentIndex(0); }
+  m_currentCategory = category;
   const QStringList categories{QString(), "data-exfiltration", "tampering-deception", "device-control"};
   m_taskMonitor->setScenarioCategory(categories.value(category));
+  if (changed) emit categoryViewChanged(category);
   if (!m_pipelineId.isEmpty()) return;
   if (auto *button = m_catGroup->button(category)) button->setChecked(true);
   onAttackCategoryChanged(category);
+  if (changed && m_allRuns.isEmpty()) onRefreshRuns();
+}
+
+void ExecutionPage::enableRibbonWorkspace()
+{
+  if (m_categoryPanel) m_categoryPanel->hide();
 }

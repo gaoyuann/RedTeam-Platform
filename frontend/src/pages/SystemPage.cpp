@@ -44,7 +44,7 @@ void SystemPage::setupUI() {
   scrollArea->setFrameShape(QFrame::NoFrame);
   auto *container = new QWidget;
   auto *layout = new QVBoxLayout(container);
-  m_tabs = new WorkbenchTabs;
+  m_tabs = new ActiveWorkbenchTabs;
 
   // ── Users tab ─────────────────────────────────────────────────────
   auto *userW = new QWidget;

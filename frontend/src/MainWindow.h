@@ -23,6 +23,7 @@ class EvaluatePage;
 class QFrame;
 class ScanPage;
 class ExecutionPage;
+class QScrollArea;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -55,6 +56,12 @@ private:
     void updateTaskContext();
     void updateFeaturePresentation();
     void chooseTaskForFeature();
+    void showAuxiliaryWorkspace(int module, const QString &title, const QString &description);
+    void bindExecutionView(ExecutionPage *page);
+    void bindScanWorkspace(ScanPage *page);
+    QString m_auxiliaryTitle;
+    QString m_auxiliaryDescription;
+    int m_auxiliaryModule = -1;
     QString featureDescription(const QString &id) const;
     QWidget *m_featureHeader = nullptr;
     QLabel *m_featureTitle = nullptr;
@@ -69,6 +76,8 @@ private:
     bool m_selectingFeatureTask = false;
     ModuleRibbon *m_ribbon = nullptr;
     QFrame *m_contextBar = nullptr;
+    QScrollArea *m_workspaceScroll = nullptr;
+    bool m_explicitRibbonChoice = false;
     QLabel *m_contextLabel = nullptr;
     QPushButton *m_overviewButton = nullptr;
     QPushButton *m_resultsButton = nullptr;

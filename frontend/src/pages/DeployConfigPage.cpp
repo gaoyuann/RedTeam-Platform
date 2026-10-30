@@ -741,7 +741,7 @@ void DeployConfigPage::showSection(const QString &section)
     const bool relatedImages = it.key() == "images" && (requested == "runtime" || requested == "tools");
     it.value()->setVisible(it.key() == requested || relatedImages || it.key() == "refresh");
     if (it.key() == requested && it.value()->layout()->count() > 0)
-      if (auto *heading = qobject_cast<QLabel *>(it.value()->layout()->itemAt(0)->widget())) heading->hide();
+      if (auto *heading = qobject_cast<QLabel *>(it.value()->layout()->itemAt(0)->widget())) heading->setVisible(requested != "llm");
   }
   setProperty("activeSection", requested);
 }
