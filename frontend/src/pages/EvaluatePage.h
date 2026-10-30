@@ -35,6 +35,7 @@ public:
 
   /// Switch to the reports sub-tab and refresh the report list.
   void showReports();
+  void showCaptureWorkspace(bool analysis);
 
   /// Select one report and preview it, without asking the user to find its run.
   void showReport(const QString &reportId);

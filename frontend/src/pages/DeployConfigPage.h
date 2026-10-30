@@ -7,6 +7,7 @@
 #include <QLineEdit>
 #include <QComboBox>
 #include <QCheckBox>
+#include <QMap>
 
 class ApiClient;
 
@@ -14,6 +15,8 @@ class DeployConfigPage : public QWidget {
   Q_OBJECT
 public:
   explicit DeployConfigPage(ApiClient *api, const QString &role = "", const QString &username = "", QWidget *parent = nullptr);
+
+  void showSection(const QString &section);
 
 private slots:
   void onRefresh();
@@ -35,6 +38,7 @@ private:
   void fitTableHeight(QTableWidget *t, int cap);
 
   ApiClient *m_api;
+  QMap<QString, QWidget *> m_sections;
 
   // Platform status
   QLabel *m_versionLabel;       // 启动时间

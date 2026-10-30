@@ -11,6 +11,7 @@
 #include "AppStyle.h"
 #include "StyleDark.h"
 #include "widgets/ScanResultOverview.h"
+#include "widgets/ModuleRibbon.h"
 #include "widgets/RemoteSourcePicker.h"
 #define private public
 #include "MainWindow.h"
@@ -30,6 +31,8 @@
 #include "pages/TaskExecutionPanel.h"
 #include "pages/TaskResultsPanel.h"
 #include "pages/StepIndicator.h"
+#include "pages/DeployConfigPage.h"
+#include "pages/SystemPage.h"
 #undef private
 
 struct MockReply {
@@ -183,9 +186,22 @@ int main(int argc, char **argv)
     std::cout << "PASS " << name << std::endl;
   };
 
+  const QString screenshotDirectory = qEnvironmentVariable("REDTEAM_RIBBON_SCREENSHOT_DIR");
+  const auto saveRibbonScreenshot = [&](MainWindow &window, const QString &name) {
+    if (screenshotDirectory.isEmpty()) return;
+    QDir().mkpath(screenshotDirectory);
+    const QString originalStyle = app.styleSheet();
+    app.setStyleSheet(Theme::GlobalStyle);
+    window.resize(1600, 1000);
+    QTest::qWait(80);
+    const QString scale = qEnvironmentVariable("QT_SCALE_FACTOR", "1");
+    verify(window.grab().save(screenshotDirectory + "/" + name + "-" + scale + ".png"), "optional local Qt review screenshot is saved");
+    app.setStyleSheet(originalStyle);
+  };
   {
     MockServer startupServer;
     startupServer.handler = [](const QString &, const QString &path) -> MockReply {
+      if (path == "/api/pipelines/B") return {success(taskRecord("B")), 160};
       if (path == "/api/pipelines/A") {
         auto task = taskRecord("A"); task["run_id"] = "";
         return {success(task)};
@@ -201,7 +217,7 @@ int main(int argc, char **argv)
     shell.m_dongleTimer->stop(); shell.m_ws->disconnectFromServer(); shell.show();
     verify(awaitCondition([&]() { return shell.m_dashboardPage->m_pendingResponses == 0; }),
       "initial shell dashboard finishes loading");
-    verify(shell.m_stackWidget->count() == 8 && !shell.m_flowPage && !shell.m_analysisPage,
+    verify(shell.m_stackWidget->count() == 10 && !shell.m_flowPage && !shell.m_analysisPage,
       "startup preserves navigation slots while deferring unused modules");
     for (int index = 1; index < 7; ++index)
       verify(shell.m_stackWidget->widget(index)->property("deferredModule").toBool(), "unopened module retains a lightweight placeholder");
@@ -210,6 +226,37 @@ int main(int argc, char **argv)
       && !startupServer.requests.value("GET /api/users")
       && !startupServer.requests.value("GET /api/config"),
       "startup sends no requests for unopened task or administration modules");
+    verify(shell.m_navList->count() == 7 && ModuleRibbon::features().size() == 34,
+      "ribbon exposes seven requirement modules and all 34 feature entries");
+    QSignalSpy unavailableSignal(shell.m_ribbon, &ModuleRibbon::featureRequested);
+    int unavailableCount = 0;
+    for (const auto &feature : ModuleRibbon::features()) {
+      auto *command = shell.findChild<QToolButton *>("ribbon." + feature.id);
+      verify(command && command->accessibleName() == feature.title, "feature retains complete accessible requirement name");
+      if (!feature.implemented) {
+        ++unavailableCount;
+        verify(!command->isEnabled(), "unimplemented feature is disabled");
+        const int pageBefore = shell.m_stackWidget->currentIndex();
+        command->click(); shell.openRibbonFeature(feature.id);
+        verify(shell.m_stackWidget->currentIndex() == pageBefore && unavailableSignal.count() == 0,
+          "unimplemented click and programmatic routing do nothing");
+      }
+    }
+    verify(unavailableCount == 7, "unsupported framework, detection, scenarios and situation views stay grey");
+    shell.openRibbonFeature("resources.llm");
+    verify(shell.m_deployPage && shell.m_stackWidget->currentIndex() == 8,
+      "resource ribbon loads its dedicated existing configuration host");
+    verify(!startupServer.requests.value("GET /api/users") && shell.m_stackWidget->widget(6)->property("deferredModule").toBool(),
+      "resource navigation never initializes user administration");
+    verify(shell.m_deployPage->property("activeSection").toString() == "llm"
+      && !shell.m_deployPage->m_sections.value("llm")->isHidden()
+      && shell.m_deployPage->m_sections.value("runtime")->isHidden(), "LLM ribbon shows only its existing configuration section");
+    saveRibbonScreenshot(shell, "qt-ribbon-llm");
+    auto *configuration = shell.m_deployPage;
+    shell.openRibbonFeature("resources.runtime");
+    verify(shell.m_deployPage == configuration && !configuration->m_sections.value("images")->isHidden()
+      && configuration->m_sections.value("llm")->isHidden(), "runtime ribbon reuses configuration and related image section");
+    saveRibbonScreenshot(shell, "qt-ribbon-runtime");
     shell.switchToPage(3);
     verify(shell.m_analysisPage && !shell.m_flowPage, "opening analysis does not construct the task module");
     emit shell.m_analysisPage->openTaskAnalysisRequested("A");
@@ -218,6 +265,32 @@ int main(int argc, char **argv)
     verify(shell.m_stackWidget->currentIndex() == 1 && shell.m_flowWebSocketConnected,
       "deferred task module has navigation and realtime bindings");
     auto *taskPage = shell.m_flowPage;
+    shell.openRibbonFeature("scans.ports");
+    verify(taskPage->m_selectedPipelineId == "A" && taskPage->m_stageTabs->currentWidget() == taskPage->m_scanTab
+      && taskPage->m_scanTab->m_scanTypeTabs->currentIndex() == 0, "ribbon changes scan type within the selected task");
+    saveRibbonScreenshot(shell, "qt-ribbon-scan");
+    shell.openRibbonFeature("resources.discovery");
+    verify(taskPage->m_selectedPipelineId == "A" && shell.m_stackWidget->currentWidget() == taskPage
+      && taskPage->m_stageTabs->currentWidget() == taskPage->m_topoTab, "asset discovery reuses selected task topology");
+    shell.openRibbonFeature("evaluation.analysis");
+    verify(shell.m_capturePage && shell.m_capturePage->m_pipelineId.isEmpty()
+      && taskPage->m_selectedPipelineId == "A" && shell.m_contextLabel->text().contains(QStringLiteral("独立捕获任务")),
+      "independent capture analysis is explicitly scoped and keeps the selected test task");
+    shell.openRibbonFeature("resources.llm");
+    verify(taskPage->m_selectedPipelineId == "A" && shell.m_contextLabel->text().contains("A"),
+      "global resource navigation keeps task context");
+    shell.openRibbonFeature("scans.ports");
+    shell.setDongleLocked(true, "ribbon lock");
+    shell.openRibbonFeature("resources.llm");
+    shell.setDongleLocked(false);
+    verify(shell.m_activeFeature == "scans.ports" && shell.m_stackWidget->currentWidget() == taskPage
+      && taskPage->m_selectedPipelineId == "A", "lock recovery restores the exact ribbon feature and task");
+    taskPage->openTaskAnalysis("B");
+    verify(shell.m_contextLabel->text().contains("B") && !shell.m_contextLabel->text().contains("A.invalid"),
+      "task identity changes immediately without retaining the previous target during loading");
+    taskPage->openTaskAnalysis("A");
+    verify(awaitCondition([&]() { return taskPage->m_lastDetailPipelineId == "A"; })
+      && shell.m_contextLabel->text().contains("A.invalid"), "late previous-task responses cannot replace the current ribbon context");
     taskPage->m_stageTabs->setCurrentWidget(taskPage->m_scanTab);
     const int beforeAgent = taskPage->m_scanTab->m_scanPageRequest;
     emit shell.m_ws->scanAgentStep(QJsonObject{});
@@ -1342,7 +1415,7 @@ int main(int argc, char **argv)
   window.m_ws->disconnectFromServer();
   window.show();
   verify(!window.findChild<QLineEdit*>("globalSearch") && !window.findChild<QPushButton*>("shellSettings"),
-    "header removes search and settings shortcuts");
+    "ribbon retains existing account and navigation permission boundaries");
   auto *toggle = window.findChild<QPushButton*>("navigationToggle");
   verify(toggle && window.m_navList->flow() == QListView::LeftToRight, "header has horizontal collapsible navigation");
   window.resize(1024, 600);
@@ -1350,26 +1423,36 @@ int main(int argc, char **argv)
   auto *header = window.findChild<QFrame*>("appTopBar");
   verify(header && header->height() <= 70 && header->geometry().contains(toggle->mapTo(header, toggle->rect().center())),
     "navigation and account controls share a compact header");
-  verify(!window.findChild<QLabel*>("appBrand") && !window.findChild<QLabel*>("appSubtitle"),
-    "compact header removes brand titles");
+  auto *platformTitle = window.findChild<QLabel *>("platformTitle");
+  verify(platformTitle && platformTitle->text() == QStringLiteral("信息系统安全智能化测试平台")
+    && window.windowTitle() == platformTitle->text(), "title row uses the requested platform name");
+  verify(window.findChild<QPushButton *>("ribbonTaskCenter") && window.m_ribbon,
+    "task center and grouped ribbon remain reachable");
+  const int expectedHosts[] = {2, 1, 2, 1, 1, 9, 1};
   for (int row = 0; row < 7; ++row) {
     window.m_navList->scrollToItem(window.m_navList->item(row));
     QCoreApplication::processEvents();
     QTest::mouseClick(window.m_navList->viewport(), Qt::LeftButton, Qt::NoModifier,
       window.m_navList->visualItemRect(window.m_navList->item(row)).center());
-    verify(window.m_stackWidget->currentIndex() == row, "horizontal module click selects matching page");
+    verify(window.m_stackWidget->currentIndex() == expectedHosts[row], "requirement module opens its existing functional host");
   }
   const int expandedHeight = window.m_stackWidget->height();
   toggle->click();
   QTest::qWait(50);
-  verify(!window.m_navList->isVisible() && window.m_stackWidget->height() > expandedHeight,
-    "collapse gives header space back to business page");
+  verify(!window.m_ribbon->isVisible() && window.m_navList->isVisible() && window.m_stackWidget->height() > expandedHeight,
+    "collapse gives ribbon space back while keeping module tabs reachable");
   window.switchToPage(1);
-  verify(toggle->text().contains(QStringLiteral("测试任务")), "collapsed header follows programmatic navigation");
+  verify(toggle->text() == QStringLiteral("展开功能区") && window.m_stackWidget->currentIndex() == 1,
+    "collapsed ribbon permits programmatic task navigation");
   toggle->click();
-  verify(window.m_navList->isVisible() && window.m_navList->currentRow() == 1, "expand preserves selected module");
+  verify(window.m_ribbon->isVisible() && window.m_stackWidget->currentIndex() == 1, "expand preserves the existing task workspace");
+  for (const auto &feature : ModuleRibbon::features()) {
+    auto *button = window.findChild<QToolButton *>("ribbon." + feature.id);
+    if (feature.adminOnly) verify(button && !button->isEnabled(), "ordinary accounts cannot trigger resource or account management");
+  }
   window.setDongleLocked(true, "fixture lock");
-  verify(!window.m_navList->isEnabled(), "lock disables header navigation");
+  verify(!window.m_navList->isEnabled() && !window.m_ribbon->isEnabled()
+    && !window.findChild<QPushButton *>("ribbonTaskCenter")->isEnabled(), "lock disables tabs, features and task shortcuts");
   window.switchToPage(5);
   verify(window.m_stackWidget->currentIndex() == 7, "locked navigation cannot leave lock page");
   window.setDongleLocked(false);

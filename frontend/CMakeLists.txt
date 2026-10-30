@@ -14,6 +14,7 @@ set(SOURCES
     src/main.cpp
     src/GlobalSearchDialog.cpp
     src/MainWindow.cpp
+    src/widgets/ModuleRibbon.cpp
     src/SimpleMainWindow.cpp
     src/ApiClient.cpp
     src/ReportFileActions.cpp
@@ -59,6 +60,7 @@ set(SOURCES
 set(HEADERS
     src/GlobalSearchDialog.h
     src/MainWindow.h
+    src/widgets/ModuleRibbon.h
     src/SimpleMainWindow.h
     src/ApiClient.h
     src/ReportFileActions.h

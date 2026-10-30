@@ -37,6 +37,7 @@ public:
 
     /// Pre-fill the target input (used when embedded in FlowPage workbench)
     void setTarget(const QString &target);
+    void selectWorkspaceMode(const QString &mode);
     QJsonObject selectedTargetContext() const;
     void setPipelineContext(const QString &pipelineId, const QString &target,
                             const QStringList &scanIds, bool scanFinished);

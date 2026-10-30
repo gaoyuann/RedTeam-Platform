@@ -46,6 +46,12 @@ public:
 
   /// Switch to a task workbench tab by index.
   void switchToStageTab(int idx);
+  void setRibbonNavigation(bool enabled);
+  void showTaskList();
+  void requestWorkspaceStage(int stage);
+  bool hasSelectedTask() const;
+  int workspaceStage() const;
+  QString taskContextSummary() const;
 
   /// Open the workbench in "direct execution" mode — no pipeline selected,
   /// jump straight to the attack tab with a playbook pre-selected.
@@ -58,6 +64,8 @@ public:
 
 signals:
   void returnPageRequested(int page);
+  void taskContextChanged();
+  void workspaceStageChanged(int stage);
 
 public slots:
   void refreshFlows();
@@ -106,6 +114,7 @@ private:
 
   // Internal stack: [0]=list, [1]=workbench
   QStackedWidget *m_stack;
+  int m_requestedStage = -1;
 
   // List view
   QWidget *m_listView;

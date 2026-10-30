@@ -3738,3 +3738,9 @@ void ScanPage::openFindingVerification(const QList<qint64> &ids) {
   });
   dialog->setAttribute(Qt::WA_DeleteOnClose);dialog->show();
 }
+
+void ScanPage::selectScanType(const QString &type)
+{
+  const QMap<QString, int> indices{{"ports", 0}, {"system", 1}, {"web", 2}, {"passwords", 3}};
+  if (indices.contains(type)) m_scanTypeTabs->setCurrentIndex(indices.value(type));
+}

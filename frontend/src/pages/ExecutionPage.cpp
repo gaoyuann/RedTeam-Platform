@@ -1334,3 +1334,11 @@ void ExecutionPage::showCellDetail(const QString &title, const QString &content)
   dlg->exec();
   dlg->deleteLater();
 }
+
+void ExecutionPage::selectAttackCategory(int category)
+{
+  // A task executes its approved plan; navigation must never replace that plan.
+  if (!m_pipelineId.isEmpty() || category < 0 || category > 3) return;
+  if (auto *button = m_catGroup->button(category)) button->setChecked(true);
+  onAttackCategoryChanged(category);
+}

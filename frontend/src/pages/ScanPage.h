@@ -28,6 +28,7 @@ public:
 
   /// Pre-fill all 4 target inputs (used when embedded in FlowPage workbench)
   void setTarget(const QString &target);
+  void selectScanType(const QString &type);
   void setPipelineScope(const QString &pipelineId, const QStringList &taskIds, const QString &state = {});
   void setTaskScope(const QStringList &taskIds);
   void clearTaskScope();

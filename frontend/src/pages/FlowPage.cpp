@@ -33,6 +33,7 @@
 #include <QGroupBox>
 #include <QLineEdit>
 #include <QTabWidget>
+#include <QTabBar>
 #include <QMenu>
 #include <QAction>
 #include <QDialog>
@@ -736,6 +737,7 @@ void FlowPage::setupWorkbenchView()
   m_aiPanel->setStage(m_stageTabs->tabText(m_stageTabs->currentIndex()));
   connect(m_aiToggleBtn, &QPushButton::toggled, m_aiPanel, &QWidget::setVisible);
   connect(m_stageTabs, &QTabWidget::currentChanged, this, [this](int index) {
+    emit workspaceStageChanged(index);
     m_aiPanel->setStage(m_stageTabs->tabText(index));
     m_stageTabs->updateGeometry();
   });
@@ -1190,6 +1192,13 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
           : status=="running" ? QStringLiteral("资产探测中") : statusText(status)
         : selectingSource ? QStringLiteral("待生成攻击测试预案") : statusText(status)));
     m_statusLabel->setStyleSheet(statusBadgeStyle(status));
+
+    if (m_requestedStage >= 0) {
+      const int requested = m_requestedStage;
+      m_requestedStage = -1;
+      if (m_stageTabs->isTabEnabled(requested)) m_stageTabs->setCurrentIndex(requested);
+    }
+    emit taskContextChanged();
 
     // 从 pipeline 数据提取 run_id 和 playbook_id，自动加载到攻击 Tab.
     // Guard against repeated events: only drive selectPlaybook/showRun when
@@ -1760,6 +1769,7 @@ void FlowPage::onFlowDoubleClicked(int row)
   if (pid.isEmpty()) return;
   m_selectedPipelineId = pid;
   clearRunContext();
+  emit taskContextChanged();
   m_lastDisplayedDetail = {};
   m_resultBtn->hide();
   m_execTab->setPipelineContext(pid, "loading", {});
@@ -1791,6 +1801,7 @@ void FlowPage::onFlowContextMenu(const QPoint &pos)
   menu->addAction(QStringLiteral("打开"), [this, pid]() {
     m_selectedPipelineId = pid;
     clearRunContext();
+    emit taskContextChanged();
     m_resultBtn->hide();
     m_execTab->setPipelineContext(pid, "loading", {});
     m_evalTab->setPipelineContext(pid, {});
@@ -1833,6 +1844,7 @@ void FlowPage::onBackToList()
 {
   const int returnPage = m_returnPage;
   m_selectedPipelineId.clear();
+  emit taskContextChanged();
   clearRunContext();
   m_stack->setCurrentIndex(0);
   if (returnPage >= 0) emit returnPageRequested(returnPage);
@@ -2058,6 +2070,7 @@ void FlowPage::showTaskDetailError(const QString &message)
   m_analysisTab->showError(message);
   m_overviewTab->showError(message);
   m_scanTab->showTaskContextError(message);
+  emit taskContextChanged();
 }
 
 void FlowPage::onRunCompleted(const QString &runId)
@@ -2077,8 +2090,10 @@ void FlowPage::switchToStageTab(int idx)
 void FlowPage::openTaskAnalysis(const QString &pipelineId)
 {
   if (pipelineId.isEmpty()) return;
+  m_requestedStage = -1;
   clearRunContext();
   m_selectedPipelineId = pipelineId;
+  emit taskContextChanged();
   m_resultBtn->hide();
   m_execTab->setPipelineContext(pipelineId, "loading", {});
   m_evalTab->setPipelineContext(pipelineId, {});
@@ -2093,8 +2108,10 @@ void FlowPage::openTaskAnalysis(const QString &pipelineId)
 void FlowPage::openTaskReport(const QString &pipelineId, const QString &reportId)
 {
   if (pipelineId.isEmpty() || reportId.isEmpty()) return;
+  m_requestedStage = -1;
   clearRunContext();
   m_selectedPipelineId = pipelineId;
+  emit taskContextChanged();
   m_pendingTaskReportId = reportId;
   m_resultBtn->hide();
   m_execTab->setPipelineContext(pipelineId, "loading", {});
@@ -2110,7 +2127,9 @@ void FlowPage::openTaskReport(const QString &pipelineId, const QString &reportId
 void FlowPage::jumpToExecution(const QString &playbookId, const QString &target)
 {
   // Clear pipeline context — this is a direct execution, not a pipeline view
+  m_requestedStage = -1;
   m_selectedPipelineId.clear();
+  emit taskContextChanged();
   clearRunContext();
   m_execTab->setPipelineContext({}, {}, {});
   m_evalTab->setPipelineContext({}, {});
@@ -2135,3 +2154,53 @@ void FlowPage::jumpToExecution(const QString &playbookId, const QString &target)
   if (!playbookId.isEmpty())
     m_execTab->selectPlaybook(playbookId, target);
 }
+
+
+void FlowPage::setRibbonNavigation(bool enabled)
+{
+  m_stageTabs->tabBar()->setVisible(!enabled);
+}
+
+void FlowPage::showTaskList()
+{
+  m_requestedStage = -1;
+  m_returnPage = -1;
+  m_backBtn->setText(QStringLiteral("← 返回任务列表"));
+  m_stack->setCurrentIndex(0);
+  refreshFlows();
+  emit taskContextChanged();
+}
+
+void FlowPage::requestWorkspaceStage(int stage)
+{
+  if (stage < 0 || stage >= m_stageTabs->count()) return;
+  if (m_selectedPipelineId.isEmpty() && m_stack->currentIndex() != 1) {
+    m_requestedStage = stage;
+    m_listState->setText(QStringLiteral("请先选择或新建测试任务，再打开对应功能。"));
+    m_flowTable->setFocus();
+    return;
+  }
+  m_stack->setCurrentIndex(1);
+  if (m_stageTabs->isTabEnabled(stage)) {
+    m_requestedStage = -1;
+    m_stageTabs->setCurrentIndex(stage);
+  } else {
+    m_requestedStage = -1;
+    m_listState->setText(QStringLiteral("当前任务类型不支持此阶段，请选择其他测试任务。"));
+    m_stack->setCurrentIndex(0);
+  }
+}
+
+bool FlowPage::hasSelectedTask() const { return !m_selectedPipelineId.isEmpty(); }
+
+QString FlowPage::taskContextSummary() const
+{
+  if (m_lastDetailPipelineId != m_selectedPipelineId || m_lastDisplayedDetail.isEmpty()) {
+    const QString state = m_statusLabel->text().contains(QStringLiteral("加载失败"))
+        ? QStringLiteral("加载失败") : QStringLiteral("正在加载");
+    return QStringLiteral("当前任务：%1 · %2").arg(m_selectedPipelineId, state);
+  }
+  return QStringLiteral("当前任务：%1 · %2").arg(m_taskIdLabel->text(), m_targetLabel->text());
+}
+
+int FlowPage::workspaceStage() const { return m_stageTabs->currentIndex(); }

@@ -255,6 +255,39 @@ void DeployConfigPage::setupUI() {
   layout->addWidget(m_refreshBtn);
   connect(m_refreshBtn, &QPushButton::clicked, this, &DeployConfigPage::onRefresh);
 
+  // Reuse each existing form as a section, without duplicating API or submit logic.
+  const QMap<QWidget *, QString> anchors{{platLabel, "status"}, {llmLabel, "llm"},
+    {sbLabel, "runtime"}, {imgLabel, "images"}, {toolLabel, "tools"},
+    {cfgLabel, "config"}, {labLabel, "labs"}, {m_refreshBtn, "refresh"}};
+  const int originalCount = layout->count();
+  QList<QLayoutItem *> originalItems;
+  for (int i = 0; i < originalCount; ++i) originalItems << layout->takeAt(0);
+  QString sectionId;
+  QVBoxLayout *sectionLayout = nullptr;
+  QMap<QString, QVBoxLayout *> sectionLayouts;
+  for (auto *item : originalItems) {
+    if (anchors.contains(item->widget())) {
+      sectionId = anchors.value(item->widget());
+      auto *section = new QWidget(container);
+      section->setObjectName(QStringLiteral("deploySection.%1").arg(sectionId));
+      sectionLayout = new QVBoxLayout;
+      sectionLayout->setContentsMargins(0, 0, 0, 0);
+      sectionLayouts.insert(sectionId, sectionLayout);
+      m_sections.insert(sectionId, section);
+      layout->addWidget(section);
+    }
+    if (!sectionLayout) { layout->addItem(item); continue; }
+    if (auto *nested = item->layout()) {
+      nested->setParent(nullptr);
+      sectionLayout->addLayout(nested);
+    } else {
+      sectionLayout->addItem(item);
+    }
+  }
+  // setLayout reparents all existing controls, including those in nested forms.
+  for (auto it = sectionLayouts.cbegin(); it != sectionLayouts.cend(); ++it)
+    m_sections.value(it.key())->setLayout(it.value());
+  layout->addStretch();
   scrollArea->setWidget(container);
   auto *outerLayout = new QVBoxLayout(this);
   outerLayout->addWidget(scrollArea);
@@ -690,4 +723,15 @@ void DeployConfigPage::tryParseLlmValue(const QString &jsonStr, QJsonObject &out
   if (err.error == QJsonParseError::NoError && doc.isObject()) {
     out = doc.object();
   }
+}
+
+void DeployConfigPage::showSection(const QString &section)
+{
+  const QString requested = section;
+  if (!m_sections.contains(requested)) return;
+  for (auto it = m_sections.cbegin(); it != m_sections.cend(); ++it) {
+    const bool relatedImages = it.key() == "images" && (requested == "runtime" || requested == "tools");
+    it.value()->setVisible(it.key() == requested || relatedImages || it.key() == "refresh");
+  }
+  setProperty("activeSection", requested);
 }

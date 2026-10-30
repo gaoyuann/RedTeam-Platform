@@ -17,6 +17,10 @@ class DongleLockPage;
 class DashboardPage;
 class AnalysisHubPage;
 class QTimer;
+class ModuleRibbon;
+class DeployConfigPage;
+class EvaluatePage;
+class QFrame;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -41,6 +45,24 @@ private:
     QWidget *createModulePage(int index);
     void ensureModulePage(int index);
     void connectFlowWebSocket();
+    void selectRibbonModule(int module);
+    void openRibbonFeature(const QString &id);
+    void syncRibbonForPage(int page);
+    void showTaskCenter();
+    void openTaskStage(int stage);
+    void updateTaskContext();
+    ModuleRibbon *m_ribbon = nullptr;
+    QFrame *m_contextBar = nullptr;
+    QLabel *m_contextLabel = nullptr;
+    QPushButton *m_overviewButton = nullptr;
+    QPushButton *m_resultsButton = nullptr;
+    QPushButton *m_navigationToggle = nullptr;
+    DeployConfigPage *m_deployPage = nullptr;
+    EvaluatePage *m_capturePage = nullptr;
+    QString m_activeFeature;
+    QString m_featureBeforeDongleLock;
+    QString m_lastFeatures[7];
+    bool m_routingFeature = false;
     bool m_flowWebSocketConnected = false;
 
     // 加密锁运行时心跳与锁屏
@@ -67,7 +89,8 @@ private:
     WsClient *m_ws = nullptr;
     ToastOverlay *m_toastOverlay = nullptr;
 
-    // Unified top-level module names; task-internal pages remain under 测试任务.
+    // Legacy page IDs remain stable for existing task/report callbacks.
+    // The visible module names are provided by ModuleRibbon.
     QStringList m_modules;
 
     // 加密锁运行时锁

@@ -1,4 +1,6 @@
 #include "MainWindow.h"
+#include "widgets/ModuleRibbon.h"
+#include "pages/DeployConfigPage.h"
 #include "ApiClient.h"
 #include "LoginDialog.h"
 #include "Theme.h"
@@ -28,6 +30,10 @@
 #include <QTimer>
 #include <QPixmap>
 #include <QIcon>
+#include <QMenu>
+#include <QSignalBlocker>
+#include <QScopedValueRollback>
+#include <QScrollArea>
 
 namespace {
 QString displayRole(const QString &role)
@@ -56,7 +62,7 @@ MainWindow::MainWindow(ApiClient *api, const QString &role, const QString &usern
 
 void MainWindow::setupUI()
 {
-    setWindowTitle(QStringLiteral("信息系统渗透智能化测试平台"));
+    setWindowTitle(QStringLiteral("信息系统安全智能化测试平台"));
     resize(1360, 860);
     setMinimumSize(1024, 600);
 
@@ -68,68 +74,101 @@ void MainWindow::setupUI()
 
     auto *topBar = new QFrame(centralWidget);
     topBar->setObjectName("appTopBar");
+    topBar->setStyleSheet(QStringLiteral("QFrame#appTopBar { background:#eaf0fb; border-bottom:1px solid #dbe4f4; }"));
     auto *headerLayout = new QHBoxLayout(topBar);
-    headerLayout->setContentsMargins(20, 4, 20, 4);
-    headerLayout->setSpacing(14);
+    headerLayout->setContentsMargins(16, 4, 16, 4);
+    headerLayout->setSpacing(8);
+    auto *home = new QPushButton(QStringLiteral("工作台"), topBar);
+    home->setObjectName("ribbonHome");
+    home->setProperty("quiet", true);
+    auto *tasks = new QPushButton(QStringLiteral("任务中心"), topBar);
+    tasks->setObjectName("ribbonTaskCenter");
+    tasks->setProperty("quiet", true);
+    headerLayout->addWidget(home);
+    headerLayout->addWidget(tasks);
+    auto *resources = new QPushButton(QStringLiteral("知识资源"), topBar);
+    resources->setObjectName("ribbonKnowledge");
+    resources->setProperty("quiet", true);
+    auto *knowledgeMenu = new QMenu(resources);
+    connect(knowledgeMenu->addAction(QStringLiteral("预案与知识库")), &QAction::triggered, this, [this]() { switchToPage(4); });
+    connect(knowledgeMenu->addAction(QStringLiteral("智能分析索引")), &QAction::triggered, this, [this]() { switchToPage(3); });
+    resources->setMenu(knowledgeMenu);
+    headerLayout->addWidget(resources);
     headerLayout->addStretch();
-    auto *userIcon = new QLabel(topBar);
-    userIcon->setPixmap(QIcon(":/icons/shell/user.svg").pixmap(24, 24));
-    headerLayout->addWidget(userIcon);
-    auto *topUser = new QLabel(QStringLiteral("%1 (%2)")
-        .arg(m_username, displayRole(m_role)), topBar);
-    topUser->setTextFormat(Qt::PlainText);
-    topUser->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
-    topUser->setMinimumWidth(120);
-    topUser->setMaximumWidth(280);
-    topUser->setToolTip(topUser->text().toHtmlEscaped());
-    topUser->setStyleSheet(QStringLiteral("color:#1e3a63; font-size:13px; font-weight:600;"));
-    headerLayout->addWidget(topUser);
-    auto *collapse = new QPushButton(QStringLiteral("收起导航"), topBar);
+    auto *title = new QLabel(QStringLiteral("信息系统安全智能化测试平台"), topBar);
+    title->setObjectName("platformTitle");
+    title->setStyleSheet(QStringLiteral("font-size:17px; font-weight:700; color:#244b82; padding:0 6px;"));
+    headerLayout->addWidget(title);
+    auto *collapse = new QPushButton(QStringLiteral("收起功能区"), topBar);
+    m_navigationToggle = collapse;
     collapse->setObjectName("navigationToggle");
     collapse->setProperty("quiet", true);
     collapse->setCheckable(true);
-    collapse->setMinimumHeight(34);
     headerLayout->addWidget(collapse);
     rootLayout->addWidget(topBar);
+    connect(home, &QPushButton::clicked, this, [this]() { switchToPage(0); });
+    connect(tasks, &QPushButton::clicked, this, &MainWindow::showTaskCenter);
 
-    // Unified horizontal module navigation within the application header.
-    m_modules = QStringList({
-        QStringLiteral("工作台"),
-        QStringLiteral("测试任务"),
-        QStringLiteral("资产与拓扑"),
-        QStringLiteral("智能分析"),
-        QStringLiteral("预案与知识库"),
-        QStringLiteral("结果与报告"),
-        QStringLiteral("系统管理")
-    });
-
-    m_navList = new QListWidget(topBar);
-    m_navList->setObjectName("navList");
-    m_navList->setMinimumWidth(0);
+    m_modules = QStringList{QStringLiteral("工作台"), QStringLiteral("测试任务"), QStringLiteral("资产与拓扑"),
+        QStringLiteral("智能分析"), QStringLiteral("预案与知识库"), QStringLiteral("结果与报告"), QStringLiteral("系统管理")};
+    m_navList = new QListWidget(centralWidget);
+    m_navList->setObjectName("ribbonModuleTabs");
+    QFont moduleFont = m_navList->font();
+    moduleFont.setPixelSize(13);
+    m_navList->setFont(moduleFont);
+    m_navList->setTextElideMode(Qt::ElideNone);
+    m_navList->setStyleSheet(QStringLiteral(
+        "QListWidget#ribbonModuleTabs { background:white; border:none; border-bottom:1px solid #dfe5ef; outline:none; }"
+        "QListWidget#ribbonModuleTabs::item { padding:4px 12px; margin:0 2px; color:#526984; border-bottom:3px solid transparent; }"
+        "QListWidget#ribbonModuleTabs::item:selected { background:#f1f5ff; color:#245fd6; border-bottom:3px solid #2862d7; }"
+        "QListWidget#ribbonModuleTabs::item:hover { background:#f6f8fc; }"));
     m_navList->setFlow(QListView::LeftToRight);
     m_navList->setWrapping(false);
     m_navList->setResizeMode(QListView::Adjust);
     m_navList->setMovement(QListView::Static);
-    m_navList->setSpacing(3);
-    m_navList->setFixedHeight(58);
-    m_navList->setIconSize(QSize(Theme::IconSize, Theme::IconSize));
+    m_navList->setSpacing(0);
+    m_navList->setFixedHeight(47);
     m_navList->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     m_navList->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_navList->setAccessibleName(QStringLiteral("主导航"));
-    const QStringList navIcons = {"dashboard", "tasks", "topology", "analysis", "library", "reports", "settings"};
-    for (int index = 0; index < m_modules.size(); ++index) {
-        auto *item = new QListWidgetItem(m_modules.at(index), m_navList);
-        item->setData(Qt::UserRole, m_modules.at(index));
-        item->setToolTip(m_modules.at(index));
-        QIcon icon(":/icons/shell/" + navIcons.at(index) + ".svg");
-        icon.addFile(":/icons/shell/" + navIcons.at(index) + "-selected.svg", QSize(), QIcon::Selected);
-        item->setIcon(icon);
-        item->setSizeHint(QSize(m_navList->fontMetrics().horizontalAdvance(m_modules.at(index)) + 56, 42));
+    m_navList->setAccessibleName(QStringLiteral("功能模块"));
+    for (const auto &name : ModuleRibbon::moduleNames()) {
+        auto *item = new QListWidgetItem(name, m_navList);
+        item->setToolTip(name);
+        item->setSizeHint(QSize(m_navList->fontMetrics().horizontalAdvance(name) + 48, 35));
     }
-    m_navList->setCurrentRow(0);
-    if (m_role != QStringLiteral("admin")) {
-        m_navList->item(6)->setToolTip(QStringLiteral("仅管理员可操作系统管理；当前账号显示权限说明。"));
-    }
+    rootLayout->addWidget(m_navList);
+    m_ribbon = new ModuleRibbon(m_role == QStringLiteral("admin"), centralWidget);
+    rootLayout->addWidget(m_ribbon);
+    m_contextBar = new QFrame(centralWidget);
+    m_contextBar->setObjectName("ribbonTaskContext");
+    m_contextBar->setStyleSheet(QStringLiteral("QFrame#ribbonTaskContext { background:#f7faff; border-bottom:1px solid #dfe5ef; }"));
+    auto *contextLayout = new QHBoxLayout(m_contextBar);
+    contextLayout->setContentsMargins(18, 3, 18, 3);
+    m_contextLabel = new QLabel(QStringLiteral("工作台 · 从上方选择功能；任务中心保留测试流程与历史记录"), m_contextBar);
+    m_contextLabel->setTextFormat(Qt::PlainText);
+    m_contextLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_contextLabel->setMinimumWidth(0);
+    m_contextLabel->setStyleSheet(QStringLiteral("font-size:12px; color:#5e7596;"));
+    contextLayout->addWidget(m_contextLabel, 1);
+    m_overviewButton = new QPushButton(QStringLiteral("任务概况"), m_contextBar);
+    m_overviewButton->setObjectName("ribbonTaskOverview");
+    m_overviewButton->setProperty("compact", true);
+    m_resultsButton = new QPushButton(QStringLiteral("测试结果"), m_contextBar);
+    m_resultsButton->setObjectName("ribbonTaskResults");
+    m_resultsButton->setProperty("compact", true);
+    m_overviewButton->setEnabled(false);
+    m_resultsButton->setEnabled(false);
+    contextLayout->addWidget(m_overviewButton);
+    contextLayout->addWidget(m_resultsButton);
+    rootLayout->addWidget(m_contextBar);
+    connect(m_overviewButton, &QPushButton::clicked, this, [this]() { openTaskStage(0); });
+    connect(m_resultsButton, &QPushButton::clicked, this, [this]() { openTaskStage(6); });
+    connect(m_ribbon, &ModuleRibbon::featureRequested, this, &MainWindow::openRibbonFeature);
+    connect(collapse, &QPushButton::toggled, this, [this, collapse](bool collapsed) {
+        m_ribbon->setVisible(!collapsed);
+        collapse->setText(collapsed ? QStringLiteral("展开功能区") : QStringLiteral("收起功能区"));
+        collapse->setAccessibleName(collapse->text());
+    });
 
     // Right: stacked pages
     m_stackWidget = new QStackedWidget(this);
@@ -149,21 +188,14 @@ void MainWindow::setupUI()
     m_dongleLockPage = new DongleLockPage(this);
     m_stackWidget->addWidget(m_dongleLockPage);
 
-    headerLayout->insertWidget(0, m_navList, 1);
-    const auto updateNavigationToggle = [this, collapse]() {
-        const bool collapsed = collapse->isChecked();
-        collapse->setText(collapsed
-            ? QStringLiteral("展开导航 · %1").arg(m_modules.value(m_navList->currentRow()))
-            : QStringLiteral("收起导航"));
-        collapse->setToolTip(collapsed ? QStringLiteral("展开主导航") : QStringLiteral("收起主导航"));
-        collapse->setAccessibleName(collapse->text());
-    };
-    connect(collapse, &QPushButton::toggled, this, [this, updateNavigationToggle](bool collapsed) {
-        m_navList->setVisible(!collapsed);
-        updateNavigationToggle();
-    });
-    connect(m_navList, &QListWidget::currentRowChanged, this, updateNavigationToggle);
-    updateNavigationToggle();
+    // Extra hosts are lazy; resource configuration never constructs user administration.
+    for (int extra = 0; extra < 2; ++extra) {
+        auto *placeholder = new QWidget(m_stackWidget);
+        placeholder->setProperty("deferredModule", true);
+        m_stackWidget->addWidget(placeholder);
+    }
+    m_navList->setCurrentRow(0);
+    m_ribbon->setModule(0);
 
     rootLayout->addWidget(m_stackWidget, 1);
     setCentralWidget(centralWidget);
@@ -197,7 +229,11 @@ void MainWindow::setupUI()
 
     // Signals
     connect(m_navList, &QListWidget::currentRowChanged,
-            this, &MainWindow::onModuleChanged);
+            this, &MainWindow::selectRibbonModule);
+    // The home dashboard initially shares the first module row without opening it.
+    connect(m_navList, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
+        if (m_activeFeature.isEmpty()) selectRibbonModule(m_navList->row(item));
+    });
     connect(m_checkBackendBtn, &QPushButton::clicked,
             this, &MainWindow::onCheckBackend);
 
@@ -252,6 +288,27 @@ QWidget *MainWindow::createModulePage(int index)
         m_flowPage = new FlowPage(m_api, m_role, m_username, this);
         connect(m_flowPage, &FlowPage::returnPageRequested, this, &MainWindow::switchToPage);
         connectFlowWebSocket();
+        m_flowPage->setRibbonNavigation(true);
+        connect(m_flowPage, &FlowPage::taskContextChanged, this, &MainWindow::updateTaskContext);
+        connect(m_flowPage, &FlowPage::workspaceStageChanged, this, [this](int stage) {
+            if (m_routingFeature || m_dongleLocked || m_stackWidget->currentWidget() != m_flowPage) return;
+            QString id;
+            if (stage == 1) id = m_activeFeature.startsWith("scans.") ? m_activeFeature : "scans.system";
+            else if (stage == 2) id = "plans.scenario";
+            else if (stage == 3) id = m_activeFeature.startsWith("topology.") ? m_activeFeature : "topology.display";
+            else if (stage == 4) id = "plans.task";
+            else if (stage == 5) id = m_activeFeature.startsWith("attacks.") ? m_activeFeature : "attacks.data";
+            else if (stage == 6 && m_activeFeature == "system.generate-report") id = m_activeFeature;
+            m_activeFeature = id;
+            const auto *entry = ModuleRibbon::feature(id);
+            if (entry) {
+                m_lastFeatures[entry->module] = id;
+                const QSignalBlocker blocker(m_navList);
+                m_navList->setCurrentRow(entry->module);
+            }
+            m_ribbon->setActiveFeature(id);
+            updateTaskContext();
+        });
         return m_flowPage;
     }
     case 2: {
@@ -331,6 +388,13 @@ QWidget *MainWindow::createModulePage(int index)
         connect(openTasks, &QPushButton::clicked, this, [this]() { switchToPage(1); });
         return restrictedPage;
     }
+    case 8:
+        if (m_role != QStringLiteral("admin")) return nullptr;
+        m_deployPage = new DeployConfigPage(m_api, m_role, m_username, this);
+        return m_deployPage;
+    case 9:
+        m_capturePage = new EvaluatePage(m_api, m_role, m_username, this);
+        return m_capturePage;
     default: return nullptr;
     }
 }
@@ -409,11 +473,12 @@ void MainWindow::resizeEvent(QResizeEvent *event)
     }
 }
 
-void MainWindow::switchToPage(int index) {
-    if (m_dongleLocked) return;
-    if (index >= 0 && index < m_modules.size()) {
-        m_navList->setCurrentRow(index);
-    }
+void MainWindow::switchToPage(int index)
+{
+    if (m_dongleLocked || index < 0 || index > 9 || index == 7) return;
+    onModuleChanged(index);
+    if (!m_routingFeature) syncRibbonForPage(index);
+    updateTaskContext();
 }
 
 void MainWindow::onModuleChanged(int row)
@@ -421,6 +486,7 @@ void MainWindow::onModuleChanged(int row)
     if (m_dongleLocked) return;
     if (row >= 0 && row < m_stackWidget->count()) {
         ensureModulePage(row);
+        if (m_stackWidget->widget(row)->property("deferredModule").toBool()) return;
         m_stackWidget->setCurrentIndex(row);
         // Trigger page refresh if it's a BasePage subclass
         auto *page = m_stackWidget->widget(row);
@@ -459,6 +525,7 @@ void MainWindow::setDongleLocked(bool locked, const QString &errorMessage) {
     }
 
     if (locked) {
+        m_featureBeforeDongleLock = m_activeFeature;
         const int current = m_stackWidget ? m_stackWidget->currentIndex() : -1;
         if (current >= 0 && m_dongleLockPage && m_stackWidget->widget(current) != m_dongleLockPage) {
             m_pageBeforeDongleLock = current;
@@ -468,17 +535,31 @@ void MainWindow::setDongleLocked(bool locked, const QString &errorMessage) {
             m_dongleLockPage->setErrorMessage(errorMessage);
             m_stackWidget->setCurrentWidget(m_dongleLockPage);
         }
-        if (m_navList) {
-            m_navList->setEnabled(false);
-        }
+        if (m_navList) m_navList->setEnabled(false);
+        if (m_ribbon) m_ribbon->setEnabled(false);
+        if (m_contextBar) m_contextBar->setEnabled(false);
+        for (const auto &name : {"ribbonHome", "ribbonTaskCenter", "ribbonKnowledge"})
+            if (auto *button = findChild<QPushButton *>(name)) button->setEnabled(false);
         return;
     }
 
     m_dongleLocked = false;
-    if (m_navList) {
-        m_navList->setEnabled(true);
+    if (m_navList) m_navList->setEnabled(true);
+    if (m_ribbon) m_ribbon->setEnabled(true);
+    if (m_contextBar) m_contextBar->setEnabled(true);
+    for (const auto &name : {"ribbonHome", "ribbonTaskCenter", "ribbonKnowledge"})
+        if (auto *button = findChild<QPushButton *>(name)) button->setEnabled(true);
+    {
+        const QScopedValueRollback<bool> routing(m_routingFeature, true);
+        switchToPage(m_pageBeforeDongleLock);
     }
-    switchToPage(m_pageBeforeDongleLock);
+    m_activeFeature = m_featureBeforeDongleLock;
+    m_ribbon->setActiveFeature(m_activeFeature);
+    if (const auto *entry = ModuleRibbon::feature(m_activeFeature)) {
+        const QSignalBlocker blocker(m_navList);
+        m_navList->setCurrentRow(entry->module);
+    }
+    updateTaskContext();
     // The selected navigation row normally stays unchanged while locked, so
     // setCurrentRow does not emit currentRowChanged when the dongle returns.
     if (m_stackWidget && m_stackWidget->currentWidget() == m_dongleLockPage) {
@@ -522,4 +603,157 @@ void MainWindow::onCheckBackend()
                 "color: #dc3545; font-weight: bold; padding: 0 10px; font-size: 13px;");
         }
     });
+}
+
+void MainWindow::selectRibbonModule(int module)
+{
+    if (m_dongleLocked || module < 0 || module >= 7) return;
+    m_ribbon->setModule(module);
+    QString id = m_lastFeatures[module];
+    if (!m_ribbon->canOpen(id)) {
+        for (const auto &feature : ModuleRibbon::features()) {
+            if (feature.module == module && m_ribbon->canOpen(feature.id)) { id = feature.id; break; }
+        }
+    }
+    if (!id.isEmpty()) openRibbonFeature(id);
+}
+
+void MainWindow::openRibbonFeature(const QString &id)
+{
+    if (m_dongleLocked || !m_ribbon->canOpen(id)) return;
+    const auto *feature = ModuleRibbon::feature(id);
+    m_activeFeature = id;
+    m_lastFeatures[feature->module] = id;
+    {
+        const QSignalBlocker blocker(m_navList);
+        m_navList->setCurrentRow(feature->module);
+    }
+    m_ribbon->setActiveFeature(id);
+    const QScopedValueRollback<bool> routing(m_routingFeature, true);
+    if (id == "resources.discovery") {
+        TopologyPage *topology = nullptr;
+        if (m_flowPage && m_flowPage->hasSelectedTask()) {
+            openTaskStage(3);
+            topology = m_flowPage->topoTab();
+        } else {
+            switchToPage(2);
+            topology = qobject_cast<TopologyPage *>(m_stackWidget->widget(2));
+        }
+        if (topology) topology->selectWorkspaceMode("discover");
+    } else if (id.startsWith("resources.")) {
+        switchToPage(8);
+        if (m_deployPage) m_deployPage->showSection(id.section('.', 1));
+    } else if (id == "plans.library") {
+        switchToPage(4);
+    } else if (id == "plans.scenario" || id == "plans.task") {
+        openTaskStage(id == "plans.scenario" ? 2 : 4);
+    } else if (id.startsWith("topology.")) {
+        TopologyPage *topology = nullptr;
+        if (m_flowPage && m_flowPage->hasSelectedTask()) {
+            openTaskStage(3);
+            topology = m_flowPage->topoTab();
+        } else {
+            switchToPage(2);
+            topology = qobject_cast<TopologyPage *>(m_stackWidget->widget(2));
+        }
+        if (topology) topology->selectWorkspaceMode(id.section('.', 1));
+    } else if (id.startsWith("scans.")) {
+        openTaskStage(1);
+        if (m_flowPage) m_flowPage->scanTab()->selectScanType(id.section('.', 1));
+    } else if (id.startsWith("attacks.")) {
+        openTaskStage(5);
+        const int category = id == "attacks.data" ? 1 : id == "attacks.tampering" ? 2 : 3;
+        if (m_flowPage) m_flowPage->execTab()->selectAttackCategory(category);
+    } else if (id.startsWith("evaluation.")) {
+        switchToPage(9);
+        if (m_capturePage) m_capturePage->showCaptureWorkspace(id == "evaluation.analysis");
+    } else if (id == "system.tasks") {
+        showTaskCenter();
+    } else if (id == "system.reports") {
+        switchToPage(5);
+    } else if (id == "system.generate-report") {
+        openTaskStage(6);
+        if (m_flowPage && m_flowPage->hasSelectedTask()) m_flowPage->evalTab()->showReports();
+    } else if (id.startsWith("system.")) {
+        switchToPage(6);
+        if (auto *system = qobject_cast<SystemPage *>(m_stackWidget->widget(6))) system->selectSection(id.section('.', 1));
+    }
+    updateTaskContext();
+}
+
+void MainWindow::showTaskCenter()
+{
+    if (m_dongleLocked) return;
+    const QScopedValueRollback<bool> routing(m_routingFeature, true);
+    switchToPage(1);
+    if (m_flowPage) m_flowPage->showTaskList();
+    if (m_activeFeature != "system.tasks") {
+        m_activeFeature.clear();
+        m_ribbon->setActiveFeature({});
+    }
+    updateTaskContext();
+}
+
+void MainWindow::openTaskStage(int stage)
+{
+    if (m_dongleLocked) return;
+    const QScopedValueRollback<bool> routing(m_routingFeature, true);
+    switchToPage(1);
+    if (m_flowPage) m_flowPage->requestWorkspaceStage(stage);
+    updateTaskContext();
+}
+
+void MainWindow::syncRibbonForPage(int page)
+{
+    QString feature;
+    if (page == 0) {
+        m_activeFeature.clear();
+        m_ribbon->setActiveFeature({});
+        return;
+    }
+    if (page == 1 && m_flowPage) {
+        const int stage = m_flowPage->workspaceStage();
+        if (stage == 1) feature = m_activeFeature.startsWith("scans.") ? m_activeFeature : "scans.system";
+        else if (stage == 2) feature = "plans.scenario";
+        else if (stage == 3) feature = m_activeFeature.startsWith("topology.") ? m_activeFeature : "topology.display";
+        else if (stage == 4) feature = "plans.task";
+        else if (stage == 5) feature = m_activeFeature.startsWith("attacks.") ? m_activeFeature : "attacks.data";
+        else if (stage == 6) feature = "system.generate-report";
+        else {
+            m_activeFeature.clear();
+            m_ribbon->setActiveFeature({});
+            return;
+        }
+    }
+    else if (page == 2) feature = "topology.display";
+    else if (page == 3) feature = "plans.scenario";
+    else if (page == 4) feature = "plans.library";
+    else if (page == 5) feature = "system.reports";
+    else if (page == 6) feature = "system.users";
+    else if (page == 8) feature = m_activeFeature.startsWith("resources.") ? m_activeFeature : "resources.runtime";
+    else if (page == 9) feature = m_activeFeature.startsWith("evaluation.") ? m_activeFeature : "evaluation.capture";
+    if (feature.isEmpty() || !m_ribbon->canOpen(feature)) return;
+    m_activeFeature = feature;
+    const auto *entry = ModuleRibbon::feature(feature);
+    m_lastFeatures[entry->module] = feature;
+    const QSignalBlocker blocker(m_navList);
+    m_navList->setCurrentRow(entry->module);
+    m_ribbon->setActiveFeature(feature);
+}
+
+void MainWindow::updateTaskContext()
+{
+    const bool selected = m_flowPage && m_flowPage->hasSelectedTask();
+    const auto *feature = ModuleRibbon::feature(m_activeFeature);
+    QString text = selected ? m_flowPage->taskContextSummary() : QStringLiteral("未选择测试任务 · 请在任务中心选择或创建任务");
+    if (feature) {
+        text += QStringLiteral("  |  %1").arg(feature->title);
+        if (feature->id.startsWith("resources.") && feature->id != "resources.discovery") text += QStringLiteral("（全局配置）");
+        if (feature->id.startsWith("evaluation.")) text += QStringLiteral("（独立捕获任务，在工作区选择记录）");
+        if (selected && feature->id.startsWith("attacks.")) text += QStringLiteral("（查看当前任务执行，沿用现有预案）");
+    }
+    m_contextLabel->setText(text);
+    m_contextLabel->setToolTip(text.toHtmlEscaped());
+    m_overviewButton->setEnabled(selected);
+    m_resultsButton->setEnabled(selected);
 }

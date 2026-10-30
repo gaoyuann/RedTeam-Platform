@@ -476,6 +476,7 @@ void EvaluatePage::setupUI() {
   analysisLayout->addWidget(m_analysisDetail, 1);
 
   capRightL->addStretch();
+  captureDetails->setObjectName(QStringLiteral("captureWorkspaceDetails"));
   captureDetails->addTab(captureConfig, QStringLiteral("捕获配置"));
   captureDetails->addTab(captureAnalysis, QStringLiteral("分析结果"));
 
@@ -1477,4 +1478,12 @@ QString EvaluatePage::formatSeverity(const QString &sev) const {
   if (sev == "medium") return "中危";
   if (sev == "low") return "低危";
   return sev;
+}
+
+void EvaluatePage::showCaptureWorkspace(bool analysis)
+{
+  if (!m_pipelineId.isEmpty()) return;
+  m_tabs->setCurrentIndex(3);
+  if (auto *details = findChild<QTabWidget *>(QStringLiteral("captureWorkspaceDetails")))
+    details->setCurrentIndex(analysis ? 1 : 0);
 }

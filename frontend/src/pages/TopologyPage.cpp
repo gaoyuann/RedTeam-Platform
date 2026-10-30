@@ -1165,6 +1165,7 @@ void TopologyPage::setupUI() {
     inspector->setObjectName("topologyInspector");
     auto *inspectorLayout = new QVBoxLayout(inspector);
     auto *inspectorTabs = new WorkbenchTabs;
+    inspectorTabs->setObjectName(QStringLiteral("topologyInspectorTabs"));
     inspectorLayout->addWidget(inspectorTabs);
     auto *nodesPage = new QWidget;
     auto *nodesLayout = new QVBoxLayout(nodesPage);
@@ -3395,4 +3396,23 @@ bool TopologyPage::loadTopologyDocumentFromPath(const QString &path,
 
 QString TopologyPage::nodeDisplayTitle(const TopologyNodeRecord &node) const {
     return defaultNodeTitle(node);
+}
+
+void TopologyPage::selectWorkspaceMode(const QString &mode)
+{
+    // Only expose/focus existing controls. Discovery, edits and saves stay explicit.
+    auto *sideTabs = findChild<QTabWidget *>(QStringLiteral("topologySideTabs"));
+    if (sideTabs) sideTabs->show();
+    if (mode == "discover") {
+        if (sideTabs) sideTabs->setCurrentIndex(1);
+        m_targetInput->setFocus();
+    } else if (mode == "edit" || mode == "annotate") {
+        if (sideTabs) sideTabs->setCurrentIndex(0);
+        if (auto *tabs = findChild<QTabWidget *>(QStringLiteral("topologyInspectorTabs"))) tabs->setCurrentIndex(2);
+        if (mode == "annotate") m_nodeNoteEdit->setFocus();
+        else m_nodeNameEdit->setFocus();
+    } else {
+        m_graphView->setFocus();
+    }
+    setProperty("workspaceMode", mode);
 }

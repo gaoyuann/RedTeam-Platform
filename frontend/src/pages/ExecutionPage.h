@@ -30,6 +30,7 @@ public:
 
   /// Pre-fill the target input (used when embedded in FlowPage workbench)
   void setTarget(const QString &target);
+  void selectAttackCategory(int category);
 
   /// Load and display a specific run by ID (used by FlowPage workbench
   /// when a pipeline's execute step produces a run).
