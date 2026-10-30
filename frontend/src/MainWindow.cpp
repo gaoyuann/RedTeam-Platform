@@ -905,7 +905,8 @@ void MainWindow::syncRibbonForPage(int page)
 void MainWindow::updateTaskContext()
 {
     const bool selected = m_flowPage && m_flowPage->hasSelectedTask();
-    if (selected && !m_pendingTaskFeature.isEmpty() && m_flowPage->taskContextReady() && !m_routingFeature && !m_dongleLocked) {
+    if (selected && !m_pendingTaskFeature.isEmpty() && m_flowPage->taskContextReady() && !m_routingFeature && !m_dongleLocked
+        && (!m_selectingFeatureTask || m_flowPage->taskSelectionRevision() != m_featureSelectionRevision)) {
         const QString requested = m_pendingTaskFeature;
         m_pendingTaskFeature.clear();
         openRibbonFeature(requested);
@@ -983,9 +984,14 @@ void MainWindow::updateFeaturePresentation()
     }
     const bool requiresTask = feature && (feature->id == "plans.scenario" || feature->id == "plans.task"
         || feature->id == "system.generate-report");
-    const bool gated = requiresTask && (!m_flowPage || !m_flowPage->hasSelectedTask())
+    const int requestedStage = feature && feature->id == "plans.scenario" ? 2 : feature && feature->id == "plans.task" ? 4 : 6;
+    const bool incompatibleTask = requiresTask && m_flowPage && m_flowPage->taskContextReady()
+        && !m_flowPage->supportsWorkspaceStage(requestedStage);
+    const bool gated = requiresTask && (!m_flowPage || !m_flowPage->hasSelectedTask() || incompatibleTask)
         && !m_selectingFeatureTask && !m_dongleLocked;
-    if (gated) m_taskGateMessage->setText(QStringLiteral("%1需要关联测试任务。请选择已有任务，或在任务列表中创建任务。\n选择后保留当前功能，继续查看该任务的数据。").arg(feature->title));
+    if (gated) m_taskGateMessage->setText(incompatibleTask
+        ? QStringLiteral("当前是资产探测任务，尚未进入%1流程。请在任务管理中选择对应的测试任务，或从探测结果创建测试任务。\n当前目标与已有探测结果会保留。").arg(feature->title)
+        : QStringLiteral("%1需要关联测试任务。请选择已有任务，或在任务列表中创建任务。\n选择后保留当前功能，继续查看该任务的数据。").arg(feature->title));
     m_taskGate->setVisible(gated);
     if (m_workspaceScroll) m_workspaceScroll->setVisible(!gated);
     m_stackWidget->setVisible(!gated);
@@ -997,9 +1003,11 @@ void MainWindow::chooseTaskForFeature()
     const QString id = m_activeFeature;
     const int stage = id == "plans.scenario" ? 2 : id == "plans.task" ? 4 : 6;
     m_selectingFeatureTask = true;
+    m_featureSelectionRevision = m_flowPage->taskSelectionRevision();
     m_pendingTaskFeature = id;
     m_flowPage->showTaskList();
-    m_flowPage->requestWorkspaceStage(stage);
+    // Keep selection in the task list even when a previous task is still selected.
+    if (!m_flowPage->hasSelectedTask()) m_flowPage->requestWorkspaceStage(stage);
     updateFeaturePresentation();
 }
 

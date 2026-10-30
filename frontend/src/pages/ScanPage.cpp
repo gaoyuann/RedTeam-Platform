@@ -886,6 +886,7 @@ void ScanPage::loadPipelineResults(bool append)
     if (data["web_scan_process_truncated"].toBool()) processLines.prepend(QStringLiteral("仅显示最近 100 条过程，完整记录见全部扫描记录"));
     m_webScanProcess->setPlainText(processLines.join("\n")); m_webScanProcess->setVisible(!processLines.isEmpty());
     const auto page = data["page"].toObject();
+    if (property("ribbonWorkspace").toBool() && data["scan_sources"].isArray()) renderPipelineSources(data["scan_sources"].toArray());
     m_sourceResultsView = false;
     m_sourceResultsPending = false;
     m_sourceTaskIds.clear();QStringList sourceTargets;
@@ -1119,10 +1120,11 @@ void ScanPage::setupUI() {
     m_portsInput->setPlaceholderText("22,80");
     m_portsInput->setMinimumWidth(150);
     h->addWidget(m_portsInput, 1, 1);
-    auto *btn = new QPushButton("创建扫描");
+    auto *btn = new QPushButton("创建并开始扫描");
     btn->setProperty("primary", true);
     h->addWidget(btn, 2, 1);
     layout->addLayout(h);
+    btn->setObjectName("scanSubmitButton");
     connect(btn, &QPushButton::clicked, this, &ScanPage::onCreateScan);
     // Task table
     auto *headerH = new QHBoxLayout;
@@ -1184,10 +1186,11 @@ void ScanPage::setupUI() {
     completer->setCaseSensitivity(Qt::CaseInsensitive);
     m_vulnTargetInput->setCompleter(completer);
     h->addWidget(m_vulnTargetInput, 0, 1);
-    auto *btn = new QPushButton("创建扫描");
+    auto *btn = new QPushButton("创建并开始扫描");
     btn->setProperty("primary", true);
     h->addWidget(btn, 2, 1);
     layout->addLayout(h);
+    btn->setObjectName("scanSubmitButton");
     connect(btn, &QPushButton::clicked, this, &ScanPage::onCreateScan);
     auto *headerH = new QHBoxLayout;
     auto *label = new QLabel("系统漏洞扫描"); label->setStyleSheet(Theme::SectionStyle);
@@ -1250,10 +1253,11 @@ void ScanPage::setupUI() {
     m_cookieInput->setPlaceholderText("PHPSESSID=abc; security=low");
     m_cookieInput->setMinimumWidth(150);
     h->addWidget(m_cookieInput, 1, 1);
-    auto *btn = new QPushButton("创建扫描");
+    auto *btn = new QPushButton("创建并开始扫描");
     btn->setProperty("primary", true);
     h->addWidget(btn, 2, 1);
     layout->addLayout(h);
+    btn->setObjectName("scanSubmitButton");
     connect(btn, &QPushButton::clicked, this, &ScanPage::onCreateScan);
     auto *headerH = new QHBoxLayout;
     auto *label = new QLabel("网站漏洞扫描"); label->setStyleSheet(Theme::SectionStyle);
@@ -1321,10 +1325,11 @@ void ScanPage::setupUI() {
       m_serviceCombo->addItem(pair.first, pair.second);
     }
     h->addWidget(m_serviceCombo, 1, 1);
-    auto *btn = new QPushButton("创建扫描");
+    auto *btn = new QPushButton("创建并开始扫描");
     btn->setProperty("primary", true);
     h->addWidget(btn, 2, 1);
     layout->addLayout(h);
+    btn->setObjectName("scanSubmitButton");
     connect(btn, &QPushButton::clicked, this, &ScanPage::onCreateScan);
     // Form definition row (only for http-post-form)
     auto *h2 = new QHBoxLayout;
@@ -1442,10 +1447,11 @@ void ScanPage::setupUI() {
     hint->setWordWrap(true);
     hint->setStyleSheet("color:#64748b; font-size:12px;");
     h->addWidget(hint, 6, 0, 1, 3);
-    auto *btn = new QPushButton("创建测试");
+    auto *btn = new QPushButton("创建并开始测试");
     btn->setProperty("primary", true);
     h->addWidget(btn, 7, 1);
     layout->addLayout(h);
+    btn->setObjectName("scanSubmitButton");
     connect(btn, &QPushButton::clicked, this, &ScanPage::onCreateScan);
     auto *headerH = new QHBoxLayout;
     auto *label = new QLabel("程序漏洞测试"); label->setStyleSheet(Theme::SectionStyle);
@@ -1517,6 +1523,11 @@ void ScanPage::setupUI() {
     auto *dialogLayout = new QVBoxLayout(formDialog);
     dialogLayout->setContentsMargins(20, 20, 20, 20);
     dialogLayout->addWidget(form);
+    auto *submissionMessage = new QLabel(formDialog);
+    submissionMessage->setObjectName("scanSubmissionMessage");
+    submissionMessage->setTextFormat(Qt::PlainText); submissionMessage->setWordWrap(true);
+    submissionMessage->setStyleSheet("font-size:12px;color:#ad6128;padding:8px 0;");
+    submissionMessage->hide(); dialogLayout->addWidget(submissionMessage);
     auto *cancel = new QDialogButtonBox(QDialogButtonBox::Cancel, formDialog);
     UiUtil::styleDialogButtons(cancel);
     cancel->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("取消"));
@@ -2616,6 +2627,7 @@ void ScanPage::showPayloadMatches(QTreeWidgetItem *item) {
 
 // ── Create scan (auto-execute) ───────────────────────────────────────
 void ScanPage::onCreateScan() {
+  if (m_scanCreationBusy) return;
   // Determine scan type from current tab
   int tabIdx = m_scanTypeTabs->currentIndex();
   QString scanType;
@@ -2630,7 +2642,7 @@ void ScanPage::onCreateScan() {
   }
 
   if (target.isEmpty()) {
-    setStatusText("请先填写扫描目标。");
+    setScanSubmissionMessage("请先填写扫描目标。");
     m_statusLabel->setStyleSheet(Theme::StatusWarningStyle);
     return;
   }
@@ -2676,7 +2688,7 @@ void ScanPage::onCreateScan() {
   if (isProgramScan(scanType)) {
     if(m_programInputKind->currentData().toString()=="remote_directory") {
       if(!m_remoteSourcePicker->hasSelection()) {
-        setStatusText("请先浏览并选择目标主机的源码文件夹。");return;
+        setScanSubmissionMessage("请先浏览并选择目标主机的源码文件夹。");return;
       }
       parameters=m_remoteSourcePicker->selection();
     }
@@ -2687,41 +2699,44 @@ void ScanPage::onCreateScan() {
   }
   if (!parameters.isEmpty()) body["parameters"] = parameters;
 
-  m_api->post("/api/scan-tasks", body, 10000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") {
-      setStatusText("创建扫描任务失败：" + res["error"].toObject()["message"].toString());
-      m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
+  const int scope = m_scopeRevision;
+  const int originTab = tabIdx;
+  const QPointer<ScanPage> guard(this);
+  setScanCreationBusy(true);
+  m_api->post("/api/scan-tasks", body, 10000, [this, guard, scope, originTab](const QJsonObject &response) {
+    if (!guard) return;
+    const bool visibleContext = scope == m_scopeRevision && originTab == m_scanTypeTabs->currentIndex();
+    const QString taskId = response["data"].toObject()["scan_task_id"].toString();
+    if (response["status"] != "ok" || taskId.isEmpty()) {
+      setScanCreationBusy(false);
+      if (visibleContext) {
+        setScanSubmissionMessage(QStringLiteral("创建扫描任务失败：") + response["error"].toObject()["message"].toString(QStringLiteral("未返回有效扫描编号，请刷新列表核对后重试。")));
+        m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
+      }
       return;
     }
-    for (auto *dialog : findChildren<QDialog*>("scanCreateDialog")) dialog->accept();
-    QString taskId = res["data"].toObject()["scan_task_id"].toString();
-    m_selectedTaskId = taskId;
-    setStatusText(QString("已创建: %1 — 正在自动执行...").arg(taskId.left(16)));
-    m_statusLabel->setStyleSheet(Theme::StatusSuccessStyle);
-    // Clear the target input for the current tab
-    int tabIdx = m_scanTypeTabs->currentIndex();
-    switch (tabIdx) {
-      case 0: m_portTargetInput->clear(); m_portsInput->clear(); break;
-      case 1: m_vulnTargetInput->clear(); break;
-      case 2: m_webTargetInput->clear(); m_cookieInput->clear(); break;
-      case 3: m_bruteTargetInput->clear(); break;
-      case 4: /* Keep the runtime address for subsequent independent tests. */ break;
+    if (visibleContext) {
+      for (auto *dialog : findChildren<QDialog *>("scanCreateDialog")) dialog->accept();
+      m_selectedTaskId = taskId;
+      setScanSubmissionMessage(QStringLiteral("已创建 %1，正在启动扫描…").arg(taskId));
+      onRefreshTasks();
     }
-    onRefreshTasks();
-
-    QJsonObject empty;
-    m_api->post("/api/scan-tasks/" + taskId + "/execute", empty, 5000, [this, taskId](const QJsonObject &execRes) {
-      if (execRes["status"].toString() == "ok") {
-        m_reexecBtn->setVisible(false);
+    m_api->post("/api/scan-tasks/" + QString::fromLatin1(QUrl::toPercentEncoding(taskId)) + "/execute", {}, 5000,
+      [this, guard, scope, originTab, taskId](const QJsonObject &started) {
+      if (!guard) return;
+      setScanCreationBusy(false);
+      if (started["status"] == "ok" && scope == m_scopeRevision) {
         if (!m_runningTaskIds.contains(taskId)) m_runningTaskIds << taskId;
         startPollingIfNeeded();
-        onRefreshTasks();
-      } else {
-        setStatusText("创建成功但执行失败，可点击「重新执行」");
-        m_statusLabel->setStyleSheet(Theme::StatusWarningStyle);
-        m_reexecBtn->setVisible(true);
-        onRefreshTasks();
       }
+      if (scope != m_scopeRevision || originTab != m_scanTypeTabs->currentIndex()) return;
+      if (started["status"] == "ok") {
+        setScanSubmissionMessage(QStringLiteral("扫描任务已启动：%1").arg(taskId)); m_reexecBtn->hide();
+      } else {
+        setScanSubmissionMessage(QStringLiteral("任务已创建，但启动失败：%1。可在列表选择该记录后重试执行。").arg(started["error"].toObject()["message"].toString()));
+        m_statusLabel->setStyleSheet(Theme::StatusErrorStyle); m_reexecBtn->show();
+      }
+      onRefreshTasks();
     });
   });
 }
@@ -3841,6 +3856,11 @@ void ScanPage::openPayloadWorkspace()
     const qint64 id = list->item(list->currentRow(), 0)->text().toLongLong();
     auto *dialog = new FindingVerificationDialog(m_api, pipeline, {id}, this);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setObjectName("scanAuxPayloadVerification");
+    connect(dialog, &QDialog::finished, this, [this, pipeline, scope]() {
+      if (pipeline != m_pipelineId || scope != m_scopeRevision) return;
+      onRefreshTasks(); emit findingVerificationChanged(pipeline);
+    });
     dialog->showPayloadWorkspace(); dialog->show(); picker->close();
   });
   connect(buttons, &QDialogButtonBox::rejected, picker, &QDialog::close);
@@ -3932,4 +3952,45 @@ void ScanPage::showAllTaskResults()
   m_ribbonScanType.clear();
   if (!m_pipelineId.isEmpty()) loadPipelineResults();
   else if (m_scopedTasks) { m_selectInitialScopeTask = true; onRefreshTasks(); }
+}
+
+void ScanPage::setScanCreationBusy(bool busy)
+{
+  m_scanCreationBusy = busy;
+  for (auto *button : findChildren<QPushButton *>("scanSubmitButton")) button->setEnabled(!busy);
+}
+
+void ScanPage::renderPipelineSources(const QJsonArray &sources)
+{
+  const QList<QTableWidget *> tables{m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable, m_sourceScanTable};
+  for (auto *table : tables) table->setRowCount(0);
+  const QMap<QString, int> indices{{"port_scan", 0}, {"vuln_scan", 1}, {"web_scan", 2}, {"brute_force", 3}};
+  for (const auto &value : sources) {
+    const auto source = value.toObject(); const QString id = source["scan_task_id"].toString();
+    const QString type = source["scan_type"].toString();
+    int index = indices.value(type, -1);
+    if (index < 0 && ribbonScanTypeMatches("web_scan", type)) index = 2;
+    if (isProgramScan(type)) index = 4;
+    if (index < 0 || id.isEmpty()) continue;
+    auto *table = tables[index]; const int row = table->rowCount(); table->insertRow(row);
+    auto *target = new QTableWidgetItem(source["target"].toString()); target->setData(Qt::UserRole, id);
+    target->setToolTip((formatScanType(type) + "\n" + source["target"].toString() + "\n" + id).toHtmlEscaped());
+    table->setItem(row, 0, target);
+    auto *status = new QTableWidgetItem(formatStatus(source["status"].toString()));
+    status->setForeground(statusColor(source["status"].toString())); table->setItem(row, 1, status);
+    table->setItem(row, 2, new QTableWidgetItem(source.contains("created_at") ? formatTime(source["created_at"].toString()) : QStringLiteral("—")));
+  }
+  const QList<QLabel *> counts{m_portScanCount, m_vulnScanCount, m_webScanCount, m_bruteForceCount, m_sourceScanCount};
+  for (int index = 0; index < tables.size(); ++index) counts[index]->setText(QStringLiteral("共 %1 个").arg(tables[index]->rowCount()));
+}
+
+void ScanPage::setScanSubmissionMessage(const QString &message)
+{
+  setStatusText(message);
+  for (auto *dialog : findChildren<QDialog *>("scanCreateDialog")) {
+    if (!dialog->isVisible()) continue;
+    if (auto *notice = dialog->findChild<QLabel *>("scanSubmissionMessage")) {
+      notice->setText(message); notice->setVisible(!message.isEmpty());
+    }
+  }
 }

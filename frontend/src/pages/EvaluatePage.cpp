@@ -1294,7 +1294,10 @@ void EvaluatePage::onCaptureTaskClicked(int row, int) {
   const QPointer<EvaluatePage> guard(this);
   m_api->get("/api/capture-tasks/" + taskId, 5000, [this, guard, taskId, selection](const QJsonObject &res) {
     if (!guard || taskId != m_selectedCaptureTaskId || selection != m_captureDetailRevision) return;
-    if (res["status"] != "ok") { m_captureStatusLabel->setText(QStringLiteral("捕获详情读取失败，请重新选择或刷新。")); return; }
+    if (res["status"] != "ok" || !res["data"].isObject() || res["data"].toObject()["capture_task_id"].toString() != taskId) {
+      m_selectedCaptureState.clear(); updateCaptureButtons();
+      m_captureStatusLabel->setText(QStringLiteral("捕获详情读取失败或记录不匹配，请重新选择或刷新。")); return;
+    }
     auto d = res["data"].toObject();
     QString status = d["status"].toString();
     int packets = d["packet_count"].toInt();

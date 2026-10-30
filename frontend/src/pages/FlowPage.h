@@ -9,6 +9,7 @@
 #include <QComboBox>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QSet>
 
 class ApiClient;
 class QAction;
@@ -52,6 +53,9 @@ public:
   bool hasSelectedTask() const;
   int workspaceStage() const;
   bool taskContextReady() const;
+  bool supportsWorkspaceStage(int stage) const;
+  QString selectedTaskId() const { return m_selectedPipelineId; }
+  int taskSelectionRevision() const { return m_taskContextRevision; }
   QString taskContextSummary() const;
 
   /// Open the workbench in "direct execution" mode — no pipeline selected,
@@ -102,6 +106,8 @@ private:
   void loadFlows();
   void resizeFlowColumns();
   void submitTaskCreation(const QJsonObject &body, bool startAfterCreate);
+  void applyTaskAction(const QString &pipelineId, bool remove);
+  QSet<QString> m_pendingTaskActions;
   void loadFlowDetail(const QString &pipelineId);
   void clearRunContext();
   void showTaskDetailError(const QString &message);

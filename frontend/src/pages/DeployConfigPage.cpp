@@ -12,6 +12,7 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QPointer>
+#include <QUrl>
 
 DeployConfigPage::DeployConfigPage(ApiClient *api, const QString &role, const QString &username, QWidget *parent)
     : QWidget(parent), m_api(api) {
@@ -104,7 +105,8 @@ void DeployConfigPage::setupUI() {
   auto *llmBtnH = new QHBoxLayout;
   m_llmSaveBtn = new QPushButton("保存模型配置");
   m_llmSaveBtn->setProperty("primary", true);
-  m_llmTestBtn = new QPushButton("测试连接");
+  m_llmTestBtn = new QPushButton("保存并测试连接");
+  m_llmTestBtn->setToolTip(QStringLiteral("先保存当前模型配置，再使用该配置检查连接。"));
   m_llmStatusLabel = new QLabel;
   llmBtnH->addWidget(m_llmSaveBtn);
   llmBtnH->addWidget(m_llmTestBtn);
@@ -321,8 +323,10 @@ void DeployConfigPage::fitTableHeight(QTableWidget *t, int cap) {
 
 // ── Slot: Check backend (merged with loadPlatformStatus) ─────────────
 void DeployConfigPage::onCheckBackend() {
+  const QPointer<DeployConfigPage> guard(this);
   m_checkBtn->setEnabled(false);
-  m_api->get("/api/health", 3000, [this](const QJsonObject &res) {
+  m_api->get("/api/health", 3000, [this, guard](const QJsonObject &res) {
+    if (!guard) return;
     m_checkBtn->setEnabled(true);
     if (res["status"].toString() == "ok") {
       m_engineLabel->setText("已连接");
@@ -343,7 +347,8 @@ void DeployConfigPage::onCheckBackend() {
   });
 
   // DB stats (separate endpoint, keep as-is)
-  m_api->get("/api/db/stats", 3000, [this](const QJsonObject &res) {
+  m_api->get("/api/db/stats", 3000, [this, guard](const QJsonObject &res) {
+    if (!guard) return;
     if (res["status"].toString() != "ok") return;
     auto d = res["data"].toObject();
     qint64 size = d["dbSizeBytes"].toVariant().toLongLong();
@@ -383,8 +388,18 @@ void DeployConfigPage::onCheckBackend() {
 
 // ── Load LLM config ──────────────────────────────────────────────────
 void DeployConfigPage::loadLlmConfig() {
-  m_api->get("/api/config/llm", 3000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
+  const QPointer<DeployConfigPage> guard(this);
+  const int version = ++m_readVersions["loadLlmConfig"];
+  if (m_llmBusy) return;
+  m_llmLoaded = false; setLlmControlsEnabled(false);
+  m_api->get("/api/config/llm", 3000, [this, guard, version](const QJsonObject &res) {
+    if (!guard || version != m_readVersions["loadLlmConfig"]) return;
+    if (res["status"] != "ok" || !res["data"].isArray()) {
+      m_llmStatusLabel->setText(QStringLiteral("模型配置读取失败，已有输入保留；请刷新后再保存或测试。"));
+      m_llmStatusLabel->setStyleSheet(Theme::StatusErrorStyle); return;
+    }
+    m_llmLoaded = true; setLlmControlsEnabled(true);
+    m_llmStatusLabel->setText(QStringLiteral("配置已读取")); m_llmStatusLabel->setStyleSheet(Theme::StatusInfoStyle);
     auto arr = res["data"].toArray();
     // Look for the 'default' entry or first entry
     QJsonObject defaultEntry;
@@ -409,6 +424,8 @@ void DeployConfigPage::loadLlmConfig() {
 
 // ── Save LLM config ──────────────────────────────────────────────────
 void DeployConfigPage::onSaveLlmConfig() {
+  if (!m_llmLoaded || m_llmBusy || !validateLlmConfiguration()) return;
+  m_llmBusy = true;
   QJsonObject entry;
   entry["key"] = m_llmApiKey->text();
   entry["url"] = m_llmBaseUrl->text();
@@ -418,9 +435,11 @@ void DeployConfigPage::onSaveLlmConfig() {
   body["config_value"] = entry;
   body["description"] = "LLM model: default";
 
-  m_llmSaveBtn->setEnabled(false);
-  m_api->put("/api/config/llm/default", body, 5000, [this](const QJsonObject &res) {
-    m_llmSaveBtn->setEnabled(true);
+  setLlmControlsEnabled(false);
+  const QPointer<DeployConfigPage> guard(this);
+  m_api->put("/api/config/llm/default", body, 5000, [this, guard](const QJsonObject &res) {
+    if (!guard) return;
+    m_llmBusy = false; setLlmControlsEnabled(true);
     if (res["status"].toString() == "ok") {
       m_llmStatusLabel->setText("已保存");
       m_llmStatusLabel->setStyleSheet(Theme::StatusSuccessStyle);
@@ -433,6 +452,8 @@ void DeployConfigPage::onSaveLlmConfig() {
 
 // ── Test LLM connection ──────────────────────────────────────────────
 void DeployConfigPage::onTestLlmConnection() {
+  if (!m_llmLoaded || m_llmBusy || !validateLlmConfiguration()) return;
+  m_llmBusy = true;
   // Save first, then test in the save callback (fixes async race)
   QJsonObject entry;
   entry["key"] = m_llmApiKey->text();
@@ -443,7 +464,7 @@ void DeployConfigPage::onTestLlmConnection() {
   body["config_value"] = entry;
   body["description"] = "LLM model: default";
 
-  m_llmSaveBtn->setEnabled(false);
+  setLlmControlsEnabled(false);
   m_llmTestBtn->setEnabled(false);
   m_llmStatusLabel->setText("保存并测试中...");
   m_llmStatusLabel->setStyleSheet(Theme::StatusInfoStyle);
@@ -452,7 +473,8 @@ void DeployConfigPage::onTestLlmConnection() {
   m_api->put("/api/config/llm/default", body, 5000, [this, guard](const QJsonObject &saveRes) {
     if (!guard) return;
     if (saveRes["status"].toString() != "ok") {
-      m_llmSaveBtn->setEnabled(true);
+      m_llmBusy = false;
+      setLlmControlsEnabled(true);
       m_llmTestBtn->setEnabled(true);
       m_llmStatusLabel->setText("保存失败");
       m_llmStatusLabel->setStyleSheet(Theme::StatusErrorStyle);
@@ -461,7 +483,8 @@ void DeployConfigPage::onTestLlmConnection() {
     m_llmStatusLabel->setText("正在请求模型服务...");
     m_api->post("/api/config/llm/test-connection", QJsonObject{}, 25000, [this, guard](const QJsonObject &res) {
       if (!guard) return;
-      m_llmSaveBtn->setEnabled(true);
+      m_llmBusy = false;
+      setLlmControlsEnabled(true);
       m_llmTestBtn->setEnabled(true);
       if (res["status"].toString() == "ok") {
         m_llmStatusLabel->setText(res["data"].toObject()["message"].toString("模型连接测试通过"));
@@ -477,13 +500,18 @@ void DeployConfigPage::onTestLlmConnection() {
 
 // ── Load sandbox config (merged with loadContainerStatus) ────────────
 void DeployConfigPage::loadSandboxConfig() {
-  m_api->get("/api/config/sandbox", 3000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") {
-      // No sandbox config yet — defaults
-      m_sandboxEnabled->setChecked(true);
-      m_sandboxType->setCurrentIndex(0);
-      return;
+  const QPointer<DeployConfigPage> guard(this);
+  const int version = ++m_readVersions["loadSandboxConfig"];
+  if (m_sandboxBusy) return;
+  m_sandboxLoaded = false; setSandboxControlsEnabled(false);
+  m_api->get("/api/config/sandbox", 3000, [this, guard, version](const QJsonObject &res) {
+    if (!guard || version != m_readVersions["loadSandboxConfig"]) return;
+    if (res["status"] != "ok" || !res["data"].isArray()) {
+      m_sandboxStatusLabel->setText(QStringLiteral("运行环境配置读取失败，已有输入保留；请刷新重试。"));
+      m_sandboxStatusLabel->setStyleSheet(Theme::StatusErrorStyle); return;
     }
+    m_sandboxLoaded = true; setSandboxControlsEnabled(true);
+    m_sandboxStatusLabel->setText(QStringLiteral("配置已读取")); m_sandboxStatusLabel->setStyleSheet(Theme::StatusInfoStyle);
     auto arr = res["data"].toArray();
     for (int i = 0; i < arr.size(); i++) {
       auto c = arr[i].toObject();
@@ -499,8 +527,12 @@ void DeployConfigPage::loadSandboxConfig() {
   });
 
   // Container status — also populates image table (was separate loadContainerStatus)
-  m_api->get("/api/tools/containers/status", 5000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
+  m_api->get("/api/tools/containers/status", 5000, [this, guard, version](const QJsonObject &res) {
+    if (!guard || version != m_readVersions["loadSandboxConfig"]) return;
+    if (res["status"] != "ok" || !res["data"].isObject()) {
+      UiUtil::EmptyHint::setState(m_imageTable, QStringLiteral("镜像状态读取失败，请刷新重试"), true); return;
+    }
+    UiUtil::EmptyHint::setState(m_imageTable, QStringLiteral("暂无已加载镜像"));
     auto d = res["data"].toObject();
     QString engine = d["engine"].toString();
     QString ver = d["engineVersion"].toString();
@@ -534,6 +566,9 @@ void DeployConfigPage::loadSandboxConfig() {
 
 // ── Save sandbox config ──────────────────────────────────────────────
 void DeployConfigPage::onSaveSandboxConfig() {
+  if (!m_sandboxLoaded || m_sandboxBusy) return;
+  m_sandboxBusy = true;
+  const QPointer<DeployConfigPage> guard(this);
   QJsonObject bodyEnabled;
   bodyEnabled["config_value"] = m_sandboxEnabled->isChecked();
   bodyEnabled["description"] = "Sandbox enabled toggle";
@@ -542,23 +577,27 @@ void DeployConfigPage::onSaveSandboxConfig() {
   bodyEngine["config_value"] = m_sandboxType->currentData().toString();
   bodyEngine["description"] = "Sandbox container engine";
 
-  m_sandboxSaveBtn->setEnabled(false);
+  setSandboxControlsEnabled(false);
   m_sandboxStatusLabel->setText("保存中...");
   m_sandboxStatusLabel->setStyleSheet(Theme::StatusInfoStyle);
-  m_api->put("/api/config/sandbox/enabled", bodyEnabled, 3000, [this, bodyEngine](const QJsonObject &enabledRes) {
+  m_api->put("/api/config/sandbox/enabled", bodyEnabled, 3000, [this, guard, bodyEngine](const QJsonObject &enabledRes) {
+    if (!guard) return;
     if (enabledRes["status"].toString() != "ok") {
-      m_sandboxSaveBtn->setEnabled(true);
+      m_sandboxBusy = false;
+      setSandboxControlsEnabled(true);
       m_sandboxStatusLabel->setText("保存失败");
       m_sandboxStatusLabel->setStyleSheet(Theme::StatusErrorStyle);
       return;
     }
-    m_api->put("/api/config/sandbox/engine", bodyEngine, 3000, [this](const QJsonObject &engineRes) {
-      m_sandboxSaveBtn->setEnabled(true);
+    m_api->put("/api/config/sandbox/engine", bodyEngine, 3000, [this, guard](const QJsonObject &engineRes) {
+      if (!guard) return;
+      m_sandboxBusy = false;
+      setSandboxControlsEnabled(true);
       if (engineRes["status"].toString() == "ok") {
         m_sandboxStatusLabel->setText("已保存");
         m_sandboxStatusLabel->setStyleSheet(Theme::StatusSuccessStyle);
       } else {
-        m_sandboxStatusLabel->setText("保存失败");
+        m_sandboxStatusLabel->setText(QStringLiteral("启用状态已保存，但引擎配置保存失败；请刷新核对。"));
         m_sandboxStatusLabel->setStyleSheet(Theme::StatusErrorStyle);
       }
     });
@@ -567,8 +606,14 @@ void DeployConfigPage::onSaveSandboxConfig() {
 
 // ── Load tool list (existing) ────────────────────────────────────────
 void DeployConfigPage::loadToolList() {
-  m_api->get("/api/tools/list", 5000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
+  const QPointer<DeployConfigPage> guard(this);
+  const int version = ++m_readVersions["loadToolList"];
+  m_api->get("/api/tools/list", 5000, [this, guard, version](const QJsonObject &res) {
+    if (!guard || version != m_readVersions["loadToolList"]) return;
+    if (res["status"] != "ok" || !res["data"].isArray()) {
+      UiUtil::EmptyHint::setState(m_toolTable, QStringLiteral("工具列表读取失败，请刷新重试"), true); return;
+    }
+    UiUtil::EmptyHint::setState(m_toolTable, QStringLiteral("暂无工具列表记录"));
     auto arr = res["data"].toArray();
     m_toolTable->setSortingEnabled(false);
     m_toolTable->setRowCount(arr.size());
@@ -593,8 +638,14 @@ void DeployConfigPage::loadToolList() {
 
 // ── Load system config (existing) ────────────────────────────────────
 void DeployConfigPage::loadConfig() {
-  m_api->get("/api/config", 5000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
+  const QPointer<DeployConfigPage> guard(this);
+  const int version = ++m_readVersions["loadConfig"];
+  m_api->get("/api/config", 5000, [this, guard, version](const QJsonObject &res) {
+    if (!guard || version != m_readVersions["loadConfig"]) return;
+    if (res["status"] != "ok" || !res["data"].isArray()) {
+      UiUtil::EmptyHint::setState(m_configTable, QStringLiteral("配置列表读取失败，请刷新重试"), true); return;
+    }
+    UiUtil::EmptyHint::setState(m_configTable, QStringLiteral("暂无配置列表记录"));
     auto arr = res["data"].toArray();
     m_configTable->setSortingEnabled(false);
     m_configTable->setRowCount(arr.size());
@@ -611,8 +662,14 @@ void DeployConfigPage::loadConfig() {
 
 // ── Load lab list ──────────────────────────────────────────────────────
 void DeployConfigPage::loadLabList() {
-  m_api->get("/api/labs", 5000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
+  const QPointer<DeployConfigPage> guard(this);
+  const int version = ++m_readVersions["loadLabList"];
+  m_api->get("/api/labs", 5000, [this, guard, version](const QJsonObject &res) {
+    if (!guard || version != m_readVersions["loadLabList"]) return;
+    if (res["status"] != "ok" || !res["data"].isArray()) {
+      UiUtil::EmptyHint::setState(m_labTable, QStringLiteral("靶场列表读取失败，请刷新重试"), true); return;
+    }
+    UiUtil::EmptyHint::setState(m_labTable, QStringLiteral("暂无靶场列表记录"));
     auto data = res["data"].toArray();
     // 排序开启时逐行 setItem 会边填边重排，行错位（状态/操作列空白的根因）
     m_labTable->setSortingEnabled(false);
@@ -622,7 +679,7 @@ void DeployConfigPage::loadLabList() {
       QString name = lab["name"].toString();
       // Backend returns "name" only, no "display_name" — capitalize for display
       QString displayName = name;
-      displayName[0] = displayName[0].toUpper();
+      if (!displayName.isEmpty()) displayName[0] = displayName[0].toUpper();
       QString status = lab["status"].toString();
 
       // Column 0: display name (store API name as UserRole data)
@@ -647,6 +704,7 @@ void DeployConfigPage::loadLabList() {
       startBtn->setProperty("compact", true);
       stopBtn->setProperty("compact", true);
       verifyBtn->setProperty("compact", true);
+      verifyBtn->setToolTip(QStringLiteral("检查靶场运行与测试链路；检查过程使用所选靶场环境。"));
 
       stopBtn->setProperty("danger", true);
       if (status == "running") {
@@ -671,12 +729,15 @@ void DeployConfigPage::loadLabList() {
 
 // ── Lab action (start / stop) ─────────────────────────────────────────
 void DeployConfigPage::onLabAction(const QString &action, const QString &name) {
+  if (!m_labTable->isEnabled() || name.isEmpty()) return;
+  const QPointer<DeployConfigPage> guard(this);
   QString actionLabel = (action == "start") ? "启动" : "停止";
   m_labStatusLabel->setText(QString("%1 %2...").arg(actionLabel, name));
   m_labStatusLabel->setStyleSheet(Theme::StatusInfoStyle);
   m_labTable->setEnabled(false);
   m_api->post("/api/labs/" + name + "/" + action, QJsonObject(), 30000,
-              [this, name](const QJsonObject &res) {
+              [this, guard, name](const QJsonObject &res) {
+    if (!guard) return;
     m_labTable->setEnabled(true);
     if (res["status"].toString() == "ok") {
       m_labStatusLabel->setText(name + " 操作成功");
@@ -694,11 +755,14 @@ void DeployConfigPage::onLabAction(const QString &action, const QString &name) {
 
 // ── Lab verify ─────────────────────────────────────────────────────────
 void DeployConfigPage::onLabVerify(const QString &name) {
+  if (!m_labTable->isEnabled() || name.isEmpty()) return;
+  const QPointer<DeployConfigPage> guard(this);
   m_labStatusLabel->setText(QString("正在自检 %1...").arg(name));
   m_labStatusLabel->setStyleSheet(Theme::StatusInfoStyle);
   m_labTable->setEnabled(false);
   m_api->post("/api/labs/" + name + "/verify", QJsonObject(), 180000,
-              [this, name](const QJsonObject &res) {
+              [this, guard, name](const QJsonObject &res) {
+    if (!guard) return;
     m_labTable->setEnabled(true);
     if (res["status"].toString() == "ok") {
       auto data = res["data"].toObject();
@@ -716,7 +780,7 @@ void DeployConfigPage::onLabVerify(const QString &name) {
                           : QString("❌ 失败 (%1/%2 检查项通过)")
                                 .arg(passCount).arg(checks.size());
       m_labStatusLabel->setText(QString("自检 %1: %2").arg(name, result));
-      m_labStatusLabel->setStyleSheet(Theme::StatusSuccessStyle);
+      m_labStatusLabel->setStyleSheet(ok ? Theme::StatusSuccessStyle : Theme::StatusErrorStyle);
     } else {
       m_labStatusLabel->setText(QString("自检 %1 失败: %2").arg(name, res["error"].toObject()["message"].toString()));
       m_labStatusLabel->setStyleSheet(Theme::StatusErrorStyle);
@@ -744,4 +808,29 @@ void DeployConfigPage::showSection(const QString &section)
       if (auto *heading = qobject_cast<QLabel *>(it.value()->layout()->itemAt(0)->widget())) heading->setVisible(requested != "llm");
   }
   setProperty("activeSection", requested);
+}
+
+void DeployConfigPage::setLlmControlsEnabled(bool enabled)
+{
+  for (auto *field : {m_llmApiKey, m_llmBaseUrl, m_llmModel}) field->setEnabled(enabled);
+  m_llmSaveBtn->setEnabled(enabled); m_llmTestBtn->setEnabled(enabled);
+}
+
+void DeployConfigPage::setSandboxControlsEnabled(bool enabled)
+{
+  m_sandboxEnabled->setEnabled(enabled); m_sandboxType->setEnabled(enabled); m_sandboxSaveBtn->setEnabled(enabled);
+}
+
+bool DeployConfigPage::validateLlmConfiguration()
+{
+  const QUrl url(m_llmBaseUrl->text().trimmed());
+  if (!url.isValid() || url.host().isEmpty() || !QStringList{"http", "https"}.contains(url.scheme().toLower())) {
+    m_llmStatusLabel->setText(QStringLiteral("请填写有效的 HTTP/HTTPS 模型服务地址。"));
+    m_llmStatusLabel->setStyleSheet(Theme::StatusWarningStyle); m_llmBaseUrl->setFocus(); return false;
+  }
+  if (m_llmModel->text().trimmed().isEmpty()) {
+    m_llmStatusLabel->setText(QStringLiteral("请填写模型名称。"));
+    m_llmStatusLabel->setStyleSheet(Theme::StatusWarningStyle); m_llmModel->setFocus(); return false;
+  }
+  return true;
 }

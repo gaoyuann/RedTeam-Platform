@@ -1371,6 +1371,8 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     m_resultBtn->setVisible((status == "completed" || status == "failed") && !runId.isEmpty());
     m_cancelAction->setVisible(isActive);
     m_deleteAction->setVisible(isDeletable);
+    m_cancelAction->setEnabled(!m_pendingTaskActions.contains(pipelineId));
+    m_deleteAction->setEnabled(!m_pendingTaskActions.contains(pipelineId));
     m_reportAction->setVisible((status == "completed" || status == "failed") && !runId.isEmpty());
     // Hide ⋯ button entirely if no actions are available
     m_moreBtn->setVisible(isActive || isDeletable || status == "completed");
@@ -1818,25 +1820,8 @@ void FlowPage::onFlowContextMenu(const QPoint &pos)
     loadFlowDetail(pid);
     m_stack->setCurrentIndex(1);
   });
-  if (isActive) {
-    menu->addAction(QStringLiteral("取消"), [this, pid]() {
-      m_api->post(QStringLiteral("/api/pipelines/%1/cancel").arg(pid),
-                  QJsonObject{}, 5000, [this](const QJsonObject &) {
-        refreshFlows();
-      });
-    });
-  } else {
-    menu->addAction(QStringLiteral("删除"), [this, pid]() {
-      if (QMessageBox::question(this, QStringLiteral("删除任务"),
-            QStringLiteral("确定删除此测试任务？此操作不可撤销。"),
-            QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes) {
-        m_api->del(QStringLiteral("/api/pipelines/%1").arg(pid), 5000,
-                   [this](const QJsonObject &) {
-          refreshFlows();
-        });
-      }
-    });
-  }
+  if (isActive) menu->addAction(QStringLiteral("取消"), [this, pid]() { applyTaskAction(pid, false); });
+  else menu->addAction(QStringLiteral("删除"), [this, pid]() { applyTaskAction(pid, true); });
   menu->exec(m_flowTable->viewport()->mapToGlobal(pos));
 }
 
@@ -1875,30 +1860,40 @@ void FlowPage::onFilterChanged(int)
 
 // ── Workbench actions ──────────────────────────────────────────────────
 
-void FlowPage::onCancelFlow()
-{
-  if (m_selectedPipelineId.isEmpty()) return;
-  QString pid = m_selectedPipelineId;
-  m_api->post(QStringLiteral("/api/pipelines/%1/cancel").arg(pid),
-              QJsonObject{}, 5000, [this, pid](const QJsonObject &) {
-    refreshFlows();
-    loadFlowDetail(pid);
-  });
-}
+void FlowPage::onCancelFlow() { applyTaskAction(m_selectedPipelineId, false); }
 
-void FlowPage::onDeleteFlow()
-{
-  if (m_selectedPipelineId.isEmpty()) return;
-  QString pid = m_selectedPipelineId;
-  if (QMessageBox::question(this, QStringLiteral("删除任务"),
-        QStringLiteral("确定删除此测试任务？此操作不可撤销。"),
-        QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes) return;
+void FlowPage::onDeleteFlow() { applyTaskAction(m_selectedPipelineId, true); }
 
-  m_api->del(QStringLiteral("/api/pipelines/%1").arg(pid), 5000,
-             [this](const QJsonObject &) {
-    m_stack->setCurrentIndex(0);
-    refreshFlows();
-  });
+void FlowPage::applyTaskAction(const QString &pipelineId, bool remove)
+{
+  if (pipelineId.isEmpty() || m_pendingTaskActions.contains(pipelineId)) return;
+  if (remove && QMessageBox::question(this, QStringLiteral("删除任务"),
+      QStringLiteral("确定删除此测试任务？此操作不可撤销。"), QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) return;
+  if (m_pendingTaskActions.contains(pipelineId)) return;
+  m_pendingTaskActions.insert(pipelineId);
+  if (pipelineId == m_selectedPipelineId) { m_cancelAction->setEnabled(false); m_deleteAction->setEnabled(false); }
+  const QPointer<FlowPage> guard(this);
+  const auto completed = [this, guard, pipelineId, remove](const QJsonObject &response) {
+    if (!guard) return;
+    m_pendingTaskActions.remove(pipelineId);
+    if (pipelineId == m_selectedPipelineId) { m_cancelAction->setEnabled(true); m_deleteAction->setEnabled(true); }
+    if (response["status"] != "ok") {
+      const QString message = QStringLiteral("%1失败：%2").arg(remove ? QStringLiteral("删除任务") : QStringLiteral("取消任务"),
+        response["error"].toObject()["message"].toString(QStringLiteral("服务未返回有效结果")));
+      m_listState->setText(message);
+      if (pipelineId == m_selectedPipelineId) { m_statusLabel->setText(message); m_statusLabel->setStyleSheet(Theme::StatusErrorStyle); }
+      return;
+    }
+    if (remove && pipelineId == m_selectedPipelineId) {
+      m_selectedPipelineId.clear(); clearRunContext(); m_stack->setCurrentIndex(0); emit taskContextChanged();
+      if (m_ribbonNavigation) emit taskListRequested(); else refreshFlows();
+    } else {
+      refreshFlows();
+      if (!remove && pipelineId == m_selectedPipelineId && m_stack->currentIndex() == 1) loadFlowDetail(pipelineId);
+    }
+  };
+  const QString path = QStringLiteral("/api/pipelines/%1").arg(QString::fromLatin1(QUrl::toPercentEncoding(pipelineId)));
+  if (remove) m_api->del(path, 5000, completed); else m_api->post(path + "/cancel", {}, 5000, completed);
 }
 
 void FlowPage::onApproveFlow()
@@ -2226,3 +2221,5 @@ QString FlowPage::taskContextSummary() const
 int FlowPage::workspaceStage() const { return m_stageTabs->currentIndex(); }
 
 bool FlowPage::taskContextReady() const { return !m_selectedPipelineId.isEmpty() && m_lastDetailPipelineId == m_selectedPipelineId && !m_lastDisplayedDetail.isEmpty(); }
+
+bool FlowPage::supportsWorkspaceStage(int stage) const { return stage >= 0 && stage < m_stageTabs->count() && m_stageTabs->isTabEnabled(stage); }

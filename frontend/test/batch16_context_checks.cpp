@@ -222,6 +222,10 @@ int main(int argc, char **argv)
     ribbonServer.handler = [&](const QString &method, const QString &path) -> MockReply {
       const auto route = QUrl(path).path();
       if (route == "/api/pipelines") return {success(QJsonArray{taskRecord("R")})};
+      if (route == "/api/pipelines/D") {
+        auto task = taskRecord("D"); task["config"] = QJsonObject{{"task_mode", "discovery"}};
+        task["steps"] = QJsonArray{QJsonObject{{"step_type", "scan"}, {"status", "completed"}}}; return {success(task)};
+      }
       if (route == "/api/pipelines/R") {
         auto task = taskRecord("R"); QJsonArray ids; for (const auto &source : sources) ids.append(source.toObject()["scan_task_id"]);
         task["summary"] = QJsonObject{{"scan_task_ids", ids}};
@@ -344,6 +348,21 @@ int main(int argc, char **argv)
         saveRibbonScreenshot(shell, QString("width-%1-%2").arg(width).arg(id), QSize(width, 800));
       }
     }
+    shell.m_flowPage->openTaskAnalysis("D");
+    verify(awaitCondition([&]() {return shell.m_flowPage->taskContextReady() && shell.m_flowPage->selectedTaskId() == "D";}), "discovery task context loads independently");
+    shell.openRibbonFeature("plans.task");
+    verify(shell.m_taskGate->isVisible() && shell.m_taskGateMessage->text().contains(QStringLiteral("资产探测任务")),
+      "incompatible task type has an explicit explanation instead of an inert plan view");
+    shell.m_chooseTaskButton->click();
+    verify(shell.m_flowPage->m_stack->currentIndex() == 0 && !shell.m_taskGate->isVisible(), "choosing a replacement task keeps the task list visible instead of reopening the old task");
+    shell.m_flowPage->openTaskAnalysis("D");
+    verify(awaitCondition([&]() {return shell.m_flowPage->taskContextReady() && shell.m_taskGate->isVisible();}),
+      "selecting the same incompatible task again still shows its reason instead of a mismatched page");
+    shell.m_chooseTaskButton->click();
+    verify(awaitCondition([&]() {return shell.m_flowPage->m_flowListFresh && shell.m_flowPage->m_flowTable->rowCount() == 1;}), "replacement task selector loads visible tasks");
+    shell.m_flowPage->onFlowDoubleClicked(0);
+    verify(awaitCondition([&]() {return shell.m_flowPage->selectedTaskId() == "R" && shell.m_flowPage->taskContextReady()
+      && shell.m_activeFeature == "plans.task";}), "replacement selection resumes the originally requested plan feature");
     for (const auto &id : QStringList{"plans.task", "scans.web", "topology.display", "system.permissions"}) {
       shell.openRibbonFeature(id); shell.resize(1024, 600); QTest::qWait(30);
       verify(shell.size() == QSize(1024, 600), "small-height workspace respects the existing minimum window size");
@@ -497,6 +516,105 @@ int main(int argc, char **argv)
     verify(captures.m_analysisPollCaptureId.isEmpty() && !captures.m_analysisPollTimer->isActive()
       && captures.m_analysisResultTable->item(0, 0)->data(Qt::UserRole).toJsonObject()["analysis_data"].toString().contains("cap-B"),
       "late analysis submit and results never restart polling or replace the current capture");
+  }
+  {
+    MockServer actions;
+    bool rejectDelete = true;
+    actions.handler = [&](const QString &method, const QString &path) -> MockReply {
+      if (method == "POST" && path.endsWith("/cancel")) return {QJsonObject{{"status", "error"}, {"error", QJsonObject{{"message", "cancel fixture failure"}}}}, 100};
+      if (method == "DELETE") return rejectDelete
+        ? MockReply{QJsonObject{{"status", "error"}, {"error", QJsonObject{{"message", "delete fixture failure"}}}}, 100}
+        : MockReply{success(QJsonObject()), 100};
+      if (path == "/api/pipelines/A" || path == "/api/pipelines/B") return {success(taskRecord(path.right(1)))};
+      if (path == "/api/pipelines" || path == "/api/pipelines?view=list") return {success(QJsonArray{taskRecord("A"), taskRecord("B")})};
+      return {success(QJsonArray())};
+    };
+    ApiClient actionApi(QStringLiteral("http://127.0.0.1:%1").arg(actions.serverPort()));
+    FlowPage tasks(&actionApi, "admin", "fixture-user"); tasks.show(); tasks.openTaskAnalysis("A");
+    verify(awaitCondition([&]() {return tasks.taskContextReady();}), "task action fixture loads current task");
+    tasks.onCancelFlow(); tasks.onCancelFlow(); tasks.openTaskAnalysis("B");
+    verify(awaitCondition([&]() {return tasks.taskContextReady() && tasks.m_selectedPipelineId == "B" && tasks.m_pendingTaskActions.isEmpty();}),
+      "cancel response does not reload the previously selected task");
+    verify(actions.requests.value("POST /api/pipelines/A/cancel") == 1 && !tasks.m_statusLabel->text().contains("cancel fixture failure"),
+      "duplicate cancel is suppressed and old task errors cannot overwrite the new task");
+    const auto acceptDelete = [&]() {
+      QTimer::singleShot(20, &tasks, []() {
+        for (auto *window : QApplication::topLevelWidgets())
+          if (auto *question = qobject_cast<QMessageBox *>(window))
+            if (question->windowTitle() == QStringLiteral("删除任务")) question->button(QMessageBox::Yes)->click();
+      });
+      tasks.onDeleteFlow();
+    };
+    acceptDelete();
+    verify(awaitCondition([&]() {return tasks.m_pendingTaskActions.isEmpty();}) && tasks.m_selectedPipelineId == "B"
+      && tasks.m_stack->currentIndex() == 1 && tasks.m_statusLabel->text().contains("delete fixture failure"),
+      "failed task deletion retains the selected workspace and shows the failure");
+    rejectDelete = false; acceptDelete(); tasks.openTaskAnalysis("A");
+    verify(awaitCondition([&]() {return tasks.taskContextReady() && tasks.m_pendingTaskActions.isEmpty();})
+      && tasks.m_selectedPipelineId == "A" && tasks.m_stack->currentIndex() == 1,
+      "successful deletion of an old task cannot close a newly selected task");
+    acceptDelete();
+    verify(awaitCondition([&]() {return tasks.m_pendingTaskActions.isEmpty() && tasks.m_selectedPipelineId.isEmpty();})
+      && tasks.m_stack->currentIndex() == 0, "successful current-task deletion clears its context and returns to task management");
+  }
+  {
+    MockServer resourceServer;
+    bool failReads = false;
+    resourceServer.handler = [&](const QString &method, const QString &path) -> MockReply {
+      if (method == "GET" && (path == "/api/config/llm" || path == "/api/config/sandbox")) {
+        if (failReads) return {QJsonObject{{"status", "error"}, {"error", QJsonObject{{"message", "fixture read failure"}}}}};
+        return {success(QJsonArray())};
+      }
+      if (path == "/api/tools/containers/status") return {success(QJsonObject{{"images", QJsonArray()}})};
+      if (method == "POST" && path.endsWith("/verify")) return {success(QJsonObject{{"ok", false}, {"checks", QJsonArray()}, {"duration", 0}}), 50};
+      return {success(QJsonArray())};
+    };
+    ApiClient resourceApi(QStringLiteral("http://127.0.0.1:%1").arg(resourceServer.serverPort()));
+    DeployConfigPage resources(&resourceApi, "admin", "fixture-user");
+    verify(awaitCondition([&]() { return resources.m_llmLoaded && resources.m_sandboxLoaded; }), "resource configuration reads before enabling save operations");
+    resources.onSaveLlmConfig();
+    verify(resources.m_llmStatusLabel->text().contains(QStringLiteral("地址")) && !resourceServer.requests.value("PUT /api/config/llm/default"),
+      "empty model service fields show a clear validation message without submitting configuration");
+    resources.m_llmModel->setText("preserve-edited-model"); resources.m_sandboxEnabled->setChecked(false);
+    failReads = true; resources.loadLlmConfig(); resources.loadSandboxConfig();
+    verify(awaitCondition([&]() { return resources.m_llmStatusLabel->text().contains(QStringLiteral("读取失败"))
+      && resources.m_sandboxStatusLabel->text().contains(QStringLiteral("读取失败")); }), "configuration read failures are visible instead of appearing as empty defaults");
+    verify(resources.m_llmModel->text() == "preserve-edited-model" && !resources.m_sandboxEnabled->isChecked(), "failed resource reads preserve existing edits");
+    resources.onSaveLlmConfig(); resources.onSaveSandboxConfig(); resources.onTestLlmConnection();
+    verify(!resources.m_llmSaveBtn->isEnabled() && !resources.m_sandboxSaveBtn->isEnabled()
+      && !resourceServer.requests.value("PUT /api/config/llm/default") && !resourceServer.requests.value("PUT /api/config/sandbox/enabled"),
+      "unread configuration cannot be saved or tested through an apparently available action");
+    resources.onLabVerify("dvwa"); resources.onLabVerify("dvwa");
+    verify(awaitCondition([&]() {return resources.m_labTable->isEnabled() && resources.m_labStatusLabel->text().contains(QStringLiteral("失败"));}), "failed lab checks display the actual failure");
+    verify(resourceServer.requests.value("POST /api/labs/dvwa/verify") == 1 && resources.m_labStatusLabel->styleSheet().contains("#991b1b"),
+      "lab check cannot be double-submitted and false results do not display a success style");
+  }
+  {
+    MockServer creation;
+    creation.handler = [](const QString &method, const QString &path) -> MockReply {
+      if (method == "POST" && path == "/api/scan-tasks") return {success(QJsonObject{{"scan_task_id", "new-scan"}}), 100};
+      if (method == "POST" && path == "/api/scan-tasks/new-scan/execute") return {success(QJsonObject()), 50};
+      return {success(QJsonArray())};
+    };
+    ApiClient creationApi(QStringLiteral("http://127.0.0.1:%1").arg(creation.serverPort()));
+    ScanPage scans(&creationApi, "user", "fixture-user"); scans.show(); scans.selectScanType("ports");
+    QDialog *portForm = nullptr;
+    for (auto *dialog : scans.findChildren<QDialog *>("scanCreateDialog"))
+      if (dialog->windowTitle().contains(QStringLiteral("端口"))) portForm = dialog;
+    verify(portForm != nullptr, "port scan has a concrete submission form");
+    portForm->show(); scans.onCreateScan();
+    verify(portForm->findChild<QLabel *>("scanSubmissionMessage")->isVisible()
+      && portForm->findChild<QLabel *>("scanSubmissionMessage")->text().contains(QStringLiteral("目标")),
+      "invalid scan input produces visible feedback inside the current form");
+    portForm->close();
+    scans.m_portTargetInput->setText("192.0.2.18"); scans.onCreateScan(); scans.onCreateScan();
+    for (auto *button : scans.findChildren<QPushButton *>("scanSubmitButton"))
+      verify(!button->isEnabled(), "scan submission controls are disabled while creation is pending");
+    scans.selectScanType("web"); scans.m_webTargetInput->setText("https://later.invalid");
+    verify(awaitCondition([&]() { return creation.requests.value("POST /api/scan-tasks/new-scan/execute") == 1 && !scans.m_scanCreationBusy; }),
+      "create-and-start scan completes once despite navigating to another scan type");
+    verify(creation.requests.value("POST /api/scan-tasks") == 1 && scans.m_webTargetInput->text() == "https://later.invalid"
+      && scans.selectedScanFeature() == "scans.web", "scan creation cannot duplicate or clear a newer type target");
   }
   if (qEnvironmentVariableIsSet("REDTEAM_RIBBON_REVIEW_ONLY")) {
     std::cout << "TOTAL " << checks << " ribbon review checks passed" << std::endl;

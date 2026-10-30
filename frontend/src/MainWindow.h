@@ -73,6 +73,7 @@ private:
     ScanPage *m_standaloneScan = nullptr;
     ExecutionPage *m_standaloneExecution = nullptr;
     QString m_pendingTaskFeature;
+    int m_featureSelectionRevision = -1;
     bool m_selectingFeatureTask = false;
     ModuleRibbon *m_ribbon = nullptr;
     QFrame *m_contextBar = nullptr;

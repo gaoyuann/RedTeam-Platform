@@ -66,6 +66,9 @@ private slots:
 private:
   void showEvent(QShowEvent *event) override;
   void setupUI();
+  void setScanCreationBusy(bool busy);
+  void setScanSubmissionMessage(const QString &message);
+  void renderPipelineSources(const QJsonArray &sources);
   void setStatusText(const QString &text);
   void openRecordDetails(QTreeWidgetItem *item);
   void openSourceScanDetails(qint64 findingId = 0);
@@ -111,6 +114,7 @@ private:
   QString m_retryRequestSource;
   bool m_allScanResults = false;
   bool m_scanPageBusy = false;
+  bool m_scanCreationBusy = false;
   int m_scanPageRequest = 0;
   qint64 m_scanCursor = 0;
   qint64 m_scanThrough = 0;
