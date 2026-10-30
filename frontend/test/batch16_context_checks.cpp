@@ -522,7 +522,7 @@ int main(int argc, char **argv)
       && candidates->child(4)->text(7) == "目标已达成", "execution state remains independent from evidence-based objective result");
     verify(candidates->child(0)->text(1).contains("CWE-548") && candidates->child(0)->text(5).contains("/docs/")
       && candidates->child(0)->text(0) == "500" && candidates->child(0)->text(4) == "高危", "rule, location and stable finding identity remain visible");
-    verify(aggregate.m_resultTree->columnCount() == 8
+    verify(aggregate.m_resultTree->columnCount() == 9
       && aggregate.m_resultTree->findChildren<QPushButton*>("findingRowAction").isEmpty(),
       "finding table has no operation column or per-row action buttons");
     const QString tableCapture = qEnvironmentVariable("F04_SCREENSHOT_DIR");
@@ -712,6 +712,94 @@ int main(int argc, char **argv)
     verify(aggregate.m_resultTree->topLevelItemCount() == 0 && aggregate.m_pipelineId.isEmpty(), "leaving aggregate clears all visible records and identity");
     for (auto *dialog : aggregate.findChildren<QDialog*>())
       if (dialog->objectName().startsWith("scanAux")) verify(!dialog->isVisible(), "leaving task closes auxiliary evidence and management windows");
+  }
+
+  {
+    MockServer classificationServer;
+    int classificationCalls = 0, classificationDelay = 0;
+    bool classificationFailure = false, wrongClassificationIds = false;
+    QMap<qint64, QJsonObject> classifications;
+    classificationServer.handler = [&](const QString &method, const QString &requestPath) -> MockReply {
+      const QString path = QUrl(requestPath).path();
+      if (method == "POST" && path.endsWith("/classifications")) {
+        ++classificationCalls;
+        if (classificationFailure) return {{{"status", "error"}, {"error", QJsonObject{{"message", "模型分类超时"}}}}};
+        const auto body = QJsonDocument::fromJson(classificationServer.requestBodies[method + " " + requestPath]).object();
+        QJsonArray items;
+        for (const auto &value : body["finding_ids"].toArray()) {
+          const auto id = value.toVariant().toLongLong();
+          const QJsonObject result{{"schema_version", 1}, {"state", id == 2 ? "unknown" : "classified"},
+            {"categories", id == 2 ? QJsonArray{} : QJsonArray{"data-exfiltration", "tampering-deception"}},
+            {"reason", "测试证据提示未授权读写；尚未实际验证"}, {"confidence", "medium"},
+            {"missing_conditions", QJsonArray{"访问位置未知，需要对照账号"}}};
+          classifications[id] = result;
+          items.append(QJsonObject{{"finding_id", wrongClassificationIds ? 999999 : id}, {"classification", result}});
+        }
+        return {success(QJsonObject{{"items", items}}), classificationDelay};
+      }
+      if (path.endsWith("/results")) {
+        const QString task = path.split('/').value(3);
+        QJsonArray rows;
+        for (int id = 1; id <= 12; ++id) rows.append(QJsonObject{{"id", id}, {"category", "vulnerability"},
+          {"result_type", "vulnerability"}, {"severity", "high"}, {"result_data", "{\"title\":\"" + task + " fixture\"}"},
+          {"classification", classifications.value(id, QJsonObject{{"schema_version", 1}, {"state", "unclassified"}})}});
+        return {success(QJsonObject{{"scan_records", rows},
+          {"page", QJsonObject{{"total", 12}, {"next_after", 12}, {"has_more", false}}},
+          {"scan_summary", QJsonObject{{"record_count", 12}}}})};
+      }
+      return {success(QJsonArray{})};
+    };
+    ApiClient classificationApi(QStringLiteral("http://127.0.0.1:%1").arg(classificationServer.serverPort()));
+    ScanPage page(&classificationApi, "user", "fixture-user"); page.resize(1360, 860); page.show();
+    page.setPipelineScope("classification-A", {});
+    verify(awaitCondition([&]() { return !page.m_scanPageBusy && page.m_aggregateRecords.size() == 12; }), "classification fixture loads task candidates");
+    verify(classificationCalls == 0 && !page.m_classifyFindings->isEnabled(), "reading findings never calls the classifier");
+    page.setCurrentFindingsChecked(true);
+    verify(page.m_classifyFindings->isEnabled() && !page.m_resultTree->isColumnHidden(8), "selected findings enable AI classification and scenario column");
+    auto *cachedAction = page.findChild<QAction*>("classifyFindingsCached");
+    verify(cachedAction != nullptr, "classification menu exposes reuse action");
+    if (cachedAction) cachedAction->trigger();
+    verify(awaitCondition([&]() { return !page.m_classificationBusy; }), "batched classification finishes");
+    verify(classificationCalls == 2 && page.m_classificationDone == 12, "all twelve selected findings are classified in bounded batches");
+    auto *group = page.m_resultTree->topLevelItem(0);
+    verify(group->child(0)->text(8).contains("数据抵近窃取") && group->child(0)->text(8).contains("信息篡改欺骗")
+      && group->child(1)->text(8) == "无法确定", "multiple scenario labels and unknown classification remain distinct");
+    verify(group->child(0)->text(7) == "待核对", "classification never upgrades a verification conclusion");
+    page.m_resultTree->itemClicked(group->child(0), 8);
+    auto *details = page.findChild<QDialog*>("scanAuxClassification");
+    verify(details && details->findChild<QPlainTextEdit*>()->toPlainText().contains("访问位置未知"), "classification detail shows rationale and missing conditions");
+    if (details) details->close();
+    classificationFailure = true;
+    auto *retryAction = page.findChild<QAction*>("reclassifyFindings");
+    if (retryAction) retryAction->trigger();
+    verify(awaitCondition([&]() { return !page.m_classificationBusy; }), "classification failure ends busy state");
+    verify(group->child(0)->text(8).contains("信息篡改欺骗") && page.m_classificationStatus->text().contains("已有分类保留"),
+      "failed reclassification retains valid labels and reports the failure");
+    const auto retryBody = QJsonDocument::fromJson(classificationServer.requestBodies["POST /api/pipelines/classification-A/results/classifications"]).object();
+    verify(retryBody["force"].toBool(), "explicit reclassification passes the force flag");
+    classificationFailure = false; wrongClassificationIds = true;
+    page.classifySelectedFindings(false);
+    verify(awaitCondition([&]() { return !page.m_classificationBusy; }) && page.m_classificationStatus->text().contains("编号不完整"),
+      "foreign response IDs cannot update finding labels");
+    wrongClassificationIds = false; classificationDelay = 250;
+    page.classifySelectedFindings(false);
+    const int startedCalls = classificationCalls;
+    verify(awaitCondition([&]() { return classificationCalls > startedCalls; }), "delayed classification request starts");
+    page.setPipelineScope("classification-B", {});
+    verify(awaitCondition([&]() { return !page.m_scanPageBusy && page.m_aggregateRecords.size() == 12
+      && page.m_aggregateRecords.first().toObject()["result_data"].toString().contains("classification-B"); }), "switching task loads its own classification view");
+    const int callsAfterSwitch = classificationCalls;
+    QTest::qWait(300);
+    verify(classificationCalls == callsAfterSwitch && page.m_pipelineId == "classification-B" && !page.m_classificationBusy
+      && page.m_classificationStatus->text().isEmpty(), "late classification cannot dispatch another batch or restore previous task status");
+    page.m_resultTree->itemClicked(page.m_resultTree->topLevelItem(0)->child(0), 8);
+    page.clearTaskScope();
+    for (auto *dialog : page.findChildren<QDialog*>("scanAuxClassification"))
+      verify(!dialog->isVisible(), "leaving task closes classification details");
+    int writes = 0;
+    for (auto it = classificationServer.requests.begin(); it != classificationServer.requests.end(); ++it)
+      if (it.key().startsWith("POST ")) { writes += it.value(); verify(it.key().endsWith("/classifications"), "classification writes never target execution endpoints"); }
+    verify(writes == classificationCalls, "all writes belong to classification requests only");
   }
 
   {

@@ -156,8 +156,36 @@ static bool isVerificationRecord(const QJsonObject &row) {
   const QStringList types{"vulnerability","web_vuln","sql_injection","misconfiguration","auth_finding","source_vuln","source_finding","program_finding"};
   return types.contains(row["result_type"].toString()) && !QStringList{"info","inf"}.contains(row["severity"].toString().toLower());
 }
+
+static void showFindingClassification(QTreeWidgetItem *item, const QJsonObject &record) {
+  if (!isVerificationRecord(record)) { item->setText(8, QStringLiteral("—")); return; }
+  const auto classification = record["classification"].toObject();
+  item->setData(8, Qt::UserRole, classification);
+  const QMap<QString, QString> labels{{"data-exfiltration", "数据抵近窃取"}, {"tampering-deception", "信息篡改欺骗"},
+    {"device-control", "关键设备夺控"}, {"cross-network-disruption", "跨网致瘫"}, {"wireless-attack", "无线攻击"}};
+  QStringList categories;
+  for (const auto &value : classification["categories"].toArray())
+    if (labels.contains(value.toString())) categories << labels[value.toString()];
+  const QString state = classification["state"].toString();
+  QString label = state == "stale" ? QStringLiteral("已过期，需重新分类")
+    : state == "unavailable" ? QStringLiteral("分类暂不可用")
+    : state == "unknown" ? QStringLiteral("无法确定")
+    : state == "classified" && classification["schema_version"].toInt() == 1 && !categories.isEmpty()
+      ? categories.join(QStringLiteral("、")) : QStringLiteral("未分类");
+  item->setText(8, label);
+  const QMap<QString, QString> confidence{{"high", "高"}, {"medium", "中"}, {"low", "低"}};
+  QStringList missing;
+  for (const auto &value : classification["missing_conditions"].toArray()) missing << value.toString();
+  item->setToolTip(8, QStringLiteral("AI 场景分类：%1\n分类依据：%2\n分类置信度：%3\n待补条件：%4\n%5\n分类为候选关联，不代表攻击已执行或验证成功。")
+    .arg(label, classification["reason"].toString(QStringLiteral("尚无分类依据")),
+      confidence.value(classification["confidence"].toString(), QStringLiteral("未提供")),
+      missing.isEmpty() ? QStringLiteral("未提供") : missing.join(QStringLiteral("；")),
+      classification["evidence_truncated"].toBool() ? QStringLiteral("分析输入仅含部分证据片段") : QString()));
+  item->setForeground(8, QColor(state == "classified" ? "#2563eb" : state == "stale" ? "#b45309" : "#64748b"));
+}
 // Keep record roles on column 0 and existing name/source consumers on columns 1–2.
 static void showFindingSummary(QTreeWidgetItem *item, const QJsonObject &record, bool aggregate) {
+  showFindingClassification(item, record);
   const bool candidate = isVerificationRecord(record);
   item->setData(0, Qt::UserRole+2, candidate ? QString("vulnerability") : record["category"].toString());
   if (!candidate) {
@@ -660,10 +688,12 @@ void ScanPage::setStatusText(const QString &text) {
 }
 
 void ScanPage::resizeResultColumns() {
-  const int available = qMax(100, m_resultTree->viewport()->width() - 260 - (m_sourceResultsView && !m_sourceRecordsMode ? 90 : 0));
+  const int classificationWidth = m_resultTree->isColumnHidden(8) ? 0 : 166;
+  const int available = qMax(260, m_resultTree->viewport()->width() - 260 - classificationWidth - (m_sourceResultsView && !m_sourceRecordsMode ? 90 : 0));
   m_resultTree->setColumnWidth(0, 52);
   m_resultTree->setColumnWidth(4, 72);
   m_resultTree->setColumnWidth(6, 136);
+  m_resultTree->setColumnWidth(8, 166);
   m_resultTree->setColumnWidth(1, available * 3 / 5);
   m_resultTree->setColumnWidth(5, available - available * 3 / 5);
 }
@@ -747,6 +777,7 @@ void ScanPage::setTarget(const QString &target)
 void ScanPage::setPipelineScope(const QString &pipelineId, const QStringList &taskIds, const QString &state)
 {
   if(m_pipelineId!=pipelineId) {
+    resetFindingClassification();
     m_checkedFindings.clear();
     const QSignalBlocker categoryBlock(m_resultCategory);
     m_resultCategory->setCurrentIndex(m_resultCategory->findData("vulnerability"));
@@ -770,7 +801,7 @@ void ScanPage::setPipelineScope(const QString &pipelineId, const QStringList &ta
 
 void ScanPage::loadPipelineResults(bool append)
 {
-  if (m_pipelineId.isEmpty()) return;
+  if (m_pipelineId.isEmpty() || m_classificationBusy) return;
   const int request = ++m_scanPageRequest;
   const QString pipeline = m_pipelineId;
   const int scope = m_scopeRevision;
@@ -1643,16 +1674,18 @@ void ScanPage::setupUI() {
   m_resultTree->installEventFilter(this);
   connect(m_resultTree, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem *item, int column) {
     if (column == 1) openRecordDetails(item);
+    if (column == 8) showClassificationDetails(item);
   });
   UiUtil::EmptyHint::attach(m_resultTree, QStringLiteral("扫描完成后在此展示结果"));
   m_resultTree->setHeaderLabels({"选择 / 编号", "漏洞名称 / 记录内容", "来源工具", "载荷情况",
-    "严重性", "目标与位置", "测试状态", "验证结论"});
+    "严重性", "目标与位置", "测试状态", "验证结论", "AI 场景分类"});
   // Keep identity and independent status/result visible first; location and source remain horizontally reachable.
-  const QList<int> visualOrder{0, 4, 1, 5, 6, 7, 3, 2};
+  const QList<int> visualOrder{0, 4, 1, 5, 8, 6, 7, 3, 2};
   for (int visual = 0; visual < visualOrder.size(); ++visual)
     m_resultTree->header()->moveSection(m_resultTree->header()->visualIndex(visualOrder[visual]), visual);
   m_resultTree->headerItem()->setToolTip(0, "稳定发现 ID；扫描结果表自增编号，用于跨筛选、分页和验证追溯。");
   m_resultTree->headerItem()->setToolTip(7, "来自系统验证目标与证据；不将工具成功或人工意见替代为自动结论。");
+  m_resultTree->headerItem()->setToolTip(8, "按需求中的五类攻击场景进行候选归类；点击查看依据和待补条件，不代表攻击成功。");
   m_resultTree->setAlternatingRowColors(true);
   m_resultTree->setSelectionMode(QAbstractItemView::ExtendedSelection);
   m_resultTree->setStyleSheet(findingIndicatorStyle("QTreeWidget#scanResultTree")
@@ -1677,9 +1710,21 @@ void ScanPage::setupUI() {
   m_openCheckedFindings = new QPushButton("打开勾选的漏洞");
   m_openCheckedFindings->setObjectName("openCheckedFindings");
   m_openCheckedFindings->setToolTip("只打开当前列表勾选的漏洞；打开窗口不会启动验证。");
+  m_classifyFindings = new QPushButton(QStringLiteral("AI 分类"));
+  m_classifyFindings->setObjectName("classifySelectedFindings");
+  m_classifyFindings->setToolTip(QStringLiteral("使用已配置模型分析勾选漏洞；分类结果保存后可复用，也可重新分类。"));
+  auto *classificationMenu = new QMenu(m_classifyFindings);
+  auto *classify = classificationMenu->addAction(QStringLiteral("分类勾选漏洞（复用已有结果）"));
+  classify->setObjectName("classifyFindingsCached");
+  connect(classify, &QAction::triggered, this, [this]() { classifySelectedFindings(false); });
+  auto *reclassify = classificationMenu->addAction(QStringLiteral("重新分类勾选漏洞"));
+  reclassify->setObjectName("reclassifyFindings");
+  connect(reclassify, &QAction::triggered, this, [this]() { classifySelectedFindings(true); });
+  m_classifyFindings->setMenu(classificationMenu);
   selectionBar->addWidget(m_selectAllFindings);
   selectionBar->addWidget(m_findingSelectionCount);
   selectionBar->addStretch();
+  selectionBar->addWidget(m_classifyFindings);
   selectionBar->addWidget(m_openCheckedFindings);
   right->addLayout(selectionBar);
   connect(m_selectAllFindings, &QCheckBox::clicked, this, [this]() {
@@ -1711,6 +1756,12 @@ void ScanPage::setupUI() {
   m_resultTree->setIndentation(12);
   for (int column : {2, 3, 7}) m_resultTree->setColumnHidden(column, true);
   right->addWidget(m_resultTree, 1);
+  m_classificationStatus = new QLabel;
+  m_classificationStatus->setObjectName("findingClassificationStatus");
+  m_classificationStatus->setWordWrap(true);
+  m_classificationStatus->setStyleSheet("color:#475569; padding:4px 0;");
+  m_classificationStatus->hide();
+  right->addWidget(m_classificationStatus);
   auto *footer = new QHBoxLayout;
   footer->addWidget(m_resultHint, 1);
   m_showAllRecords = new QPushButton(QStringLiteral("查看全部记录"));
@@ -2161,10 +2212,11 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
   if (candidatesOnly && m_resultTree->topLevelItemCount() == 1)
     m_resultTree->setRootIndex(m_resultTree->model()->index(0, 0));
   m_resultTree->setRootIsDecorated(!candidatesOnly);
-  m_resultTree->setHeaderLabels({"选择", "漏洞名称 / 记录内容", "来源工具", "载荷情况", "严重性", "目标 / 位置", "验证状态", "验证结论"});
+  m_resultTree->setHeaderLabels({"选择", "漏洞名称 / 记录内容", "来源工具", "载荷情况", "严重性", "目标 / 位置", "验证状态", "验证结论", "AI 场景分类"});
+  m_resultTree->setColumnHidden(8, !m_allScanResults);
   for (int column : {2, 3, 7}) m_resultTree->setColumnHidden(column, true);
   if (sourceTable) {
-    m_resultTree->setHeaderLabels({"选择", "漏洞名称", "来源工具", "CWE", "严重性", "源码文件 / 行号", "验证状态", "验证结论"});
+    m_resultTree->setHeaderLabels({"选择", "漏洞名称", "来源工具", "CWE", "严重性", "源码文件 / 行号", "验证状态", "验证结论", "AI 场景分类"});
     m_resultTree->setColumnHidden(3, false);
     m_resultTree->setColumnHidden(7, false);
     m_resultTree->setColumnWidth(3, 90);
@@ -2197,6 +2249,7 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
   m_selectAllFindings->setVisible(canSelect);
   m_findingSelectionCount->setVisible(canSelect);
   m_openCheckedFindings->setVisible(canSelect);
+  m_classifyFindings->setVisible(canSelect && m_allScanResults);
   if(m_sourceResultsView) {
     m_sourceDemoBtn->hide();
     if(!m_sourceRecordsMode)m_resultHint->setText(m_sourceResultsPending ? m_sourceProgressText
@@ -2230,6 +2283,130 @@ void ScanPage::updateFindingSelection() {
   m_selectAllFindings->setEnabled(!m_scanPageBusy && !items.isEmpty());
   m_findingSelectionCount->setText(QString("已选 %1 / 可选 %2 条").arg(selected).arg(items.size()));
   m_openCheckedFindings->setEnabled(!m_scanPageBusy && selected > 0);
+  m_classifyFindings->setEnabled(!m_scanPageBusy && !m_classificationBusy && m_allScanResults && selected > 0);
+  m_resultCategory->setEnabled(!m_classificationBusy);
+  m_resultSource->setEnabled(!m_classificationBusy);
+  m_allResultsButton->setEnabled(!m_classificationBusy);
+}
+
+void ScanPage::classifySelectedFindings(bool force) {
+  if (m_classificationBusy || m_scanPageBusy || m_pipelineId.isEmpty() || !m_allScanResults) return;
+  m_classificationQueue.clear();
+  for (auto *item : selectableFindingItems())
+    if (item->checkState(0) == Qt::Checked) m_classificationQueue.append(item->data(0, Qt::UserRole+1).toLongLong());
+  if (m_classificationQueue.isEmpty()) return;
+  ++m_classificationRevision;
+  m_classificationBusy = true;
+  m_classificationForce = force;
+  m_classificationDone = 0;
+  m_classificationTotal = m_classificationQueue.size();
+  m_classificationPipeline = m_pipelineId;
+  m_classificationScope = m_scopeRevision;
+  m_classificationMoreEnabled = m_moreResultsButton->isEnabled();
+  m_moreResultsButton->setEnabled(false);
+  m_classificationStatus->show();
+  updateFindingSelection();
+  classifyNextBatch();
+}
+
+void ScanPage::classifyNextBatch() {
+  if (!m_classificationBusy || m_classificationPipeline != m_pipelineId || m_classificationScope != m_scopeRevision) return;
+  if (m_classificationQueue.isEmpty()) {
+    m_classificationBusy = false;
+    m_moreResultsButton->setEnabled(m_classificationMoreEnabled);
+    m_classificationStatus->setText(QStringLiteral("AI 分类完成 %1 / %2 条 · 点击分类标签查看依据；分类不代表验证成功。")
+      .arg(m_classificationDone).arg(m_classificationTotal));
+    updateFindingSelection();
+    return;
+  }
+  QJsonArray ids;
+  while (!m_classificationQueue.isEmpty() && ids.size() < 10) ids.append(double(m_classificationQueue.takeFirst()));
+  m_classificationStatus->setText(QStringLiteral("AI 分类中 %1 / %2 条 · 正在分析本批 %3 条…")
+    .arg(m_classificationDone).arg(m_classificationTotal).arg(ids.size()));
+  const int revision = m_classificationRevision;
+  const int scope = m_classificationScope;
+  const QString pipeline = m_classificationPipeline;
+  QPointer<ScanPage> guard(this);
+  m_api->post("/api/pipelines/" + pipeline + "/results/classifications",
+    {{"finding_ids", ids}, {"force", m_classificationForce}}, 150000,
+    [this, guard, revision, scope, pipeline, ids](const QJsonObject &response) {
+      if (!guard || revision != m_classificationRevision || scope != m_scopeRevision || pipeline != m_pipelineId) return;
+      if (response["status"].toString() != "ok") {
+        m_classificationBusy = false;
+        m_moreResultsButton->setEnabled(m_classificationMoreEnabled);
+        m_classificationQueue.clear();
+        m_classificationStatus->setText(QStringLiteral("AI 分类未完成（已完成 %1 / %2 条）：%3。已有分类保留，可重试。")
+          .arg(m_classificationDone).arg(m_classificationTotal)
+          .arg(response["error"].toObject()["message"].toString(QStringLiteral("请求失败"))));
+        updateFindingSelection();
+        return;
+      }
+      const auto items = response["data"].toObject()["items"].toArray();
+      QMap<qint64, QJsonObject> results;
+      QSet<qint64> expected;
+      for (const auto &id : ids) expected.insert(id.toVariant().toLongLong());
+      for (const auto &value : items) {
+        const auto item = value.toObject();
+        const auto id = item["finding_id"].toVariant().toLongLong();
+        if (!expected.contains(id) || results.contains(id) || !item["classification"].isObject()) break;
+        results.insert(id, item["classification"].toObject());
+      }
+      if (results.size() != expected.size() || items.size() != ids.size()) {
+        m_classificationBusy = false;
+        m_moreResultsButton->setEnabled(m_classificationMoreEnabled);
+        m_classificationQueue.clear();
+        m_classificationStatus->setText(QStringLiteral("分类响应编号不完整，请刷新后重试；已有分类保留。"));
+        updateFindingSelection();
+        return;
+      }
+      for (int i = 0; i < m_aggregateRecords.size(); ++i) {
+        auto row = m_aggregateRecords.at(i).toObject();
+        const auto id = row["id"].toVariant().toLongLong();
+        if (results.contains(id)) { row["classification"] = results[id]; m_aggregateRecords[i] = row; }
+      }
+      {
+        const QSignalBlocker blocker(m_resultTree);
+        for (QTreeWidgetItemIterator it(m_resultTree); *it; ++it) {
+          const auto id = (*it)->data(0, Qt::UserRole+1).toLongLong();
+          if ((*it)->parent() && results.contains(id))
+            showFindingClassification(*it, {{"category", "vulnerability"}, {"classification", results[id]}});
+        }
+      }
+      m_classificationDone += items.size();
+      classifyNextBatch();
+    });
+}
+
+void ScanPage::showClassificationDetails(QTreeWidgetItem *item) {
+  if (!item || !item->parent() || item->data(0, Qt::UserRole+2).toString() != "vulnerability") return;
+  for (auto *old : findChildren<QDialog*>("scanAuxClassification")) old->close();
+  auto *dialog = new QDialog(this);
+  dialog->setObjectName("scanAuxClassification");
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  dialog->setWindowTitle(QStringLiteral("AI 场景分类依据"));
+  dialog->resize(680, 440);
+  auto *layout = new QVBoxLayout(dialog);
+  auto *details = new QPlainTextEdit;
+  details->setReadOnly(true);
+  details->setPlainText(QStringLiteral("漏洞：%1\n发现编号：%2\n\n%3").arg(item->text(1), item->text(0), item->toolTip(8)));
+  layout->addWidget(details);
+  auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close);
+  buttons->button(QDialogButtonBox::Close)->setText(QStringLiteral("关闭"));
+  connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::close);
+  layout->addWidget(buttons);
+  dialog->show();
+}
+
+void ScanPage::resetFindingClassification() {
+  ++m_classificationRevision;
+  if (m_classificationBusy && m_moreResultsButton) m_moreResultsButton->setEnabled(m_classificationMoreEnabled);
+  m_classificationBusy = false;
+  m_classificationQueue.clear();
+  m_classificationPipeline.clear();
+  m_classificationDone = 0;
+  m_classificationTotal = 0;
+  if (m_classificationStatus) { m_classificationStatus->clear(); m_classificationStatus->hide(); }
+  for (auto *dialog : findChildren<QDialog*>("scanAuxClassification")) dialog->close();
 }
 
 void ScanPage::setCurrentFindingsChecked(bool checked) {
@@ -3175,6 +3352,7 @@ void ScanPage::onDeleteTask() {
 
 // ── Clear detail panel ────────────────────────────────────────────────
 void ScanPage::clearDetailPanel() {
+  resetFindingClassification();
   if(m_sourceDetail)m_sourceDetail->close();m_sourceDetail.clear();
   m_sourceTaskIds.clear();m_sourceViewTarget.clear();m_openSourceDetailsRequested=false;
   if(m_sourceDetailButton)m_sourceDetailButton->hide();
