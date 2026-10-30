@@ -15,6 +15,7 @@ class QPlainTextEdit;
 class QTableWidget;
 class QComboBox;
 class QTimer;
+class QLineEdit;
 
 class SourceScanDetailDialog : public QDialog {
   Q_OBJECT
@@ -27,8 +28,9 @@ signals:
   void testRequested(const QList<qint64> &findingIds);
 private:
   void rebuildFiles();
-  void updateFindings();
-  void showFinding(int row);
+  void filterFiles();
+  void updateFindings(bool preserveFile=false);
+  void showFinding(int row,bool navigate=true);
   void prepareSelectedFinding();
   qint64 selectedTestFinding() const;
   void updateTestButton();
@@ -42,12 +44,14 @@ private:
   QString m_target,m_selectedFile,m_progressReport;
   QJsonArray m_displayRows,m_finalRows;
   QMap<QString,QTreeWidgetItem*> m_files;
+  QMap<QString,bool> m_searchExpansion;
   QMap<QString,QJsonObject> m_received,m_sourceFiles;
   QString m_error;
   int m_request=0,m_outstanding=0,m_sourceRequest=0;
   qint64 m_requestedFinding=0;
-  bool m_pending=true,m_fresh=false,m_canTest=false;
-  QLabel *m_summary,*m_notice,*m_location,*m_codeNotice;
+  bool m_pending=true,m_fresh=false,m_canTest=false,m_browsingFile=false;
+  QLabel *m_summary,*m_notice,*m_location,*m_codeNotice,*m_fileSummary;
+  QLineEdit *m_fileSearch;
   QPushButton *m_refresh,*m_attack;
   QTreeWidget *m_tree;
   QPlainTextEdit *m_code,*m_evidence,*m_details;

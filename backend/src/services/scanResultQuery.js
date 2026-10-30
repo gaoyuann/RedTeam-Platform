@@ -8,6 +8,7 @@ import { scanCoverage } from './scanCoverage.js';
 import { getPayloadIndex } from './payloadLoader.js';
 import { findingPayloadSummary } from './findingPayloads.js';
 import {visibleSourceScanRecords,sourceScanResultState} from './sourceScanResults.js';
+import { findingClassification } from './findingClassificationStore.js';
 
 export function pipelineScans(db,pipeline) {
   const linked=[...new Set(String(pipeline.scan_task_id || '').split(',').map(s=>s.trim()).filter(Boolean))];
@@ -75,7 +76,9 @@ export function scanPage(db,pipeline,query={}) {
   const selected=filtered.filter(r=>r.id>after).slice(0,limit);
   const payloadIndex = selected.some(row=>row.category==='vulnerability') ? getPayloadIndex(db) : null;
   const records=selected.length?db.prepare(`SELECT * FROM scan_results WHERE id IN (${selected.map(()=>'?').join(',')}) ORDER BY id`).all(...selected.map(r=>r.id))
-    .map(row=>({...publicScanRecord(row),verification:verificationSummary(db,row.id,pipeline.pipeline_id),payload_match:payloadIndex ? findingPayloadSummary(db,row,payloadIndex) : null})):[];
+    .map(row=>({...publicScanRecord(row),verification:verificationSummary(db,row.id,pipeline.pipeline_id),
+      classification:findingClassification(db,pipeline.pipeline_id,row,collection.scans.find(scan=>scan.scan_task_id===row.scan_task_id)),
+      payload_match:payloadIndex ? findingPayloadSummary(db,row,payloadIndex) : null})):[];
   const processIds=collection.rows.filter(r=>['web_agent_step','web_scan_summary','scan_agent_step','scan_agent_summary','scan_capability_assessment'].includes(r.result_type) && (!query.scan_task_id || r.scan_task_id===query.scan_task_id)).map(r=>r.id);
   const process=processIds.length?db.prepare(`SELECT * FROM scan_results WHERE id IN (${processIds.slice(-100).map(()=>'?')}) ORDER BY id`).all(...processIds.slice(-100)).map(publicScanRecord):[];
   return {web_scan_process:process,web_scan_process_truncated:processIds.length>100,scan_summary:collection.summary,scan_coverage:collection.coverage,scan_records:records,
