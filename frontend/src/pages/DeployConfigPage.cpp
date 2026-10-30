@@ -392,6 +392,7 @@ void DeployConfigPage::loadLlmConfig() {
   const int version = ++m_readVersions["loadLlmConfig"];
   if (m_llmBusy) return;
   m_llmLoaded = false; setLlmControlsEnabled(false);
+  m_llmStatusLabel->setText(QStringLiteral("正在读取模型配置…")); m_llmStatusLabel->setStyleSheet(Theme::StatusInfoStyle);
   m_api->get("/api/config/llm", 3000, [this, guard, version](const QJsonObject &res) {
     if (!guard || version != m_readVersions["loadLlmConfig"]) return;
     if (res["status"] != "ok" || !res["data"].isArray()) {
@@ -504,6 +505,7 @@ void DeployConfigPage::loadSandboxConfig() {
   const int version = ++m_readVersions["loadSandboxConfig"];
   if (m_sandboxBusy) return;
   m_sandboxLoaded = false; setSandboxControlsEnabled(false);
+  m_sandboxStatusLabel->setText(QStringLiteral("正在读取运行环境配置…")); m_sandboxStatusLabel->setStyleSheet(Theme::StatusInfoStyle);
   m_api->get("/api/config/sandbox", 3000, [this, guard, version](const QJsonObject &res) {
     if (!guard || version != m_readVersions["loadSandboxConfig"]) return;
     if (res["status"] != "ok" || !res["data"].isArray()) {

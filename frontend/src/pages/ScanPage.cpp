@@ -2703,6 +2703,7 @@ void ScanPage::onCreateScan() {
   const int originTab = tabIdx;
   const QPointer<ScanPage> guard(this);
   setScanCreationBusy(true);
+  setScanSubmissionMessage(QStringLiteral("正在创建扫描任务，请等待服务器返回编号…"));
   m_api->post("/api/scan-tasks", body, 10000, [this, guard, scope, originTab](const QJsonObject &response) {
     if (!guard) return;
     const bool visibleContext = scope == m_scopeRevision && originTab == m_scanTypeTabs->currentIndex();
