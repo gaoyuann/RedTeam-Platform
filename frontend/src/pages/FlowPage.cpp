@@ -16,6 +16,7 @@
 #include "../UiUtil.h"
 #include "../widgets/MetricCard.h"
 #include "../widgets/WorkbenchTabs.h"
+#include "../widgets/ActiveStackedWidget.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
@@ -33,6 +34,7 @@
 #include <QGroupBox>
 #include <QLineEdit>
 #include <QTabWidget>
+#include <QTabBar>
 #include <QMenu>
 #include <QAction>
 #include <QDialog>
@@ -222,18 +224,17 @@ static QString statusBadgeStyle(const QString &status)
 
 // ── FlowPage ───────────────────────────────────────────────────────────
 
-// Other stages have large minimum sizes; they must not push scan pagination offscreen.
-class ScanWorkspaceTabs final : public WorkbenchTabs {
+// Hidden stages must not impose minimum sizes on the visible workspace.
+class TaskWorkspaceTabs final : public WorkbenchTabs {
 public:
   using WorkbenchTabs::WorkbenchTabs;
   QSize minimumSizeHint() const override {
-    if (currentWidget() && currentWidget()->objectName() == "scanPage")
-      return currentWidget()->minimumSizeHint() + QSize(4, tabBar()->sizeHint().height() + 4);
-    return WorkbenchTabs::minimumSizeHint();
+    if (!currentWidget()) return QSize(0, 0);
+    const int tabs = tabBar()->isVisible() ? tabBar()->sizeHint().height() : 0;
+    return currentWidget()->minimumSizeHint().expandedTo(currentWidget()->minimumSize()) + QSize(4, tabs + 4);
   }
   QSize sizeHint() const override {
-    if (currentWidget() && currentWidget()->objectName() == "scanPage") return minimumSizeHint();
-    return WorkbenchTabs::sizeHint();
+    return currentWidget() ? currentWidget()->sizeHint().expandedTo(minimumSizeHint()) : minimumSizeHint();
   }
 };
 
@@ -315,7 +316,7 @@ void FlowPage::setupUI()
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(0);
 
-  m_stack = new QStackedWidget(this);
+  m_stack = new ActiveStackedWidget(this);
   layout->addWidget(m_stack);
 
   setupListView();
@@ -508,6 +509,7 @@ void FlowPage::setupWorkbenchView()
 
   // Top bar
   auto *topBar = new QFrame(m_workbenchView);
+  topBar->setObjectName("taskWorkspaceActions");
   topBar->setObjectName("flowToolbar");
   topBar->setStyleSheet("QFrame#flowToolbar { background:#ffffff; border-bottom:1px solid #dbe3ef; }");
   auto *topLayout = new QHBoxLayout(topBar);
@@ -614,13 +616,14 @@ void FlowPage::setupWorkbenchView()
   connect(m_reportAction, &QAction::triggered, [this]() {
     m_stageTabs->setCurrentWidget(m_evalTab);
     m_evalTab->showReports();         // 切到"测试报告"子页 + 刷新
+    emit taskReportOpened();
   });
   topLayout->addWidget(m_moreBtn);
 
   m_aiToggleBtn = new QPushButton(QStringLiteral("AI 协作"), topBar);
   m_aiToggleBtn->setObjectName(QStringLiteral("taskAiToggleButton"));
   m_aiToggleBtn->setCheckable(true);
-  m_aiToggleBtn->setChecked(true);
+  m_aiToggleBtn->setChecked(false);
   m_aiToggleBtn->setToolTip(QStringLiteral("显示或收起任务级 AI 协作面板"));
   UiUtil::styleToolbarButton(m_aiToggleBtn);
   topLayout->addWidget(m_aiToggleBtn);
@@ -636,6 +639,7 @@ void FlowPage::setupWorkbenchView()
 
   // Six user-facing phases map to the existing four backend execution steps.
   auto *progressFrame = new QFrame(m_workbenchView);
+  progressFrame->setObjectName(QStringLiteral("taskPhaseNavigation"));
   progressFrame->setStyleSheet("background:#f8fbff;");
   auto *progressLayout = new QHBoxLayout(progressFrame);
   progressLayout->setContentsMargins(14, 6, 14, 6);
@@ -652,7 +656,7 @@ void FlowPage::setupWorkbenchView()
   layout->addWidget(progressFrame);
 
   // Task workbench tabs preserve the selected pipeline context.
-  m_stageTabs = new ScanWorkspaceTabs(m_workbenchView, false);
+  m_stageTabs = new TaskWorkspaceTabs(m_workbenchView, false);
   m_topoTab = new TopologyPage(m_api, m_role, m_username, m_stageTabs);
   connect(m_topoTab,&TopologyPage::testTargetRequested,this,[this](const QString &target) {
     createTestForTarget(target,m_topoTab->selectedTargetContext());
@@ -712,6 +716,7 @@ void FlowPage::setupWorkbenchView()
   workspace->addWidget(m_stageTabs);
   m_aiPanel = new TaskAiPanel(m_api, workspace);
   workspace->addWidget(m_aiPanel);
+  m_aiPanel->setVisible(m_aiToggleBtn->isChecked());
   workspace->setChildrenCollapsible(false);
   workspace->setStretchFactor(0, 4);
   workspace->setStretchFactor(1, 1);
@@ -736,6 +741,7 @@ void FlowPage::setupWorkbenchView()
   m_aiPanel->setStage(m_stageTabs->tabText(m_stageTabs->currentIndex()));
   connect(m_aiToggleBtn, &QPushButton::toggled, m_aiPanel, &QWidget::setVisible);
   connect(m_stageTabs, &QTabWidget::currentChanged, this, [this](int index) {
+    emit workspaceStageChanged(index);
     m_aiPanel->setStage(m_stageTabs->tabText(index));
     m_stageTabs->updateGeometry();
   });
@@ -783,6 +789,9 @@ void FlowPage::setupWorkbenchView()
     selectSource();
   });
   connect(m_planTab, &TaskPlanPage::sourceVerificationRequested, this, selectSource);
+  connect(m_planTab, &TaskPlanPage::payloadWorkspaceRequested, this, [this]() {
+    m_scanTab->openPayloadWorkspace();
+  });
   connect(m_planTab, &TaskPlanPage::planChanged, this, [this]() {
     if (!m_selectedPipelineId.isEmpty()) loadFlowDetail(m_selectedPipelineId);
     refreshFlows();
@@ -1191,6 +1200,13 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
         : selectingSource ? QStringLiteral("待生成攻击测试预案") : statusText(status)));
     m_statusLabel->setStyleSheet(statusBadgeStyle(status));
 
+    if (m_requestedStage >= 0) {
+      const int requested = m_requestedStage;
+      m_requestedStage = -1;
+      if (m_stageTabs->isTabEnabled(requested)) m_stageTabs->setCurrentIndex(requested);
+    }
+    emit taskContextChanged();
+
     // 从 pipeline 数据提取 run_id 和 playbook_id，自动加载到攻击 Tab.
     // Guard against repeated events: only drive selectPlaybook/showRun when
     // the ID actually changes, so we don't reset the user's manual combo
@@ -1355,6 +1371,8 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     m_resultBtn->setVisible((status == "completed" || status == "failed") && !runId.isEmpty());
     m_cancelAction->setVisible(isActive);
     m_deleteAction->setVisible(isDeletable);
+    m_cancelAction->setEnabled(!m_pendingTaskActions.contains(pipelineId));
+    m_deleteAction->setEnabled(!m_pendingTaskActions.contains(pipelineId));
     m_reportAction->setVisible((status == "completed" || status == "failed") && !runId.isEmpty());
     // Hide ⋯ button entirely if no actions are available
     m_moreBtn->setVisible(isActive || isDeletable || status == "completed");
@@ -1374,11 +1392,19 @@ void FlowPage::createTestForTarget(const QString &target, const QJsonObject &top
   createFlow(false,target,topologySource);
 }
 
-void FlowPage::createFlow(bool quickMode, const QString &initialTarget, const QJsonObject &topologySource)
+void FlowPage::createAssessmentTask() { createFlow(false, {}, {}, true); }
+
+void FlowPage::leaveSelectedTask()
+{
+  m_selectedPipelineId.clear(); m_requestedStage = -1;
+  clearRunContext(); m_stack->setCurrentIndex(0); emit taskContextChanged();
+}
+
+void FlowPage::createFlow(bool quickMode, const QString &initialTarget, const QJsonObject &topologySource, bool assessment)
 {
   QDialog dlg(this);
   dlg.setObjectName(initialTarget.isEmpty() ? "taskCreateDialog" : "topologyTargetTaskDialog");
-  dlg.setWindowTitle(initialTarget.isEmpty() ? QStringLiteral("新建资产探测任务") : QStringLiteral("对所选目标发起扫描"));
+  dlg.setWindowTitle(assessment ? QStringLiteral("新建安全测试任务") : initialTarget.isEmpty() ? QStringLiteral("新建资产探测任务") : QStringLiteral("对所选目标发起扫描"));
   dlg.setMinimumWidth(520);
   dlg.setStyleSheet(Theme::PageStyle + QStringLiteral(
       "QDialog#taskCreateDialog, QDialog#topologyTargetTaskDialog { background:%1; }"
@@ -1581,14 +1607,16 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget, const QJ
     const auto kind = programKind->currentData().toString();
     programCard->setVisible(program);
     heading->setText(program ? QStringLiteral("新建源码／程序测试")
-      : initialTarget.isEmpty() ? QStringLiteral("发现资产与拓扑") : QStringLiteral("对所选目标发起扫描"));
+      : assessment ? QStringLiteral("新建安全测试任务") : initialTarget.isEmpty() ? QStringLiteral("发现资产与拓扑") : QStringLiteral("对所选目标发起扫描"));
     intro->setText(program ? QStringLiteral("指定程序目标与审计说明，后续沿用程序测试流程。")
+      : assessment ? QStringLiteral("填写目标后开始扫描，扫描发现、想定、预案、载荷和验证结果归属于同一个测试任务。")
       : initialTarget.isEmpty() ? QStringLiteral("先发现主机、端口与服务并生成拓扑，再从拓扑选择目标开展扫描。")
       : QStringLiteral("以所选主机或服务为目标开始扫描，后续分析与验证归属此任务。"));
-    confirmButton->setText(!initialTarget.isEmpty() ? QStringLiteral("确认并开始扫描")
+    confirmButton->setText(assessment ? QStringLiteral("创建并开始测试") : !initialTarget.isEmpty() ? QStringLiteral("确认并开始扫描")
       : program ? quickMode ? QStringLiteral("创建并开始测试") : QStringLiteral("创建任务")
       : quickMode ? QStringLiteral("创建并开始探测") : QStringLiteral("创建探测任务"));
     scanPolicyHint->setText(program ? QStringLiteral("源码／程序测试沿用专项流程，后续验证需人工确认。")
+      : assessment ? QStringLiteral("先扫描并分析；生成预案、载荷和执行验证仍需单独操作。")
       : initialTarget.isEmpty() ? QStringLiteral("先做资产探测，完成后在拓扑中选择扫描目标。")
       : QStringLiteral("扫描所选主机或服务，后续验证需人工确认。"));
     pickerRow->setVisible(program && kind == "remote_directory");
@@ -1660,7 +1688,7 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget, const QJ
   config["task_name"] = taskName;
   config["test_type"] = testType->currentData().toString();
   if (testType->currentData().toString() != "program")
-    config["task_mode"] = initialTarget.isEmpty() ? QStringLiteral("discovery") : QStringLiteral("assessment");
+    config["task_mode"] = assessment || !initialTarget.isEmpty() ? QStringLiteral("assessment") : QStringLiteral("discovery");
   const bool hasRuntime = testType->currentData().toString() == "program"
       && programKind->currentData().toString() == "agent" && !runtimeInput->text().trimmed().isEmpty();
   if (testType->currentData().toString() == "program") {
@@ -1693,7 +1721,7 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget, const QJ
   QJsonObject body{{"target", target}, {"config", config},
       {"request_id", QUuid::createUuid().toString(QUuid::WithoutBraces)}};
   if (!topologySource.isEmpty()) body["topology_source"] = topologySource;
-  submitTaskCreation(body, quickMode || !initialTarget.isEmpty());
+  submitTaskCreation(body, assessment || quickMode || !initialTarget.isEmpty());
 }
 
 void FlowPage::submitTaskCreation(const QJsonObject &body, bool startAfterCreate)
@@ -1716,6 +1744,7 @@ void FlowPage::submitTaskCreation(const QJsonObject &body, bool startAfterCreate
           : QStringLiteral("创建结果未确认，请刷新列表核对是否已创建。"));
       m_creationNotice->show(); m_creationOpen->hide(); m_creationCopy->hide();
       m_retryCreate->setVisible(m_pendingCreateCanRetry); m_retryCreate->setEnabled(m_pendingCreateCanRetry);
+      emit taskCreationFailed();
       QMessageBox::warning(this, QStringLiteral("任务创建失败"),
           res["error"].toObject()["message"].toString());
       return;
@@ -1734,7 +1763,9 @@ void FlowPage::submitTaskCreation(const QJsonObject &body, bool startAfterCreate
     refreshFlows();
     if (!startAfterCreate) return;
     QJsonObject startBody;
-    if (!webScanStartBody(this, res["data"].toObject(), startBody)) return;
+    if (!webScanStartBody(this, res["data"].toObject(), startBody)) {
+      openTaskAnalysis(pipelineId); emit assessmentTaskOpened(); return;
+    }
     const bool discovery=parseJsonObject(task["config"])["task_mode"].toString()=="discovery";
     m_api->post(QStringLiteral("/api/pipelines/%1/start").arg(pipelineId),
                 startBody, 10000, [this,guard,pipelineId,discovery](const QJsonObject &startResponse) {
@@ -1747,6 +1778,7 @@ void FlowPage::submitTaskCreation(const QJsonObject &body, bool startAfterCreate
       refreshFlows();
       openTaskAnalysis(pipelineId);
       m_stageTabs->setCurrentWidget(discovery ? static_cast<QWidget*>(m_topoTab) : static_cast<QWidget*>(m_scanTab));
+      if (!discovery) emit assessmentTaskOpened();
     });
   });
 }
@@ -1760,6 +1792,7 @@ void FlowPage::onFlowDoubleClicked(int row)
   if (pid.isEmpty()) return;
   m_selectedPipelineId = pid;
   clearRunContext();
+  emit taskContextChanged();
   m_lastDisplayedDetail = {};
   m_resultBtn->hide();
   m_execTab->setPipelineContext(pid, "loading", {});
@@ -1791,6 +1824,7 @@ void FlowPage::onFlowContextMenu(const QPoint &pos)
   menu->addAction(QStringLiteral("打开"), [this, pid]() {
     m_selectedPipelineId = pid;
     clearRunContext();
+    emit taskContextChanged();
     m_resultBtn->hide();
     m_execTab->setPipelineContext(pid, "loading", {});
     m_evalTab->setPipelineContext(pid, {});
@@ -1800,25 +1834,8 @@ void FlowPage::onFlowContextMenu(const QPoint &pos)
     loadFlowDetail(pid);
     m_stack->setCurrentIndex(1);
   });
-  if (isActive) {
-    menu->addAction(QStringLiteral("取消"), [this, pid]() {
-      m_api->post(QStringLiteral("/api/pipelines/%1/cancel").arg(pid),
-                  QJsonObject{}, 5000, [this](const QJsonObject &) {
-        refreshFlows();
-      });
-    });
-  } else {
-    menu->addAction(QStringLiteral("删除"), [this, pid]() {
-      if (QMessageBox::question(this, QStringLiteral("删除任务"),
-            QStringLiteral("确定删除此测试任务？此操作不可撤销。"),
-            QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes) {
-        m_api->del(QStringLiteral("/api/pipelines/%1").arg(pid), 5000,
-                   [this](const QJsonObject &) {
-          refreshFlows();
-        });
-      }
-    });
-  }
+  if (isActive) menu->addAction(QStringLiteral("取消"), [this, pid]() { applyTaskAction(pid, false); });
+  else menu->addAction(QStringLiteral("删除"), [this, pid]() { applyTaskAction(pid, true); });
   menu->exec(m_flowTable->viewport()->mapToGlobal(pos));
 }
 
@@ -1833,9 +1850,11 @@ void FlowPage::onBackToList()
 {
   const int returnPage = m_returnPage;
   m_selectedPipelineId.clear();
+  emit taskContextChanged();
   clearRunContext();
   m_stack->setCurrentIndex(0);
   if (returnPage >= 0) emit returnPageRequested(returnPage);
+  else if (m_ribbonNavigation) emit taskListRequested();
   else refreshFlows();
 }
 
@@ -1855,30 +1874,40 @@ void FlowPage::onFilterChanged(int)
 
 // ── Workbench actions ──────────────────────────────────────────────────
 
-void FlowPage::onCancelFlow()
-{
-  if (m_selectedPipelineId.isEmpty()) return;
-  QString pid = m_selectedPipelineId;
-  m_api->post(QStringLiteral("/api/pipelines/%1/cancel").arg(pid),
-              QJsonObject{}, 5000, [this, pid](const QJsonObject &) {
-    refreshFlows();
-    loadFlowDetail(pid);
-  });
-}
+void FlowPage::onCancelFlow() { applyTaskAction(m_selectedPipelineId, false); }
 
-void FlowPage::onDeleteFlow()
-{
-  if (m_selectedPipelineId.isEmpty()) return;
-  QString pid = m_selectedPipelineId;
-  if (QMessageBox::question(this, QStringLiteral("删除任务"),
-        QStringLiteral("确定删除此测试任务？此操作不可撤销。"),
-        QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes) return;
+void FlowPage::onDeleteFlow() { applyTaskAction(m_selectedPipelineId, true); }
 
-  m_api->del(QStringLiteral("/api/pipelines/%1").arg(pid), 5000,
-             [this](const QJsonObject &) {
-    m_stack->setCurrentIndex(0);
-    refreshFlows();
-  });
+void FlowPage::applyTaskAction(const QString &pipelineId, bool remove)
+{
+  if (pipelineId.isEmpty() || m_pendingTaskActions.contains(pipelineId)) return;
+  if (remove && QMessageBox::question(this, QStringLiteral("删除任务"),
+      QStringLiteral("确定删除此测试任务？此操作不可撤销。"), QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) return;
+  if (m_pendingTaskActions.contains(pipelineId)) return;
+  m_pendingTaskActions.insert(pipelineId);
+  if (pipelineId == m_selectedPipelineId) { m_cancelAction->setEnabled(false); m_deleteAction->setEnabled(false); }
+  const QPointer<FlowPage> guard(this);
+  const auto completed = [this, guard, pipelineId, remove](const QJsonObject &response) {
+    if (!guard) return;
+    m_pendingTaskActions.remove(pipelineId);
+    if (pipelineId == m_selectedPipelineId) { m_cancelAction->setEnabled(true); m_deleteAction->setEnabled(true); }
+    if (response["status"] != "ok") {
+      const QString message = QStringLiteral("%1失败：%2").arg(remove ? QStringLiteral("删除任务") : QStringLiteral("取消任务"),
+        response["error"].toObject()["message"].toString(QStringLiteral("服务未返回有效结果")));
+      m_listState->setText(message);
+      if (pipelineId == m_selectedPipelineId) { m_statusLabel->setText(message); m_statusLabel->setStyleSheet(Theme::StatusErrorStyle); }
+      return;
+    }
+    if (remove && pipelineId == m_selectedPipelineId) {
+      m_selectedPipelineId.clear(); clearRunContext(); m_stack->setCurrentIndex(0); emit taskContextChanged();
+      if (m_ribbonNavigation) emit taskListRequested(); else refreshFlows();
+    } else {
+      refreshFlows();
+      if (!remove && pipelineId == m_selectedPipelineId && m_stack->currentIndex() == 1) loadFlowDetail(pipelineId);
+    }
+  };
+  const QString path = QStringLiteral("/api/pipelines/%1").arg(QString::fromLatin1(QUrl::toPercentEncoding(pipelineId)));
+  if (remove) m_api->del(path, 5000, completed); else m_api->post(path + "/cancel", {}, 5000, completed);
 }
 
 void FlowPage::onApproveFlow()
@@ -2058,6 +2087,7 @@ void FlowPage::showTaskDetailError(const QString &message)
   m_analysisTab->showError(message);
   m_overviewTab->showError(message);
   m_scanTab->showTaskContextError(message);
+  emit taskContextChanged();
 }
 
 void FlowPage::onRunCompleted(const QString &runId)
@@ -2070,6 +2100,7 @@ void FlowPage::onRunCompleted(const QString &runId)
 
 void FlowPage::switchToStageTab(int idx)
 {
+  if (idx == 1) m_scanTab->showAllTaskResults();
   if (m_stageTabs && idx >= 0 && idx < m_stageTabs->count())
     m_stageTabs->setCurrentIndex(idx);
 }
@@ -2077,8 +2108,10 @@ void FlowPage::switchToStageTab(int idx)
 void FlowPage::openTaskAnalysis(const QString &pipelineId)
 {
   if (pipelineId.isEmpty()) return;
+  m_requestedStage = -1;
   clearRunContext();
   m_selectedPipelineId = pipelineId;
+  emit taskContextChanged();
   m_resultBtn->hide();
   m_execTab->setPipelineContext(pipelineId, "loading", {});
   m_evalTab->setPipelineContext(pipelineId, {});
@@ -2093,8 +2126,10 @@ void FlowPage::openTaskAnalysis(const QString &pipelineId)
 void FlowPage::openTaskReport(const QString &pipelineId, const QString &reportId)
 {
   if (pipelineId.isEmpty() || reportId.isEmpty()) return;
+  m_requestedStage = -1;
   clearRunContext();
   m_selectedPipelineId = pipelineId;
+  emit taskContextChanged();
   m_pendingTaskReportId = reportId;
   m_resultBtn->hide();
   m_execTab->setPipelineContext(pipelineId, "loading", {});
@@ -2110,7 +2145,9 @@ void FlowPage::openTaskReport(const QString &pipelineId, const QString &reportId
 void FlowPage::jumpToExecution(const QString &playbookId, const QString &target)
 {
   // Clear pipeline context — this is a direct execution, not a pipeline view
+  m_requestedStage = -1;
   m_selectedPipelineId.clear();
+  emit taskContextChanged();
   clearRunContext();
   m_execTab->setPipelineContext({}, {}, {});
   m_evalTab->setPipelineContext({}, {});
@@ -2135,3 +2172,70 @@ void FlowPage::jumpToExecution(const QString &playbookId, const QString &target)
   if (!playbookId.isEmpty())
     m_execTab->selectPlaybook(playbookId, target);
 }
+
+
+void FlowPage::setRibbonNavigation(bool enabled)
+{
+  m_ribbonNavigation = enabled;
+  m_stageTabs->tabBar()->setVisible(!enabled);
+  if (auto *phases = findChild<QFrame *>(QStringLiteral("taskPhaseNavigation"))) phases->setVisible(!enabled);
+  if (enabled) {
+    m_targetLabel->hide(); m_taskIdLabel->hide(); m_copyTaskId->hide();
+    if (auto *actions = findChild<QFrame *>("taskWorkspaceActions")) actions->setMaximumHeight(46);
+    m_scanTab->enableRibbonWorkspace();
+    m_execTab->enableRibbonWorkspace();
+    if (auto *title = m_planTab->findChild<QLabel *>("planPageTitle")) title->hide();
+    m_aiToggleBtn->setChecked(false);
+    m_aiPanel->hide();
+  }
+}
+
+void FlowPage::showTaskList()
+{
+  m_requestedStage = -1;
+  m_returnPage = -1;
+  m_backBtn->setText(QStringLiteral("← 返回任务列表"));
+  m_stack->setCurrentIndex(0);
+  refreshFlows();
+  emit taskContextChanged();
+}
+
+void FlowPage::requestWorkspaceStage(int stage)
+{
+  if (stage < 0 || stage >= m_stageTabs->count()) return;
+  if (m_selectedPipelineId.isEmpty() && m_stack->currentIndex() != 1) {
+    m_requestedStage = stage;
+    m_listState->setText(QStringLiteral("请先选择或新建测试任务，再打开对应功能。"));
+    m_flowTable->setFocus();
+    return;
+  }
+  m_stack->setCurrentIndex(1);
+  if (m_stageTabs->isTabEnabled(stage)) {
+    m_requestedStage = -1;
+    m_stageTabs->setCurrentIndex(stage);
+  } else {
+    m_requestedStage = -1;
+    m_listState->setText(QStringLiteral("当前任务类型不支持此阶段，请选择其他测试任务。"));
+    m_stack->setCurrentIndex(0);
+  }
+}
+
+bool FlowPage::hasSelectedTask() const { return !m_selectedPipelineId.isEmpty(); }
+
+QString FlowPage::taskContextSummary() const
+{
+  if (m_lastDetailPipelineId != m_selectedPipelineId || m_lastDisplayedDetail.isEmpty()) {
+    const QString state = m_statusLabel->text().contains(QStringLiteral("加载失败"))
+        ? QStringLiteral("加载失败") : QStringLiteral("正在加载");
+    return QStringLiteral("当前任务：%1 · %2").arg(m_selectedPipelineId, state);
+  }
+  return QStringLiteral("当前任务：%1 · %2").arg(m_taskIdLabel->text(), m_targetLabel->text());
+}
+
+int FlowPage::workspaceStage() const { return m_stageTabs->currentIndex(); }
+
+bool FlowPage::taskContextReady() const { return !m_selectedPipelineId.isEmpty() && m_lastDetailPipelineId == m_selectedPipelineId && !m_lastDisplayedDetail.isEmpty(); }
+
+bool FlowPage::supportsWorkspaceStage(int stage) const { return stage >= 0 && stage < m_stageTabs->count() && m_stageTabs->isTabEnabled(stage); }
+
+bool FlowPage::creationPending() const { return !m_newBtn->isEnabled(); }

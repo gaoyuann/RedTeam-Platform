@@ -35,6 +35,7 @@ public:
 
   /// Switch to the reports sub-tab and refresh the report list.
   void showReports();
+  void showCaptureWorkspace(bool analysis);
 
   /// Select one report and preview it, without asking the user to find its run.
   void showReport(const QString &reportId);
@@ -73,6 +74,7 @@ private:
   void setupUI();
   void loadAnalysisForCapture(const QString &captureTaskId);
   void populateAnalysisTable(const QJsonArray &arr);
+  void updateCaptureButtons();
   QString formatAnalysisType(const QString &type) const;
   QString formatSeverity(const QString &sev) const;
   QString findWpsExecutable();
@@ -133,6 +135,11 @@ private:
   QPushButton *m_createCaptureBtn;
   QPushButton *m_delCaptureBtn;
   QString m_selectedCaptureTaskId;
+  QString m_selectedCaptureState;
+  bool m_captureActionBusy = false;
+  int m_captureListRevision = 0;
+  int m_captureDetailRevision = 0;
+  int m_captureAnalysisRevision = 0;
   QTimer *m_capturePollTimer;
 
   // Right panel: config + status + analysis results

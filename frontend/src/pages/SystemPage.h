@@ -13,13 +13,14 @@
 #include <QJsonObject>
 
 class ApiClient;
-class DeployConfigPage;
 class DongleVerificationPage;
 
 class SystemPage : public QWidget {
   Q_OBJECT
 public:
   explicit SystemPage(ApiClient *api, const QString &role = "", const QString &username = "", QWidget *parent = nullptr);
+
+  void selectSection(const QString &section);
 
 private slots:
   void onRefreshUsers();
@@ -58,9 +59,6 @@ private:
   // Permissions tab
   QTableWidget *m_permTable;
   QPushButton *m_permSaveBtn;
-
-  // Deploy config tab (moved from top-level navigation)
-  DeployConfigPage *m_deployTab = nullptr;
 
   // 加密锁校验 tab
   DongleVerificationPage *m_dongleTab = nullptr;

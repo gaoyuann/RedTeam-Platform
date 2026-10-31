@@ -1071,3 +1071,8 @@ void FindingVerificationDialog::showVerificationCode() {
   if(m_verificationCode->toPlainText()!=code)m_verificationCode->setPlainText(code);
   updateButtons();
 }
+
+void FindingVerificationDialog::showPayloadWorkspace()
+{
+  m_tabs->setCurrentIndex(1);
+}

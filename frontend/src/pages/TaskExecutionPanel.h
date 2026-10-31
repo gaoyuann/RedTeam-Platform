@@ -19,6 +19,7 @@ public:
   explicit TaskExecutionPanel(ApiClient *api, const QString &role, const QString &username, QWidget *parent = nullptr);
   void setTaskContext(const QString &pipelineId, const QString &runId, const QString &target = {});
   void clearTaskContext();
+  void setScenarioCategory(const QString &category);
 
 public slots:
   void refresh();
@@ -47,6 +48,8 @@ private:
   QString m_completedRunId;
   QString m_detailKey;
   QJsonObject m_snapshot;
+  QString m_scenarioCategory;
+  QLabel *m_scenarioSummary;
   int m_contextVersion = 0;
   int m_requestVersion = 0;
   bool m_busy = false;

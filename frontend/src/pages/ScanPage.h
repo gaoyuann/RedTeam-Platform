@@ -28,6 +28,11 @@ public:
 
   /// Pre-fill all 4 target inputs (used when embedded in FlowPage workbench)
   void setTarget(const QString &target);
+  void selectScanType(const QString &type);
+  void openPayloadWorkspace();
+  void enableRibbonWorkspace();
+  QString selectedScanFeature() const;
+  void showAllTaskResults();
   void setPipelineScope(const QString &pipelineId, const QStringList &taskIds, const QString &state = {});
   void setTaskScope(const QStringList &taskIds);
   void clearTaskScope();
@@ -35,6 +40,8 @@ public:
 
 signals:
   void sourceGenerationStatus(const QString &message, bool error);
+  void taskSelectionRequested();
+  void workspaceViewChanged(bool sourceExtension);
   void sourcePlaybookGenerated(const QString &playbookId);
   void playbookNavigateRequested(const QString &playbookId, const QString &target = "");
   /// 从扫描结果漏洞一键发起攻击（演示动线：扫描 → 漏洞列表 → 攻击）
@@ -59,6 +66,9 @@ private slots:
 private:
   void showEvent(QShowEvent *event) override;
   void setupUI();
+  void setScanCreationBusy(bool busy);
+  void setScanSubmissionMessage(const QString &message);
+  void renderPipelineSources(const QJsonArray &sources);
   void setStatusText(const QString &text);
   void openRecordDetails(QTreeWidgetItem *item);
   void openSourceScanDetails(qint64 findingId = 0);
@@ -104,10 +114,13 @@ private:
   QString m_retryRequestSource;
   bool m_allScanResults = false;
   bool m_scanPageBusy = false;
+  bool m_scanCreationBusy = false;
   int m_scanPageRequest = 0;
   qint64 m_scanCursor = 0;
   qint64 m_scanThrough = 0;
   QJsonArray m_aggregateRecords;
+  QString m_ribbonScanType;
+  QMap<QString,QString> m_scanSourceTypes;
   bool m_sourceResultsView = false;
   bool m_sourceResultsPending = false;
   bool m_sourceRecordsMode = false;

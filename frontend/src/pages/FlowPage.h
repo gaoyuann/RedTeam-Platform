@@ -9,6 +9,7 @@
 #include <QComboBox>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QSet>
 
 class ApiClient;
 class QAction;
@@ -46,6 +47,16 @@ public:
 
   /// Switch to a task workbench tab by index.
   void switchToStageTab(int idx);
+  void setRibbonNavigation(bool enabled);
+  void showTaskList();
+  void requestWorkspaceStage(int stage);
+  bool hasSelectedTask() const;
+  int workspaceStage() const;
+  bool taskContextReady() const;
+  bool supportsWorkspaceStage(int stage) const;
+  QString selectedTaskId() const { return m_selectedPipelineId; }
+  int taskSelectionRevision() const { return m_taskContextRevision; }
+  QString taskContextSummary() const;
 
   /// Open the workbench in "direct execution" mode — no pipeline selected,
   /// jump straight to the attack tab with a playbook pre-selected.
@@ -55,9 +66,18 @@ public:
   void openTaskAnalysis(const QString &pipelineId);
   void setReturnPage(int page, const QString &title);
   void createTestForTarget(const QString &target, const QJsonObject &topologySource = {});
+  void createAssessmentTask();
+  bool creationPending() const;
+  void leaveSelectedTask();
 
 signals:
   void returnPageRequested(int page);
+  void taskContextChanged();
+  void taskListRequested();
+  void taskReportOpened();
+  void assessmentTaskOpened();
+  void taskCreationFailed();
+  void workspaceStageChanged(int stage);
 
 public slots:
   void refreshFlows();
@@ -75,7 +95,7 @@ private slots:
   void onCancelFlow();
   void onDeleteFlow();
   void onApproveFlow();
-  void createFlow(bool quickMode, const QString &initialTarget = {}, const QJsonObject &topologySource = {});
+  void createFlow(bool quickMode, const QString &initialTarget = {}, const QJsonObject &topologySource = {}, bool assessment = false);
   void onStartFlow();
   void onBackToList();
   void onFilterChanged(int index);
@@ -91,6 +111,8 @@ private:
   void loadFlows();
   void resizeFlowColumns();
   void submitTaskCreation(const QJsonObject &body, bool startAfterCreate);
+  void applyTaskAction(const QString &pipelineId, bool remove);
+  QSet<QString> m_pendingTaskActions;
   void loadFlowDetail(const QString &pipelineId);
   void clearRunContext();
   void showTaskDetailError(const QString &message);
@@ -106,6 +128,8 @@ private:
 
   // Internal stack: [0]=list, [1]=workbench
   QStackedWidget *m_stack;
+  int m_requestedStage = -1;
+  bool m_ribbonNavigation = false;
 
   // List view
   QWidget *m_listView;

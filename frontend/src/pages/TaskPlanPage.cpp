@@ -7,6 +7,9 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFormLayout>
+#include <QFrame>
+#include <QGroupBox>
+#include <QScrollArea>
 #include <QHeaderView>
 #include <QInputDialog>
 #include <QJsonArray>
@@ -79,16 +82,19 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   layout->setSpacing(8);
   auto *header = new QHBoxLayout;
   auto *title = new QLabel(QStringLiteral("任务预案 · 编辑与审阅"), this);
+  title->setObjectName("planPageTitle");
   title->setStyleSheet(QStringLiteral("font-size:20px; font-weight:700; color:#172033;"));
   header->addWidget(title, 1);
   m_refresh = new QPushButton(QStringLiteral("刷新预案"), this);
   m_refresh->setObjectName(QStringLiteral("planRefreshButton"));
   header->addWidget(m_refresh);
+  header->addStretch();
+  m_refresh->setMaximumWidth(132);
   layout->addLayout(header);
   auto *optional = new QLabel(QStringLiteral("可选，用于批量编排；逐漏洞测试可直接从漏洞列表开始。"), this);
   optional->setObjectName("optionalPlanHint");
   optional->setWordWrap(true);
-  optional->setStyleSheet(Theme::StatusInfoStyle);
+  optional->setStyleSheet("font-size:12px;color:#7187a5;padding:2px 0;");
   layout->addWidget(optional);
   m_status = new QLabel(this);
   m_status->setObjectName(QStringLiteral("planStatusLabel"));
@@ -99,7 +105,11 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   m_scope->setTextFormat(Qt::PlainText);
   m_scope->setWordWrap(true);
   m_scope->setStyleSheet(QStringLiteral("color:#64748b; font-size:12px;"));
-  layout->addWidget(m_scope);
+  auto *scopeBox = new QGroupBox(QStringLiteral("任务来源与范围"), this);
+  scopeBox->setCheckable(true); scopeBox->setChecked(false);
+  auto *scopeLayout = new QVBoxLayout(scopeBox); scopeLayout->addWidget(m_scope);
+  m_scope->hide(); connect(scopeBox, &QGroupBox::toggled, m_scope, &QWidget::setVisible);
+  layout->addWidget(scopeBox);
   auto *sourceRow = new QHBoxLayout;
   sourceRow->addWidget(new QLabel(QStringLiteral("来源预案："), this));
   m_source = new QComboBox(this);
@@ -117,6 +127,12 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   m_generateSource->hide();
   layout->addWidget(m_generateSource);
   connect(m_generateSource, &QPushButton::clicked, this, &TaskPlanPage::sourceVerificationRequested);
+  auto *payloadWorkspace = new QPushButton(QStringLiteral("载荷生成与管理"), this);
+  payloadWorkspace->setObjectName(QStringLiteral("planPayloadWorkspace"));
+  payloadWorkspace->setToolTip(QStringLiteral("选择当前任务漏洞，打开关联载荷代码与生成记录；不会自动生成或执行。"));
+  connect(payloadWorkspace, &QPushButton::clicked, this, &TaskPlanPage::payloadWorkspaceRequested);
+  payloadWorkspace->setMaximumWidth(160);
+  header->addWidget(payloadWorkspace);
 
   auto *form = new QFormLayout;
   m_name = new QLineEdit(this);
@@ -129,7 +145,12 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   m_notes->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   m_notes->setPlaceholderText(QStringLiteral("填写验证目标、人工确认点和停止条件；备注不作为自动执行规则。"));
   form->addRow(QStringLiteral("约束 / 备注："), m_notes);
-  layout->addLayout(form);
+  auto *formCard = new QFrame(this);
+  formCard->setObjectName("planFormCard");
+  formCard->setMaximumWidth(1120);
+  formCard->setLayout(form);
+  formCard->setStyleSheet("QFrame#planFormCard { background:white; border:1px solid #dfe6f0; border-radius:6px; padding:12px; }");
+  layout->addWidget(formCard);
 
   auto *tabs = new WorkbenchTabs(this);
   auto *stepsPage = new QWidget(tabs);
@@ -225,6 +246,20 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   footer->setWordWrap(true);
   footer->setStyleSheet(QStringLiteral("font-size:12px; color:#64748b;"));
   layout->addWidget(footer);
+  // Scroll editable content while keeping save/review actions visible.
+  auto *body = new QWidget(this);
+  auto *bodyLayout = new QVBoxLayout;
+  bodyLayout->setContentsMargins(0, 0, 0, 0);
+  while (layout->count() && layout->itemAt(0)->layout() != actions) {
+    auto *item = layout->takeAt(0);
+    if (auto *nested = item->layout()) { nested->setParent(nullptr); bodyLayout->addLayout(nested); }
+    else bodyLayout->addItem(item);
+  }
+  body->setLayout(bodyLayout);
+  auto *editorScroll = new QScrollArea(this);
+  editorScroll->setObjectName("planEditorScroll");
+  editorScroll->setFrameShape(QFrame::NoFrame); editorScroll->setWidgetResizable(true);
+  editorScroll->setWidget(body); layout->insertWidget(0, editorScroll, 1);
 
   connect(m_refresh, &QPushButton::clicked, this, [this]() { refresh(true); });
   connect(m_create, &QPushButton::clicked, this, [this]() {

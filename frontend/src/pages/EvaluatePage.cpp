@@ -30,6 +30,7 @@
 #include <QDialog>
 #include <QGridLayout>
 #include <QShowEvent>
+#include <QTabBar>
 
 EvaluatePage::EvaluatePage(ApiClient *api, const QString &role, const QString &username, QWidget *parent)
     : QWidget(parent), m_api(api), m_previewMode(false) {
@@ -164,7 +165,7 @@ void EvaluatePage::setupUI() {
 
   auto *layout = new QVBoxLayout(this);
   layout->setContentsMargins(12, 8, 12, 8);
-  m_tabs = new WorkbenchTabs;
+  m_tabs = new ActiveWorkbenchTabs;
 
   // ── Tab 1: Grading ────────────────────────────────────────────────
   auto *gradeW = new QWidget;
@@ -397,7 +398,7 @@ void EvaluatePage::setupUI() {
   auto *capRightW = new QWidget;
   auto *capRightOuter = new QVBoxLayout(capRightW);
   capRightOuter->setContentsMargins(0, 0, 0, 0);
-  auto *captureDetails = new WorkbenchTabs;
+  auto *captureDetails = new ActiveWorkbenchTabs;
   captureDetails->setObjectName("captureDetails");
   capRightOuter->addWidget(captureDetails);
   auto *captureConfig = new QWidget;
@@ -425,16 +426,21 @@ void EvaluatePage::setupUI() {
   m_durationSpin = new QSpinBox;
   m_durationSpin->setRange(5, 3600);
   m_durationSpin->setValue(60);
+  connect(m_captureTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) { m_durationSpin->setEnabled(index == 0); });
   configGrid->addWidget(m_bpfInput, 3, 0);
   configGrid->addWidget(m_durationSpin, 3, 1);
   configGrid->setColumnStretch(0, 1);
   configGrid->setColumnStretch(1, 1);
   capRightL->setSpacing(6);
   capRightL->addLayout(configGrid);
+  auto *captureHelp = new QLabel(QStringLiteral("参数用于新建任务；新建后不会自动开始。开始与停止作用于左侧选中的任务，已完成的记录保持原样。"));
+  captureHelp->setWordWrap(true); captureHelp->setStyleSheet("font-size:12px;color:#7c91ac;padding:6px 0;");
+  capRightL->addWidget(captureHelp);
 
   auto *actH = new QHBoxLayout;
   m_startCaptureBtn = new QPushButton("▶ 开始捕获");
   m_startCaptureBtn->setProperty("primary", true);
+  m_startCaptureBtn->setEnabled(false);
   m_stopCaptureBtn = new QPushButton("■ 停止捕获");
   m_stopCaptureBtn->setProperty("danger", true);
   m_stopCaptureBtn->setEnabled(false);
@@ -447,6 +453,7 @@ void EvaluatePage::setupUI() {
   m_captureStatusLabel = new QLabel("选择左侧捕获任务查看详情");
   m_captureStatusLabel->setWordWrap(true);
   m_captureStatusLabel->setStyleSheet("font-size: 13px; padding: 8px;");
+  m_captureStatusLabel->setTextFormat(Qt::PlainText);
   capRightL->addWidget(m_captureStatusLabel);
 
   auto *anaBtnH = new QHBoxLayout;
@@ -476,6 +483,7 @@ void EvaluatePage::setupUI() {
   analysisLayout->addWidget(m_analysisDetail, 1);
 
   capRightL->addStretch();
+  captureDetails->setObjectName(QStringLiteral("captureWorkspaceDetails"));
   captureDetails->addTab(captureConfig, QStringLiteral("捕获配置"));
   captureDetails->addTab(captureAnalysis, QStringLiteral("分析结果"));
 
@@ -1102,10 +1110,13 @@ void EvaluatePage::onEvidenceClicked(int row, int) {
 
 void EvaluatePage::onLoadCaptureTasks() {
   if (!m_pipelineId.isEmpty()) return;
-  const int revision = m_runRequestRevision;
+  const int revision = ++m_captureListRevision;
   QPointer<EvaluatePage> guard(this);
   m_api->get("/api/capture-tasks", 5000, [this, guard, revision](const QJsonObject &res) {
-    if (!guard || revision != m_runRequestRevision || !m_pipelineId.isEmpty() || res["status"].toString() != "ok") return;
+    if (!guard || revision != m_captureListRevision || !m_pipelineId.isEmpty()) return;
+    if (res["status"] != "ok" || !res["data"].isArray()) {
+      m_captureStatusLabel->setText(QStringLiteral("捕获列表读取失败，请点击刷新重试；已有记录保留。")); return;
+    }
     auto arr = res["data"].toArray();
     const bool sorting = m_captureTaskTable->isSortingEnabled();
     m_captureTaskTable->setSortingEnabled(false);
@@ -1125,6 +1136,7 @@ void EvaluatePage::onLoadCaptureTasks() {
       else if (status == "FAILED") status = errMsg.isEmpty() ? "失败" : QString("失败: %1").arg(errMsg.left(40));
       else if (status == "STOPPED") status = "已停止";
       m_captureTaskTable->setItem(i, 2, new QTableWidgetItem(status));
+      m_captureTaskTable->item(i, 2)->setData(Qt::UserRole, r["status"].toString());
       m_captureTaskTable->setItem(i, 3, new QTableWidgetItem(QString::number(r["packet_count"].toInt())));
       qint64 sizeBytes = r["file_size_bytes"].toInt();
       QString sizeStr = sizeBytes > 1048576 ? QString("%1 MB").arg(sizeBytes / 1048576.0, 0, 'f', 1)
@@ -1136,6 +1148,21 @@ void EvaluatePage::onLoadCaptureTasks() {
 
 
     m_captureTaskTable->setSortingEnabled(sorting);
+    bool selectedFound = false;
+    for (int row = 0; row < m_captureTaskTable->rowCount(); ++row) {
+      if (m_captureTaskTable->item(row, 0)->text() != m_selectedCaptureTaskId) continue;
+      selectedFound = true; m_captureTaskTable->selectRow(row);
+      m_selectedCaptureState = m_captureTaskTable->item(row, 2)->data(Qt::UserRole).toString();
+      break;
+    }
+    if (!selectedFound && !m_selectedCaptureTaskId.isEmpty() && !m_captureActionBusy) {
+      ++m_captureDetailRevision; ++m_captureAnalysisRevision;
+      m_selectedCaptureTaskId.clear(); m_selectedCaptureState.clear();
+      m_analysisPollTimer->stop(); m_analysisPollCaptureId.clear();
+      m_analysisResultTable->setRowCount(0); m_analysisDetail->clear();
+      m_captureStatusLabel->setText(QStringLiteral("原捕获记录已不可用，请重新选择。"));
+    }
+    updateCaptureButtons();
     // Start/stop polling based on running tasks
     if (hasRunning && !m_capturePollTimer->isActive()) {
       m_capturePollTimer->start();
@@ -1146,7 +1173,9 @@ void EvaluatePage::onLoadCaptureTasks() {
 }
 
 void EvaluatePage::onLoadInterfaces() {
-  m_api->get("/api/capture-tasks/interfaces/list", 5000, [this](const QJsonObject &res) {
+  const QPointer<EvaluatePage> guard(this);
+  m_api->get("/api/capture-tasks/interfaces/list", 5000, [this, guard](const QJsonObject &res) {
+    if (!guard) return;
     if (res["status"].toString() != "ok") return;
     auto arr = res["data"].toArray();
     if (arr.isEmpty()) return;
@@ -1167,96 +1196,108 @@ void EvaluatePage::onLoadInterfaces() {
   });
 }
 
-void EvaluatePage::onCreateCapture() {
-  if (!m_createCaptureBtn->isEnabled()) return;
+void EvaluatePage::updateCaptureButtons()
+{
+  m_createCaptureBtn->setEnabled(!m_captureActionBusy);
+  m_startCaptureBtn->setEnabled(!m_captureActionBusy && !m_selectedCaptureTaskId.isEmpty() && m_selectedCaptureState == "PENDING");
+  m_stopCaptureBtn->setEnabled(!m_captureActionBusy && !m_selectedCaptureTaskId.isEmpty() && m_selectedCaptureState == "RUNNING");
+  m_delCaptureBtn->setEnabled(!m_captureActionBusy && !m_selectedCaptureTaskId.isEmpty() && m_selectedCaptureState != "RUNNING");
+  m_runAnalysisBtn->setEnabled(!m_captureActionBusy && m_analysisPollCaptureId.isEmpty()
+    && !m_selectedCaptureTaskId.isEmpty() && QStringList{"COMPLETED", "STOPPED"}.contains(m_selectedCaptureState));
+}
 
-  QJsonObject body;
-  QString interfaceName = m_interfaceCombo->currentData().toString();
-  body["interface"] = interfaceName.isEmpty() ? m_interfaceCombo->currentText() : interfaceName;
-  body["bpf_filter"] = m_bpfInput->text();
-  body["capture_type"] = m_captureTypeCombo->currentIndex() == 0 ? "timed" : "manual";
-  body["duration_sec"] = m_durationSpin->value();
-
-  m_createCaptureBtn->setEnabled(false);
-  m_createCaptureBtn->setText("创建中...");
-  m_startCaptureBtn->setEnabled(false);
-  m_captureStatusLabel->setText("正在创建捕获任务...");
-
-  m_api->post("/api/capture-tasks", body, 5000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") {
-      m_createCaptureBtn->setEnabled(true);
-      m_createCaptureBtn->setText("+ 新建捕获");
-      m_startCaptureBtn->setEnabled(true);
-      m_captureStatusLabel->setText("创建捕获任务失败：" + res["error"].toObject()["message"].toString());
-      return;
+void EvaluatePage::onCreateCapture()
+{
+  if (m_captureActionBusy || !m_pipelineId.isEmpty()) return;
+  const QString interfaceName = m_interfaceCombo->currentData().toString();
+  if (interfaceName.isEmpty()) { m_captureStatusLabel->setText(QStringLiteral("请选择可用网络接口。")); return; }
+  const QJsonObject body{{"interface", interfaceName}, {"bpf_filter", m_bpfInput->text()},
+    {"capture_type", m_captureTypeCombo->currentIndex() == 0 ? "timed" : "manual"}, {"duration_sec", m_durationSpin->value()}};
+  const int selection = m_captureDetailRevision;
+  const QPointer<EvaluatePage> guard(this);
+  m_captureActionBusy = true; updateCaptureButtons();
+  m_captureStatusLabel->setText(QStringLiteral("正在创建捕获任务…"));
+  m_api->post("/api/capture-tasks", body, 5000, [this, guard, selection](const QJsonObject &response) {
+    if (!guard) return;
+    m_captureActionBusy = false;
+    const QString id = response["data"].toObject()["capture_task_id"].toString();
+    if (response["status"] != "ok" || id.isEmpty()) {
+      if (selection == m_captureDetailRevision) m_captureStatusLabel->setText(QStringLiteral("创建捕获任务失败：") + response["error"].toObject()["message"].toString(QStringLiteral("未返回有效编号")));
+    } else if (selection == m_captureDetailRevision) {
+      ++m_captureDetailRevision; ++m_captureAnalysisRevision;
+      m_analysisPollTimer->stop(); m_analysisPollCaptureId.clear();
+      m_selectedCaptureTaskId = id; m_selectedCaptureState = "PENDING";
+      m_analysisResultTable->setRowCount(0); m_analysisDetail->clear();
+      m_captureStatusLabel->setText(QStringLiteral("捕获任务已创建，点击“开始捕获”启动该任务。"));
     }
-    auto d = res["data"].toObject();
-    QString taskId = d["capture_task_id"].toString();
-    if (taskId.isEmpty()) {
-      m_createCaptureBtn->setEnabled(true);
-      m_createCaptureBtn->setText("+ 新建捕获");
-      m_startCaptureBtn->setEnabled(true);
-      m_captureStatusLabel->setText("创建捕获任务失败：服务端未返回任务编号。");
-      return;
-    }
-    // Auto-start the capture
-    m_api->post("/api/capture-tasks/" + taskId + "/start", QJsonObject(), 5000, [this](const QJsonObject &startRes) {
-      m_createCaptureBtn->setEnabled(true);
-      m_createCaptureBtn->setText("+ 新建捕获");
-      if (startRes["status"].toString() != "ok") {
-        m_startCaptureBtn->setEnabled(true);
-        m_stopCaptureBtn->setEnabled(false);
-        QMessageBox::warning(this->window(), "启动失败",
-          QString("捕获任务已创建但启动失败：%1").arg(startRes["error"].toObject()["message"].toString()));
-      } else {
-        m_startCaptureBtn->setEnabled(false);
-        m_stopCaptureBtn->setEnabled(true);
-        m_captureStatusLabel->setText("捕获任务已启动。");
-      }
-      onLoadCaptureTasks();
-    });
+    updateCaptureButtons(); onLoadCaptureTasks();
   });
 }
 
-void EvaluatePage::onStartCapture() {
-  // Create and start in one flow
-  onCreateCapture();
+void EvaluatePage::onStartCapture()
+{
+  if (m_captureActionBusy || m_selectedCaptureTaskId.isEmpty() || m_selectedCaptureState != "PENDING") return;
+  const QString id = m_selectedCaptureTaskId; const int selection = m_captureDetailRevision;
+  const QPointer<EvaluatePage> guard(this);
+  m_captureActionBusy = true; updateCaptureButtons();
+  m_captureStatusLabel->setText(QStringLiteral("正在启动选中的捕获任务…"));
+  m_api->post("/api/capture-tasks/" + id + "/start", {}, 5000, [this, guard, id, selection](const QJsonObject &response) {
+    if (!guard) return;
+    m_captureActionBusy = false;
+    if (id == m_selectedCaptureTaskId && selection == m_captureDetailRevision) {
+      if (response["status"] == "ok") { m_selectedCaptureState = "RUNNING"; m_captureStatusLabel->setText(QStringLiteral("捕获任务已启动。")); }
+      else m_captureStatusLabel->setText(QStringLiteral("启动捕获失败：") + response["error"].toObject()["message"].toString());
+    }
+    updateCaptureButtons(); onLoadCaptureTasks();
+  });
 }
 
-void EvaluatePage::onStopCapture() {
-  if (m_selectedCaptureTaskId.isEmpty()) return;
-  const QString taskId = m_selectedCaptureTaskId;
-  m_stopCaptureBtn->setEnabled(false);
-  m_captureStatusLabel->setText("正在停止捕获任务...");
-  m_api->post("/api/capture-tasks/" + taskId + "/stop", QJsonObject(), 5000, [this, taskId](const QJsonObject &res) {
-    if (taskId != m_selectedCaptureTaskId) return;
-    if (res["status"].toString() != "ok") {
-      m_stopCaptureBtn->setEnabled(true);
-      m_captureStatusLabel->setText("停止捕获失败：" + res["error"].toObject()["message"].toString());
-      return;
+void EvaluatePage::onStopCapture()
+{
+  if (m_captureActionBusy || m_selectedCaptureTaskId.isEmpty() || m_selectedCaptureState != "RUNNING") return;
+  const QString id = m_selectedCaptureTaskId; const int selection = m_captureDetailRevision;
+  const QPointer<EvaluatePage> guard(this);
+  m_captureActionBusy = true; updateCaptureButtons();
+  m_captureStatusLabel->setText(QStringLiteral("正在停止选中的捕获任务…"));
+  m_api->post("/api/capture-tasks/" + id + "/stop", {}, 5000, [this, guard, id, selection](const QJsonObject &response) {
+    if (!guard) return;
+    m_captureActionBusy = false;
+    if (id == m_selectedCaptureTaskId && selection == m_captureDetailRevision) {
+      if (response["status"] == "ok") { m_selectedCaptureState = "STOPPED"; m_captureStatusLabel->setText(QStringLiteral("捕获任务已停止，可查看分析。")); }
+      else m_captureStatusLabel->setText(QStringLiteral("停止捕获失败：") + response["error"].toObject()["message"].toString());
     }
-    m_stopCaptureBtn->setEnabled(false);
-    m_startCaptureBtn->setEnabled(true);
-    m_captureStatusLabel->setText("捕获任务已停止。");
-    onLoadCaptureTasks();
+    updateCaptureButtons(); onLoadCaptureTasks();
   });
 }
 
 void EvaluatePage::onCaptureTaskClicked(int row, int) {
   auto *idItem = m_captureTaskTable->item(row, 0);
   if (!idItem) return;
-  m_selectedCaptureTaskId = idItem->text();
-  m_delCaptureBtn->setEnabled(true);
+  const QString next = idItem->text();
+  if (m_selectedCaptureTaskId != next) {
+    ++m_captureDetailRevision; ++m_captureAnalysisRevision;
+    m_analysisPollTimer->stop(); m_analysisPollCaptureId.clear();
+    m_analysisResultTable->setRowCount(0); m_analysisDetail->clear();
+    m_runAnalysisBtn->setText(QStringLiteral("分析"));
+  }
+  m_selectedCaptureTaskId = next;
 
   // Check if this task is running
   auto *statusItem = m_captureTaskTable->item(row, 2);
   bool isRunning = statusItem && statusItem->text() == "运行中";
-  m_stopCaptureBtn->setEnabled(isRunning);
+  m_selectedCaptureState = isRunning ? "RUNNING" : statusItem ? statusItem->data(Qt::UserRole).toString() : QString();
+  updateCaptureButtons();
 
   // Fetch full task detail and update status label
   const QString taskId = m_selectedCaptureTaskId;
-  m_api->get("/api/capture-tasks/" + taskId, 5000, [this, taskId](const QJsonObject &res) {
-    if (taskId != m_selectedCaptureTaskId || res["status"].toString() != "ok") return;
+  const int selection = ++m_captureDetailRevision;
+  const QPointer<EvaluatePage> guard(this);
+  m_api->get("/api/capture-tasks/" + taskId, 5000, [this, guard, taskId, selection](const QJsonObject &res) {
+    if (!guard || taskId != m_selectedCaptureTaskId || selection != m_captureDetailRevision) return;
+    if (res["status"] != "ok" || !res["data"].isObject() || res["data"].toObject()["capture_task_id"].toString() != taskId) {
+      m_selectedCaptureState.clear(); updateCaptureButtons();
+      m_captureStatusLabel->setText(QStringLiteral("捕获详情读取失败或记录不匹配，请重新选择或刷新。")); return;
+    }
     auto d = res["data"].toObject();
     QString status = d["status"].toString();
     int packets = d["packet_count"].toInt();
@@ -1280,8 +1321,9 @@ void EvaluatePage::onCaptureTaskClicked(int row, int) {
         .arg(errMsg.isEmpty() ? "" : QString("\n错误: %1").arg(errMsg)));
 
     // Enable/disable analysis button based on status
-    bool canAnalyze = (status == "COMPLETED" || status == "STOPPED");
-    m_runAnalysisBtn->setEnabled(canAnalyze);
+    m_selectedCaptureState = status;
+    const bool canAnalyze = (status == "COMPLETED" || status == "STOPPED");
+    updateCaptureButtons();
 
     // Auto-load existing analysis results for this capture
     if (canAnalyze) {
@@ -1299,20 +1341,28 @@ void EvaluatePage::onCaptureTaskClicked(int row, int) {
   });
 }
 
-void EvaluatePage::onDeleteCaptureTask() {
-  if (m_selectedCaptureTaskId.isEmpty()) return;
-  auto reply = QMessageBox::question(this->window(), "确认删除",
-    QString("确定要删除此捕获任务及其 PCAP 文件吗？"),
-    QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-  if (reply != QMessageBox::Yes) return;
-  m_api->del("/api/capture-tasks/" + m_selectedCaptureTaskId, 5000, [this](const QJsonObject &) {
-    m_selectedCaptureTaskId.clear();
-    m_delCaptureBtn->setEnabled(false);
-    m_runAnalysisBtn->setEnabled(false);
-    m_analysisResultTable->setRowCount(0);
-    m_analysisDetail->clear();
-    m_captureStatusLabel->setText("选择左侧捕获任务查看详情");
-    onLoadCaptureTasks();
+void EvaluatePage::onDeleteCaptureTask()
+{
+  if (m_captureActionBusy || m_selectedCaptureTaskId.isEmpty() || m_selectedCaptureState == "RUNNING") return;
+  const QString id = m_selectedCaptureTaskId; const int selection = m_captureDetailRevision;
+  const auto reply = QMessageBox::question(this->window(), QStringLiteral("确认删除"),
+    QStringLiteral("确定要删除此捕获任务及其 PCAP 文件吗？"), QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+  if (reply != QMessageBox::Yes || id != m_selectedCaptureTaskId || selection != m_captureDetailRevision) return;
+  const QPointer<EvaluatePage> guard(this);
+  m_captureActionBusy = true; updateCaptureButtons();
+  m_api->del("/api/capture-tasks/" + id, 5000, [this, guard, id, selection](const QJsonObject &response) {
+    if (!guard) return;
+    m_captureActionBusy = false;
+    if (id == m_selectedCaptureTaskId && selection == m_captureDetailRevision) {
+      if (response["status"] == "ok") {
+        ++m_captureDetailRevision; ++m_captureAnalysisRevision;
+        m_analysisPollTimer->stop(); m_analysisPollCaptureId.clear();
+        m_selectedCaptureTaskId.clear(); m_selectedCaptureState.clear();
+        m_analysisResultTable->setRowCount(0); m_analysisDetail->clear();
+        m_captureStatusLabel->setText(QStringLiteral("捕获记录已删除，请选择其他记录。"));
+      } else m_captureStatusLabel->setText(QStringLiteral("删除捕获记录失败：") + response["error"].toObject()["message"].toString());
+    }
+    updateCaptureButtons(); onLoadCaptureTasks();
   });
 }
 
@@ -1326,63 +1376,46 @@ void EvaluatePage::onCapturePollStatus() {
 
 // ── Analysis (integrated into capture tab) ────────────────────────────
 
-void EvaluatePage::onRunAnalysis() {
-  if (m_selectedCaptureTaskId.isEmpty()) return;
-
-  m_runAnalysisBtn->setEnabled(false);
-  m_runAnalysisBtn->setText("分析中...");
-  m_api->post("/api/capture-tasks/" + m_selectedCaptureTaskId + "/analyze", QJsonObject(), 10000,
-    [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") {
-      m_runAnalysisBtn->setEnabled(true);
-      m_runAnalysisBtn->setText("🔍 分析");
-      return;
+void EvaluatePage::onRunAnalysis()
+{
+  if (m_selectedCaptureTaskId.isEmpty() || !m_analysisPollCaptureId.isEmpty()
+      || !QStringList{"COMPLETED", "STOPPED"}.contains(m_selectedCaptureState)) return;
+  const QString id = m_selectedCaptureTaskId; const int revision = ++m_captureAnalysisRevision;
+  const QPointer<EvaluatePage> guard(this);
+  m_analysisPollCaptureId = id; m_analysisPollCount = 0;
+  m_runAnalysisBtn->setText(QStringLiteral("分析中…")); updateCaptureButtons();
+  m_analysisDetail->setPlainText(QStringLiteral("正在启动所选捕获记录的分析…"));
+  m_api->post("/api/capture-tasks/" + id + "/analyze", {}, 10000, [this, guard, id, revision](const QJsonObject &response) {
+    if (!guard || id != m_selectedCaptureTaskId || revision != m_captureAnalysisRevision) return;
+    if (response["status"] != "ok") {
+      m_analysisPollCaptureId.clear(); m_runAnalysisBtn->setText(QStringLiteral("重试分析"));
+      m_analysisDetail->setPlainText(QStringLiteral("分析请求失败：") + response["error"].toObject()["message"].toString());
+      updateCaptureButtons(); return;
     }
-    // Analysis is async on the backend — start polling for results
-    m_analysisPollCaptureId = m_selectedCaptureTaskId;
-    m_analysisPollCount = 0;
-    m_analysisPollTimer->start(2000);  // first poll after 2s
+    m_analysisPollTimer->start(2000);
   });
 }
 
-void EvaluatePage::onPollAnalysisResults() {
-  if (m_analysisPollCaptureId.isEmpty()) {
-    m_runAnalysisBtn->setEnabled(true);
-    m_runAnalysisBtn->setText("🔍 分析");
-    return;
-  }
-
-  m_api->get("/api/capture-tasks/" + m_analysisPollCaptureId + "/analysis", 5000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") {
-      m_runAnalysisBtn->setEnabled(true);
-      m_runAnalysisBtn->setText("🔍 分析");
-      m_analysisPollCaptureId.clear();
-      m_analysisPollCount = 0;
-      return;
+void EvaluatePage::onPollAnalysisResults()
+{
+  const QString id = m_analysisPollCaptureId; const int revision = m_captureAnalysisRevision;
+  if (id.isEmpty() || id != m_selectedCaptureTaskId) { m_analysisPollTimer->stop(); updateCaptureButtons(); return; }
+  const QPointer<EvaluatePage> guard(this);
+  m_api->get("/api/capture-tasks/" + id + "/analysis", 5000, [this, guard, id, revision](const QJsonObject &response) {
+    if (!guard || id != m_selectedCaptureTaskId || revision != m_captureAnalysisRevision || id != m_analysisPollCaptureId) return;
+    if (response["status"] != "ok" || !response["data"].isArray()) {
+      m_analysisPollTimer->stop(); m_analysisPollCaptureId.clear();
+      m_runAnalysisBtn->setText(QStringLiteral("重试分析"));
+      m_analysisDetail->setPlainText(QStringLiteral("分析结果读取失败，请重试。")); updateCaptureButtons(); return;
     }
-    auto arr = res["data"].toArray();
-
-    // If no results yet, keep polling (max ~30s via 15 polls × 2s)
-    if (arr.isEmpty()) {
-      if (++m_analysisPollCount < 15) {
-        m_analysisPollTimer->start(2000);
-        return;
-      }
-      // Timed out waiting for results
-      m_runAnalysisBtn->setEnabled(true);
-      m_runAnalysisBtn->setText("🔍 分析");
-      m_analysisPollCaptureId.clear();
-      m_analysisPollCount = 0;
-      return;
-    }
-
-    // Got results — reset and display
-    m_analysisPollCount = 0;
-    m_runAnalysisBtn->setEnabled(true);
-    m_runAnalysisBtn->setText("🔍 重新分析");
-    m_analysisPollCaptureId.clear();
-
-    populateAnalysisTable(arr);
+    const auto rows = response["data"].toArray();
+    if (rows.isEmpty() && ++m_analysisPollCount < 15) { m_analysisPollTimer->start(2000); return; }
+    m_analysisPollTimer->stop(); m_analysisPollCaptureId.clear(); m_analysisPollCount = 0;
+    if (rows.isEmpty()) {
+      m_runAnalysisBtn->setText(QStringLiteral("重试分析"));
+      m_analysisDetail->setPlainText(QStringLiteral("暂未读取到分析结果，可稍后刷新或重试。"));
+    } else { populateAnalysisTable(rows); m_runAnalysisBtn->setText(QStringLiteral("重新分析")); }
+    updateCaptureButtons();
   });
 }
 
@@ -1408,21 +1441,22 @@ void EvaluatePage::onAnalysisResultClicked(int row, int) {
 
 
 // ── Helper: load analysis results for a capture task ─────────────────
-void EvaluatePage::loadAnalysisForCapture(const QString &captureTaskId) {
-  m_api->get("/api/capture-tasks/" + captureTaskId + "/analysis", 5000, [this, captureTaskId](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") return;
-    auto arr = res["data"].toArray();
-
-    if (arr.isEmpty()) {
-      m_analysisResultTable->setRowCount(0);
-      m_analysisDetail->clear();
-      m_runAnalysisBtn->setText("🔍 分析");
-      return;
+void EvaluatePage::loadAnalysisForCapture(const QString &captureTaskId)
+{
+  if (captureTaskId.isEmpty() || captureTaskId != m_selectedCaptureTaskId || !m_analysisPollCaptureId.isEmpty()
+      || !QStringList{"COMPLETED", "STOPPED"}.contains(m_selectedCaptureState)) return;
+  const int revision = m_captureAnalysisRevision;
+  const QPointer<EvaluatePage> guard(this);
+  m_api->get("/api/capture-tasks/" + captureTaskId + "/analysis", 5000, [this, guard, captureTaskId, revision](const QJsonObject &response) {
+    if (!guard || revision != m_captureAnalysisRevision || captureTaskId != m_selectedCaptureTaskId || !m_analysisPollCaptureId.isEmpty()) return;
+    if (response["status"] != "ok" || !response["data"].isArray()) {
+      m_analysisDetail->setPlainText(QStringLiteral("分析记录读取失败，请重新选择或刷新。")); return;
     }
-
-    // Has existing analysis — show results, button becomes "重新分析"
-    m_runAnalysisBtn->setText("🔍 重新分析");
-    populateAnalysisTable(arr);
+    const auto rows = response["data"].toArray();
+    if (rows.isEmpty()) { m_analysisResultTable->setRowCount(0); m_analysisDetail->clear(); }
+    else populateAnalysisTable(rows);
+    m_runAnalysisBtn->setText(rows.isEmpty() ? QStringLiteral("分析") : QStringLiteral("重新分析"));
+    updateCaptureButtons();
   });
 }
 
@@ -1477,4 +1511,14 @@ QString EvaluatePage::formatSeverity(const QString &sev) const {
   if (sev == "medium") return "中危";
   if (sev == "low") return "低危";
   return sev;
+}
+
+void EvaluatePage::showCaptureWorkspace(bool analysis)
+{
+  if (!m_pipelineId.isEmpty()) return;
+  m_tabs->setCurrentIndex(3);
+  m_createCaptureBtn->setVisible(!analysis);
+  m_tabs->tabBar()->hide();
+  if (auto *details = findChild<QTabWidget *>(QStringLiteral("captureWorkspaceDetails")))
+  { details->setCurrentIndex(analysis ? 1 : 0); details->tabBar()->hide(); }
 }

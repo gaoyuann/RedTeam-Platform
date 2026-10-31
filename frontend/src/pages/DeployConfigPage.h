@@ -7,6 +7,7 @@
 #include <QLineEdit>
 #include <QComboBox>
 #include <QCheckBox>
+#include <QMap>
 
 class ApiClient;
 
@@ -14,6 +15,8 @@ class DeployConfigPage : public QWidget {
   Q_OBJECT
 public:
   explicit DeployConfigPage(ApiClient *api, const QString &role = "", const QString &username = "", QWidget *parent = nullptr);
+
+  void showSection(const QString &section);
 
 private slots:
   void onRefresh();
@@ -24,6 +27,9 @@ private slots:
 
 private:
   void setupUI();
+  void setLlmControlsEnabled(bool enabled);
+  bool validateLlmConfiguration();
+  void setSandboxControlsEnabled(bool enabled);
   void loadToolList();
   void loadConfig();
   void loadLlmConfig();
@@ -35,6 +41,12 @@ private:
   void fitTableHeight(QTableWidget *t, int cap);
 
   ApiClient *m_api;
+  QMap<QString, QWidget *> m_sections;
+  bool m_llmLoaded = false;
+  bool m_sandboxLoaded = false;
+  bool m_llmBusy = false;
+  bool m_sandboxBusy = false;
+  QMap<QString, int> m_readVersions;
 
   // Platform status
   QLabel *m_versionLabel;       // 启动时间
