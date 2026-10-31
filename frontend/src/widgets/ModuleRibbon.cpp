@@ -6,7 +6,6 @@
 #include <QVariant>
 #include <QHBoxLayout>
 #include <QIcon>
-#include <QLabel>
 #include <QScrollArea>
 #include <QStackedWidget>
 #include <QToolButton>
@@ -14,42 +13,43 @@
 
 QStringList ModuleRibbon::moduleNames()
 {
-    return {QStringLiteral("测试资源部署配置"), QStringLiteral("漏洞利用想定与预案"),
-        QStringLiteral("网络拓扑绘制"), QStringLiteral("脆弱性扫描"),
-        QStringLiteral("漏洞攻击测试"), QStringLiteral("测试评估"), QStringLiteral("系统管理")};
+    return {QStringLiteral("网络拓扑绘制"), QStringLiteral("脆弱性扫描"),
+        QStringLiteral("漏洞利用想定与预案"), QStringLiteral("漏洞攻击测试"),
+        QStringLiteral("测试评估"), QStringLiteral("测试资源部署配置"), QStringLiteral("系统管理")};
 }
 
 const QVector<RibbonFeature> &ModuleRibbon::features()
 {
     static const QVector<RibbonFeature> values{
-        {"resources.discovery", "资产探测", "目标资源", "search", 0},
-        {"resources.hexstrike", "HexStrike部署配置", "执行环境", "settings", 0, false},
-        {"resources.runtime", "虚拟环境部署配置", "执行环境", "settings", 0, true, true},
-        {"resources.llm", "大语言模型LLM部署配置", "智能服务", "analysis", 0, true, true},
-        {"resources.labs", "测试靶场部署配置", "测试支撑", "topology", 0, true, true},
-        {"resources.tools", "测试工具部署配置", "测试支撑", "settings", 0, true, true},
-        {"plans.scenario", "漏洞利用想定", "想定规划", "analysis", 1},
-        {"plans.task", "漏洞利用预案", "预案编排", "tasks", 1},
-        {"plans.library", "漏洞利用战术手册", "战术知识", "library", 1},
-        {"topology.discover", "网络拓扑探测", "拓扑发现", "search", 2},
-        {"topology.edit", "网络拓扑编辑", "拓扑编绘", "settings", 2},
-        {"topology.display", "网络拓扑展示", "拓扑视图", "topology", 2},
-        {"topology.annotate", "网络拓扑信息标注", "信息标注", "reports", 2},
-        {"scans.system", "系统漏洞扫描", "漏洞检测", "search", 3},
-        {"scans.web", "Web漏洞扫描", "漏洞检测", "search", 3},
-        {"scans.ports", "端口扫描", "服务检测", "topology", 3},
-        {"scans.passwords", "弱口令扫描", "服务检测", "settings", 3},
-        {"scans.backdoor", "后门探测", "威胁检测", "search", 3, false},
-        {"attacks.data", "数据抵近窃取攻击测试", "数据与信息", "tasks", 4},
-        {"attacks.tampering", "信息篡改欺骗攻击测试", "数据与信息", "tasks", 4},
-        {"attacks.control", "关键设备夺控攻击测试", "设备与网络", "tasks", 4},
-        {"attacks.disruption", "跨网致瘫攻击测试", "设备与网络", "topology", 4, false},
-        {"attacks.wireless", "无线攻击测试", "无线环境", "topology", 4, false},
-        {"evaluation.capture", "网络数据捕获", "网络证据", "topology", 5},
-        {"evaluation.analysis", "网络数据分析", "网络证据", "analysis", 5},
-        {"evaluation.perception", "安全态势感知", "安全态势", "dashboard", 5, false},
-        {"evaluation.situation", "安全态势分析", "安全态势", "analysis", 5, false},
-        {"evaluation.display", "安全态势展示", "安全态势", "dashboard", 5, false},
+        {"topology.discover", "网络拓扑探测", "拓扑发现", "search", 0},
+        {"topology.edit", "网络拓扑编辑", "拓扑编绘", "settings", 0},
+        {"topology.display", "网络拓扑展示", "拓扑视图", "topology", 0},
+        {"topology.annotate", "网络拓扑信息标注", "信息标注", "reports", 0},
+        {"scans.system", "系统漏洞扫描", "漏洞检测", "search", 1},
+        {"scans.web", "Web漏洞扫描", "漏洞检测", "search", 1},
+        {"scans.ports", "端口扫描", "服务检测", "topology", 1},
+        {"scans.passwords", "弱口令扫描", "服务检测", "settings", 1},
+        {"scans.backdoor", "后门探测", "威胁检测", "search", 1, false},
+        {"plans.scenario", "漏洞利用想定", "想定规划", "analysis", 2},
+        {"plans.task", "漏洞利用预案", "预案编排", "tasks", 2},
+        {"plans.library", "漏洞利用战术手册", "战术知识", "library", 2},
+        {"attacks.data", "数据抵近窃取攻击测试", "数据与信息", "tasks", 3},
+        {"attacks.tampering", "信息篡改欺骗攻击测试", "数据与信息", "tasks", 3},
+        {"attacks.control", "关键设备夺控攻击测试", "设备与网络", "tasks", 3},
+        {"attacks.disruption", "跨网致瘫攻击测试", "设备与网络", "topology", 3, false},
+        {"attacks.wireless", "无线攻击测试", "无线环境", "topology", 3, false},
+        {"evaluation.results", "测试结果与评估", "任务评估", "reports", 4},
+        {"evaluation.capture", "网络数据捕获", "网络证据", "topology", 4},
+        {"evaluation.analysis", "网络数据分析", "网络证据", "analysis", 4},
+        {"evaluation.perception", "安全态势感知", "安全态势", "dashboard", 4, false},
+        {"evaluation.situation", "安全态势分析", "安全态势", "analysis", 4, false},
+        {"evaluation.display", "安全态势展示", "安全态势", "dashboard", 4, false},
+        {"resources.discovery", "资产探测", "目标资源", "search", 5},
+        {"resources.hexstrike", "HexStrike部署配置", "执行环境", "settings", 5, false},
+        {"resources.runtime", "虚拟环境部署配置", "执行环境", "settings", 5, true, true},
+        {"resources.llm", "大语言模型LLM部署配置", "智能服务", "analysis", 5, true, true},
+        {"resources.labs", "测试靶场部署配置", "测试支撑", "topology", 5, true, true},
+        {"resources.tools", "测试工具部署配置", "测试支撑", "settings", 5, true, true},
         {"system.tasks", "任务管理", "任务与账户", "tasks", 6},
         {"system.users", "用户管理", "任务与账户", "user", 6, true, true},
         {"system.permissions", "权限管理", "任务与账户", "settings", 6, true, true},
@@ -73,16 +73,15 @@ ModuleRibbon::ModuleRibbon(bool administrator, QWidget *parent)
     setAttribute(Qt::WA_StyledBackground, true);
     setStyleSheet(QStringLiteral(
         "QWidget#moduleRibbon { background:#ffffff; border-bottom:1px solid #dbe3ef; }"
-        "QToolButton { color:#425b7e; border:1px solid transparent; border-radius:5px;"
-        " padding:6px 9px; font-size:12px; background:transparent; }"
+        "QToolButton { color:#334b6b; border:1px solid transparent; border-radius:6px;"
+        " padding:3px 9px; font-size:17px; font-weight:600; background:transparent; }"
         "QToolButton:hover { background:#f1f5ff; border-color:#dce6fa; }"
         "QToolButton:checked { color:#245fd6; background:#edf3ff; border-color:#cdddfb; }"
-        "QToolButton:disabled { color:#a8b2c2; background:transparent; border-color:transparent; }"
-        "QLabel { color:#8a9bb3; font-size:10px; background:transparent; border:none; }"));
+        "QToolButton:disabled { color:#a8b2c2; background:transparent; border-color:transparent; }"));
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     root->addWidget(m_pages);
-    setFixedHeight(78);
+    setFixedHeight(72);
     m_selection->setExclusive(true);
     for (int module = 0; module < moduleNames().size(); ++module) {
         auto *scroll = new QScrollArea(m_pages);
@@ -91,6 +90,10 @@ ModuleRibbon::ModuleRibbon(bool administrator, QWidget *parent)
         scroll->setFrameShape(QFrame::NoFrame);
         scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
         scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        scroll->setStyleSheet(QStringLiteral(
+            "QScrollBar:horizontal { height:4px; background:#f1f5fb; margin:0; }"
+            "QScrollBar::handle:horizontal { background:#c7d3e4; border-radius:2px; min-width:24px; }"
+            "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width:0; }"));
         auto *content = new QWidget(scroll);
         QPalette palette = content->palette();
         palette.setColor(QPalette::Window, Qt::white);
@@ -127,11 +130,11 @@ ModuleRibbon::ModuleRibbon(bool administrator, QWidget *parent)
                 button->setIconSize(QSize(18, 18));
                 button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
                 button->setCheckable(true);
-                QFont commandFont = button->font(); commandFont.setPixelSize(12); button->setFont(commandFont);
-                int textWidth = 0;
-                for (const auto &line : label.split('\n')) textWidth = qMax(textWidth, button->fontMetrics().horizontalAdvance(line));
-                button->setFixedWidth(qMax(90, textWidth + 42));
-                button->setFixedHeight(44);
+                QFont commandFont = button->font(); commandFont.setPixelSize(17);
+                commandFont.setWeight(QFont::DemiBold); button->setFont(commandFont);
+                button->ensurePolished();
+                button->setFixedWidth(qMax(90, button->sizeHint().width()));
+                button->setFixedHeight(60);
                 m_selection->addButton(button);
                 button->setEnabled(canOpen(entry.id));
                 button->setToolTip(!entry.implemented ? entry.title + QStringLiteral(" · 暂未实现")
@@ -143,9 +146,6 @@ ModuleRibbon::ModuleRibbon(bool administrator, QWidget *parent)
                 m_buttons << button;
             }
             vertical->addLayout(commands);
-            auto *label = new QLabel(name, group);
-            label->setAlignment(Qt::AlignCenter);
-            vertical->addWidget(label);
             groups->addWidget(group);
             auto *line = new QFrame(content);
             line->setFrameShape(QFrame::VLine);

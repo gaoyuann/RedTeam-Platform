@@ -3,6 +3,9 @@
 #include "../Theme.h"
 #include "../UiUtil.h"
 #include "../widgets/WorkbenchTabs.h"
+#include "../widgets/ActiveStackedWidget.h"
+#include "../widgets/PageComponents.h"
+#include "FindingPlanPanel.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -10,6 +13,8 @@
 #include <QFrame>
 #include <QGroupBox>
 #include <QScrollArea>
+#include <QStandardItemModel>
+#include <QSignalBlocker>
 #include <QHeaderView>
 #include <QInputDialog>
 #include <QJsonArray>
@@ -37,7 +42,7 @@ QString jsonText(const QJsonValue &value)
 QString planState(const QString &state)
 {
   if (state == "draft") return QStringLiteral("编辑中");
-  if (state == "submitted") return QStringLiteral("已提审 · 等待管理员审批");
+  if (state == "submitted") return QStringLiteral("方案已准备 · 等待确认");
   if (state == "rejected") return QStringLiteral("已驳回 · 可返回编辑");
   if (state == "approved") return QStringLiteral("审批通过 · 执行按审批快照启动");
   return QStringLiteral("尚未建立任务草稿");
@@ -68,7 +73,7 @@ void setupTable(QTableWidget *table, const QStringList &headers)
   table->setWordWrap(false);
   table->setShowGrid(false);
   table->setTextElideMode(Qt::ElideRight);
-  table->verticalHeader()->setDefaultSectionSize(36);
+  table->verticalHeader()->setDefaultSectionSize(46);
 }
 }
 
@@ -81,7 +86,7 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   layout->setContentsMargins(16, 14, 16, 14);
   layout->setSpacing(8);
   auto *header = new QHBoxLayout;
-  auto *title = new QLabel(QStringLiteral("任务预案 · 编辑与审阅"), this);
+  auto *title = new QLabel(QStringLiteral("测试方案"), this);
   title->setObjectName("planPageTitle");
   title->setStyleSheet(QStringLiteral("font-size:20px; font-weight:700; color:#172033;"));
   header->addWidget(title, 1);
@@ -91,25 +96,37 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   header->addStretch();
   m_refresh->setMaximumWidth(132);
   layout->addLayout(header);
-  auto *optional = new QLabel(QStringLiteral("可选，用于批量编排；逐漏洞测试可直接从漏洞列表开始。"), this);
+  auto *optional = new QLabel(QStringLiteral("整体编排预案；具体漏洞的预案、执行版本和证据分别保存。"), this);
   optional->setObjectName("optionalPlanHint");
   optional->setWordWrap(true);
-  optional->setStyleSheet("font-size:12px;color:#7187a5;padding:2px 0;");
+  optional->setStyleSheet("font-size:16px;color:#7187a5;padding:2px 0;");
   layout->addWidget(optional);
   m_status = new QLabel(this);
   m_status->setObjectName(QStringLiteral("planStatusLabel"));
   m_status->setTextFormat(Qt::PlainText);
   m_status->setWordWrap(true);
   layout->addWidget(m_status);
+  m_reviewSummary = new QLabel(this);
+  m_reviewSummary->setObjectName("planReviewSummary");
+  m_reviewSummary->setTextFormat(Qt::PlainText);
+  m_reviewSummary->setWordWrap(true);
+  m_reviewSummary->setStyleSheet(QStringLiteral("color:#334155; background:#f8fbff; border:1px solid #dbe3ef; border-radius:8px; padding:10px 12px;"));
+  layout->addWidget(m_reviewSummary);
   m_scope = new QLabel(this);
   m_scope->setTextFormat(Qt::PlainText);
   m_scope->setWordWrap(true);
-  m_scope->setStyleSheet(QStringLiteral("color:#64748b; font-size:12px;"));
+  m_scope->setStyleSheet(QStringLiteral("color:#64748b; font-size:16px;"));
   auto *scopeBox = new QGroupBox(QStringLiteral("任务来源与范围"), this);
+  scopeBox->setObjectName("planScopeDetails");
   scopeBox->setCheckable(true); scopeBox->setChecked(false);
   auto *scopeLayout = new QVBoxLayout(scopeBox); scopeLayout->addWidget(m_scope);
   m_scope->hide(); connect(scopeBox, &QGroupBox::toggled, m_scope, &QWidget::setVisible);
   layout->addWidget(scopeBox);
+  m_planConfiguration = new QWidget(this);
+  m_planConfiguration->setObjectName("planConfiguration");
+  auto *configurationLayout = new QVBoxLayout(m_planConfiguration);
+  configurationLayout->setContentsMargins(0,0,0,0);
+  configurationLayout->setSpacing(8);
   auto *sourceRow = new QHBoxLayout;
   sourceRow->addWidget(new QLabel(QStringLiteral("来源预案："), this));
   m_source = new QComboBox(this);
@@ -120,7 +137,7 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   m_create = new QPushButton(QStringLiteral("建立任务草稿"), this);
   m_create->setObjectName(QStringLiteral("planCreateButton"));
   sourceRow->addWidget(m_create);
-  layout->addLayout(sourceRow);
+  configurationLayout->addLayout(sourceRow);
   m_generateSource = new QPushButton(QStringLiteral("生成攻击测试预案"), this);
   m_generateSource->setObjectName(QStringLiteral("planGenerateSourceButton"));
   m_generateSource->setProperty("primary", true);
@@ -132,7 +149,16 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   payloadWorkspace->setToolTip(QStringLiteral("选择当前任务漏洞，打开关联载荷代码与生成记录；不会自动生成或执行。"));
   connect(payloadWorkspace, &QPushButton::clicked, this, &TaskPlanPage::payloadWorkspaceRequested);
   payloadWorkspace->setMaximumWidth(160);
-  header->addWidget(payloadWorkspace);
+  auto *findingPlan = new QPushButton(QStringLiteral("选择漏洞编制预案"), this);
+  findingPlan->setObjectName(QStringLiteral("planFindingWorkspace"));
+  findingPlan->setEnabled(false);
+  connect(findingPlan, &QPushButton::clicked, this, &TaskPlanPage::findingPlanRequested);
+  m_technicalDetails = new QPushButton(QStringLiteral("显示技术详情"), this);
+  m_technicalDetails->setObjectName("planTechnicalDetails");
+  m_technicalDetails->setCheckable(true);
+  auto *more = PageComponents::actionMenu(QStringLiteral("更多"), {m_technicalDetails, nullptr, findingPlan, payloadWorkspace}, this);
+  more->setObjectName("planActionsMenu");
+  header->addWidget(more);
 
   auto *form = new QFormLayout;
   m_name = new QLineEdit(this);
@@ -150,7 +176,8 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   formCard->setMaximumWidth(1120);
   formCard->setLayout(form);
   formCard->setStyleSheet("QFrame#planFormCard { background:white; border:1px solid #dfe6f0; border-radius:6px; padding:12px; }");
-  layout->addWidget(formCard);
+  configurationLayout->addWidget(formCard);
+  layout->addWidget(m_planConfiguration);
 
   auto *tabs = new WorkbenchTabs(this);
   auto *stepsPage = new QWidget(tabs);
@@ -161,6 +188,8 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   setupTable(m_steps, {QStringLiteral("步骤"), QStringLiteral("工具"), QStringLiteral("参数摘要"), QStringLiteral("失败策略")});
   UiUtil::EmptyHint::attach(m_steps, QStringLiteral("暂无预案步骤；建立或读取任务草稿后显示"));
   auto *editor = new QFrame(splitter);
+  m_stepEditor = editor;
+  editor->setObjectName("planStepEditor");
   editor->setProperty("softCard", true);
   auto *editorLayout = new QVBoxLayout(editor);
   auto *editorTitle = new QLabel(QStringLiteral("步骤详情"), editor);
@@ -220,7 +249,7 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   m_history = new QTableWidget(tabs);
   m_history->setObjectName(QStringLiteral("planHistoryTable"));
   setupTable(m_history, {QStringLiteral("时间（UTC）"), QStringLiteral("操作"), QStringLiteral("记录版本"), QStringLiteral("操作人"), QStringLiteral("意见")});
-  tabs->addTab(m_history, QStringLiteral("提审 / 审批记录"));
+  tabs->addTab(m_history, QStringLiteral("方案记录"));
   layout->addWidget(tabs, 1);
 
   auto *actions = new QHBoxLayout;
@@ -243,8 +272,9 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   actions->addWidget(m_approve);
   layout->addLayout(actions);
   auto *footer = new QLabel(QStringLiteral("草稿只修改当前任务，来源预案保持原样。提审后锁定编辑，修改须返回编辑并重新提审；批准的执行版本仅保存在所属任务，执行前检查仍需通过。"), this);
+  footer->setObjectName("planVersionHint");
   footer->setWordWrap(true);
-  footer->setStyleSheet(QStringLiteral("font-size:12px; color:#64748b;"));
+  footer->setStyleSheet(QStringLiteral("font-size:16px; color:#64748b;"));
   layout->addWidget(footer);
   // Scroll editable content while keeping save/review actions visible.
   auto *body = new QWidget(this);
@@ -302,6 +332,39 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   connect(m_reopen, &QPushButton::clicked, this, [this]() { transition("reopen"); });
   connect(m_reject, &QPushButton::clicked, this, [this]() { transition("reject"); });
   connect(m_approve, &QPushButton::clicked, this, [this]() { transition("approve"); });
+  connect(m_technicalDetails, &QPushButton::toggled, this, [this]() { updateControls(); });
+  // Keep the established global/source editor intact, while staged tests use
+  // the actual finding plans as their primary workspace.
+  m_globalPlan = new QWidget(this);
+  auto *globalLayout = new QVBoxLayout(m_globalPlan);
+  globalLayout->setContentsMargins(0,0,0,0);
+  while (layout->count()) {
+    auto *item = layout->takeAt(0);
+    if (auto *widget = item->widget()) { globalLayout->addWidget(widget); delete item; }
+    else if (auto *nested = item->layout()) { nested->setParent(nullptr); globalLayout->addLayout(nested); }
+    else globalLayout->addItem(item);
+  }
+  m_planViews = new ActiveStackedWidget(this);
+  m_planViews->addWidget(m_globalPlan);
+  m_findingPlans = new FindingPlanPanel(m_api, m_planViews);
+  m_planViews->addWidget(m_findingPlans);
+  auto *kindRow = new QHBoxLayout;
+  kindRow->addWidget(new QLabel(QStringLiteral("方案范围："), this));
+  m_planKind = new QComboBox(this);
+  m_planKind->setObjectName("taskPlanKind");
+  m_planKind->addItems({QStringLiteral("整体任务方案"), QStringLiteral("逐漏洞验证方案")});
+  m_planKind->setToolTip(QStringLiteral("两类方案属于同一任务，版本、确认和执行记录分别保存。"));
+  kindRow->addWidget(m_planKind); kindRow->addStretch();
+  layout->addLayout(kindRow);
+  layout->addWidget(m_planViews);
+  connect(m_planKind, QOverload<int>::of(&QComboBox::activated), this, [this](int index) {
+    if (index == 0) showGlobalPlan(); else showFindingPlanList();
+  });
+  m_findingPlans->changed = [this]() { emit planChanged(); };
+  m_findingPlans->scanRequested = [this]() { emit scanRequested(); };
+  m_findingPlans->globalPlanRequested = [this]() { showGlobalPlan(); };
+  m_findingPlans->executionStarted = [this](const QString &pipeline) { emit findingExecutionStarted(pipeline); };
+  m_findingPlans->assessmentRequested = [this](const QString &pipeline) { emit assessmentRequested(pipeline); };
   clearTaskContext();
 }
 
@@ -315,6 +378,9 @@ void TaskPlanPage::clearTaskContext()
 {
   ++m_contextVersion;
   ++m_requestVersion;
+  m_findingPlanView = false;
+  if (m_findingPlans) m_findingPlans->setTask({});
+  if (m_planViews) m_planViews->setCurrentWidget(m_globalPlan);
   m_pipeline = {};
   m_plan = {};
   m_content = {};
@@ -332,6 +398,20 @@ void TaskPlanPage::setTaskContext(const QJsonObject &pipeline)
   const bool statusChanged = pipeline["status"] != m_pipeline.value("status");
   if (changed) clearTaskContext();
   m_pipeline = pipeline;
+  if (changed) {
+    const auto config = pipeline["config"].isObject() ? pipeline["config"].toObject()
+      : QJsonDocument::fromJson(pipeline["config"].toString().toUtf8()).object();
+    m_technicalDetails->setChecked(config["workflow_mode"] != "intelligent");
+  }
+  syncPlanKind();
+  if (usesFindingPlans()) {
+    const auto config = pipeline["config"].isObject() ? pipeline["config"].toObject()
+      : QJsonDocument::fromJson(pipeline["config"].toString().toUtf8()).object();
+    m_findingPlans->setGlobalPlanAvailable(config["workflow_mode"] != "staged");
+    m_planViews->setCurrentWidget(m_findingPlans);
+    m_findingPlans->setTask(pipeline["pipeline_id"].toString());
+    return;
+  }
   updateControls();
   if (changed || (statusChanged && !m_busy && !m_dirty)) refresh();
   if (!changed && statusChanged && m_dirty)
@@ -340,6 +420,7 @@ void TaskPlanPage::setTaskContext(const QJsonObject &pipeline)
 
 void TaskPlanPage::refresh(bool discard)
 {
+  if (usesFindingPlans()) { m_findingPlans->refresh(); return; }
   if (m_busy || m_pipeline.value("pipeline_id").toString().isEmpty()) return;
   if (m_dirty) {
     if (!discard) return;
@@ -379,6 +460,57 @@ void TaskPlanPage::refresh(bool discard)
     }
     if (guard->m_plan.isEmpty()) guard->loadSources(request);
   });
+}
+
+bool TaskPlanPage::usesFindingPlans() const
+{
+  const auto config = m_pipeline["config"].isObject() ? m_pipeline["config"].toObject()
+    : QJsonDocument::fromJson(m_pipeline["config"].toString().toUtf8()).object();
+  return m_findingPlanView || config["workflow_mode"] == "staged";
+}
+
+void TaskPlanPage::syncPlanKind()
+{
+  if (!m_planKind) return;
+  const auto config = m_pipeline.value("config").isObject() ? m_pipeline.value("config").toObject()
+    : QJsonDocument::fromJson(m_pipeline.value("config").toString().toUtf8()).object();
+  if (auto *model = qobject_cast<QStandardItemModel *>(m_planKind->model()))
+    model->item(0)->setEnabled(config.value("workflow_mode") != "staged");
+  const QSignalBlocker blocker(m_planKind);
+  m_planKind->setCurrentIndex(usesFindingPlans() ? 1 : 0);
+  m_planKind->setEnabled(!m_pipeline.isEmpty() && !m_busy);
+}
+
+void TaskPlanPage::showGlobalPlan()
+{
+  const auto config = m_pipeline.value("config").isObject() ? m_pipeline.value("config").toObject()
+    : QJsonDocument::fromJson(m_pipeline.value("config").toString().toUtf8()).object();
+  if (m_pipeline.isEmpty() || config.value("workflow_mode") == "staged") { syncPlanKind(); return; }
+  m_findingPlanView = false;
+  m_planViews->setCurrentWidget(m_globalPlan);
+  syncPlanKind();
+  if (!m_dirty && !m_busy) refresh();
+}
+
+void TaskPlanPage::openFindingPlans(const QList<qint64> &findingIds)
+{
+  if (m_pipeline["pipeline_id"].toString().isEmpty() || findingIds.isEmpty()) return;
+  showFindingPlanList();
+  m_findingPlans->openFindings(findingIds);
+}
+
+void TaskPlanPage::showFindingPlanList()
+{
+  if (m_pipeline.value("pipeline_id").toString().isEmpty()) return;
+  ++m_requestVersion;
+  m_busy = false;
+  m_findingPlanView = true;
+  const auto config = m_pipeline["config"].isObject() ? m_pipeline["config"].toObject()
+    : QJsonDocument::fromJson(m_pipeline["config"].toString().toUtf8()).object();
+  m_findingPlans->setGlobalPlanAvailable(config["workflow_mode"] != "staged");
+  m_planViews->setCurrentWidget(m_findingPlans);
+  m_findingPlans->setTask(m_pipeline["pipeline_id"].toString());
+  syncPlanKind();
 }
 
 void TaskPlanPage::loadSources(int requestVersion)
@@ -471,6 +603,18 @@ void TaskPlanPage::render()
   showStep();
   const auto config = m_pipeline.value("config").isObject() ? m_pipeline.value("config").toObject()
       : QJsonDocument::fromJson(m_pipeline.value("config").toString().toUtf8()).object();
+  const bool intelligent = config["workflow_mode"] == "intelligent";
+  m_reviewSummary->setVisible(intelligent && !m_plan.isEmpty());
+  m_reviewSummary->setText(QStringLiteral("测试目标：%1\n方案：%2，共 %3 个步骤。%4\n%5")
+      .arg(m_pipeline.value("target").toString(), m_content.value("name").toString()).arg(steps.size())
+      .arg(m_content.value("source_playbook").toObject().value("description").toString())
+      .arg(m_plan.value("state") == "submitted"
+        ? m_role == "admin" ? QStringLiteral("方案已准备好。确认后开始测试，无需填写工具参数。")
+                           : QStringLiteral("方案已准备好，等待管理员确认后执行，无需填写工具参数。")
+        : QStringLiteral("实际执行状态与证据请在攻击测试和结果评估中查看，执行完成不代表漏洞成立。")));
+  if (auto *hint = findChild<QLabel *>("optionalPlanHint"))
+    hint->setText(intelligent ? QStringLiteral("系统依据当前任务的扫描与分析编制方案；逐漏洞专项验证可作为补充。")
+                             : QStringLiteral("整体编排预案；具体漏洞的预案、执行版本和证据分别保存。"));
   m_scope->setText(QStringLiteral("任务：%1 · 目标：%2\n任务ID：%4\n授权范围记录：%3（授权需人工核验；后端使用结构化范围限制调用）")
       .arg(config["task_name"].toString(m_pipeline.value("pipeline_id").toString()), m_pipeline.value("target").toString(), config["authorization_scope"].toString(QStringLiteral("未填写")), UiUtil::taskIdentifier(m_pipeline)));
   if (!m_content.isEmpty()) {
@@ -483,13 +627,24 @@ void TaskPlanPage::render()
   if (m_plan.value("state").toString() == "approved")
     message(QStringLiteral("审批通过 · 提审版本 v%1 · 当前记录 v%2；执行状态请查看任务头部。")
         .arg(m_plan.value("revision").toInt() - 1).arg(m_plan.value("revision").toInt()));
-  if (m_plan.isEmpty() && m_pipeline.value("status").toString() != "awaiting_approval")
-    message(QStringLiteral("当前任务不在待审批阶段；等待预案生成并进入待审批后再建立草稿。"));
+  if (m_plan.isEmpty() && m_pipeline.value("status").toString() != "awaiting_approval") {
+    const auto status = m_pipeline.value("status").toString();
+    message(intelligent
+      ? status == "failed" ? m_pipeline.value("error_message").toString(QStringLiteral("方案准备失败，请查看任务日志。"))
+      : status == "cancelled" ? QStringLiteral("任务已取消，扫描与分析结果已保留；未自动启动预案执行。")
+      : status == "created" ? QStringLiteral("启动任务后，系统自动扫描、分析并编制方案，完成后送审。")
+      : status == "completed" ? QStringLiteral("任务已结束，尚无本任务预案；请查看任务结果与日志。")
+      : QStringLiteral("系统正在扫描、分析并编制方案；完成后自动送审，无需手动建立草稿。")
+      : config["workflow_mode"] == "staged"
+      ? QStringLiteral("选择当前任务的漏洞编制预案，填写方法、参数与预期证据，再单独确认攻击测试。")
+      : QStringLiteral("当前任务不在待审批阶段；可从漏洞列表编制逐漏洞预案，或等待全局预案进入审批。"), status == "failed");
+  }
   updateControls();
 }
 
 void TaskPlanPage::updateControls()
 {
+  syncPlanKind();
   const bool waiting = m_pipeline.value("status").toString() == "awaiting_approval";
   const QString state = m_plan.value("state").toString();
   const bool editable = waiting && state == "draft" && !m_busy;
@@ -500,6 +655,22 @@ void TaskPlanPage::updateControls()
       : QJsonDocument::fromJson(m_pipeline.value("config").toString().toUtf8()).object();
   const bool selected = m_steps->currentRow() >= 0;
   const bool sourceMode =QStringList{"source_assisted","program_dynamic"}.contains( config["scan_mode"].toString());
+  const bool intelligent = config["workflow_mode"] == "intelligent";
+  const bool technical = m_technicalDetails->isChecked() || state == "draft";
+  m_planConfiguration->setVisible(technical);
+  m_stepEditor->setVisible(technical);
+  m_steps->setColumnHidden(1, !technical);
+  m_steps->setColumnHidden(2, !technical);
+  if (auto *scopeBox = findChild<QGroupBox *>("planScopeDetails")) scopeBox->setVisible(technical);
+  if (auto *hint = findChild<QLabel *>("optionalPlanHint")) hint->setVisible(!intelligent);
+  if (auto *footer = findChild<QLabel *>("planVersionHint")) footer->setVisible(technical);
+  m_technicalDetails->setEnabled(!m_pipeline.isEmpty() && state != "draft");
+  m_create->setVisible(!intelligent);
+  m_save->setVisible(!intelligent || state == "draft");
+  m_submit->setVisible(!intelligent || state == "draft");
+  m_approve->setText(intelligent ? QStringLiteral("确认方案并开始测试") : QStringLiteral("批准此版本并执行"));
+  if (auto *button = findChild<QPushButton *>("planFindingWorkspace"))
+    button->setEnabled(!m_pipeline.isEmpty() && !sourceMode && config["task_mode"].toString() != "discovery");
   m_generateSource->setVisible(sourceMode && m_plan.isEmpty());
   m_generateSource->setEnabled(waiting && !m_busy && !m_dirty);
   m_refresh->setEnabled(!m_busy && !m_pipeline.isEmpty());

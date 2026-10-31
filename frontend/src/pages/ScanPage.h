@@ -13,9 +13,11 @@
 #include <QJsonObject>
 #include <QTabWidget>
 #include <QPointer>
+#include <functional>
 
 class QCheckBox;
 class QPlainTextEdit;
+class QProgressBar;
 class ApiClient;
 class RemoteSourcePicker;
 class ScanResultOverview;
@@ -30,13 +32,15 @@ public:
   void setTarget(const QString &target);
   void selectScanType(const QString &type);
   void openPayloadWorkspace();
+  void openVerificationWorkspace();
   void enableRibbonWorkspace();
   QString selectedScanFeature() const;
   void showAllTaskResults();
   void setPipelineScope(const QString &pipelineId, const QStringList &taskIds, const QString &state = {});
-  void setTaskScope(const QStringList &taskIds);
-  void clearTaskScope();
+  void setTaskScope(const QStringList &taskIds, bool preserveFindingWindows = false);
+  void clearTaskScope(bool preserveFindingWindows = false);
   void showTaskContextError(const QString &message);
+  void openFindingVerification(const QList<qint64> &ids);
 
 signals:
   void sourceGenerationStatus(const QString &message, bool error);
@@ -47,6 +51,9 @@ signals:
   /// 从扫描结果漏洞一键发起攻击（演示动线：扫描 → 漏洞列表 → 攻击）
   void attackRequested(const QString &target, const QString &vulnText, const QString &resultType);
   void findingVerificationChanged(const QString &pipelineId);
+  void testContextRequested(const QString &pipelineId, const QList<qint64> &findingIds);
+  void assessmentRequested(const QString &pipelineId);
+  void findingPlansRequested(const QString &pipelineId, const QList<qint64> &findingIds);
 
 public slots:
   void onRefreshTasks();
@@ -80,10 +87,31 @@ private:
   void resizeResultColumns();
   bool eventFilter(QObject *object, QEvent *event) override;
   QPlainTextEdit *m_webScanProcess = nullptr;
+  QLabel *m_scanIssueSummary = nullptr;
   QLabel *m_compactStatus = nullptr;
+  QProgressBar *m_scanProgress = nullptr;
+  QLabel *m_progressText = nullptr;
+  QLabel *m_progressValue = nullptr;
+  QLabel *m_progressState = nullptr;
+  QPushButton *m_processToggle = nullptr;
+  QPushButton *m_tasksToggle = nullptr;
+  bool m_scanRefreshPending = false;
+  bool m_scanResultsFresh = true;
+  QString m_resultsQuery;
+  QByteArray m_renderedResults;
+  QJsonArray m_renderedSources;
+  void setScanProgress(const QString &text, bool active, int finished = 0, int total = 0,
+                       const QString &detail = {});
+  void fetchPipelineSnapshot(const QString &path, int desiredCount, const QJsonArray &rows,
+                             std::function<void(const QJsonObject &)> done);
   QLabel *m_listTitle = nullptr;
   QPushButton *m_showAllRecords = nullptr;
-  void openFindingVerification(const QList<qint64> &ids);
+  void prepareCurrentFinding();
+  void openFindingPicker(bool payload);
+  void updatePrepareFindingButton();
+  QPushButton *m_prepareFinding = nullptr;
+  bool m_testContextBusy = false;
+  int m_findingActionRevision = 0;
   QSet<qint64> m_checkedFindings;
   QList<QTreeWidgetItem*> selectableFindingItems() const;
   void updateFindingSelection();

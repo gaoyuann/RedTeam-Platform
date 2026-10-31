@@ -4,6 +4,7 @@
 #include "ApiClient.h"
 #include "Theme.h"
 #include "AppStyle.h"
+#include "UiTypography.h"
 #include "services/dongle/DongleService.h"
 #include <QApplication>
 #include <QMessageBox>
@@ -20,19 +21,12 @@
 
 static void loadBundledFonts() {
   QDir appDir(QCoreApplication::applicationDirPath());
-  QString fontDir = appDir.filePath("../fonts");
-  if (!QDir(fontDir).exists()) return;
-
-  int loaded = 0;
-  for (const auto &entry : QDir(fontDir).entryInfoList(
+  const QStringList fontDirs{appDir.filePath("fonts"), appDir.filePath("../fonts")};
+  for (const auto &fontDir : fontDirs) {
+    for (const auto &entry : QDir(fontDir).entryInfoList(
          {"*.ttf", "*.otf", "*.ttc"}, QDir::Files)) {
-    int id = QFontDatabase::addApplicationFont(entry.absoluteFilePath());
-    if (id != -1) loaded++;
-  }
-  if (loaded > 0) {
-    QFont font = QApplication::font();
-    font.setFamily("Noto Sans CJK SC");
-    QApplication::setFont(font);
+      QFontDatabase::addApplicationFont(entry.absoluteFilePath());
+    }
   }
 }
 
@@ -89,10 +83,9 @@ int main(int argc, char *argv[])
     QNetworkProxyFactory::setUseSystemConfiguration(false);
     QNetworkProxy::setApplicationProxy(QNetworkProxy::NoProxy);
 
-    // Global font & stylesheet (fonts loaded in splash below)
-    QFont baseFont = app.font();
-    baseFont.setPointSize(11);
-    app.setFont(baseFont);
+    // Choose fonts before constructing the splash, login or main window.
+    loadBundledFonts();
+    app.setFont(Theme::uiFont());
 
     // Dark mode detection: check system palette or QSettings override
     QSettings themeSettings("RedTeam", "RedTeam-Platform");
@@ -114,8 +107,6 @@ int main(int argc, char *argv[])
     splash.updateProgress(10, "正在加载资源...");
     app.processEvents();
 
-    // Real loading: fonts
-    loadBundledFonts();
     splash.updateProgress(30, "资源加载完成");
     app.processEvents();
 

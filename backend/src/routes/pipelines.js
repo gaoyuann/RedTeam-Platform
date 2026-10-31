@@ -1,7 +1,7 @@
 import {putPostRequests,clearPostRequests} from '../services/scanPostRequests.js';
 import {isTargetInScope} from '../services/taskScope.js';
 import {putScanSessionAuth,clearScanSessionAuth} from '../services/scanSessionAuth.js';
-import {defaultScanAgent,isScanAgent,isDiscoveryTask,scanAgentBusy,isSourceTask,validateScanAgentMode} from '../services/scanAgentConfig.js';
+import {defaultScanAgent,isScanAgent,isDiscoveryTask,isIntelligentWorkflow,scanAgentBusy,isSourceTask,validateScanAgentMode} from '../services/scanAgentConfig.js';
 import {validateWebScanConfig,isWebAgent,hasWebScanSchema,putWebCredentials,clearWebCredentials,webTargetBusy} from '../services/webScanConfig.js';
 import { hasStatistics } from '../services/findingInstances.js';
 import { hasScanIntegrity } from '../services/scanResultStore.js';
@@ -22,6 +22,7 @@ import { captureTopologyOrigin, readTopologyOrigin } from '../services/topologyO
 import { sourceTarget, httpSourceConnection, resolveSourceConnection } from '../services/sourceScanConnections.js';
 import { normalizeTaskScope, scopeBlockingConditions, scopeConditions, taskScope } from '../services/taskScope.js';
 import {cscanTarget,cscanRemotePath,cscanSourcePath,cscanNotes} from '../services/cscanTarget.js';
+import {validUrlHostname} from '../services/networkTarget.js';
 import {sourceSubdir} from '../services/sourceRemoteDirectory.js';
 import {resolveTopologyTaskSource} from '../services/topologyTaskSource.js';
 
@@ -38,7 +39,10 @@ function validateTarget(target) {
   }
   // Allow URLs (http://, https://) — pipelines target web applications
   if (/^https?:\/\//i.test(target)) {
-    try { new URL(target); return true; } catch { return false; }
+    try {
+      const url = new URL(target);
+      return validUrlHostname(url.hostname) && !url.username && !url.password && !url.hash;
+    } catch { return false; }
   }
   const ipCidr = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/;
   const hostname = /^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$/;
@@ -315,7 +319,7 @@ export default function (db) {
         const parsed = typeof config === 'string' ? JSON.parse(config) : config;
         // Only allow known config keys
         const sanitized = {};
-        const allowedKeys = ['task_mode', 'auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id', 'source_subdir', 'cscan_target', 'source_path', 'source_notes', 'input_kind', 'runtime_target', 'task_scope'];
+        const allowedKeys = ['workflow_mode', 'task_mode', 'auto_execute', 'timeout', 'scan_parameters', 'execution_parameters', 'require_approval', 'task_name', 'test_type', 'authorization_confirmed', 'authorization_scope', 'creation_mode', 'created_by_label', 'scan_mode', 'source_url', 'source_connection_id', 'source_subdir', 'cscan_target', 'source_path', 'source_notes', 'input_kind', 'runtime_target', 'task_scope'];
         for (const key of allowedKeys) {
           if (parsed[key] !== undefined) sanitized[key] = parsed[key];
         }
@@ -340,6 +344,7 @@ export default function (db) {
       // Only NEW tasks receive the discovery default. Historical tasks keep
       // their recorded dispatch mode, including on restart or update.
       program.config=defaultScanAgent({...(!isProgramMode(program.config.scan_mode)?{task_mode:'discovery'}:{}),...program.config},target);
+      validateScanAgentMode(program.config,target);
       validateWebScanConfig(program.config,target);
       const source=resolveTopologyTaskSource(db,req.user,req.body.topology_source,target,program.config);
       if (source) program.config.topology_source=source;
@@ -409,7 +414,7 @@ export default function (db) {
       try {
         const previous=JSON.parse(pipeline.config || '{}');
         const requested=JSON.parse(configStr);
-        for(const key of ['retry_of_pipeline_id','retry_request_id','scan_orchestrator','task_mode','topology_source']) if(previous[key]) requested[key]=previous[key];
+        for(const key of ['retry_of_pipeline_id','retry_request_id','scan_orchestrator','task_mode','topology_source','workflow_mode','source_scan_task_id']) if(previous[key]) requested[key]=previous[key];
         if(requested.task_scope === undefined) requested.task_scope=previous.task_scope;
         const normalized=await normalizeProgramConfig(requested,pipeline.target);
         // Recompute only for editable tasks. Historical runtime tasks retain
@@ -620,6 +625,9 @@ export default function (db) {
       return res.status(403).json({ status: 'error', error: { message: '没有权限审批此流水线' } });
     }
     let approvalConfig={};try {approvalConfig=JSON.parse(pipeline.config || '{}');} catch {}
+    if (isIntelligentWorkflow(approvalConfig)) {
+      return res.status(409).json({status:'error',error:{message:'智能测试须在任务预案页审阅并批准具体版本，不能直接批准来源预案'}});
+    }
     if(isProgramMode(approvalConfig.scan_mode)) {
       return res.status(409).json({status:'error',error:{message:'程序测试需先选择发现并建立任务预案，不能绕过演示对象清单直接执行'}});
     }

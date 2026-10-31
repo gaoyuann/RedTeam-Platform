@@ -56,6 +56,7 @@ ExecutionPage::ExecutionPage(ApiClient *api, const QString &role, const QString 
   connect(m_taskMonitor, &TaskExecutionPanel::runSelected, this, &ExecutionPage::runSelected);
   connect(m_taskMonitor, &TaskExecutionPanel::runCompleted, this, &ExecutionPage::runCompleted);
   connect(m_taskMonitor, &TaskExecutionPanel::findingVerificationChanged, this, &ExecutionPage::findingVerificationChanged);
+  connect(m_taskMonitor, &TaskExecutionPanel::assessmentRequested, this, &ExecutionPage::assessmentRequested);
   loadPlaybooks();
 
   // Poll timer for real-time execution updates
@@ -85,11 +86,19 @@ void ExecutionPage::setupUI() {
   auto *standaloneLayout = new QVBoxLayout(m_standaloneControls);
   standaloneLayout->setContentsMargins(0, 0, 0, 0);
   tab1Layout->addWidget(m_standaloneControls);
-  m_pipelineHint = new QLabel(tab1);
+  m_pipelineHint = new QLabel(this);
   m_pipelineHint->setWordWrap(true);
   m_pipelineHint->setStyleSheet("color:#64748b;padding:4px 0;");
   m_pipelineHint->hide();
-  tab1Layout->addWidget(m_pipelineHint);
+  mainLayout->addWidget(m_pipelineHint);
+  m_reviewPlan = new QPushButton(QStringLiteral("审阅本任务方案，确认后执行"), this);
+  m_reviewPlan->setObjectName("executionReviewPlan");
+  m_reviewPlan->setProperty("primary", true);
+  m_reviewPlan->hide();
+  mainLayout->addWidget(m_reviewPlan, 0, Qt::AlignLeft);
+  connect(m_reviewPlan, &QPushButton::clicked, this, [this]() {
+    if (!m_pipelineId.isEmpty() && m_pipelineStatus == "awaiting_approval") emit planReviewRequested();
+  });
 
   // ── Attack category filter ─────────────────────────────────────────
   auto *catH = new QHBoxLayout;
@@ -145,7 +154,7 @@ void ExecutionPage::setupUI() {
   m_catalogueStatus = new QLabel;
   m_catalogueStatus->setObjectName("executionCatalogueStatus");
   m_catalogueStatus->setTextFormat(Qt::PlainText); m_catalogueStatus->setWordWrap(true);
-  m_catalogueStatus->setStyleSheet("font-size:12px;color:#7088a8;");
+  m_catalogueStatus->setStyleSheet("font-size:14px;color:#7088a8;");
   standaloneLayout->addWidget(m_catalogueStatus);
   connect(m_execBtn, &QPushButton::clicked, this, &ExecutionPage::onExecute);
   connect(m_playbookCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
@@ -167,7 +176,7 @@ void ExecutionPage::setupUI() {
   m_runScopeNote = new QLabel;
   m_runScopeNote->setObjectName("standaloneRunScope");
   m_runScopeNote->setWordWrap(true);
-  m_runScopeNote->setStyleSheet("font-size:12px;color:#768da9;");
+  m_runScopeNote->setStyleSheet("font-size:14px;color:#768da9;");
   tab1Layout->addWidget(m_runScopeNote);
   m_runTable = new QTableWidget(0, 5);
   UiUtil::EmptyHint::attach(m_runTable, QStringLiteral("暂无攻击执行记录"));
@@ -590,7 +599,7 @@ void ExecutionPage::refreshTaskRecords() {
   if (!m_pipelineId.isEmpty()) m_taskMonitor->refresh();
 }
 
-void ExecutionPage::setPipelineContext(const QString &pipelineId, const QString &status, const QString &runId, const QString &target) {
+void ExecutionPage::setPipelineContext(const QString &pipelineId, const QString &status, const QString &runId, const QString &target, bool intelligent) {
   const bool changed = pipelineId != m_pipelineId || runId != m_pipelineRunId;
   m_pipelineId = pipelineId;
   m_pipelineStatus = status;
@@ -599,13 +608,19 @@ void ExecutionPage::setPipelineContext(const QString &pipelineId, const QString 
   if (scoped) m_targetInput->setText(target);
   m_tabWidget->setVisible(!scoped);
   m_taskMonitor->setTaskContext(pipelineId, runId, target);
+  m_taskMonitor->setPrimaryPlan(intelligent);
   m_taskMonitor->setVisible(scoped);
   m_targetInput->setReadOnly(scoped);
   m_standaloneControls->setVisible(!scoped);
   m_pipelineHint->setVisible(scoped);
+  m_reviewPlan->setVisible(scoped && status == "awaiting_approval");
+  m_reviewPlan->setEnabled(scoped && status == "awaiting_approval");
   m_execBtn->setEnabled(!scoped);
   m_execBtn->setText(QStringLiteral("执行"));
-  m_pipelineHint->setText(QStringLiteral("逐漏洞测试可从漏洞列表直接开始；双击下方记录查看历史。全局预案为可选批量编排，状态见主预案详情。"));
+  m_pipelineHint->setText(scoped && status == "awaiting_approval"
+    ? QStringLiteral("扫描与分析已保存。请审阅本任务方案并确认执行，当前尚未启动攻击测试。")
+    : intelligent ? QStringLiteral("执行已确认的本次方案；下方展示步骤、工具调用和证据。执行完成不代表漏洞成立。")
+    : QStringLiteral("逐漏洞测试可从漏洞列表直接开始；双击下方记录查看历史。全局预案为可选批量编排，状态见主预案详情。"));
   if (changed) {
     m_launching = false; m_previewLoading = false; m_previewReady = false; ++m_previewRequest;
     ++m_contextRevision;
@@ -720,7 +735,7 @@ void ExecutionPage::onExecute() {
       "%7"
       "<p><b>已保存的预案步骤：</b></p>"
       "<pre style='font-family:monospace;background:#f5f5f5;padding:8px;'>%8</pre>"
-      "<p style='color:#888;font-size:11px;'>⚠ ReAct 引擎会根据每步结果动态调整后续步骤，实际执行可能与此计划不同。</p>"
+      "<p style='color:#888;font-size:13px;'>⚠ ReAct 引擎会根据每步结果动态调整后续步骤，实际执行可能与此计划不同。</p>"
       "<p><b>是否开始执行？</b></p>")
       .arg(pbName, pbDesc.isEmpty() ? QStringLiteral("（无描述）") : pbDesc,
            target.toHtmlEscaped(), pbDiff.isEmpty() ? QStringLiteral("未标注") : pbDiff,
@@ -1463,7 +1478,7 @@ void ExecutionPage::showCellDetail(const QString &title, const QString &content)
   auto *te = new QTextEdit(dlg);
   te->setPlainText(content);
   te->setReadOnly(true);
-  te->setStyleSheet("QTextEdit { font-size: 13px; font-family: 'Monospace'; "
+  te->setStyleSheet("QTextEdit { font-size: 15px; font-family: 'Monospace'; "
                     "background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; }");
   l->addWidget(te);
   auto *btn = new QPushButton(QStringLiteral("关闭"), dlg);

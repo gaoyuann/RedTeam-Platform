@@ -101,7 +101,7 @@ public:
     hint->m_label = label;
     label->setAlignment(Qt::AlignCenter);
     label->setStyleSheet(
-      "color:#64748b; font-size:13px; background:transparent; padding:0 16px;");
+      "color:#64748b; font-size:15px; background:transparent; padding:0 16px;");
     label->setAttribute(Qt::WA_TransparentForMouseEvents);
     label->setWordWrap(true);
     label->setGeometry(view->viewport()->rect());
@@ -125,7 +125,7 @@ public:
     auto *label = view->viewport()->findChild<QLabel *>(QStringLiteral("itemViewEmptyHint"), Qt::FindDirectChildrenOnly);
     if (!label) return;
     label->setText(text);
-    label->setStyleSheet(QStringLiteral("color:%1; font-size:13px; background:transparent; padding:0 16px;")
+    label->setStyleSheet(QStringLiteral("color:%1; font-size:15px; background:transparent; padding:0 16px;")
         .arg(error ? QStringLiteral("#b42318") : QStringLiteral("#64748b")));
   }
 

@@ -18,8 +18,8 @@ public:
     setElideMode(Qt::ElideNone);
     setStyleSheet(QStringLiteral(
       "QTabBar::tab { background:transparent; color:#64748b; border:none;"
-      " padding:%1px %2px; margin-right:4px; font-size:13px; font-weight:500; }"
-      "QTabBar::tab:selected { color:#2563eb; font-weight:600; }"
+      " padding:%1px %2px; margin-right:4px; font-size:18px; font-weight:600; }"
+      "QTabBar::tab:selected { color:#2563eb; font-weight:700; }"
       "QTabBar::tab:hover:!selected { color:#2563eb; background:#f1f6ff; border-radius:6px; }"
       "QTabBar::tab:disabled { color:#a3afbf; }").arg(compact ? 9 : 12).arg(m_padding));
     m_animation.setDuration(150);

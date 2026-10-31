@@ -36,6 +36,7 @@
 #include <QScopedValueRollback>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QStyle>
 
 namespace {
 QString displayRole(const QString &role)
@@ -88,7 +89,8 @@ void MainWindow::setupUI()
     m_navList = new QListWidget(moduleBar);
     m_navList->setObjectName("ribbonModuleTabs");
     QFont moduleFont = m_navList->font();
-    moduleFont.setPixelSize(13);
+    moduleFont.setPixelSize(18);
+    moduleFont.setWeight(QFont::DemiBold);
     m_navList->setFont(moduleFont);
     m_navList->setTextElideMode(Qt::ElideNone);
     m_navList->setStyleSheet(QStringLiteral(
@@ -101,7 +103,7 @@ void MainWindow::setupUI()
     m_navList->setResizeMode(QListView::Adjust);
     m_navList->setMovement(QListView::Static);
     m_navList->setSpacing(0);
-    m_navList->setFixedHeight(47);
+    m_navList->setFixedHeight(51);
     m_navList->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     m_navList->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_navList->setAccessibleName(QStringLiteral("功能模块"));
@@ -118,6 +120,10 @@ void MainWindow::setupUI()
     collapse->setProperty("compact", true);
     collapse->setCheckable(true);
     collapse->setAccessibleName(collapse->text());
+    collapse->setIcon(style()->standardIcon(QStyle::SP_ArrowUp));
+    collapse->setIconSize(QSize(12, 12));
+    collapse->setCursor(Qt::PointingHandCursor);
+    collapse->setToolTip(QStringLiteral("收起子功能按钮，保留模块页签"));
     moduleLayout->addWidget(collapse);
     rootLayout->addWidget(moduleBar);
     m_ribbon = new ModuleRibbon(m_role == QStringLiteral("admin"), centralWidget);
@@ -132,15 +138,12 @@ void MainWindow::setupUI()
     m_contextLabel->setTextFormat(Qt::PlainText);
     m_contextLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_contextLabel->setMinimumWidth(0);
-    m_contextLabel->setStyleSheet(QStringLiteral("font-size:12px; color:#5e7596;"));
+    m_contextLabel->setStyleSheet(QStringLiteral("font-size:17px; color:#455b78;"));
     contextLayout->addWidget(m_contextLabel, 1);
     m_switchTaskButton = new QPushButton(QStringLiteral("选择任务"), m_contextBar);
     m_switchTaskButton->setObjectName("featureSelectTask"); m_switchTaskButton->setProperty("compact", true);
-    m_independentButton = new QPushButton(QStringLiteral("独立操作"), m_contextBar);
-    m_independentButton->setObjectName("featureIndependent"); m_independentButton->setProperty("compact", true);
-    contextLayout->addWidget(m_switchTaskButton); contextLayout->addWidget(m_independentButton);
+    contextLayout->addWidget(m_switchTaskButton);
     connect(m_switchTaskButton, &QPushButton::clicked, this, &MainWindow::chooseTaskForFeature);
-    connect(m_independentButton, &QPushButton::clicked, this, &MainWindow::useIndependentWorkspace);
     m_overviewButton = new QPushButton(QStringLiteral("任务概况"), m_contextBar);
     m_overviewButton->setObjectName("ribbonTaskOverview");
     m_overviewButton->setProperty("compact", true);
@@ -157,18 +160,23 @@ void MainWindow::setupUI()
         if (!m_dongleLocked) showAuxiliaryWorkspace(6, QStringLiteral("任务概况"), QStringLiteral("任务管理中的当前任务详情，包含目标、状态与进度。"));
     });
     connect(m_resultsButton, &QPushButton::clicked, this, [this]() {
-        openTaskStage(6);
-        if (!m_dongleLocked) showAuxiliaryWorkspace(5, QStringLiteral("任务结果与证据"), QStringLiteral("查看已有任务结果、统计与证据；不表示独立安全态势功能已经实现。"));
+        openRibbonFeature(QStringLiteral("evaluation.results"));
     });
     connect(m_ribbon, &ModuleRibbon::featureRequested, this, [this](const QString &id) {
         openRibbonFeature(id);
         if (!m_explicitRibbonChoice && height() < 720) m_navigationToggle->setChecked(true);
     });
     connect(collapse, &QPushButton::clicked, this, [this]() { m_explicitRibbonChoice = true; });
-    connect(collapse, &QPushButton::toggled, this, [this, collapse](bool collapsed) {
-        m_ribbon->setVisible(!collapsed);
+    connect(collapse, &QPushButton::toggled, this, [this, collapse, rootLayout](bool collapsed) {
         collapse->setText(collapsed ? QStringLiteral("展开功能区") : QStringLiteral("收起功能区"));
+        collapse->setIcon(style()->standardIcon(collapsed ? QStyle::SP_ArrowDown : QStyle::SP_ArrowUp));
         collapse->setAccessibleName(collapse->text());
+        collapse->setToolTip(collapsed ? QStringLiteral("展开当前模块的子功能按钮")
+                                       : QStringLiteral("收起子功能按钮，保留模块页签"));
+        m_ribbon->setVisible(!collapsed);
+        // Hiding a widget only posts a LayoutRequest. Apply the new workspace
+        // geometry in this interaction, before queued table/polling work runs.
+        rootLayout->activate();
     });
 
     // Right: stacked pages
@@ -204,19 +212,19 @@ void MainWindow::setupUI()
     featureLayout->setContentsMargins(20, 5, 20, 5);
     featureLayout->setSpacing(3);
     m_featurePath = new QLabel(m_featureHeader);
-    m_featurePath->setStyleSheet("font-size:11px;color:#8a99ae;");
+    m_featurePath->setStyleSheet("font-size:15px;color:#8a99ae;");
     m_featureTitle = new QLabel(m_featureHeader);
     m_featureTitle->setObjectName("featurePageTitle");
     m_featureTitle->setTextFormat(Qt::PlainText);
-    m_featureTitle->setStyleSheet("font-size:14px;font-weight:600;color:#203b60;");
+    m_featureTitle->setStyleSheet("font-size:18px;font-weight:600;color:#203b60;");
     m_featureDescription = new QLabel(m_featureHeader);
     m_featureDescription->setTextFormat(Qt::PlainText);
     m_featureDescription->setWordWrap(true);
-    m_featureDescription->setStyleSheet("font-size:12px;color:#7b8fa9;");
+    m_featureDescription->setStyleSheet("font-size:16px;color:#7b8fa9;");
     m_featurePath->hide();
     auto *featureHeading = new QHBoxLayout;
     featureHeading->addWidget(m_featureTitle, 1);
-    m_newTaskButton = new QPushButton(QStringLiteral("新建测试任务"), m_featureHeader);
+    m_newTaskButton = new QPushButton(QStringLiteral("＋ 发起测试"), m_featureHeader);
     m_newTaskButton->setObjectName("featureNewTestTask"); m_newTaskButton->setProperty("primary", true);
     connect(m_newTaskButton, &QPushButton::clicked, this, &MainWindow::createTaskForFeature);
     contextLayout->insertWidget(1, m_newTaskButton);
@@ -231,14 +239,14 @@ void MainWindow::setupUI()
     gateLayout->setSpacing(18);
     m_taskGateMessage = new QLabel(m_taskGate);
     m_taskGateMessage->setWordWrap(true);
-    m_taskGateMessage->setStyleSheet("font-size:14px;color:#7c90ac;");
+    m_taskGateMessage->setStyleSheet("font-size:18px;color:#7c90ac;");
     m_chooseTaskButton = new QPushButton(QStringLiteral("选择测试任务"), m_taskGate);
     m_chooseTaskButton->setProperty("primary", true);
     m_chooseTaskButton->setFixedWidth(155);
     gateLayout->addWidget(m_taskGateMessage);
     auto *gateActions = new QHBoxLayout;
     gateActions->addWidget(m_chooseTaskButton);
-    m_gateNewTaskButton = new QPushButton(QStringLiteral("新建测试任务"), m_taskGate);
+    m_gateNewTaskButton = new QPushButton(QStringLiteral("发起测试"), m_taskGate);
     m_gateNewTaskButton->setObjectName("featureGateNewTask");
     connect(m_gateNewTaskButton, &QPushButton::clicked, this, &MainWindow::createTaskForFeature);
     gateActions->addWidget(m_gateNewTaskButton); gateActions->addStretch();
@@ -266,7 +274,7 @@ void MainWindow::setupUI()
     statusBar()->addWidget(m_checkBackendBtn);
 
     m_backendStatusLabel = new QLabel(QStringLiteral("未检测"), this);
-    m_backendStatusLabel->setStyleSheet("color: #64748b; padding: 0 10px; font-size: 13px;");
+    m_backendStatusLabel->setStyleSheet("color: #64748b; padding: 0 10px; font-size:17px;");
     statusBar()->addWidget(m_backendStatusLabel);
 
     // User info label in status bar
@@ -275,7 +283,7 @@ void MainWindow::setupUI()
     m_userInfoLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     m_userInfoLabel->setMaximumWidth(240);
     m_userInfoLabel->setToolTip(m_userInfoLabel->text().toHtmlEscaped());
-    m_userInfoLabel->setStyleSheet("color: #64748b; padding: 0 10px; font-size: 13px;");
+    m_userInfoLabel->setStyleSheet("color: #64748b; padding: 0 10px; font-size:17px;");
     statusBar()->addWidget(m_userInfoLabel);
 
     m_logoutBtn = new QPushButton(QStringLiteral("退出登录"), this);
@@ -348,15 +356,21 @@ QWidget *MainWindow::createModulePage(int index)
         m_flowPage->setRibbonNavigation(true);
         bindExecutionView(m_flowPage->execTab());
         bindScanWorkspace(m_flowPage->scanTab());
+        connect(m_flowPage->topoTab(), &TopologyPage::topologyViewRequested, this, [this]() {
+            if (!m_dongleLocked) openRibbonFeature(QStringLiteral("topology.display"));
+        });
         connect(m_flowPage, &FlowPage::taskContextChanged, this, &MainWindow::updateTaskContext);
         connect(m_flowPage, &FlowPage::taskCreationFailed, this, [this]() {
             m_creatingTaskFeature.clear(); updateFeaturePresentation();
         });
         connect(m_flowPage, &FlowPage::assessmentTaskOpened, this, [this]() {
             if (m_creatingTaskFeature.isEmpty()) return;
-            const QString id = m_creatingTaskFeature; m_creatingTaskFeature.clear();
-            m_pendingTaskFeature = id;
-            if (!m_dongleLocked && m_flowPage->taskContextReady()) { m_pendingTaskFeature.clear(); openRibbonFeature(id); }
+            m_creatingTaskFeature.clear();
+            m_pendingTaskFeature.clear();
+            m_flowPage->switchToStageTab(1);
+            m_flowPage->scanTab()->showAllTaskResults();
+            showAuxiliaryWorkspace(1, QStringLiteral("当前任务扫描"),
+                QStringLiteral("查看本任务的扫描进度与全部发现；后续方案、攻击和评估沿用同一任务。"));
         });
         connect(m_flowPage, &FlowPage::taskListRequested, this, [this]() { openRibbonFeature("system.tasks"); });
         connect(m_flowPage, &FlowPage::taskReportOpened, this, [this]() {
@@ -372,7 +386,7 @@ QWidget *MainWindow::createModulePage(int index)
             if (stage == 1) {
                 id = m_flowPage->scanTab()->selectedScanFeature();
                 if (id.isEmpty()) {
-                    showAuxiliaryWorkspace(3, QStringLiteral("任务扫描发现"), QStringLiteral("查看当前任务全部来源的扫描发现；上方可选择具体检测类型。"));
+                    showAuxiliaryWorkspace(1, QStringLiteral("任务扫描发现"), QStringLiteral("查看当前任务全部来源的扫描发现；上方可选择具体检测类型。"));
                     return;
                 }
             }
@@ -382,14 +396,14 @@ QWidget *MainWindow::createModulePage(int index)
             else if (stage == 5) {
                 const int category = m_flowPage->execTab()->attackCategory();
                 if (category == 0) {
-                    showAuxiliaryWorkspace(4, QStringLiteral("当前任务执行"), QStringLiteral("查看当前任务的执行与证据；选择上方场景可筛选关联记录。"));
+                    showAuxiliaryWorkspace(3, QStringLiteral("当前任务执行"), QStringLiteral("查看当前任务的执行与证据；选择上方场景可筛选关联记录。"));
                     return;
                 }
                 id = QStringList{QString(), "attacks.data", "attacks.tampering", "attacks.control"}.value(category);
             }
             else if (stage == 6) {
                 if (m_activeFeature == "system.generate-report" || m_activeFeature == "system.reports") id = m_activeFeature;
-                else { showAuxiliaryWorkspace(5, QStringLiteral("任务结果与证据"), QStringLiteral("查看当前任务统计、验证结论与证据，报告在系统管理中生成和管理。")); return; }
+                else id = "evaluation.results";
             } else if (stage == 0) {
                 showAuxiliaryWorkspace(6, QStringLiteral("任务概况"), QStringLiteral("当前任务的目标、状态、进度及关联记录。")); return;
             }
@@ -409,6 +423,9 @@ QWidget *MainWindow::createModulePage(int index)
     }
     case 2: {
         auto *assetTopology=new TopologyPage(m_api,m_role,m_username,this);
+        connect(assetTopology, &TopologyPage::topologyViewRequested, this, [this]() {
+            if (!m_dongleLocked) openRibbonFeature(QStringLiteral("topology.display"));
+        });
         connect(assetTopology,&TopologyPage::testTargetRequested,this,[this,assetTopology](const QString &target) {
             if(m_dongleLocked) return;
             switchToPage(1);
@@ -445,9 +462,8 @@ QWidget *MainWindow::createModulePage(int index)
         connect(playbookPage, &PlaybookPage::executeRequested, this,
             [this](const QString &id) {
                 if (m_dongleLocked) return;
-                switchToPage(1);  // 测试任务
-                m_flowPage->jumpToExecution(id, QString());
-                m_flowPage->setReturnPage(4, QStringLiteral("预案与知识库"));
+                m_pendingSourcePlaybookId = id;
+                openRibbonFeature(QStringLiteral("plans.task"));
             });
 
         return playbookPage;
@@ -496,35 +512,6 @@ QWidget *MainWindow::createModulePage(int index)
         if (m_role != QStringLiteral("admin")) return nullptr;
         m_deployPage = new DeployConfigPage(m_api, m_role, m_username, this);
         return m_deployPage;
-    case 10: {
-        m_standaloneScan = new ScanPage(m_api, m_role, m_username, this);
-        m_standaloneScan->enableRibbonWorkspace();
-        bindScanWorkspace(m_standaloneScan);
-        connect(m_standaloneScan, &ScanPage::taskSelectionRequested, this, [this]() { openRibbonFeature("system.tasks"); });
-        connect(m_standaloneScan, &ScanPage::playbookNavigateRequested, this, [this](const QString &id, const QString &target) {
-            switchToPage(1);
-            m_flowPage->jumpToExecution(id, target);
-        });
-        connect(m_standaloneScan, &ScanPage::attackRequested, this, [this](const QString &target, const QString &text, const QString &type) {
-            switchToPage(11);
-            m_standaloneExecution->attackFromVuln(target, text, type);
-        });
-        if (m_ws) {
-            const auto refresh = [this]() { if (m_standaloneScan->isVisible()) m_standaloneScan->onRefreshTasks(); };
-            connect(m_ws, &WsClient::scanCompleted, m_standaloneScan, refresh);
-            connect(m_ws, &WsClient::connected, m_standaloneScan, refresh);
-        }
-        return m_standaloneScan;
-    }
-    case 11:
-        m_standaloneExecution = new ExecutionPage(m_api, m_role, m_username, this);
-        m_standaloneExecution->enableRibbonWorkspace();
-        bindExecutionView(m_standaloneExecution);
-        if (m_ws) {
-            connect(m_ws, &WsClient::runReact, m_standaloneExecution, &ExecutionPage::onRunReact);
-            connect(m_ws, &WsClient::runCompleted, m_standaloneExecution, &ExecutionPage::onRefreshRuns);
-        }
-        return m_standaloneExecution;
     case 9:
         m_capturePage = new EvaluatePage(m_api, m_role, m_username, this);
         return m_capturePage;
@@ -615,6 +602,11 @@ void MainWindow::resizeEvent(QResizeEvent *event)
 void MainWindow::switchToPage(int index)
 {
     if (m_dongleLocked || index < 0 || index > 11 || index == 7) return;
+    // Compatibility page IDs resolve into the same task pages as the ribbon.
+    if (index == 10 || index == 11) {
+        openRibbonFeature(index == 10 ? QStringLiteral("scans.system") : QStringLiteral("attacks.data"));
+        return;
+    }
     onModuleChanged(index);
     if (!m_routingFeature) syncRibbonForPage(index);
     updateFeaturePresentation();
@@ -730,18 +722,18 @@ void MainWindow::onCheckBackend()
 {
     m_checkBackendBtn->setEnabled(false);
     m_backendStatusLabel->setText("检测中...");
-    m_backendStatusLabel->setStyleSheet("color: #64748b; padding: 0 10px; font-size: 13px;");
+    m_backendStatusLabel->setStyleSheet("color: #64748b; padding: 0 10px; font-size:17px;");
 
     m_api->get("/api/health", 3000, [this](const QJsonObject &res) {
         m_checkBackendBtn->setEnabled(true);
         if (res["status"].toString() == "ok") {
             m_backendStatusLabel->setText("已连接");
             m_backendStatusLabel->setStyleSheet(
-                "color: #16a34a; font-weight: bold; padding: 0 10px; font-size: 13px;");
+                "color: #16a34a; font-weight: bold; padding: 0 10px; font-size:17px;");
         } else {
             m_backendStatusLabel->setText("未连接");
             m_backendStatusLabel->setStyleSheet(
-                "color: #dc3545; font-weight: bold; padding: 0 10px; font-size: 13px;");
+                "color: #dc3545; font-weight: bold; padding: 0 10px; font-size:17px;");
         }
     });
 }
@@ -802,22 +794,14 @@ void MainWindow::openRibbonFeature(const QString &id)
         }
         if (topology) topology->selectWorkspaceMode(id.section('.', 1));
     } else if (id.startsWith("scans.")) {
-        if (m_flowPage && m_flowPage->hasSelectedTask()) {
-            openTaskStage(1);
-            m_flowPage->scanTab()->selectScanType(id.section('.', 1));
-        } else {
-            switchToPage(10);
-            if (m_standaloneScan) m_standaloneScan->selectScanType(id.section('.', 1));
-        }
+        openTaskStage(1);
+        if (m_flowPage) m_flowPage->scanTab()->selectScanType(id.section('.', 1));
     } else if (id.startsWith("attacks.")) {
         const int category = id == "attacks.data" ? 1 : id == "attacks.tampering" ? 2 : 3;
-        if (m_flowPage && m_flowPage->hasSelectedTask()) {
-            openTaskStage(5);
-            m_flowPage->execTab()->selectAttackCategory(category);
-        } else {
-            switchToPage(11);
-            if (m_standaloneExecution) m_standaloneExecution->selectAttackCategory(category);
-        }
+        openTaskStage(5);
+        if (m_flowPage) m_flowPage->execTab()->selectAttackCategory(category);
+    } else if (id == "evaluation.results") {
+        openTaskStage(6);
     } else if (id.startsWith("evaluation.")) {
         switchToPage(9);
         if (m_capturePage) m_capturePage->showCaptureWorkspace(id == "evaluation.analysis");
@@ -879,19 +863,17 @@ void MainWindow::syncRibbonForPage(int page)
         const int stage = m_flowPage->workspaceStage();
         if (stage == 1) {
             feature = m_flowPage->scanTab()->selectedScanFeature();
-            if (feature.isEmpty()) { showAuxiliaryWorkspace(3, QStringLiteral("任务扫描发现"), QStringLiteral("当前任务全部来源的扫描记录；选择上方类型查看对应结果。")); return; }
+            if (feature.isEmpty()) { showAuxiliaryWorkspace(1, QStringLiteral("任务扫描发现"), QStringLiteral("当前任务全部来源的扫描记录；选择上方类型查看对应结果。")); return; }
         }
         else if (stage == 2) feature = "plans.scenario";
         else if (stage == 3) feature = m_activeFeature.startsWith("topology.") ? m_activeFeature : "topology.display";
         else if (stage == 4) feature = "plans.task";
         else if (stage == 5) {
             const int category = m_flowPage->execTab()->attackCategory();
-            if (!category) { showAuxiliaryWorkspace(4, QStringLiteral("当前任务执行"), QStringLiteral("查看任务执行与证据，或选择场景筛选关联记录。")); return; }
+            if (!category) { showAuxiliaryWorkspace(3, QStringLiteral("当前任务执行"), QStringLiteral("查看任务执行与证据，或选择场景筛选关联记录。")); return; }
             feature = QStringList{QString(), "attacks.data", "attacks.tampering", "attacks.control"}.value(category);
         }
-        else if (stage == 6) {
-            showAuxiliaryWorkspace(5, QStringLiteral("任务结果与证据"), QStringLiteral("查看已有任务结果、统计与证据。")); return;
-        }
+        else if (stage == 6) feature = "evaluation.results";
         else {
             m_activeFeature.clear();
             m_ribbon->setActiveFeature({});
@@ -933,7 +915,18 @@ void MainWindow::updateTaskContext()
         && (!m_selectingFeatureTask || m_flowPage->taskSelectionRevision() != m_featureSelectionRevision)) {
         const QString requested = m_pendingTaskFeature;
         m_pendingTaskFeature.clear();
-        openRibbonFeature(requested);
+        if (requested == "scans.all" || requested == "attacks.all") {
+            m_selectingFeatureTask = false;
+            const bool scan = requested == "scans.all";
+            openTaskStage(scan ? 1 : 5);
+            if (scan) m_flowPage->scanTab()->showAllTaskResults();
+            else m_flowPage->execTab()->selectAttackCategory(0);
+            showAuxiliaryWorkspace(scan ? 1 : 3, scan ? QStringLiteral("当前任务扫描") : QStringLiteral("当前任务执行"),
+                QStringLiteral("查看当前任务的全部记录与证据。"));
+        } else if (requested == "system.tasks") {
+            m_selectingFeatureTask = false;
+            syncRibbonForPage(1);
+        } else openRibbonFeature(requested);
         return;
     }
     if (selected && m_flowPage->taskContextReady() && m_activeFeature.startsWith("scans.")
@@ -942,11 +935,19 @@ void MainWindow::updateTaskContext()
         openRibbonFeature(m_activeFeature);
         return;
     }
+    if (selected && m_flowPage->taskContextReady() && !m_flowPage->taskListVisible()
+        && m_activeFeature == "system.tasks" && !m_routingFeature && !m_dongleLocked)
+        syncRibbonForPage(1);
+    if (selected && m_flowPage->taskContextReady() && m_activeFeature == "plans.task" && !m_pendingSourcePlaybookId.isEmpty()) {
+        const QString source = m_pendingSourcePlaybookId;
+        m_pendingSourcePlaybookId.clear();
+        m_flowPage->useTaskPlaybook(source);
+    }
     const auto *feature = ModuleRibbon::feature(m_activeFeature);
-    QString text = selected ? m_flowPage->taskContextSummary() : QStringLiteral("未关联测试任务 · 可选择已有任务或新建测试任务");
+    QString text = selected ? m_flowPage->taskContextSummary() : QStringLiteral("请选择已有任务，或点击“发起测试”");
     if (feature) {
         if (feature->id.startsWith("resources.") && feature->id != "resources.discovery") text += QStringLiteral("（全局配置）");
-        if (feature->id.startsWith("evaluation.")) text += QStringLiteral("（独立捕获任务，在工作区选择记录）");
+        if (feature->id == "evaluation.capture" || feature->id == "evaluation.analysis") text += QStringLiteral("（网络捕获辅助工具）");
         if (selected && feature->id.startsWith("attacks.")) text += QStringLiteral("（当前任务执行记录）");
     }
     updateFeaturePresentation();
@@ -980,6 +981,7 @@ QString MainWindow::featureDescription(const QString &id) const
         {"attacks.data", "查看数据抵近窃取场景的预案或已保存分类关联的执行记录。"},
         {"attacks.tampering", "查看信息篡改欺骗场景的预案或已保存分类关联的执行记录。"},
         {"attacks.control", "查看关键设备夺控场景的预案或已保存分类关联的执行记录。"},
+        {"evaluation.results", "查看当前任务的验证结论、执行证据和评估结果。"},
         {"evaluation.capture", "配置捕获接口、过滤条件和时长，查看原独立捕获任务。"},
         {"evaluation.analysis", "选择已有捕获记录，查看网络数据分析及证据定位。"},
         {"system.tasks", "管理当前账号可见的测试任务与执行状态。"},
@@ -1007,19 +1009,20 @@ void MainWindow::updateFeaturePresentation()
         m_featureDescription->setText(featureDescription(feature->id));
         m_ribbon->setToolTip(featureDescription(feature->id));
     }
-    const bool requiresTask = feature && (feature->id == "plans.scenario" || feature->id == "plans.task"
-        || feature->id == "system.generate-report");
-    const int requestedStage = feature && feature->id == "plans.scenario" ? 2 : feature && feature->id == "plans.task" ? 4 : 6;
+    const int requestedStage = feature ? stageForFeature(feature->id) : -1;
+    const bool requiresTask = requestedStage == 1 || requestedStage == 2 || requestedStage == 4
+        || requestedStage == 5 || requestedStage == 6;
     const bool incompatibleTask = requiresTask && m_flowPage && m_flowPage->taskContextReady()
         && !m_flowPage->supportsWorkspaceStage(requestedStage);
-    const bool testFeature = feature && (feature->id.startsWith("scans.") || feature->id.startsWith("attacks.") || requiresTask || feature->id == "system.tasks");
+    const bool taskView = !m_auxiliaryTitle.isEmpty() && m_flowPage
+        && m_stackWidget->currentWidget() == m_flowPage && !m_flowPage->taskListVisible();
+    const bool testFeature = taskView || (feature && (feature->id.startsWith("scans.") || feature->id.startsWith("attacks.") || requiresTask || feature->id == "system.tasks"));
     const bool contextual = testFeature || (feature && (feature->id.startsWith("topology.") || feature->id == "resources.discovery"));
     m_newTaskButton->setVisible(testFeature);
     const bool canCreate = !m_openingTaskCreation && m_creatingTaskFeature.isEmpty();
     m_newTaskButton->setEnabled(canCreate);
     m_gateNewTaskButton->setEnabled(canCreate);
     m_switchTaskButton->setVisible(contextual);
-    m_independentButton->setVisible(contextual && m_flowPage && m_flowPage->hasSelectedTask() && !requiresTask && feature->id != "system.tasks");
     const bool gated = requiresTask && (!m_flowPage || !m_flowPage->hasSelectedTask() || incompatibleTask)
         && !m_selectingFeatureTask && !m_dongleLocked;
     if (gated) m_taskGateMessage->setText(incompatibleTask
@@ -1034,7 +1037,9 @@ void MainWindow::chooseTaskForFeature()
 {
     if (m_dongleLocked) return;
     QString id = m_activeFeature;
-    if (id.isEmpty()) id = "system.tasks";
+    if (id.isEmpty()) id = m_auxiliaryModule == 1 ? QStringLiteral("scans.all")
+        : m_auxiliaryModule == 3 ? QStringLiteral("attacks.all")
+        : m_auxiliaryModule == 4 ? QStringLiteral("evaluation.results") : QStringLiteral("system.tasks");
     if (!m_flowPage) ensureModulePage(1);
     if (!m_flowPage) return;
     const QScopedValueRollback<bool> routing(m_routingFeature, true);
@@ -1064,31 +1069,36 @@ void MainWindow::bindExecutionView(ExecutionPage *page)
     connect(page, &ExecutionPage::categoryViewChanged, this, [this, page](int category) {
         if (m_routingFeature || m_dongleLocked || !page->isVisible()) return;
         if (!category) {
-            showAuxiliaryWorkspace(4, QStringLiteral("执行记录与证据"), QStringLiteral("当前显示全部执行记录；上方可选择场景查看关联预案或记录。"));
+            showAuxiliaryWorkspace(3, QStringLiteral("执行记录与证据"), QStringLiteral("当前显示全部执行记录；上方可选择场景查看关联预案或记录。"));
             return;
         }
         const QString id = QStringList{QString(), "attacks.data", "attacks.tampering", "attacks.control"}.value(category);
         if (id.isEmpty()) return;
-        m_auxiliaryTitle.clear(); m_activeFeature = id; m_lastFeatures[4] = id;
-        const QSignalBlocker blocker(m_navList); m_navList->setCurrentRow(4); m_ribbon->setActiveFeature(id);
+        m_auxiliaryTitle.clear(); m_activeFeature = id; m_lastFeatures[3] = id;
+        const QSignalBlocker blocker(m_navList); m_navList->setCurrentRow(3); m_ribbon->setActiveFeature(id);
         updateFeaturePresentation(); updateTaskContext();
     });
 }
 
 void MainWindow::bindScanWorkspace(ScanPage *page)
 {
+    connect(page, &ScanPage::testContextRequested, this, [this,page](const QString &pipelineId, const QList<qint64> &ids) {
+        if (m_dongleLocked || !page->isVisible()) return;
+        switchToPage(1);
+        m_flowPage->openFindingWorkspace(pipelineId, ids);
+    });
     connect(page, &ScanPage::workspaceViewChanged, this, [this, page](bool source) {
         if (m_routingFeature || m_dongleLocked || !page->isVisible()) return;
         if (source) {
-            showAuxiliaryWorkspace(3, QStringLiteral("程序与源码扫描"), QStringLiteral("原有独立源码扫描扩展工作区；当前任务选择保留，创建与查看使用此工作区的扫描记录。"));
+            showAuxiliaryWorkspace(1, QStringLiteral("程序与源码扫描"), QStringLiteral("原有独立源码扫描扩展工作区；当前任务选择保留，创建与查看使用此工作区的扫描记录。"));
         } else {
             const QString id = page->selectedScanFeature();
             if (id.isEmpty()) {
-                showAuxiliaryWorkspace(3, QStringLiteral("任务扫描发现"), QStringLiteral("查看当前任务全部来源的发现、过程与验证状态。"));
+                showAuxiliaryWorkspace(1, QStringLiteral("任务扫描发现"), QStringLiteral("查看当前任务全部来源的发现、过程与验证状态。"));
                 return;
             }
-            m_auxiliaryTitle.clear(); m_activeFeature = id; m_lastFeatures[3] = id;
-            const QSignalBlocker blocker(m_navList); m_navList->setCurrentRow(3); m_ribbon->setActiveFeature(id);
+            m_auxiliaryTitle.clear(); m_activeFeature = id; m_lastFeatures[1] = id;
+            const QSignalBlocker blocker(m_navList); m_navList->setCurrentRow(1); m_ribbon->setActiveFeature(id);
             updateFeaturePresentation(); updateTaskContext();
         }
     });
@@ -1101,7 +1111,7 @@ int MainWindow::stageForFeature(const QString &id) const
     if (id == "plans.scenario") return 2;
     if (id == "plans.task") return 4;
     if (id.startsWith("attacks.")) return 5;
-    if (id == "system.generate-report") return 6;
+    if (id == "system.generate-report" || id == "evaluation.results") return 6;
     return -1;
 }
 
@@ -1122,16 +1132,4 @@ void MainWindow::createTaskForFeature()
     }
     if (!m_flowPage->creationPending()) m_creatingTaskFeature.clear();
     updateFeaturePresentation();
-}
-
-void MainWindow::useIndependentWorkspace()
-{
-    if (m_dongleLocked || !m_flowPage || !m_creatingTaskFeature.isEmpty()) return;
-    const QString requested = m_activeFeature;
-    if (!(requested.startsWith("scans.") || requested.startsWith("attacks.")
-        || requested.startsWith("topology.") || requested == "resources.discovery")) return;
-    const QScopedValueRollback<bool> routing(m_routingFeature, true);
-    m_pendingTaskFeature.clear(); m_selectingFeatureTask = false;
-    m_flowPage->leaveSelectedTask();
-    openRibbonFeature(requested);
 }

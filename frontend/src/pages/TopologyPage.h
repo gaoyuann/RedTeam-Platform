@@ -47,6 +47,7 @@ public:
                             const QStringList &scanIds, bool scanFinished);
 
 signals:
+    void topologyViewRequested();
     void testTargetRequested(const QString &target);
     void nodeFindingsRequested(const QString &pipelineId, const QList<qint64> &findingIds);
     void linkedTaskRequested(const QString &pipelineId);
@@ -98,6 +99,7 @@ private:
     quint64 m_contextGeneration = 0;
     void refreshScans(bool preserveStatus);
     void populateTopologyDocument();
+    void updateCanvasHeading();
     void populateDocumentPlaceholder(const QString &title, const QString &detail);
     void renderTopologyScene();
     void updateEdgeGeometry(const TopologyEdgeRecord &edge);
@@ -189,6 +191,7 @@ private:
     QGraphicsScene *m_graphScene;
     QGraphicsView *m_graphView;
     QTableWidget *m_assetTable = nullptr;
+    QPushButton *m_viewAssetTopologyButton = nullptr;
     QLabel *m_emptyCanvas = nullptr;
 
     // Right panel

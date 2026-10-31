@@ -17,9 +17,9 @@ public:
     setStyleSheet(QStringLiteral(
         "QFrame[metricCard=\"true\"] { background:%2; border:1px solid %3; border-radius:%4px; }"
         "QLabel { background:transparent; border:none; }"
-        "QLabel#metricTitle { color:#64748b; font-size:12px; }"
+        "QLabel#metricTitle { color:#64748b; font-size:16px; }"
         "QLabel#metricValue { color:%1; font-size:26px; font-weight:700; }"
-        "QLabel#metricCaption { color:#94a3b8; font-size:11px; }").arg(accent, Theme::Card, Theme::Border).arg(Theme::CardRadius));
+        "QLabel#metricCaption { color:#64748b; font-size:15px; }").arg(accent, Theme::Card, Theme::Border).arg(Theme::CardRadius));
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(14, 10, 14, 10);
     layout->setSpacing(2);

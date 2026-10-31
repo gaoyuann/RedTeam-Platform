@@ -57,13 +57,11 @@ private:
     void updateFeaturePresentation();
     void chooseTaskForFeature();
     void createTaskForFeature();
-    void useIndependentWorkspace();
     int stageForFeature(const QString &id) const;
     QString m_creatingTaskFeature;
     bool m_openingTaskCreation = false;
     QPushButton *m_switchTaskButton = nullptr;
     QPushButton *m_newTaskButton = nullptr;
-    QPushButton *m_independentButton = nullptr;
     QPushButton *m_gateNewTaskButton = nullptr;
     void showAuxiliaryWorkspace(int module, const QString &title, const QString &description);
     void bindExecutionView(ExecutionPage *page);
@@ -79,9 +77,8 @@ private:
     QWidget *m_taskGate = nullptr;
     QLabel *m_taskGateMessage = nullptr;
     QPushButton *m_chooseTaskButton = nullptr;
-    ScanPage *m_standaloneScan = nullptr;
-    ExecutionPage *m_standaloneExecution = nullptr;
     QString m_pendingTaskFeature;
+    QString m_pendingSourcePlaybookId;
     int m_featureSelectionRevision = -1;
     bool m_selectingFeatureTask = false;
     ModuleRibbon *m_ribbon = nullptr;

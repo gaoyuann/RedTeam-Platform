@@ -13,4 +13,11 @@ public:
     QSize sizeHint() const override {
         return currentWidget() ? currentWidget()->sizeHint().expandedTo(minimumSizeHint()) : QSize(0, 0);
     }
+    bool hasHeightForWidth() const override {
+        return currentWidget() && currentWidget()->hasHeightForWidth();
+    }
+    int heightForWidth(int width) const override {
+        // Wrapped labels on hidden pages must not stretch the visible workspace.
+        return currentWidget() ? currentWidget()->heightForWidth(width) : -1;
+    }
 };

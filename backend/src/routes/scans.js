@@ -20,6 +20,7 @@ import {isProgramScan, isProgramFinding, loadProgramProjects, publicProgramProje
 import {appendTaskLog} from '../services/taskActivity.js';
 import {cscanTarget,cscanSourcePath,cscanNotes} from '../services/cscanTarget.js';
 import {retainedCscanReport} from '../services/sourceAuditNative.js';
+import {continueScanTest} from '../services/scanTestContext.js';
 import {visibleSourceScanRecords,sourceScanResultState,sourceScanPreview} from '../services/sourceScanResults.js';
 
 export default function (db, dependencies={}) {
@@ -38,6 +39,10 @@ export default function (db, dependencies={}) {
   });
 
   router.param('scanTaskId', recordParam(db, 'scan'));
+  router.post('/:scanTaskId/test-context', (req,res,next) => {
+    try { res.json({status:'ok',data:continueScanTest(db,req.user,req.params.scanTaskId)}); }
+    catch(error) { next(error); }
+  });
   const sourceAccess = (req, task) => !isProgramScan(task.scan_type) || req.user?.role === 'admin' || task.created_by === req.user?.sub;
   router.get('/program-projects', async (req,res) => {
     try {res.json({status:'ok',data:(await loadProgramProjects()).map(publicProgramProject)});}

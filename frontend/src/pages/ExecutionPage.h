@@ -39,7 +39,7 @@ public:
   void showRun(const QString &runId, bool focus = true);
   void focusDetails();
   void showExecutionError(const QString &message);
-  void setPipelineContext(const QString &pipelineId, const QString &status, const QString &runId, const QString &target = {});
+  void setPipelineContext(const QString &pipelineId, const QString &status, const QString &runId, const QString &target = {}, bool intelligent = false);
 
   void clearRunContext();
 
@@ -49,7 +49,9 @@ signals:
   void runCompleted(const QString &runId);
   void runSelected(const QString &runId);
   void findingVerificationChanged(const QString &pipelineId);
+  void assessmentRequested(const QString &pipelineId);
   void categoryViewChanged(int category);
+  void planReviewRequested();
 
 public slots:
   void onRefreshRuns();
@@ -83,6 +85,7 @@ private:
   TaskExecutionPanel *m_taskMonitor;
   QWidget *m_standaloneControls;
   QLabel *m_pipelineHint;
+  QPushButton *m_reviewPlan = nullptr;
   QComboBox *m_playbookCombo;
   QLineEdit *m_targetInput;
   QPushButton *m_execBtn;

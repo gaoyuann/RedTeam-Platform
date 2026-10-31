@@ -58,6 +58,7 @@ set(SOURCES
 )
 
 set(HEADERS
+    src/widgets/PageComponents.h
     src/GlobalSearchDialog.h
     src/MainWindow.h
     src/widgets/ModuleRibbon.h
@@ -72,6 +73,7 @@ set(HEADERS
     src/LoginDialog.h
     src/AppStyle.h
     src/Theme.h
+    src/UiTypography.h
     src/widgets/WorkbenchTabs.h
     src/widgets/MetricCard.h
     src/widgets/ScanResultOverview.h
@@ -83,6 +85,7 @@ set(HEADERS
     src/pages/AnalysisHubPage.h
     src/pages/ResourceCatalogPage.h
     src/pages/TaskPlanPage.h
+    src/pages/FindingPlanPanel.h
     src/pages/TaskOverviewPage.h
     src/pages/TaskLogPanel.h
     src/pages/DeployConfigPage.h

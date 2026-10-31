@@ -27,14 +27,14 @@ constexpr int TopBarHeight = 64;
 constexpr int NavigationWidth = 184;
 constexpr int NavigationCompactWidth = 64;
 constexpr int IconSize = 22;
-constexpr int ControlHeight = 36;
+constexpr int ControlHeight = 40;
 constexpr int CardRadius = 8;
 constexpr int Space = 16;
 constexpr const char* Card = "#ffffff";
 constexpr const char* CanvasBackground = "#08121a";
 constexpr const char* CanvasText = "#a8bdd5";
 constexpr const char* Text = "#172033";
-constexpr const char* TextSecondary = "#64748b";
+constexpr const char* TextSecondary = "#526174";
 constexpr const char* Selected = "#dcebff";
 
 // ── Status colors (unified across all pages) ─────────────────────────
@@ -70,8 +70,8 @@ constexpr const char* SectionStyle =
 inline const QString ButtonStyle = R"css(
   QPushButton {
     background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ffffff,stop:1 #fafcff); color:#475569; border:1px solid #d5deeb;
-    border-radius:8px; padding:0 14px; min-height:34px;
-    font-size:13px; font-weight:500;
+    border-radius:8px; padding:0 14px; min-height:40px;
+    font-size:18px; font-weight:600;
   }
   QPushButton:hover { background:#f2f6ff; color:#1d4ed8; border-color:#adc5ef; }
   QPushButton:pressed { background:#e6efff; border-color:#7ea6e8; }
@@ -94,8 +94,8 @@ inline const QString ButtonStyle = R"css(
   QPushButton[warning="true"] { background:#fffbeb; color:#a16207; border-color:#fde68a; }
   QPushButton[warning="true"]:hover { background:#fef3c7; border-color:#facc15; }
   QPushButton[warning="true"]:pressed { background:#fde68a; }
-  QPushButton[compact="true"] { min-height:26px; padding:0 10px; font-size:12px; border-radius:6px; }
-  QPushButton[large="true"] { min-height:44px; font-size:15px; }
+  QPushButton[compact="true"] { min-height:34px; padding:0 10px; font-size:17px; border-radius:6px; }
+  QPushButton[large="true"] { min-height:44px; font-size:17px; }
   QPushButton[danger="true"]:focus, QPushButton[warning="true"]:focus { border-color:#7ea6e8; }
   QPushButton:disabled, QPushButton[primary="true"]:disabled,
   QPushButton[danger="true"]:disabled, QPushButton#dangerBtn:disabled, QPushButton[warning="true"]:disabled,

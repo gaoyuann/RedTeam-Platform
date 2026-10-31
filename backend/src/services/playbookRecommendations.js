@@ -1,18 +1,20 @@
 import { buildDiscoveredProfile } from './targetDiscovery.js';
 import { matchPlaybooks } from './playbookMatcher.js';
+import { planScanSources, planObservationTypesExcluded } from './planScanSources.js';
 
 export function recommendForScans(db, target, scanTaskIds) {
   const identifiers = [...new Set((Array.isArray(scanTaskIds) ? scanTaskIds : [scanTaskIds])
     .filter(identifier => typeof identifier === 'string' && identifier))];
   if (!identifiers.length) return [];
-  const scans = db.prepare(`SELECT scan_task_id, scan_type, status FROM scan_tasks
-    WHERE scan_task_id IN (${identifiers.map(() => '?').join(',')}) AND target = ? AND status IN ('COMPLETED', 'PARTIAL')`)
-    .all(...identifiers, target);
-  const results = scans.flatMap(scan => db.prepare('SELECT * FROM scan_results WHERE scan_task_id = ?').all(scan.scan_task_id))
+  const scans = planScanSources(db, target, identifiers);
+  const scopedResults = scans.flatMap(scan => db.prepare('SELECT * FROM scan_results WHERE scan_task_id = ?').all(scan.scan_task_id))
     .filter(result => matchesTarget(result, target));
+  const results = scopedResults.filter(result => !planObservationTypesExcluded.includes(result.result_type));
   const completedActions = new Set();
   for (const scan of scans) {
-    const findings = results.filter(result => result.scan_task_id === scan.scan_task_id);
+    // Diagnostics do not supply matching evidence, but must still prevent a
+    // failed/partial tool check from being labelled as already completed.
+    const findings = scopedResults.filter(result => result.scan_task_id === scan.scan_task_id);
     const failedTools = new Set(findings.filter(result => ['scan_error', 'scan_warning'].includes(result.result_type)).map(result => result.source_tool));
     for (const finding of findings) {
       if (failedTools.has(finding.source_tool)) continue;

@@ -20,6 +20,7 @@ public:
   void setTaskContext(const QString &pipelineId, const QString &runId, const QString &target = {});
   void clearTaskContext();
   void setScenarioCategory(const QString &category);
+  void setPrimaryPlan(bool primary);
 
 public slots:
   void refresh();
@@ -28,6 +29,7 @@ signals:
   void runSelected(const QString &runId);
   void runCompleted(const QString &runId);
   void findingVerificationChanged(const QString &pipelineId);
+  void assessmentRequested(const QString &pipelineId);
 
 protected:
   void showEvent(QShowEvent *event) override;
@@ -54,6 +56,7 @@ private:
   int m_requestVersion = 0;
   bool m_busy = false;
   bool m_refreshFailed = false;
+  bool m_primaryPlan = false;
   QLabel *m_title;
   QLabel *m_state;
   QLabel *m_parentState;

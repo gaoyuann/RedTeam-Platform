@@ -1,4 +1,5 @@
 import { isIP } from 'node:net';
+import {validUrlHostname} from './networkTarget.js';
 import {cscanSourcePath,cscanRemotePath} from './cscanTarget.js';
 
 function invalid(message) { throw Object.assign(new Error(message), { status: 400 }); }
@@ -11,6 +12,7 @@ function address(value) {
   if (/^https?:\/\//i.test(raw) || /^tcp:\/\//i.test(raw)) {
     let url;
     try { url = new URL(raw); } catch { invalid('测试范围 URL 无效'); }
+    if (!validUrlHostname(url.hostname)) invalid('测试范围主机名无效；主机与端口之间应使用冒号');
     if (!['http:', 'https:', 'tcp:'].includes(url.protocol) || !url.hostname || url.username || url.password || url.hash)
       invalid('测试范围 URL 不允许凭据、片段或其他协议');
     if (/%(?:2f|5c|2e|00|0a|0d)/i.test(url.pathname) || url.pathname.includes('\\'))

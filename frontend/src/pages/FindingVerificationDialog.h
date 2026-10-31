@@ -22,6 +22,10 @@ public:
   FindingVerificationDialog(ApiClient *api, const QString &pipeline, const QList<qint64> &findings, QWidget *parent=nullptr,
       const QString &existingVerificationId={}, const QString &existingAttemptId={});
   void showPayloadWorkspace();
+  void showPlanWorkspace();
+signals:
+  void assessmentRequested(const QString &pipelineId);
+  void verificationStarted(const QString &pipelineId);
 protected:
   void done(int result) override;
   void resizeEvent(QResizeEvent *event) override;
@@ -68,6 +72,7 @@ private:
   QGroupBox *m_resultSummary;
   QPlainTextEdit *m_planSummary;
   QPushButton *m_prepareSimple, *m_confirmSimple, *m_startSimple;
+  QPushButton *m_assess = nullptr;
   QTimer *m_timer;
   QPushButton *m_systemEvidence, *m_save, *m_start, *m_confirmButton, *m_generate;
   QJsonObject m_detail;
