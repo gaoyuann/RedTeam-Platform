@@ -82,7 +82,7 @@ ModuleRibbon::ModuleRibbon(bool administrator, QWidget *parent)
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     root->addWidget(m_pages);
-    setFixedHeight(112);
+    setFixedHeight(78);
     m_selection->setExclusive(true);
     for (int module = 0; module < moduleNames().size(); ++module) {
         auto *scroll = new QScrollArea(m_pages);
@@ -98,7 +98,7 @@ ModuleRibbon::ModuleRibbon(bool administrator, QWidget *parent)
         content->setAutoFillBackground(true);
         scroll->viewport()->setPalette(palette);
         auto *groups = new QHBoxLayout(content);
-        groups->setContentsMargins(16, 5, 16, 3);
+        groups->setContentsMargins(14, 4, 14, 2);
         groups->setSpacing(12);
         QStringList groupNames;
         for (const auto &entry : features())
@@ -124,13 +124,14 @@ ModuleRibbon::ModuleRibbon(bool administrator, QWidget *parent)
                 button->setText(label);
                 button->setAccessibleName(entry.title);
                 button->setIcon(QIcon(QStringLiteral(":/icons/shell/%1.svg").arg(entry.icon)));
-                button->setIconSize(QSize(24, 24));
-                button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+                button->setIconSize(QSize(18, 18));
+                button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
                 button->setCheckable(true);
+                QFont commandFont = button->font(); commandFont.setPixelSize(12); button->setFont(commandFont);
                 int textWidth = 0;
                 for (const auto &line : label.split('\n')) textWidth = qMax(textWidth, button->fontMetrics().horizontalAdvance(line));
-                button->setFixedWidth(qMax(108, textWidth + 24));
-                button->setFixedHeight(78);
+                button->setFixedWidth(qMax(90, textWidth + 42));
+                button->setFixedHeight(44);
                 m_selection->addButton(button);
                 button->setEnabled(canOpen(entry.id));
                 button->setToolTip(!entry.implemented ? entry.title + QStringLiteral(" · 暂未实现")

@@ -219,7 +219,18 @@ int main(int argc, char **argv)
         {"result_data", QString::fromUtf8(QJsonDocument(QJsonObject{{"title", types[i]}, {"port", 443}}).toJson(QJsonDocument::Compact))}});
       auto scan = sources.last().toObject(); scan["created_at"] = "2026-10-30T12:00:00Z"; scan["results"] = QJsonArray{scanRows.last()}; scanTasks.append(scan);
     }
+    QJsonObject createdAssessment;
     ribbonServer.handler = [&](const QString &method, const QString &path) -> MockReply {
+      if (method == "POST" && path == "/api/pipelines") {
+        createdAssessment = QJsonDocument::fromJson(ribbonServer.requestBodies.value("POST /api/pipelines")).object();
+        auto task = taskRecord("NEW"); task["target"] = createdAssessment["target"]; task["config"] = createdAssessment["config"];
+        return {success(task)};
+      }
+      if (method == "POST" && path == "/api/pipelines/NEW/start") return {success(taskRecord("NEW"))};
+      if (path == "/api/pipelines/NEW") {
+        auto task = taskRecord("NEW"); task["target"] = createdAssessment["target"]; task["config"] = createdAssessment["config"];
+        return {success(task)};
+      }
       const auto route = QUrl(path).path();
       if (route == "/api/pipelines") return {success(QJsonArray{taskRecord("R")})};
       if (route == "/api/pipelines/D") {
@@ -256,6 +267,9 @@ int main(int argc, char **argv)
       if (route == "/api/pipelines/R/verifications/payload-R") return {success(QJsonObject{{"id", "payload-R"}, {"pipeline_id", "R"},
         {"finding_id", 701}, {"revision", 0}, {"state", "needs_plan"}, {"finding", scanRows[1]}})};
       if (route == "/api/scan-tasks") return {success(scanTasks)};
+      if (route.startsWith("/api/scan-tasks/scope-")) {
+        for (const auto &value : scanTasks) if (route == "/api/scan-tasks/" + value.toObject()["scan_task_id"].toString()) return {success(value)};
+      }
       if (route == "/api/reports/index") return {success(QJsonObject{{"total", 0}, {"items", QJsonArray()}})};
       return {success(QJsonArray())};
     };
@@ -302,6 +316,14 @@ int main(int argc, char **argv)
       verify(scan->findChild<QFrame *>("scanTasksPanel")->isVisible(), "scan task records are visible without opening a hidden manager");
       verify(shell.m_featureTitle->text() == ModuleRibbon::feature(id)->title, "visible page title follows the clicked leaf");
     }
+    shell.openRibbonFeature("scans.system");
+    auto *scanPage = shell.m_flowPage->m_scanTab;
+    verify(awaitCondition([&]() {return !scanPage->m_scanPageBusy && scanPage->m_vulnScanTable->rowCount() == 1;}), "task source is available for selection");
+    emit scanPage->m_vulnScanTable->cellClicked(0, 0);
+    verify(awaitCondition([&]() {return !scanPage->m_allScanResults && scanPage->m_currentScanType == "vuln_scan";}), "source click loads an individual scan record");
+    shell.openRibbonFeature("scans.web");
+    verify(awaitCondition([&]() {return scanPage->m_allScanResults && !scanPage->m_scanPageBusy && scanPage->m_resultTree->topLevelItemCount() == 1
+      && scanPage->m_resultTree->topLevelItem(0)->childCount() == 1;}), "switching a feature after source detail restores visible aggregate results");
     for (int i = 0; i < 3; ++i) {
       const QString id = QStringList{"attacks.data", "attacks.tampering", "attacks.control"}[i];
       shell.openRibbonFeature(id);
@@ -343,8 +365,9 @@ int main(int argc, char **argv)
       for (const auto &id : QStringList{"resources.llm", "plans.task", "scans.web", "topology.edit", "system.users"}) {
         shell.openRibbonFeature(id);
         shell.resize(width, 800); QTest::qWait(30);
-        verify(shell.width() <= width && shell.m_featureTitle->isVisible(), "business page does not expand the requested window width");
-        verify(shell.m_featureHeader->geometry().right() < shell.width(), "feature heading stays inside the window");
+        verify(shell.width() <= width && shell.m_workspaceScroll->isVisible(), "business page does not expand the requested window width");
+        verify(shell.m_featureHeader->isHidden() && shell.m_featureDescription->isHidden(), "selected feature has no redundant title and explanation block above its content");
+        verify(shell.m_ribbon->height() <= 80, "subfunction ribbon remains compact");
         saveRibbonScreenshot(shell, QString("width-%1-%2").arg(width).arg(id), QSize(width, 800));
       }
     }
@@ -377,6 +400,38 @@ int main(int argc, char **argv)
     for (auto it = ribbonServer.requests.cbegin(); it != ribbonServer.requests.cend(); ++it)
       verify(it.key().startsWith("GET ") || (it.key() == "POST /api/pipelines/R/verifications" && it.value() == 1),
         "only explicit per-finding workspace creation may write; navigation never generates or executes");
+    shell.openRibbonFeature("scans.web");
+    shell.m_independentButton->click();
+    verify(!shell.m_flowPage->hasSelectedTask() && shell.m_stackWidget->currentIndex() == 10 && shell.m_activeFeature == "scans.web",
+      "user can leave the sticky task context directly in the scan feature");
+    QTimer::singleShot(30, &shell, [&]() {
+      for (auto *widget : QApplication::topLevelWidgets())
+        if (auto *dialog = qobject_cast<QDialog *>(widget)) if (dialog->objectName() == "taskCreateDialog") dialog->reject();
+    });
+    shell.m_newTaskButton->click();
+    verify(shell.m_creatingTaskFeature.isEmpty() && shell.m_newTaskButton->isEnabled(), "cancelling inline task creation retains a usable current feature");
+    bool assessmentFormShown = false;
+    QTimer::singleShot(30, &shell, [&]() {
+      for (auto *widget : QApplication::topLevelWidgets()) {
+        auto *dialog = qobject_cast<QDialog *>(widget);
+        if (!dialog || dialog->objectName() != "taskCreateDialog") continue;
+        assessmentFormShown = dialog->windowTitle() == QStringLiteral("新建安全测试任务");
+        dialog->findChild<QLineEdit *>("taskTargetInput")->setText("https://new.example.test");
+        dialog->findChild<QCheckBox *>("taskAuthorizationCheck")->setChecked(true);
+        dialog->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->click();
+      }
+    });
+    shell.m_newTaskButton->click();
+    verify(assessmentFormShown && awaitCondition([&]() { return shell.m_flowPage->selectedTaskId() == "NEW" && shell.m_flowPage->taskContextReady()
+      && shell.m_activeFeature == "scans.web" && shell.m_stackWidget->currentWidget() == shell.m_flowPage; }),
+      "new task is created and opened from the feature without detouring through task management");
+    verify(createdAssessment["config"].toObject()["task_mode"] == "assessment" && ribbonServer.requests.value("POST /api/pipelines/NEW/start") == 1,
+      "feature-created security test is an assessment rather than an unusable discovery-only task");
+    shell.m_switchTaskButton->click();
+    verify(awaitCondition([&]() {return shell.m_flowPage->m_flowListFresh && shell.m_flowPage->m_flowTable->rowCount() == 1;}), "switch task is directly reachable in current context");
+    shell.m_flowPage->onFlowDoubleClicked(0);
+    verify(awaitCondition([&]() {return shell.m_flowPage->selectedTaskId() == "R" && shell.m_flowPage->taskContextReady() && shell.m_activeFeature == "scans.web";}),
+      "choosing another task keeps the requested function instead of resetting the workflow");
     app.setStyleSheet(reviewOriginalStyle);
   }
   {
@@ -1845,12 +1900,14 @@ int main(int argc, char **argv)
   verify(toggle && window.m_navList->flow() == QListView::LeftToRight, "header has horizontal collapsible navigation");
   window.resize(1024, 600);
   QTest::qWait(100);
-  auto *header = window.findChild<QFrame*>("appTopBar");
-  verify(header && header->height() <= 70 && header->geometry().contains(toggle->mapTo(header, toggle->rect().center())),
-    "navigation and account controls share a compact header");
-  auto *platformTitle = window.findChild<QLabel *>("platformTitle");
-  verify(platformTitle && platformTitle->text() == QStringLiteral("信息系统安全智能化测试平台")
-    && window.windowTitle() == platformTitle->text(), "title row uses the requested platform name");
+  auto *moduleBar = window.findChild<QFrame*>("ribbonModuleBar");
+  verify(moduleBar && moduleBar->height() == window.m_navList->height() && toggle
+    && moduleBar->rect().contains(toggle->mapTo(moduleBar, toggle->rect().center()))
+    && toggle->mapTo(moduleBar, QPoint()).x() >= window.m_navList->geometry().right(),
+    "collapse control stays beside the scrollable module tabs without an extra header row");
+  verify(!window.findChild<QFrame*>("appTopBar") && !window.findChild<QLabel *>("platformTitle")
+    && window.windowTitle() == QStringLiteral("信息系统安全智能化测试平台"),
+    "platform name appears in the window title without a duplicate banner");
   verify(!window.findChild<QPushButton *>("ribbonTaskCenter") && !window.findChild<QPushButton *>("ribbonHome")
     && !window.findChild<QPushButton *>("ribbonKnowledge") && window.m_ribbon,
     "only composition graph module navigation is present in the title area");

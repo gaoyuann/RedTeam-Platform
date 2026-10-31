@@ -76,31 +76,16 @@ void MainWindow::setupUI()
     rootLayout->setSpacing(0);
 
     centralWidget->setStyleSheet(QStringLiteral("QWidget#contentArea { background:#f3f5f9; }"));
-    auto *topBar = new QFrame(centralWidget);
-    topBar->setObjectName("appTopBar");
-    topBar->setStyleSheet(QStringLiteral("QFrame#appTopBar { background:#eaf0fb; border-bottom:1px solid #dbe4f4; }"));
-    auto *headerLayout = new QHBoxLayout(topBar);
-    headerLayout->setContentsMargins(16, 4, 16, 4);
-    headerLayout->setSpacing(8);
-    auto *mark = new QLabel(QStringLiteral("安全测试"), topBar);
-    mark->setStyleSheet("font-size:12px;font-weight:600;color:#6280a9;padding-left:4px;");
-    headerLayout->addWidget(mark);
-    headerLayout->addStretch();
-    auto *title = new QLabel(QStringLiteral("信息系统安全智能化测试平台"), topBar);
-    title->setObjectName("platformTitle");
-    title->setStyleSheet(QStringLiteral("font-size:17px; font-weight:700; color:#244b82; padding:0 6px;"));
-    headerLayout->addWidget(title);
-    auto *collapse = new QPushButton(QStringLiteral("收起功能区"), topBar);
-    m_navigationToggle = collapse;
-    collapse->setObjectName("navigationToggle");
-    collapse->setProperty("quiet", true);
-    collapse->setCheckable(true);
-    headerLayout->addWidget(collapse);
-    rootLayout->addWidget(topBar);
+    auto *moduleBar = new QFrame(centralWidget);
+    moduleBar->setObjectName("ribbonModuleBar");
+    moduleBar->setStyleSheet(QStringLiteral("QFrame#ribbonModuleBar { background:white; border-bottom:1px solid #dfe5ef; }"));
+    auto *moduleLayout = new QHBoxLayout(moduleBar);
+    moduleLayout->setContentsMargins(0, 0, 12, 0);
+    moduleLayout->setSpacing(8);
 
     m_modules = QStringList{QStringLiteral("工作台"), QStringLiteral("测试任务"), QStringLiteral("资产与拓扑"),
         QStringLiteral("智能分析"), QStringLiteral("预案与知识库"), QStringLiteral("结果与报告"), QStringLiteral("系统管理")};
-    m_navList = new QListWidget(centralWidget);
+    m_navList = new QListWidget(moduleBar);
     m_navList->setObjectName("ribbonModuleTabs");
     QFont moduleFont = m_navList->font();
     moduleFont.setPixelSize(13);
@@ -125,20 +110,37 @@ void MainWindow::setupUI()
         item->setToolTip(name);
         item->setSizeHint(QSize(m_navList->fontMetrics().horizontalAdvance(name) + 48, 35));
     }
-    rootLayout->addWidget(m_navList);
+    moduleLayout->addWidget(m_navList, 1);
+    auto *collapse = new QPushButton(QStringLiteral("收起功能区"), moduleBar);
+    m_navigationToggle = collapse;
+    collapse->setObjectName("navigationToggle");
+    collapse->setProperty("quiet", true);
+    collapse->setProperty("compact", true);
+    collapse->setCheckable(true);
+    collapse->setAccessibleName(collapse->text());
+    moduleLayout->addWidget(collapse);
+    rootLayout->addWidget(moduleBar);
     m_ribbon = new ModuleRibbon(m_role == QStringLiteral("admin"), centralWidget);
     rootLayout->addWidget(m_ribbon);
     m_contextBar = new QFrame(centralWidget);
     m_contextBar->setObjectName("ribbonTaskContext");
     m_contextBar->setStyleSheet(QStringLiteral("QFrame#ribbonTaskContext { background:#f7faff; border-bottom:1px solid #dfe5ef; }"));
     auto *contextLayout = new QHBoxLayout(m_contextBar);
-    contextLayout->setContentsMargins(18, 3, 18, 3);
+    contextLayout->setContentsMargins(16, 3, 16, 3);
+    m_contextBar->setMinimumHeight(34);
     m_contextLabel = new QLabel(QStringLiteral("工作台 · 从上方选择功能；任务中心保留测试流程与历史记录"), m_contextBar);
     m_contextLabel->setTextFormat(Qt::PlainText);
     m_contextLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_contextLabel->setMinimumWidth(0);
     m_contextLabel->setStyleSheet(QStringLiteral("font-size:12px; color:#5e7596;"));
     contextLayout->addWidget(m_contextLabel, 1);
+    m_switchTaskButton = new QPushButton(QStringLiteral("选择任务"), m_contextBar);
+    m_switchTaskButton->setObjectName("featureSelectTask"); m_switchTaskButton->setProperty("compact", true);
+    m_independentButton = new QPushButton(QStringLiteral("独立操作"), m_contextBar);
+    m_independentButton->setObjectName("featureIndependent"); m_independentButton->setProperty("compact", true);
+    contextLayout->addWidget(m_switchTaskButton); contextLayout->addWidget(m_independentButton);
+    connect(m_switchTaskButton, &QPushButton::clicked, this, &MainWindow::chooseTaskForFeature);
+    connect(m_independentButton, &QPushButton::clicked, this, &MainWindow::useIndependentWorkspace);
     m_overviewButton = new QPushButton(QStringLiteral("任务概况"), m_contextBar);
     m_overviewButton->setObjectName("ribbonTaskOverview");
     m_overviewButton->setProperty("compact", true);
@@ -199,21 +201,27 @@ void MainWindow::setupUI()
     m_featureHeader = new QWidget(centralWidget);
     m_featureHeader->setObjectName("featurePageHeader");
     auto *featureLayout = new QVBoxLayout(m_featureHeader);
-    featureLayout->setContentsMargins(24, 16, 24, 12);
-    featureLayout->setSpacing(5);
+    featureLayout->setContentsMargins(20, 5, 20, 5);
+    featureLayout->setSpacing(3);
     m_featurePath = new QLabel(m_featureHeader);
     m_featurePath->setStyleSheet("font-size:11px;color:#8a99ae;");
     m_featureTitle = new QLabel(m_featureHeader);
     m_featureTitle->setObjectName("featurePageTitle");
     m_featureTitle->setTextFormat(Qt::PlainText);
-    m_featureTitle->setStyleSheet("font-size:22px;font-weight:700;color:#203b60;");
+    m_featureTitle->setStyleSheet("font-size:14px;font-weight:600;color:#203b60;");
     m_featureDescription = new QLabel(m_featureHeader);
     m_featureDescription->setTextFormat(Qt::PlainText);
     m_featureDescription->setWordWrap(true);
     m_featureDescription->setStyleSheet("font-size:12px;color:#7b8fa9;");
-    featureLayout->addWidget(m_featurePath);
-    featureLayout->addWidget(m_featureTitle);
-    featureLayout->addWidget(m_featureDescription);
+    m_featurePath->hide();
+    auto *featureHeading = new QHBoxLayout;
+    featureHeading->addWidget(m_featureTitle, 1);
+    m_newTaskButton = new QPushButton(QStringLiteral("新建测试任务"), m_featureHeader);
+    m_newTaskButton->setObjectName("featureNewTestTask"); m_newTaskButton->setProperty("primary", true);
+    connect(m_newTaskButton, &QPushButton::clicked, this, &MainWindow::createTaskForFeature);
+    contextLayout->insertWidget(1, m_newTaskButton);
+    featureLayout->addLayout(featureHeading);
+    m_featureDescription->hide();
     rootLayout->addWidget(m_featureHeader);
     m_featureHeader->hide();
     m_taskGate = new QWidget(centralWidget);
@@ -228,7 +236,13 @@ void MainWindow::setupUI()
     m_chooseTaskButton->setProperty("primary", true);
     m_chooseTaskButton->setFixedWidth(155);
     gateLayout->addWidget(m_taskGateMessage);
-    gateLayout->addWidget(m_chooseTaskButton, 0, Qt::AlignLeft);
+    auto *gateActions = new QHBoxLayout;
+    gateActions->addWidget(m_chooseTaskButton);
+    m_gateNewTaskButton = new QPushButton(QStringLiteral("新建测试任务"), m_taskGate);
+    m_gateNewTaskButton->setObjectName("featureGateNewTask");
+    connect(m_gateNewTaskButton, &QPushButton::clicked, this, &MainWindow::createTaskForFeature);
+    gateActions->addWidget(m_gateNewTaskButton); gateActions->addStretch();
+    gateLayout->addLayout(gateActions);
     gateLayout->addStretch();
     connect(m_chooseTaskButton, &QPushButton::clicked, this, &MainWindow::chooseTaskForFeature);
     rootLayout->addWidget(m_taskGate, 1);
@@ -335,6 +349,15 @@ QWidget *MainWindow::createModulePage(int index)
         bindExecutionView(m_flowPage->execTab());
         bindScanWorkspace(m_flowPage->scanTab());
         connect(m_flowPage, &FlowPage::taskContextChanged, this, &MainWindow::updateTaskContext);
+        connect(m_flowPage, &FlowPage::taskCreationFailed, this, [this]() {
+            m_creatingTaskFeature.clear(); updateFeaturePresentation();
+        });
+        connect(m_flowPage, &FlowPage::assessmentTaskOpened, this, [this]() {
+            if (m_creatingTaskFeature.isEmpty()) return;
+            const QString id = m_creatingTaskFeature; m_creatingTaskFeature.clear();
+            m_pendingTaskFeature = id;
+            if (!m_dongleLocked && m_flowPage->taskContextReady()) { m_pendingTaskFeature.clear(); openRibbonFeature(id); }
+        });
         connect(m_flowPage, &FlowPage::taskListRequested, this, [this]() { openRibbonFeature("system.tasks"); });
         connect(m_flowPage, &FlowPage::taskReportOpened, this, [this]() {
             if (m_dongleLocked) return;
@@ -344,6 +367,7 @@ QWidget *MainWindow::createModulePage(int index)
         });
         connect(m_flowPage, &FlowPage::workspaceStageChanged, this, [this](int stage) {
             if (m_routingFeature || !m_pendingTaskFeature.isEmpty() || m_dongleLocked || m_stackWidget->currentWidget() != m_flowPage) return;
+            if (!m_creatingTaskFeature.isEmpty()) return;
             QString id;
             if (stage == 1) {
                 id = m_flowPage->scanTab()->selectedScanFeature();
@@ -581,8 +605,8 @@ void MainWindow::resizeEvent(QResizeEvent *event)
         if (height() < 720) m_navigationToggle->setChecked(true);
         else if (height() >= 760) m_navigationToggle->setChecked(false);
     }
-    if (m_featureDescription) m_featureDescription->setVisible(height() >= 720);
-    if (m_featurePath) m_featurePath->setVisible(height() >= 720);
+    if (m_featureDescription) m_featureDescription->hide();
+    if (m_featurePath) m_featurePath->hide();
     if (m_toastOverlay) {
         m_toastOverlay->reposition();
     }
@@ -919,12 +943,11 @@ void MainWindow::updateTaskContext()
         return;
     }
     const auto *feature = ModuleRibbon::feature(m_activeFeature);
-    QString text = selected ? m_flowPage->taskContextSummary() : QStringLiteral("未选择测试任务 · 请在任务中心选择或创建任务");
+    QString text = selected ? m_flowPage->taskContextSummary() : QStringLiteral("未关联测试任务 · 可选择已有任务或新建测试任务");
     if (feature) {
-        text += QStringLiteral("  |  %1").arg(feature->title);
         if (feature->id.startsWith("resources.") && feature->id != "resources.discovery") text += QStringLiteral("（全局配置）");
         if (feature->id.startsWith("evaluation.")) text += QStringLiteral("（独立捕获任务，在工作区选择记录）");
-        if (selected && feature->id.startsWith("attacks.")) text += QStringLiteral("（查看当前任务执行，沿用现有预案）");
+        if (selected && feature->id.startsWith("attacks.")) text += QStringLiteral("（当前任务执行记录）");
     }
     updateFeaturePresentation();
     if (!m_auxiliaryTitle.isEmpty()) text += QStringLiteral("  |  %1").arg(m_auxiliaryTitle);
@@ -932,6 +955,7 @@ void MainWindow::updateTaskContext()
     m_contextLabel->setToolTip(text.toHtmlEscaped());
     m_overviewButton->setEnabled(selected);
     m_resultsButton->setEnabled(selected);
+    m_switchTaskButton->setText(selected ? QStringLiteral("更换任务") : QStringLiteral("选择任务"));
 }
 
 QString MainWindow::featureDescription(const QString &id) const
@@ -972,7 +996,7 @@ void MainWindow::updateFeaturePresentation()
 {
     if (!m_featureHeader || !m_taskGate) return;
     const auto *feature = ModuleRibbon::feature(m_activeFeature);
-    m_featureHeader->setVisible((feature || !m_auxiliaryTitle.isEmpty()) && !m_dongleLocked);
+    m_featureHeader->setVisible(!m_auxiliaryTitle.isEmpty() && !m_dongleLocked);
     if (!m_auxiliaryTitle.isEmpty()) {
         m_featureTitle->setText(m_auxiliaryTitle);
         m_featurePath->setText(ModuleRibbon::moduleNames().value(m_auxiliaryModule) + QStringLiteral("  /  ") + m_auxiliaryTitle);
@@ -981,12 +1005,21 @@ void MainWindow::updateFeaturePresentation()
         m_featureTitle->setText(feature->title);
         m_featurePath->setText(ModuleRibbon::moduleNames().value(feature->module) + QStringLiteral("  /  ") + feature->title);
         m_featureDescription->setText(featureDescription(feature->id));
+        m_ribbon->setToolTip(featureDescription(feature->id));
     }
     const bool requiresTask = feature && (feature->id == "plans.scenario" || feature->id == "plans.task"
         || feature->id == "system.generate-report");
     const int requestedStage = feature && feature->id == "plans.scenario" ? 2 : feature && feature->id == "plans.task" ? 4 : 6;
     const bool incompatibleTask = requiresTask && m_flowPage && m_flowPage->taskContextReady()
         && !m_flowPage->supportsWorkspaceStage(requestedStage);
+    const bool testFeature = feature && (feature->id.startsWith("scans.") || feature->id.startsWith("attacks.") || requiresTask || feature->id == "system.tasks");
+    const bool contextual = testFeature || (feature && (feature->id.startsWith("topology.") || feature->id == "resources.discovery"));
+    m_newTaskButton->setVisible(testFeature);
+    const bool canCreate = !m_openingTaskCreation && m_creatingTaskFeature.isEmpty();
+    m_newTaskButton->setEnabled(canCreate);
+    m_gateNewTaskButton->setEnabled(canCreate);
+    m_switchTaskButton->setVisible(contextual);
+    m_independentButton->setVisible(contextual && m_flowPage && m_flowPage->hasSelectedTask() && !requiresTask && feature->id != "system.tasks");
     const bool gated = requiresTask && (!m_flowPage || !m_flowPage->hasSelectedTask() || incompatibleTask)
         && !m_selectingFeatureTask && !m_dongleLocked;
     if (gated) m_taskGateMessage->setText(incompatibleTask
@@ -999,15 +1032,20 @@ void MainWindow::updateFeaturePresentation()
 
 void MainWindow::chooseTaskForFeature()
 {
-    if (m_dongleLocked || !m_flowPage) return;
-    const QString id = m_activeFeature;
-    const int stage = id == "plans.scenario" ? 2 : id == "plans.task" ? 4 : 6;
+    if (m_dongleLocked) return;
+    QString id = m_activeFeature;
+    if (id.isEmpty()) id = "system.tasks";
+    if (!m_flowPage) ensureModulePage(1);
+    if (!m_flowPage) return;
+    const QScopedValueRollback<bool> routing(m_routingFeature, true);
+    const int stage = stageForFeature(id);
+    switchToPage(1);
     m_selectingFeatureTask = true;
     m_featureSelectionRevision = m_flowPage->taskSelectionRevision();
     m_pendingTaskFeature = id;
     m_flowPage->showTaskList();
     // Keep selection in the task list even when a previous task is still selected.
-    if (!m_flowPage->hasSelectedTask()) m_flowPage->requestWorkspaceStage(stage);
+    if (!m_flowPage->hasSelectedTask() && stage >= 0) m_flowPage->requestWorkspaceStage(stage);
     updateFeaturePresentation();
 }
 
@@ -1054,4 +1092,46 @@ void MainWindow::bindScanWorkspace(ScanPage *page)
             updateFeaturePresentation(); updateTaskContext();
         }
     });
+}
+
+int MainWindow::stageForFeature(const QString &id) const
+{
+    if (id == "resources.discovery" || id.startsWith("topology.")) return 3;
+    if (id.startsWith("scans.")) return 1;
+    if (id == "plans.scenario") return 2;
+    if (id == "plans.task") return 4;
+    if (id.startsWith("attacks.")) return 5;
+    if (id == "system.generate-report") return 6;
+    return -1;
+}
+
+void MainWindow::createTaskForFeature()
+{
+    if (m_dongleLocked || m_openingTaskCreation || !m_creatingTaskFeature.isEmpty()) return;
+    const QString requested = stageForFeature(m_activeFeature) >= 0 ? m_activeFeature : QStringLiteral("scans.system");
+    {
+        const QScopedValueRollback<bool> routing(m_routingFeature, true);
+        ensureModulePage(1);
+    }
+    if (!m_flowPage) return;
+    m_creatingTaskFeature = requested;
+    {
+        const QScopedValueRollback<bool> opening(m_openingTaskCreation, true);
+        updateFeaturePresentation();
+        m_flowPage->createAssessmentTask();
+    }
+    if (!m_flowPage->creationPending()) m_creatingTaskFeature.clear();
+    updateFeaturePresentation();
+}
+
+void MainWindow::useIndependentWorkspace()
+{
+    if (m_dongleLocked || !m_flowPage || !m_creatingTaskFeature.isEmpty()) return;
+    const QString requested = m_activeFeature;
+    if (!(requested.startsWith("scans.") || requested.startsWith("attacks.")
+        || requested.startsWith("topology.") || requested == "resources.discovery")) return;
+    const QScopedValueRollback<bool> routing(m_routingFeature, true);
+    m_pendingTaskFeature.clear(); m_selectingFeatureTask = false;
+    m_flowPage->leaveSelectedTask();
+    openRibbonFeature(requested);
 }

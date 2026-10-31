@@ -66,12 +66,17 @@ public:
   void openTaskAnalysis(const QString &pipelineId);
   void setReturnPage(int page, const QString &title);
   void createTestForTarget(const QString &target, const QJsonObject &topologySource = {});
+  void createAssessmentTask();
+  bool creationPending() const;
+  void leaveSelectedTask();
 
 signals:
   void returnPageRequested(int page);
   void taskContextChanged();
   void taskListRequested();
   void taskReportOpened();
+  void assessmentTaskOpened();
+  void taskCreationFailed();
   void workspaceStageChanged(int stage);
 
 public slots:
@@ -90,7 +95,7 @@ private slots:
   void onCancelFlow();
   void onDeleteFlow();
   void onApproveFlow();
-  void createFlow(bool quickMode, const QString &initialTarget = {}, const QJsonObject &topologySource = {});
+  void createFlow(bool quickMode, const QString &initialTarget = {}, const QJsonObject &topologySource = {}, bool assessment = false);
   void onStartFlow();
   void onBackToList();
   void onFilterChanged(int index);

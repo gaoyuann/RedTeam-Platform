@@ -3812,7 +3812,8 @@ void ScanPage::selectScanType(const QString &type)
     m_resultSource->setCurrentIndex(0);
     const QSignalBlocker block(m_resultCategory);
     m_resultCategory->setCurrentIndex(m_resultCategory->findData(type == "ports" || type == "passwords" ? "all" : "vulnerability"));
-    if (m_allScanResults) loadPipelineResults();
+    // Selecting one source switches to record detail; a new type must restore the aggregate view.
+    loadPipelineResults();
   } else {
     m_selectedTaskId.clear();
     clearDetailPanel();

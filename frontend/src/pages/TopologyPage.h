@@ -40,6 +40,8 @@ public:
     void selectWorkspaceMode(const QString &mode);
     void refreshAssetTable();
     bool eventFilter(QObject *object, QEvent *event) override;
+    void fitVisibleWorkspace();
+    bool m_fitWhenVisible = false;
     QJsonObject selectedTargetContext() const;
     void setPipelineContext(const QString &pipelineId, const QString &target,
                             const QStringList &scanIds, bool scanFinished);

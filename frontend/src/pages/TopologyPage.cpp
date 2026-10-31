@@ -2339,6 +2339,7 @@ void TopologyPage::populateDocumentPlaceholder(const QString &title,
 // ── Render Topology Scene ────────────────────────────────────────────────
 
 void TopologyPage::renderTopologyScene() {
+    m_fitWhenVisible = true;
     if (m_emptyCanvas) {
         m_emptyCanvas->setVisible(m_topologyDocument.nodes.isEmpty());
         m_emptyCanvas->setGeometry(m_graphView->viewport()->rect());
@@ -2970,6 +2971,8 @@ void TopologyPage::onResetView() {
     m_graphView->fitInView(
         m_graphScene->itemsBoundingRect().adjusted(-50, -50, 50, 100),
         Qt::KeepAspectRatio);
+    if (m_graphView->isVisible() && m_graphView->viewport()->width() > 120 && m_graphView->viewport()->height() > 120)
+        m_fitWhenVisible = false;
 }
 
 // ── Add / Remove Nodes & Edges ──────────────────────────────────────────
@@ -3428,13 +3431,19 @@ QString TopologyPage::nodeDisplayTitle(const TopologyNodeRecord &node) const {
 
 void TopologyPage::selectWorkspaceMode(const QString &mode)
 {
+    const QString previousMode = property("workspaceMode").toString();
     setProperty("workspaceMode", mode);
+    if (mode != "assets" && previousMode != mode) {
+        m_fitWhenVisible = true;
+        QTimer::singleShot(0, this, &TopologyPage::fitVisibleWorkspace);
+    }
     for (const auto &name : {"topologyZoomOut", "topologyZoomIn", "topologyFitView", "topologyEditMenu", "topologySourcesButton", "topologyInspectorButton", "topologyInfoButton"})
         if (auto *button = findChild<QPushButton *>(name)) button->setVisible(mode != "assets");
     m_saveTopologyButton->setVisible(mode != "assets");
     m_nodeActionHint->setVisible(mode != "assets");
-    m_nodeTestTargetCombo->setVisible(mode != "assets");
-    m_nodeTestButton->setVisible(mode != "assets");
+    m_nodeTestTargetCombo->setVisible(true);
+    m_nodeTestButton->setVisible(true);
+    m_nodeTestButton->setText(mode == "assets" ? QStringLiteral("对所选资产创建测试") : QStringLiteral("对所选目标发起扫描"));
     m_nodeVerifyButton->setVisible(mode != "assets");
     if (auto *button = findChild<QPushButton *>("topologyUpdateButton")) button->setText(mode == "assets" ? QStringLiteral("刷新资产清单") : QStringLiteral("更新拓扑"));
     auto *sideTabs = findChild<QTabWidget *>(QStringLiteral("topologySideTabs"));
@@ -3529,10 +3538,20 @@ void TopologyPage::refreshAssetTable()
 
 bool TopologyPage::eventFilter(QObject *object, QEvent *event)
 {
+    if (m_graphView && object == m_graphView->viewport() && (event->type() == QEvent::Resize || event->type() == QEvent::Show)) {
+        if (m_fitWhenVisible) QTimer::singleShot(0, this, &TopologyPage::fitVisibleWorkspace);
+    }
     if (m_graphView && object == m_graphView->viewport() && event->type() == QEvent::Resize && m_emptyCanvas) {
         m_emptyCanvas->setGeometry(m_graphView->viewport()->rect());
         m_emptyCanvas->setVisible(m_topologyDocument.nodes.isEmpty());
         m_emptyCanvas->raise();
     }
     return QWidget::eventFilter(object, event);
+}
+
+void TopologyPage::fitVisibleWorkspace()
+{
+    if (!m_fitWhenVisible || !m_graphView->isVisible() || m_topologyDocument.nodes.isEmpty()
+        || m_graphView->viewport()->width() <= 120 || m_graphView->viewport()->height() <= 120) return;
+    onResetView();
 }

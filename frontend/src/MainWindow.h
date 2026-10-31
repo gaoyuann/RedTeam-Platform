@@ -56,6 +56,15 @@ private:
     void updateTaskContext();
     void updateFeaturePresentation();
     void chooseTaskForFeature();
+    void createTaskForFeature();
+    void useIndependentWorkspace();
+    int stageForFeature(const QString &id) const;
+    QString m_creatingTaskFeature;
+    bool m_openingTaskCreation = false;
+    QPushButton *m_switchTaskButton = nullptr;
+    QPushButton *m_newTaskButton = nullptr;
+    QPushButton *m_independentButton = nullptr;
+    QPushButton *m_gateNewTaskButton = nullptr;
     void showAuxiliaryWorkspace(int module, const QString &title, const QString &description);
     void bindExecutionView(ExecutionPage *page);
     void bindScanWorkspace(ScanPage *page);
