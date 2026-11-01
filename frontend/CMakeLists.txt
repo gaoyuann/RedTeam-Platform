@@ -191,6 +191,13 @@ if(BUILD_UI_CHECKS)
   endif()
   target_include_directories(RedTeam-Platform-Batch16Checks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   foreach(UI_SCALE IN ITEMS 1 1.25 1.5)
+    add_test(NAME ui-task-dialog-${UI_SCALE} COMMAND RedTeam-Platform-Batch16Checks)
+    set_tests_properties(ui-task-dialog-${UI_SCALE} PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${UI_SCALE};REDTEAM_TASK_DIALOG_ONLY=1"
+      TIMEOUT 30
+    )
+  endforeach()
+  foreach(UI_SCALE IN ITEMS 1 1.25 1.5)
     add_test(NAME ui-context-${UI_SCALE} COMMAND RedTeam-Platform-Batch16Checks)
     set_tests_properties(ui-context-${UI_SCALE} PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${UI_SCALE};REDTEAM_CONTEXT_SEGMENT=details"

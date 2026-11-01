@@ -1553,7 +1553,6 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget, const QJ
   QDialog dlg(this);
   dlg.setObjectName(initialTarget.isEmpty() ? "taskCreateDialog" : "topologyTargetTaskDialog");
   dlg.setWindowTitle(assessment ? QStringLiteral("新建安全测试任务") : initialTarget.isEmpty() ? QStringLiteral("新建资产探测任务") : QStringLiteral("对所选目标发起扫描"));
-  dlg.setMinimumWidth(520);
   dlg.setStyleSheet(Theme::PageStyle + QStringLiteral(
       "QDialog#taskCreateDialog, QDialog#topologyTargetTaskDialog { background:%1; }"
       "QScrollArea#taskCreateScroll, QWidget#taskCreateBody { background:transparent; border:none; }"
@@ -1745,7 +1744,8 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget, const QJ
     const auto *window = dlg.windowHandle();
     const auto *screen = window && window->screen() ? window->screen() : QGuiApplication::primaryScreen();
     const auto screenSize = screen ? screen->availableGeometry().size() : QSize(1360, 860);
-    const int dialogWidth = qMin(560, qMax(520, screenSize.width() - 32));
+    const int dialogWidth = qMax(1, qMin(560, screenSize.width() - 32));
+    dlg.setMinimumWidth(qMin(520, dialogWidth));
     const int contentWidth = dialogWidth - l->contentsMargins().left() - l->contentsMargins().right();
     const auto labelHeight = [=](QLabel *label) {
       return label->hasHeightForWidth() ? label->heightForWidth(contentWidth) : label->sizeHint().height();
@@ -1756,10 +1756,17 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget, const QJ
         + authorizationCheck->sizeHint().height() + labelHeight(scanPolicyHint) + btns->sizeHint().height();
     const int bodyHeight = bodyLayout->hasHeightForWidth() ? bodyLayout->totalHeightForWidth(contentWidth)
         : bodyLayout->sizeHint().height();
-    scroll->setFixedHeight(qMin(bodyHeight, qMax(80, availableHeight - fixedHeight)));
+    scroll->setFixedHeight(qMin(bodyHeight, qMax(0, availableHeight - fixedHeight)));
     l->invalidate();
     l->activate();
     dlg.resize(dialogWidth, fixedHeight + scroll->height());
+    const QRect available = screen ? screen->availableGeometry() : QRect(QPoint(), screenSize);
+    const QRect frame = dlg.frameGeometry();
+    const QPoint center = dlg.isVisible() ? frame.center() : available.center();
+    dlg.move(qBound(available.left(), center.x() - frame.width()/2,
+          qMax(available.left(), available.right() - frame.width() + 1)),
+        qBound(available.top(), center.y() - frame.height()/2,
+          qMax(available.top(), available.bottom() - frame.height() + 1)));
   };
   auto updateProgramFields = [=, &dlg] {
     const bool program = testType->currentData().toString() == "program";
@@ -1840,6 +1847,7 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget, const QJ
   if (!topologySource.isEmpty()) testType->setEnabled(false);
   targetInput->setFocus();
 
+  QTimer::singleShot(0, &dlg, resizeDialog);
   if (dlg.exec() != QDialog::Accepted) return;
 
   const QString target = targetInput->text().trimmed();

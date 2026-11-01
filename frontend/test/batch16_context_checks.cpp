@@ -379,6 +379,40 @@ static void runHomeWorkflowChecks(const std::function<void(bool, const char *)> 
   qApp->setStyleSheet(previousStyle);
 }
 
+static void runTaskDialogGeometryChecks(const std::function<void(bool, const char *)> &verify)
+{
+  MockServer server;
+  server.handler=[](const QString &,const QString &){return MockReply{success(QJsonArray())};};
+  ApiClient api(QStringLiteral("http://127.0.0.1:%1").arg(server.serverPort()));
+  const auto previousStyle=qApp->styleSheet();const auto previousFont=qApp->font();
+  qApp->setStyleSheet(Theme::GlobalStyle+Theme::ButtonStyle);
+  auto font=qApp->font();font.setPointSize(11);qApp->setFont(font);
+  MainWindow shell(&api,"user","fixture-user");shell.m_dongleTimer->stop();shell.m_ws->disconnectFromServer();
+  shell.switchToPage(1);shell.resize(1360,860);shell.show();
+  for(bool quick:{false,true}) {
+    QTimer::singleShot(0,shell.m_flowPage,[&] {
+      auto *dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      verify(dialog,"task creation opens its dialog");
+      dialog->findChild<QLineEdit*>("taskTargetInput")->setText("http://192.0.2.40:8089/app/");
+      auto *options=dialog->findChild<QToolButton*>("taskOptionsToggle");
+      for(bool expanded:{false,true}) {
+        options->setChecked(expanded);
+        QTest::qWait(30);
+        const auto *screen=dialog->windowHandle()->screen();
+        qInfo()<<"Task dialog geometry"<<dialog->size()<<"frame"<<dialog->frameGeometry()<<"minimum"<<dialog->minimumSize()<<"screen"<<screen->availableGeometry();
+        verify(screen->availableGeometry().contains(dialog->frameGeometry()),"complete task dialog frame fits the available screen");
+        auto *buttons=dialog->findChild<QDialogButtonBox*>();
+        verify(dialog->rect().contains(QRect(buttons->mapTo(dialog,QPoint()),buttons->size())),"task dialog actions remain inside the window");
+        auto *scroll=dialog->findChild<QScrollArea*>("taskCreateScroll");
+        verify(scroll->horizontalScrollBar()->maximum()==0,"task form remains readable without horizontal scrolling");
+      }
+      dialog->reject();
+    });
+    shell.m_flowPage->createFlow(quick);
+  }
+  qApp->setStyleSheet(previousStyle);qApp->setFont(previousFont);
+}
+
 int main(int argc, char **argv)
 {
   QTemporaryDir isolatedSettings;
@@ -401,6 +435,11 @@ int main(int argc, char **argv)
     std::cout << "PASS " << name << std::endl;
   };
   runPageComponentsChecks(verify);
+  if (qEnvironmentVariableIsSet("REDTEAM_TASK_DIALOG_ONLY")) {
+    runTaskDialogGeometryChecks(verify);
+    std::cout << "TOTAL " << checks << " task dialog checks passed" << std::endl;
+    return 0;
+  }
   if (qEnvironmentVariableIsSet("REDTEAM_MANUAL_PLAN_ONLY")) {
     runManualTaskPlanChecks(verify);
     std::cout << "TOTAL " << checks << " manual plan checks passed" << std::endl;
