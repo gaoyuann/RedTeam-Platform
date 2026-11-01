@@ -19,7 +19,8 @@ import {payloadArtifactView} from './findingPayloadArtifacts.js';
 import {makeSourceResponseRule} from './sourceResponseRule.js';
 import {verificationCodeHistory} from './findingVerificationCode.js';
 import {currentFindingPayload} from './currentFindingPayload.js';
-import {assertCodePlan} from './verificationCodeArtifact.js';
+import {reusableLibraryPayload,libraryPayloadItems} from './findingPayloadReuse.js';
+import {assertCodePlan,codeHash} from './verificationCodeArtifact.js';
 import {makeCodeRule} from './sourceCodeRule.js';
 
 export const json = (value, fallback = {}) => { try { return typeof value === 'string' ? JSON.parse(value) : value ?? fallback; } catch { return fallback; } };
@@ -91,7 +92,7 @@ export function verificationDetail(db, pipeline, id) {
     payloads:verificationPayloadCatalog(db,item,row,plans[0]?.content),payload_artifacts:payloadArtifactView(db,item),readiness:verificationReadiness(db,pipeline,item,plans[0]), summary:verificationSummary(db,item.finding_id,pipeline.pipeline_id) });
   detail.finding.result_data=JSON.stringify(detail.finding.result_data);
   detail.verification_code=verificationCodeHistory(db,item.id);
-  detail.current_payload=currentFindingPayload(detail.payload_artifacts,detail.verification_code);
+  detail.current_payload=currentFindingPayload(detail.payload_artifacts,detail.verification_code,libraryPayloadItems(reusableLibraryPayload(db,row)),codeHash(row.result_data));
   // Serialize only after field-level redaction; legacy readers still receive valid JSON.
   for(const attempt of detail.attempts)for(const evidence of attempt.evidence)if(evidence.observation)evidence.raw_stdout=JSON.stringify(evidence.observation);
   return detail;

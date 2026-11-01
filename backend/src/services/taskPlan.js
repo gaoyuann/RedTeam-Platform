@@ -6,6 +6,7 @@ import { appendTaskLog } from './taskActivity.js';
 import { assertPlaybookUse, canReadPlaybook, playbookScope } from './playbookAccess.js';
 import { sourceTarget } from './sourceScanConnections.js';
 import { validateSourceDemonstration } from './sourceVerification.js';
+import { resultCategory } from './scanResultCatalog.js';
 
 function fail(status, message) {
   throw Object.assign(new Error(message), { status });
@@ -60,6 +61,42 @@ export function getTaskPlanSources(db, pipeline, actor) {
   }).map(({playbook_id, name, steps_count}) => ({playbook_id, name, steps_count}));
 }
 
+function manualScanContinuationBlock(db, pipeline) {
+  try {
+    if (db.prepare("SELECT 1 FROM scan_tasks WHERE pipeline_id=? AND UPPER(status) NOT IN ('COMPLETED','PARTIAL','FAILED','CANCELLED')").get(pipeline.pipeline_id))
+      return '扫描仍在运行或状态未确认，暂不能选择整体执行预案';
+    if (db.prepare(`SELECT 1 FROM scan_tool_runs r JOIN scan_tasks s USING(scan_task_id) WHERE s.pipeline_id=?
+      AND (r.state NOT IN ('completed','failed','timed_out','cancelled') OR r.completed_at IS NULL
+        OR NOT json_valid(r.outcome) OR json_extract(r.outcome,'$.stopped') IS NOT 1)`).get(pipeline.pipeline_id))
+      return '扫描工具停止未确认，暂不能继续执行';
+    if (db.prepare("SELECT 1 FROM finding_verification_attempts WHERE pipeline_id=? AND (state IN ('queued','running','cancelling','unknown') OR stop_confirmed=0)").get(pipeline.pipeline_id))
+      return '当前任务还有运行中或停止未确认的逐漏洞测试';
+  } catch { return '当前服务缺少扫描停止状态记录，请更新服务后核对'; }
+  return '';
+}
+
+export function taskPlanSelectionState(db, pipeline) {
+  const state = {can_create_from_existing:false, requires_scan_failure_confirmation:false,
+    pipeline_status:pipeline.status, reason:'当前任务不在待审批阶段'};
+  if (pipeline.status === 'awaiting_approval') return {...state,can_create_from_existing:true,reason:''};
+  if (pipeline.status !== 'failed' || pipeline.run_id) return state;
+  const config = json(pipeline.config, {});
+  if (config.task_mode === 'discovery' || config.workflow_mode === 'staged' || isProgramMode(config.scan_mode)
+      || ['source','program'].includes(config.test_type)) return state;
+  if (getTaskPlan(db,pipeline.pipeline_id)) return {...state,reason:'当前任务已有方案，请核对其执行状态，不要重复建立'};
+  if (!db.prepare("SELECT 1 FROM pipeline_steps WHERE pipeline_id=? AND step_type='scan' AND status='failed'").get(pipeline.pipeline_id))
+    return {...state,reason:'仅扫描失败且尚未执行的任务可从已有发现选择整体预案'};
+  const blocked = manualScanContinuationBlock(db,pipeline);
+  if (blocked) return {...state,reason:blocked};
+  const findings = db.prepare(`SELECT r.result_type,r.result_data,r.source_tool,r.severity FROM scan_results r
+    JOIN scan_tasks s USING(scan_task_id) WHERE s.pipeline_id=?`).iterate(pipeline.pipeline_id);
+  let usable = false;
+  for (const finding of findings) if (resultCategory(finding) === 'vulnerability') { usable = true; break; }
+  if (!usable) return {...state,reason:'扫描没有保留可继续验证的漏洞候选，请先完成有效扫描'};
+  return {...state,can_create_from_existing:true,requires_scan_failure_confirmation:true,
+    reason:'扫描未完整成功，已有发现和失败记录会保留；可明确选择已有预案建立草稿，审阅确认后执行'};
+}
+
 function record(db, pipelineId, actor, action, note = '') {
   const row = db.prepare('SELECT * FROM task_plans WHERE pipeline_id = ?').get(pipelineId);
   db.prepare(`INSERT INTO task_plan_history (pipeline_id, revision, action, actor, actor_role, note, snapshot)
@@ -93,8 +130,19 @@ function update(db, pipelineId, actor, action, state, content, note = '') {
   return getTaskPlan(db, pipelineId);
 }
 
-export function createTaskPlan(db, pipeline, actor, playbookId) {
-  waiting(pipeline);
+export function createTaskPlan(db, pipeline, actor, playbookId, options = {}) {
+  return db.transaction(() => createTaskPlanInternal(db,pipeline,actor,playbookId,options))();
+}
+
+function createTaskPlanInternal(db, pipeline, actor, playbookId, options) {
+  const current = db.prepare('SELECT * FROM pipelines WHERE pipeline_id=?').get(pipeline.pipeline_id);
+  if (!current) fail(404,'任务不存在');
+  pipeline = current;
+  const selection = taskPlanSelectionState(db,pipeline);
+  if (!selection.can_create_from_existing) fail(409,selection.reason);
+  const manualContinuation = selection.requires_scan_failure_confirmation;
+  if (manualContinuation && (options.continueAfterScanFailure !== true || typeof playbookId !== 'string' || !playbookId.trim()))
+    fail(409,'请明确选择已有预案，并确认基于本次扫描保留的发现继续；扫描失败记录不会改为成功');
   if (getTaskPlan(db, pipeline.pipeline_id)) fail(409, '任务已有草稿，请刷新，不要重复初始化');
   const sourceId = playbookId || pipeline.generated_playbook_id;
   assertPlaybookUse(db, sourceId, actor, pipeline.created_by);
@@ -126,7 +174,15 @@ export function createTaskPlan(db, pipeline, actor, playbookId) {
   };
   db.prepare("INSERT INTO task_plans (pipeline_id, state, content) VALUES (?, 'draft', ?)")
     .run(pipeline.pipeline_id, JSON.stringify(content));
-  record(db, pipeline.pipeline_id, actor, 'create');
+  if (manualContinuation) {
+    const result = json(pipeline.result, {});
+    result.manual_scan_continuation = {previous_status:pipeline.status, scan_error:pipeline.error_message || null,
+      selected_playbook_id:sourceId, requested_by:actor.sub, requested_at:new Date().toISOString()};
+    db.prepare("UPDATE pipelines SET status='awaiting_approval',result=?,updated_at=datetime('now') WHERE pipeline_id=? AND status='failed'")
+      .run(JSON.stringify(result),pipeline.pipeline_id);
+    appendTaskLog(db,pipeline.pipeline_id,'用户选择已有预案继续审阅；扫描失败及已有发现保留，尚未执行','warn');
+  }
+  record(db, pipeline.pipeline_id, actor, 'create',manualContinuation ? '从扫描保留的发现选择已有预案，保留原扫描失败' : '');
   if (isProgramMode(config.scan_mode)) {
     db.prepare("UPDATE pipeline_steps SET status='completed',completed_at=datetime('now'),output_data=? WHERE pipeline_id=? AND step_type='generate'")
       .run(JSON.stringify({playbook_id:sourceId,method:'selected_source_demonstration',draft:true}),pipeline.pipeline_id);
@@ -184,6 +240,10 @@ export function transitionTaskPlan(db, pipeline, actor, action, body) {
   if (!allowed[action]) fail(400, '未知预案操作');
   if (['reject', 'approve'].includes(action) && actor.role !== 'admin') fail(403, '只有管理员可以审批任务预案');
   const plan = checkedPlan(db, pipeline, body.revision, allowed[action]);
+  if (['submit','approve'].includes(action) && json(pipeline.result,{}).manual_scan_continuation) {
+    const blocked = manualScanContinuationBlock(db,pipeline);
+    if (blocked) fail(409,blocked);
+  }
   const note = text(body.note ?? '', 2000, '审批意见').trim();
   if (action === 'reject' && !note) fail(400, '驳回时请填写原因');
   if (action === 'submit') {
@@ -198,7 +258,9 @@ export function transitionTaskPlan(db, pipeline, actor, action, body) {
   const config = json(pipeline.config, {});
   if (config.authorization_confirmed !== true || plan.content.target !== pipeline.target
       || plan.content.authorization_scope !== (config.authorization_scope || '')) fail(409, '任务授权记录与提审快照不一致');
-  if (config.auto_execute === false) fail(409, '此任务禁止自动执行，不能批准并执行');
+  const enableExecution = config.auto_execute === false && body.enable_execution === true;
+  if (config.auto_execute === false && !enableExecution)
+    fail(409, '此任务未启用执行，请明确确认启用本任务执行后再批准');
   if (db.prepare("SELECT COUNT(*) AS count FROM pipelines WHERE status = 'running'").get().count >= 5)
     fail(429, '运行中任务数量已达上限，请等待其他任务结束后再审批');
   const playbookId = `task_plan_${randomUUID()}`;
@@ -236,5 +298,10 @@ export function transitionTaskPlan(db, pipeline, actor, action, body) {
       .run(JSON.stringify({playbook_id:playbookId,source_playbook_id:plan.content.source_playbook_id,
         method:'selected_source_demonstration',finding_ids:metadata.source_verification.finding_ids}),pipeline.pipeline_id);
   }
-  return update(db, pipeline.pipeline_id, actor, 'approve', 'approved', plan.content, note);
+  if (enableExecution) {
+    db.prepare('UPDATE pipelines SET config = ? WHERE pipeline_id = ?')
+      .run(JSON.stringify({...config, auto_execute:true}), pipeline.pipeline_id);
+  }
+  return update(db, pipeline.pipeline_id, actor, 'approve', 'approved', plan.content,
+    enableExecution ? [note, '管理员明确确认启用本任务执行，并批准当前提审版本'].filter(Boolean).join('\n') : note);
 }

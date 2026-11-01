@@ -27,14 +27,14 @@ constexpr int TopBarHeight = 64;
 constexpr int NavigationWidth = 184;
 constexpr int NavigationCompactWidth = 64;
 constexpr int IconSize = 22;
-constexpr int ControlHeight = 36;
+constexpr int ControlHeight = 30;
 constexpr int CardRadius = 8;
 constexpr int Space = 16;
 constexpr const char* Card = "#ffffff";
 constexpr const char* CanvasBackground = "#08121a";
 constexpr const char* CanvasText = "#a8bdd5";
 constexpr const char* Text = "#172033";
-constexpr const char* TextSecondary = "#64748b";
+constexpr const char* TextSecondary = "#526174";
 constexpr const char* Selected = "#dcebff";
 
 // ── Status colors (unified across all pages) ─────────────────────────
@@ -62,7 +62,7 @@ constexpr const char* TableAltRow   = "#f0f4f8";
 // ── Section header QSS ───────────────────────────────────────────────
 // Replaces the duplicated sectionStyle string in 6 page files.
 constexpr const char* SectionStyle =
-  "font-size:17px; font-weight:700; color:#172033; "
+  "font-size:14px; font-weight:600; color:#172033; "
   "padding:4px 0 7px; border-bottom:1px solid #dbe3ef;";
 
 // Shared button roles used by pages, dialogs and toolbars. Sizes are variants,
@@ -70,7 +70,7 @@ constexpr const char* SectionStyle =
 inline const QString ButtonStyle = R"css(
   QPushButton {
     background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ffffff,stop:1 #fafcff); color:#475569; border:1px solid #d5deeb;
-    border-radius:8px; padding:0 14px; min-height:34px;
+    border-radius:8px; padding:0 10px; min-height:30px;
     font-size:13px; font-weight:500;
   }
   QPushButton:hover { background:#f2f6ff; color:#1d4ed8; border-color:#adc5ef; }
@@ -83,7 +83,7 @@ inline const QString ButtonStyle = R"css(
   QPushButton[quiet="true"] { background:transparent; border-color:transparent; }
   QPushButton[quiet="true"]:hover { background:#f1f5fb; color:#1d4ed8; border-color:#e2e8f0; }
   QPushButton[quiet="true"]:focus { border-color:#7ea6e8; }
-  QPushButton[iconOnly="true"] { padding:0; font-size:18px; }
+  QPushButton[iconOnly="true"] { padding:0; font-size:13px; }
   QPushButton[iconOnly="true"]::menu-indicator { image:none; width:0; }
   QPushButton[menuAction="true"] { padding-right:24px; }
   QPushButton[menuAction="true"]::menu-indicator { subcontrol-position:center right; right:9px; }
@@ -94,8 +94,8 @@ inline const QString ButtonStyle = R"css(
   QPushButton[warning="true"] { background:#fffbeb; color:#a16207; border-color:#fde68a; }
   QPushButton[warning="true"]:hover { background:#fef3c7; border-color:#facc15; }
   QPushButton[warning="true"]:pressed { background:#fde68a; }
-  QPushButton[compact="true"] { min-height:26px; padding:0 10px; font-size:12px; border-radius:6px; }
-  QPushButton[large="true"] { min-height:44px; font-size:15px; }
+  QPushButton[compact="true"] { min-height:26px; padding:0 10px; font-size:13px; border-radius:6px; }
+  QPushButton[large="true"] { min-height:34px; font-size:13px; }
   QPushButton[danger="true"]:focus, QPushButton[warning="true"]:focus { border-color:#7ea6e8; }
   QPushButton:disabled, QPushButton[primary="true"]:disabled,
   QPushButton[danger="true"]:disabled, QPushButton#dangerBtn:disabled, QPushButton[warning="true"]:disabled,

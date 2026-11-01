@@ -11,6 +11,7 @@
 #include <QJsonArray>
 #include <QLabel>
 #include <QGroupBox>
+#include <QScrollArea>
 #include <QMap>
 #include <QPointer>
 #include <QPushButton>
@@ -104,7 +105,17 @@ TaskExecutionPanel::TaskExecutionPanel(ApiClient *api, const QString &role, cons
 {
   setObjectName("taskExecutionPanel");
   setStyleSheet(Theme::PageStyle);
-  auto *outer = new QVBoxLayout(this);
+  auto *root = new QVBoxLayout(this);
+  root->setContentsMargins(0, 0, 0, 0);
+  auto *scroll = new QScrollArea(this);
+  scroll->setObjectName("executionPanelScroll");
+  scroll->setWidgetResizable(true);
+  scroll->setFrameShape(QFrame::NoFrame);
+  auto *body = new QWidget(scroll);
+  scroll->setWidget(body);
+  root->addWidget(scroll);
+  auto *outer = new QVBoxLayout(body);
+  outer->setSizeConstraint(QLayout::SetMinimumSize);
   outer->setContentsMargins(8, 8, 8, 8);
   auto *heading = new QHBoxLayout;
   m_title = label(this);
@@ -122,15 +133,25 @@ TaskExecutionPanel::TaskExecutionPanel(ApiClient *api, const QString &role, cons
   m_parentDetails->setCheckable(true);
   m_parentDetails->setChecked(false);
   auto *parentLayout = new QVBoxLayout(m_parentDetails);
+  parentLayout->setContentsMargins(12, 6, 12, 8);
   auto *parentBody = new QWidget(m_parentDetails);
   auto *parentContent = new QVBoxLayout(parentBody);
   parentContent->setContentsMargins(0, 0, 0, 0);
+  parentContent->setSpacing(4);
+  parentContent->setSizeConstraint(QLayout::SetMinimumSize);
   m_parentState = label(parentBody);
   parentContent->addWidget(m_parentState);
   parentContent->addWidget(m_identity);
-  parentLayout->addWidget(parentBody);
-  parentBody->hide();
-  connect(m_parentDetails, &QGroupBox::toggled, parentBody, &QWidget::setVisible);
+  auto *parentScroll = new QScrollArea(m_parentDetails);
+  parentScroll->setObjectName("executionPlanSummaryScroll");
+  parentScroll->setFrameShape(QFrame::NoFrame);
+  parentScroll->setWidgetResizable(true);
+  parentScroll->setMinimumHeight(180);
+  parentScroll->setMaximumHeight(240);
+  parentScroll->setWidget(parentBody);
+  parentLayout->addWidget(parentScroll);
+  parentScroll->hide();
+  connect(m_parentDetails, &QGroupBox::toggled, parentScroll, &QWidget::setVisible);
   outer->addWidget(m_parentDetails);
   auto *metrics = new QHBoxLayout;
   const QStringList titles{QStringLiteral("主预案 Run 状态"), QStringLiteral("主预案已返回 / 步骤"), QStringLiteral("主预案工具调用"), QStringLiteral("主预案证据")};
@@ -143,9 +164,14 @@ TaskExecutionPanel::TaskExecutionPanel(ApiClient *api, const QString &role, cons
   m_gate->setStyleSheet("color:#475569;padding:4px 0;");
   parentContent->addWidget(m_gate);
   auto *notice = label(this);
-  notice->setText(QStringLiteral("只读监控；取消任务请使用工作台顶部按钮。后端暂无可靠的暂停/恢复/手动重试接口，本页不提供这些操作。工具成功、规则命中和 MITRE 标签不等于漏洞已验证；模拟模式必须另行核验。"));
-  notice->setStyleSheet("color:#64748b;font-size:12px;");
+  notice->setText(QStringLiteral("选择执行记录查看步骤、证据与结果；停止任务请使用当前任务操作。工具成功与漏洞验证结论分别展示。"));
+  notice->setStyleSheet("color:#64748b;font-size:14px;");
   outer->addWidget(notice);
+  m_scenarioSummary = label(this);
+  m_scenarioSummary->setObjectName("executionScenarioSummary");
+  m_scenarioSummary->setStyleSheet("font-size:14px;color:#6c83a5;padding:8px 0;");
+  m_scenarioSummary->hide();
+  outer->addWidget(m_scenarioSummary);
   auto *splitter = new QSplitter(Qt::Horizontal, this);
   m_tabs = new WorkbenchTabs(splitter);
   auto makeTable = [this](const QString &title, const QStringList &headers, const QString &hint) {
@@ -158,6 +184,7 @@ TaskExecutionPanel::TaskExecutionPanel(ApiClient *api, const QString &role, cons
     table->setWordWrap(false);
     table->setShowGrid(false);
     table->verticalHeader()->hide();
+    table->verticalHeader()->setDefaultSectionSize(46);
     table->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
     table->horizontalHeader()->setStretchLastSection(true);
     table->setStyleSheet(Theme::ItemViewStyle);
@@ -202,13 +229,14 @@ TaskExecutionPanel::TaskExecutionPanel(ApiClient *api, const QString &role, cons
   m_detail->setAcceptRichText(false);
   splitter->addWidget(m_tabs);
   splitter->addWidget(detailCard);
+  splitter->setMinimumHeight(280);
   splitter->setChildrenCollapsible(false);
   splitter->setStretchFactor(0, 3);
   splitter->setStretchFactor(1, 2);
   splitter->setSizes({680, 360});
   outer->addWidget(splitter, 1);
   m_updated = label(this);
-  m_updated->setStyleSheet("color:#64748b;font-size:12px;");
+  m_updated->setStyleSheet("color:#64748b;font-size:14px;");
   outer->addWidget(m_updated);
   m_timer = new QTimer(this);
   m_timer->setInterval(2000);
@@ -237,9 +265,21 @@ void TaskExecutionPanel::setTaskContext(const QString &pipelineId, const QString
   }
 }
 
+void TaskExecutionPanel::setPrimaryPlan(bool primary)
+{
+  if (m_primaryPlan == primary) return;
+  m_primaryPlan = primary;
+  m_parentDetails->setTitle(primary ? QStringLiteral("本次方案执行详情")
+      : QStringLiteral("主预案详情（可选批量编排，展开查看）"));
+  m_parentDetails->setChecked(primary);
+  m_tabs->setCurrentWidget(primary ? m_steps : m_verifications);
+  if (!m_snapshot.isEmpty()) render();
+}
+
 void TaskExecutionPanel::clearTaskContext()
 {
   ++m_contextVersion;
+  for (auto *dialog : findChildren<FindingVerificationDialog *>("taskExecutionVerification")) dialog->close();
   ++m_requestVersion;
   m_pipelineId.clear();
   m_expectedRunId.clear();
@@ -248,6 +288,8 @@ void TaskExecutionPanel::clearTaskContext()
   m_completedRunId.clear();
   m_detailKey.clear();
   m_snapshot = {};
+  m_scenarioSummary->setText(m_scenarioCategory.isEmpty() ? QString() : QStringLiteral("正在读取当前任务的场景记录…"));
+  m_scenarioSummary->setVisible(!m_scenarioCategory.isEmpty());
   m_busy = false;
   m_refreshFailed = false;
   m_timer->stop();
@@ -258,8 +300,8 @@ void TaskExecutionPanel::clearTaskContext()
   m_state->setStyleSheet(Theme::StatusInfoStyle);
   m_identity->clear();
   m_parentState->clear();
-  m_parentDetails->setChecked(false);
-  m_tabs->setCurrentWidget(m_verifications);
+  m_parentDetails->setChecked(m_primaryPlan);
+  m_tabs->setCurrentWidget(m_primaryPlan ? m_steps : m_verifications);
   m_gate->clear();
   m_updated->clear();
   m_detail->setPlainText(QStringLiteral("选择步骤、尝试、证据或预检项查看来源与详情。"));
@@ -410,6 +452,7 @@ void TaskExecutionPanel::render()
   m_parentState->setText(status);
   m_parentState->setStyleSheet(run.value("status").toString() == "FAILED" ? Theme::StatusErrorStyle
     : counts.value("failed").toInt() > 0 ? Theme::StatusWarningStyle : Theme::StatusInfoStyle);
+  const QString parentStatus = status;
   if(verifications.value("schema_version").toInt()==1) {
     const int total=verifications.value("total").toInt(), active=verifications.value("active").toInt();
     status=active>0 ? QStringLiteral("逐漏洞测试进行中 · %1 次活动测试").arg(active)
@@ -421,6 +464,8 @@ void TaskExecutionPanel::render()
       .arg(verifications.value("aborted").toInt()).arg(verifications.value("unknown").toInt());
     if(verifications.value("invalid_source_count").toInt()>0)status+=QStringLiteral("\n另有 %1 条记录来源不匹配，未展示内容。请核对来源。").arg(verifications.value("invalid_source_count").toInt());
   } else status=QStringLiteral("当前接口未提供逐漏洞执行列表，请使用配套后端版本查看；主预案状态见详情。");
+  if (m_primaryPlan && verifications.value("active").toInt() == 0 && !runId.isEmpty())
+    status = parentStatus + (verifications.value("total").toInt() > 0 ? "\n" + status : QString());
   m_state->setText(status);
   m_state->setStyleSheet(Theme::StatusInfoStyle);
   m_metrics[0]->setValue(runId.isEmpty() ? QStringLiteral("—") : stateText(run.value("status").toString()));
@@ -463,7 +508,22 @@ void TaskExecutionPanel::render()
     else { table->clearSelection(); table->setCurrentCell(-1, -1); }
     table->blockSignals(false);
   }
-  const auto childRows=verifications.value("items").toArray();
+  QJsonArray childRows;
+  int unclassified = 0;
+  const auto allChildRows = verifications.value("items").toArray();
+  for (const auto &value : allChildRows) {
+    const auto classification = value.toObject().value("classification").toObject();
+    if (classification.value("state").toString() != "classified") ++unclassified;
+    if (m_scenarioCategory.isEmpty() || (classification.value("state").toString() == "classified"
+        && classification.value("categories").toArray().contains(m_scenarioCategory))) childRows.append(value);
+  }
+  m_scenarioSummary->setVisible(!m_scenarioCategory.isEmpty());
+  if (!m_scenarioCategory.isEmpty()) {
+    m_state->setToolTip(m_state->text());
+    m_state->setText(status + "\n" + QStringLiteral("本场景已加载 %1 条关联执行记录").arg(childRows.size()));
+  }
+  if (!m_scenarioCategory.isEmpty()) m_scenarioSummary->setText(QStringLiteral("当前场景：匹配已保存分类的执行记录 %1 条；另有 %2 条未分类或分类已过期。仅筛选本次返回记录，分类不代表验证成立。")
+    .arg(childRows.size()).arg(unclassified));
   const auto *selected=m_verifications->item(m_verifications->currentRow(),0);
   const QString selectedId=selected?selected->data(Qt::UserRole).toJsonObject().value("attempt_id").toString():QString();
   {const QSignalBlocker block(m_verifications);m_verifications->setRowCount(childRows.size());int selectedRow=-1;
@@ -554,6 +614,10 @@ void TaskExecutionPanel::openVerificationHistory(int index)
   const int context=m_contextVersion;
   auto *dialog=new FindingVerificationDialog(m_api,pipeline,{row.value("finding_id").toVariant().toLongLong()},this,
       row.value("verification_id").toString(),row.value("attempt_id").toString());
+  dialog->setObjectName("taskExecutionVerification");
+  connect(dialog, &FindingVerificationDialog::assessmentRequested, this, [this,pipeline,context](const QString &id) {
+    if (pipeline == m_pipelineId && context == m_contextVersion && id == pipeline) emit assessmentRequested(id);
+  });
   connect(dialog,&QDialog::finished,this,[this,pipeline,context](){
     if(pipeline!=m_pipelineId || context!=m_contextVersion)return;
     refresh();
@@ -561,4 +625,15 @@ void TaskExecutionPanel::openVerificationHistory(int index)
   });
   dialog->setAttribute(Qt::WA_DeleteOnClose);
   dialog->show();
+}
+
+void TaskExecutionPanel::setScenarioCategory(const QString &category)
+{
+  m_scenarioCategory = category;
+  m_tabs->setCurrentWidget(m_verifications);
+  if (!m_snapshot.isEmpty()) render();
+  else {
+    m_scenarioSummary->setVisible(!category.isEmpty());
+    m_scenarioSummary->setText(QStringLiteral("正在读取当前场景的执行记录；未分类记录不会自动归入场景。"));
+  }
 }

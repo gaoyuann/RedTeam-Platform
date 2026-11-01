@@ -26,13 +26,7 @@ ResultsPage::ResultsPage(ApiClient *api, const QString &role, const QString &use
   setObjectName("resultsPage");
   setStyleSheet(Theme::PageStyle);
   auto *layout = new QVBoxLayout(this);
-  layout->setContentsMargins(24, 20, 24, 20);
-  auto *title = new QLabel(QStringLiteral("结果与报告"), this);
-  title->setStyleSheet("font-size:24px; font-weight:700; color:#12213c;");
-  layout->addWidget(title);
-  auto *hint = new QLabel(QStringLiteral("任务追溯报告按明确来源定位；历史报告不按同目标猜测任务归属。草稿、工具结果和人工复核结论分开处理。"), this);
-  hint->setWordWrap(true);
-  layout->addWidget(hint);
+  layout->setContentsMargins(24, 0, 24, 20);
   m_tabs = new WorkbenchTabs(this);
   layout->addWidget(m_tabs, 1);
   auto *index = new QWidget(m_tabs);

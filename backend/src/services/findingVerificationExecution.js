@@ -3,6 +3,7 @@ import {attemptVerificationSummary} from './findingVerificationSummary.js';
 import {pipelineScans} from './scanResultQuery.js';
 import {taskScope,isTargetInScope} from './taskScope.js';
 import {redactScanValue} from './scanResultCatalog.js';
+import {findingClassification} from './findingClassificationStore.js';
 const parse=v=>{try{return typeof v==='string'?JSON.parse(v):v;}catch{return null;}};
 const hash=v=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
 const has=(db,t)=>!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t);
@@ -35,10 +36,18 @@ export function findingVerificationExecution(db,pipeline,{limit=100,summaryOnly=
   for(const row of valid){if(['queued','running','cancelling'].includes(row.state))output.active++;else if(Object.hasOwn(output,row.state)&&typeof output[row.state]==='number')output[row.state]++;}
   if(summaryOnly)return output;
   const selected=valid.slice(0,Math.max(1,Math.min(200,Number.isSafeInteger(limit)?limit:100)));
+  const classifications=new Map();
   output.items=selected.map(row=>{
     const item={id:row.verification_id,pipeline_id:row.pipeline_id,finding_id:row.finding_id,state:row.state,revision:row.revision};
     const summary=attemptVerificationSummary(db,item,row),plan=parse(row.content),finding=parse(row.result_data);
+    if(!classifications.has(row.finding_id)) {
+      const findingRow=db.prepare('SELECT * FROM scan_results WHERE id=?').get(row.finding_id);
+      const scan=db.prepare('SELECT * FROM scan_tasks WHERE scan_task_id=?').get(row.scan_task_id);
+      classifications.set(row.finding_id,findingRow ? findingClassification(db,pipeline.pipeline_id,findingRow,scan) : null);
+    }
+    const classification=classifications.get(row.finding_id);
     return {attempt_id:row.id,verification_id:row.verification_id,finding_id:row.finding_id,run_id:row.run_id,revision:row.revision,
+      classification,
       state:row.state,stop_confirmed:!!row.stop_confirmed,created_at:row.created_at,completed_at:row.completed_at,
       finding_name:safeText(finding?.title || finding?.finding || finding?.name) || `发现 #${row.finding_id}`,
       plan_name:safeText(plan.name),objective:summary.result.objective,result:summary.result,

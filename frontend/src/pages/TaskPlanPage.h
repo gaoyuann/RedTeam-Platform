@@ -12,6 +12,8 @@ class QLineEdit;
 class QPlainTextEdit;
 class QPushButton;
 class QTableWidget;
+class QStackedWidget;
+class FindingPlanPanel;
 
 class TaskPlanPage : public QWidget {
   Q_OBJECT
@@ -22,17 +24,27 @@ public:
   void addCandidate(const QString &category, int index, const QJsonValue &source);
   void showGenerationStatus(const QString &text, bool error) { message(text, error); }
   void useSourcePlaybook(const QString &playbookId);
+  void openFindingPlans(const QList<qint64> &findingIds);
+  void showGlobalPlan();
+  void chooseExistingPlan();
+  void showFindingPlanList();
 
 signals:
   void planChanged();
   void executionStarted();
   void sourceVerificationRequested();
+  void payloadWorkspaceRequested();
+  void findingPlanRequested();
+  void assessmentRequested(const QString &pipelineId);
+  void findingExecutionStarted(const QString &pipelineId);
+  void scanRequested();
 
 private:
   void refresh(bool discard = false);
   void loadSources(int requestVersion);
   void render();
   void updateControls();
+  void applySelectionState(const QJsonObject &response);
   void markDirty();
   void editStep();
   void showStep();
@@ -43,6 +55,13 @@ private:
   void mutate(const QString &suffix, const QJsonObject &body, bool put = false,
               std::function<void()> after = nullptr);
   void message(const QString &text, bool error = false);
+  bool usesFindingPlans() const;
+  void syncPlanKind();
+  QComboBox *m_planKind = nullptr;
+  FindingPlanPanel *m_findingPlans = nullptr;
+  QStackedWidget *m_planViews = nullptr;
+  QWidget *m_globalPlan = nullptr;
+  bool m_findingPlanView = false;
 
   ApiClient *m_api;
   QString m_role;
@@ -54,9 +73,15 @@ private:
   bool m_busy = false;
   bool m_dirty = false;
   bool m_rendering = false;
+  bool m_canContinueFailedScan = false;
+  QString m_selectionReason;
   QString m_pendingSourcePlaybookId;
   QLabel *m_status;
+  QLabel *m_reviewSummary;
   QLabel *m_scope;
+  QWidget *m_planConfiguration;
+  QWidget *m_stepEditor;
+  QPushButton *m_technicalDetails;
   QComboBox *m_source;
   QPushButton *m_create;
   QPushButton *m_generateSource;

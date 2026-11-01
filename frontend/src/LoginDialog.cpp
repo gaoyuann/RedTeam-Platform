@@ -1,5 +1,6 @@
 #include "LoginDialog.h"
 #include "ApiClient.h"
+#include "LocalLoginStore.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
@@ -13,6 +14,7 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QGraphicsDropShadowEffect>
+#include <QPointer>
 
 // ── Painted icons for password visibility toggle ──────────────────────
 // SVG/QIcon::fromTheme often fails on Linux/WSL; draw with QPainter instead.
@@ -71,6 +73,7 @@ static bool isDarkMode() {
 
 LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
     : QDialog(parent), m_api(api) {
+  m_api->clearToken();
   setWindowTitle("登录");
   setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
 
@@ -218,6 +221,7 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
 
   // Remember password
   auto *rememberCheck = new QCheckBox("记住密码");
+  rememberCheck->setObjectName("loginRemember");
   if (dark) {
     rememberCheck->setStyleSheet("color: #8899aa; font-size: 13px;");
   } else {
@@ -225,17 +229,13 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
   }
   formLayout->addRow(QString(), rememberCheck);
 
-  // Load saved credentials
   QSettings savedSettings("RedTeam", "RedTeam-Platform");
-  QString savedUser = savedSettings.value("login/username").toString();
-  QString savedPass = savedSettings.value("login/password").toString();
+  const QString savedUser = savedSettings.value("login/username").toString();
   if (!savedUser.isEmpty()) {
     m_usernameEdit->setText(savedUser);
     rememberCheck->setChecked(true);
   }
-  if (!savedPass.isEmpty()) {
-    m_passwordEdit->setText(savedPass);
-  }
+  m_passwordEdit->setText(savedSettings.value("login/password").toString());
 
   // Error label
   m_errorLabel = new QLabel;
@@ -246,6 +246,18 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
                              .arg(dark ? "#fc8181" : "#b42318"));
   m_errorLabel->hide();
   cardLayout->addWidget(m_errorLabel);
+
+  auto *offlineBtn = new QPushButton("离线打开界面");
+  offlineBtn->setObjectName("loginOffline");
+  offlineBtn->setAutoDefault(false);
+  offlineBtn->setToolTip("不连接服务器，仅打开本地界面；扫描、任务和报告等在线功能需要登录后端。");
+  cardLayout->addWidget(offlineBtn);
+  connect(offlineBtn, &QPushButton::clicked, this, [this]() {
+    m_api->clearToken();
+    m_username = "离线访客";
+    m_role = "user";
+    accept();
+  });
 
   cardLayout->addSpacing(16);
 
@@ -340,8 +352,9 @@ void LoginDialog::paintEvent(QPaintEvent *)
 }
 
 void LoginDialog::onLogin(bool remember) {
+  if (!m_loginBtn->isEnabled()) return;
   QString user = m_usernameEdit->text().trimmed();
-  QString pass = m_passwordEdit->text().trimmed();
+  QString pass = m_passwordEdit->text();
 
   if (user.isEmpty() || pass.isEmpty()) {
     m_errorLabel->setText("请输入用户名和密码");
@@ -357,7 +370,9 @@ void LoginDialog::onLogin(bool remember) {
   body["username"] = user;
   body["password"] = pass;
 
-  m_api->post("/api/users/login", body, 10000, [this, user, pass, remember](const QJsonObject &res) {
+  QPointer<LoginDialog> guard(this);
+  m_api->post("/api/users/login", body, 10000, [this, guard, user, pass, remember](const QJsonObject &res) {
+    if (!guard || result() == QDialog::Accepted) return;
     m_loginBtn->setEnabled(true);
     m_loginBtn->setText("登  录");
 
@@ -365,6 +380,9 @@ void LoginDialog::onLogin(bool remember) {
       auto data = res["data"].toObject();
       m_username = data["username"].toString();
       m_role = data["role"].toString();
+
+      QSettings offlineSettings("RedTeam", "RedTeam-Platform");
+      LocalLoginStore(offlineSettings).cache(m_api->baseUrl(), user, pass, m_role);
 
       // Save JWT tokens to ApiClient
       QString accessToken = data["access_token"].toString();
@@ -387,6 +405,26 @@ void LoginDialog::onLogin(bool remember) {
       accept();
     } else {
       auto err = res["error"].toObject();
+      if (res["transport_error"].toBool() || res["http_status"].toInt() >= 500) {
+        QSettings settings("RedTeam", "RedTeam-Platform");
+        const QString cachedRole = LocalLoginStore(settings).verify(m_api->baseUrl(), user, pass);
+        if (!cachedRole.isEmpty()) {
+          m_api->clearToken();
+          m_username = user;
+          m_role = cachedRole;
+          m_passwordEdit->clear();
+          accept();
+          return;
+        }
+        m_errorLabel->setText("服务器暂时无法连接，且本机没有匹配的离线登录记录。可点击“离线打开界面”继续。");
+        m_errorLabel->show();
+        m_passwordEdit->setFocus();
+        return;
+      }
+      if (res["http_status"].toInt() == 401 || res["http_status"].toInt() == 403) {
+        QSettings settings("RedTeam", "RedTeam-Platform");
+        LocalLoginStore(settings).remove(m_api->baseUrl(), user);
+      }
       QString msg = err["message"].toString();
       if (msg.isEmpty()) msg = "连接服务器失败，请确认服务器地址和端口";
       m_errorLabel->setText(msg);

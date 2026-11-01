@@ -146,7 +146,6 @@ test('pure-scan report freezes full data and supports generic permissions and ex
     assert.match(await docx.file('word/document.xml').async('string'),/本次攻击测试概况/);
     response=await fetch(root+'/api/reports/'+created.report.report_id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:{}})});assert.equal(response.status,409);
     response=await fetch(root+'/api/reports/'+created.report.report_id,{method:'DELETE'});assert.equal(response.status,409);
-    response=await fetch(root+'/api/pipelines/f09',{method:'DELETE'});assert.equal(response.status,409);
     response=await fetch(root+'/api/scans/s',{method:'DELETE'});assert.equal(response.status,409);
     assert.ok(db.prepare("SELECT 1 FROM pipelines WHERE pipeline_id='f09'").get());
     assert.ok(db.prepare("SELECT 1 FROM scan_tasks WHERE scan_task_id='s'").get());
@@ -164,6 +163,14 @@ test('pure-scan report freezes full data and supports generic permissions and ex
     assert.equal(db.prepare('SELECT total_changes() n').get().n,beforePreview);
     response=await post('/instances/sync',{source_fingerprint:current});assert.equal(response.status,200);
     response=await post('/baselines',{source_fingerprint:current,content:{...baseline(),cookie:'not-allowed'}});assert.equal(response.status,400);
+    response=await fetch(root+'/api/pipelines/f09',{method:'DELETE'});assert.equal(response.status,200);
+    assert.ok(db.prepare("SELECT 1 FROM task_deletions WHERE pipeline_id='f09'").get());
+    assert.ok(db.prepare("SELECT 1 FROM finding_instances WHERE pipeline_id='f09'").get());
+    assert.ok(db.prepare("SELECT 1 FROM task_baselines WHERE pipeline_id='f09'").get());
+    response=await fetch(root+'/api/pipelines?view=list');assert.equal((await response.json()).data.length,0);
+    response=await fetch(root+'/api/reports/'+created.report.report_id+'/export?format=json');assert.equal(response.status,200);
+    assert.deepEqual((await response.json()).report.content.results.statistics,document.report.content.results.statistics);
+
 
   }finally{if(server)await new Promise(resolve=>server.close(resolve));db.close();}
 });

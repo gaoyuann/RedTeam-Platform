@@ -6,6 +6,7 @@ import { llmFailure } from './llmFailure.js';
 import { loadTargetProfile } from './targetDiscovery.js';
 import { isUsableVariable, parseVariableContract, validateVariablePlan } from './executionVariables.js';
 import { buildContextForTarget } from './targetAdapters/index.js';
+import { planScanSources, planObservationTypesExcluded } from './planScanSources.js';
 
 const TOOL_LIST = [
   'nmap', 'httpx', 'nikto', 'sqlmap', 'nuclei', 'hydra', 'john',
@@ -32,13 +33,18 @@ export async function generatePlaybook(scanTaskId, analysisResult = null, { scan
   if (!task) return { ok: false, error: 'Scan task not found' };
   if(isProgramScan(task.scan_type)) return generateSourceVerification(db,task,findingIds,{adaptive,demonstration});
   const ids = Array.isArray(scanTaskIds) && scanTaskIds.length ? scanTaskIds : [scanTaskId];
+  const scans = planScanSources(db, task.target, ids, task.created_by);
+  const sourceIds = scans.map(scan => scan.scan_task_id);
+  if (!sourceIds.length) return { ok: false, error: '本任务没有已完成且范围有效的扫描证据' };
 
   const results = db.prepare(
     `SELECT r.result_type, r.result_data, r.severity, r.mitre_technique_id, r.source_tool
      FROM scan_results r JOIN scan_tasks t ON t.scan_task_id = r.scan_task_id
-     WHERE r.scan_task_id IN (${ids.map(() => '?').join(',')}) AND t.target = ? AND t.created_by IS ? AND t.status IN ('COMPLETED', 'PARTIAL')
-     ORDER BY r.severity DESC LIMIT 15`
-  ).all(...ids, task.target, task.created_by);
+     WHERE r.scan_task_id IN (${sourceIds.map(() => '?').join(',')})
+       AND r.result_type NOT IN (${planObservationTypesExcluded.map(() => '?').join(',')})
+     ORDER BY CASE lower(r.severity) WHEN 'critical' THEN 0 WHEN 'high' THEN 1
+       WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, r.id LIMIT 15`
+  ).all(...sourceIds, ...planObservationTypesExcluded);
 
   // Build findings summary — skip raw_output (tool output noise, not useful for playbook)
   // and truncate each entry to keep prompt within LLM context limits

@@ -4,6 +4,9 @@
 #include "ApiClient.h"
 #include "Theme.h"
 #include "AppStyle.h"
+#include "UiTypography.h"
+#include "UiDisplayScaling.h"
+#include <cstdio>
 #include "services/dongle/DongleService.h"
 #include <QApplication>
 #include <QMessageBox>
@@ -20,24 +23,33 @@
 
 static void loadBundledFonts() {
   QDir appDir(QCoreApplication::applicationDirPath());
-  QString fontDir = appDir.filePath("../fonts");
-  if (!QDir(fontDir).exists()) return;
-
-  int loaded = 0;
-  for (const auto &entry : QDir(fontDir).entryInfoList(
+  const QStringList fontDirs{appDir.filePath("fonts"), appDir.filePath("../fonts")};
+  for (const auto &fontDir : fontDirs) {
+    for (const auto &entry : QDir(fontDir).entryInfoList(
          {"*.ttf", "*.otf", "*.ttc"}, QDir::Files)) {
-    int id = QFontDatabase::addApplicationFont(entry.absoluteFilePath());
-    if (id != -1) loaded++;
-  }
-  if (loaded > 0) {
-    QFont font = QApplication::font();
-    font.setFamily("Noto Sans CJK SC");
-    QApplication::setFont(font);
+      QFontDatabase::addApplicationFont(entry.absoluteFilePath());
+    }
   }
 }
 
 int main(int argc, char *argv[])
 {
+    Theme::enableHighDpiScaling();
+    bool displayInfo = false, rawDisplayInfo = false;
+    for (int index = 1; index < argc; ++index) {
+        const QString argument = QString::fromLocal8Bit(argv[index]);
+        displayInfo = displayInfo || argument == QStringLiteral("--display-info");
+        rawDisplayInfo = rawDisplayInfo || argument == QStringLiteral("--display-info-raw");
+    }
+    if (!rawDisplayInfo)
+        Theme::applyWslDisplayScaling(QFileInfo(QString::fromLocal8Bit(argv[0])).absoluteFilePath());
+    if (displayInfo || rawDisplayInfo) {
+        QApplication diagnostic(argc, argv);
+        const auto json = QJsonDocument(Theme::displayScalingInfo()).toJson(QJsonDocument::Compact);
+        std::fwrite(json.constData(), 1, size_t(json.size()), stdout);
+        std::fputc('\n', stdout);
+        return 0;
+    }
     // ── Input Method (IME) setup ───────────────────────────────────────
     // On Linux/X11, Qt5 needs QT_IM_MODULE to connect to an IME framework.
     // If not set, auto-detect: prefer fcitx5 > fcitx > ibus > compose.
@@ -89,10 +101,9 @@ int main(int argc, char *argv[])
     QNetworkProxyFactory::setUseSystemConfiguration(false);
     QNetworkProxy::setApplicationProxy(QNetworkProxy::NoProxy);
 
-    // Global font & stylesheet (fonts loaded in splash below)
-    QFont baseFont = app.font();
-    baseFont.setPointSize(11);
-    app.setFont(baseFont);
+    // Choose fonts before constructing the splash, login or main window.
+    loadBundledFonts();
+    app.setFont(Theme::uiFont());
 
     // Dark mode detection: check system palette or QSettings override
     QSettings themeSettings("RedTeam", "RedTeam-Platform");
@@ -114,8 +125,6 @@ int main(int argc, char *argv[])
     splash.updateProgress(10, "正在加载资源...");
     app.processEvents();
 
-    // Real loading: fonts
-    loadBundledFonts();
     splash.updateProgress(30, "资源加载完成");
     app.processEvents();
 

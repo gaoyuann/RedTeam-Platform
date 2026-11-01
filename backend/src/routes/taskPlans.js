@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getTaskPlan, getTaskPlanSources, createTaskPlan, saveTaskPlan, addTaskPlanSuggestion, transitionTaskPlan } from '../services/taskPlan.js';
+import { getTaskPlan, getTaskPlanSources, taskPlanSelectionState, createTaskPlan, saveTaskPlan, addTaskPlanSuggestion, transitionTaskPlan } from '../services/taskPlan.js';
 import {isDiscoveryTask} from '../services/scanAgentConfig.js';
 
 export default function taskPlanRoutes(db, loadResume = async () => (await import('../services/pipelineEngine.js')).resumePipelineAfterApproval) {
@@ -13,10 +13,13 @@ export default function taskPlanRoutes(db, loadResume = async () => (await impor
       return res.status(409).json({status:'error',error:{message:'资产探测仅采集拓扑，请先选择节点创建扫描任务'}});
     next();
   });
-  router.get('/', (req, res) => res.json({ status: 'ok', data: getTaskPlan(db, req.params.id) }));
+  router.get('/', (req, res) => {
+    const pipeline=db.prepare('SELECT * FROM pipelines WHERE pipeline_id=?').get(req.params.id);
+    res.json({status:'ok',data:getTaskPlan(db,req.params.id),meta:{plan_selection:taskPlanSelectionState(db,pipeline)}});
+  });
   router.get('/sources', (req, res) => {
     const pipeline = db.prepare('SELECT * FROM pipelines WHERE pipeline_id=?').get(req.params.id);
-    res.json({status:'ok', data:getTaskPlanSources(db, pipeline, req.user)});
+    res.json({status:'ok',data:getTaskPlanSources(db,pipeline,req.user),meta:{plan_selection:taskPlanSelectionState(db,pipeline)}});
   });
   const mutate = (action, operation) => async (req, res, next) => {
     try {
@@ -37,13 +40,14 @@ export default function taskPlanRoutes(db, loadResume = async () => (await impor
             .run(req.params.id);
         });
       }
-      res.status(resume ? 202 : 200).json({ status: 'ok', data });
+      const pipeline=db.prepare('SELECT * FROM pipelines WHERE pipeline_id=?').get(req.params.id);
+      res.status(resume ? 202 : 200).json({status:'ok',data,meta:{plan_selection:taskPlanSelectionState(db,pipeline)}});
     } catch (error) {
       if (error.status) return res.status(error.status).json({ status: 'error', error: { message: error.message } });
       next(error);
     }
   };
-  router.post('/', mutate('create', (pipeline, actor, body) => createTaskPlan(db, pipeline, actor, body.playbook_id)));
+  router.post('/', mutate('create', (pipeline, actor, body) => createTaskPlan(db,pipeline,actor,body.playbook_id,{continueAfterScanFailure:body.continue_after_scan_failure===true})));
   router.put('/', mutate('save', (pipeline, actor, body) => saveTaskPlan(db, pipeline, actor, body)));
   router.post('/suggestions', mutate('suggestion', (pipeline, actor, body) => addTaskPlanSuggestion(db, pipeline, actor, body)));
   for (const action of ['submit', 'reopen', 'reject', 'approve'])

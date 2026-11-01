@@ -162,14 +162,14 @@ TaskResultsPanel::TaskResultsPanel(ApiClient *api, const QString &role, const QS
   outer->addWidget(m_state);
   outer->addWidget(m_identity);
   auto *metrics = new QHBoxLayout;
-  const QStringList titles{"发现候选（未复核）", "已返回 / 已知步骤", "证据记录", "历史教学得分（非风险）"};
+  const QStringList titles{"发现候选（未复核）", "主预案返回 / 步骤", "主预案证据", "历史教学得分（非风险）"};
   for (int index = 0; index < 4; ++index) {
     m_metrics[index] = new MetricCard(titles[index], Theme::Primary, this);
     m_metrics[index]->setObjectName("resultsMetric" + QString::number(index));
     metrics->addWidget(m_metrics[index]);
   }
   outer->addLayout(metrics);
-  m_assessment->setStyleSheet("color:#64748b;font-size:12px;");
+  m_assessment->setStyleSheet("color:#64748b;font-size:14px;");
   outer->addWidget(m_assessment);
   auto *splitter = new QSplitter(Qt::Horizontal, this);
   m_tabs = new WorkbenchTabs(splitter);
@@ -186,6 +186,7 @@ TaskResultsPanel::TaskResultsPanel(ApiClient *api, const QString &role, const QS
     table->setWordWrap(false);
     table->setShowGrid(false);
     table->verticalHeader()->hide();
+    table->verticalHeader()->setDefaultSectionSize(46);
     table->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
     table->horizontalHeader()->setStretchLastSection(true);
     table->setStyleSheet(Theme::ItemViewStyle);
@@ -212,6 +213,11 @@ TaskResultsPanel::TaskResultsPanel(ApiClient *api, const QString &role, const QS
   m_tabs->addTab(m_trace, QStringLiteral("来源链"));
   m_scanRecords = new ScanPage(m_api, m_role, m_username, m_tabs);
   m_tabs->addTab(m_scanRecords, QStringLiteral("全部扫描记录"));
+  connect(m_scanRecords, &ScanPage::assessmentRequested, this, [this](const QString &pipeline) {
+    if (pipeline != m_pipelineId) return;
+    m_tabs->setCurrentWidget(m_statistics);
+    refresh();
+  });
   auto *detailCard = new QFrame(splitter);
   detailCard->setProperty("softCard", true);
   auto *detailLayout = new QVBoxLayout(detailCard);
@@ -252,7 +258,7 @@ TaskResultsPanel::TaskResultsPanel(ApiClient *api, const QString &role, const QS
   m_exportResult->setObjectName("taskReportExportResult");
   outer->addWidget(m_exportResult);
   m_updated = plainLabel(this);
-  m_updated->setStyleSheet("color:#64748b;font-size:12px;");
+  m_updated->setStyleSheet("color:#64748b;font-size:14px;");
   outer->addWidget(m_updated);
   m_timer = new QTimer(this);
   m_timer->setInterval(5000);
@@ -462,7 +468,13 @@ void TaskResultsPanel::render()
   m_identity->setText(QStringLiteral("任务：%1 · 任务ID：%2  ·  目标：%3\nRun：%4  ·  预案：%5")
       .arg(m_snapshot.value("task_name").toString(), UiUtil::taskIdentifier(m_snapshot), m_snapshot.value("target").toString(),
         run.value("run_id").toString().isEmpty() ? QStringLiteral("尚未生成") : run.value("run_id").toString(), run.value("playbook_name").toString()));
-  m_state->setText(run.isEmpty() ? QStringLiteral("暂无执行结果；可以查看已有候选，但不能生成执行结果报告。")
+  if (run.isEmpty() && m_snapshot.contains("statistics")) {
+    const auto statistics = m_snapshot.value("statistics").toObject();
+    const int attempts = statistics.value("verifications").toObject().value("attempts").toInt();
+    m_state->setText((attempts > 0 ? QStringLiteral("已有 %1 次逐漏洞测试记录，结论与证据见统一统计。").arg(attempts)
+        : QStringLiteral("尚未执行漏洞验证，可查看扫描发现与检查覆盖。"))
+      + (statistics.value("report_ready").toBool() ? QStringLiteral("可生成当前证据快照报告。") : QStringLiteral("报告需等待活动操作结束并确认停止。")));
+  } else m_state->setText(run.isEmpty() ? QStringLiteral("暂无执行结果；可以查看已有候选，但不能生成执行结果报告。")
       : QStringLiteral("Run %1 · %2").arg(state(run.value("status").toString()), run.value("stop_reason").toString()));
   m_state->setStyleSheet(run.value("status").toString() == "FAILED" ? Theme::StatusErrorStyle : Theme::StatusInfoStyle);
   m_assessment->setText(assessment.value("risk_level").toString() + "\n" + assessment.value("notice").toString()

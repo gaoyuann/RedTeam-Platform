@@ -42,6 +42,30 @@ test('unsupported tool report outputs are corrected once before a validated play
   assert.deepEqual(db.prepare('SELECT output_variables FROM playbook_steps WHERE playbook_id=?').all(result.playbook_id).map(row=>JSON.parse(row.output_variables)),[[],[]]);
 });
 
+test('scan-agent planning receives scoped child evidence ahead of audit messages and excludes foreign tasks', async t => {
+  const db = await fixture(t), target = 'http://example.test:8089/';
+  db.prepare("INSERT INTO pipelines(pipeline_id,target,status,config,created_by) VALUES('parent',?,'running',?,'alice')")
+    .run(target, JSON.stringify({ task_scope: { includes: [target], excludes: [], execution_location: 'scanner', discovery_budget: 3 } }));
+  db.prepare("UPDATE scan_tasks SET pipeline_id='parent',scan_type='react_scan' WHERE scan_task_id='s'").run();
+  db.prepare("INSERT INTO pipelines(pipeline_id,target,status,created_by) VALUES('foreign',?,'completed','alice')").run(target);
+  for (const [id, parent, path] of [['child','parent','app/'], ['foreign-child','foreign','app/']])
+    db.prepare("INSERT INTO scan_tasks(scan_task_id,pipeline_id,target,scan_type,status,created_by) VALUES(?,?,?,'web_scan','COMPLETED','alice')")
+      .run(id, parent, target + path);
+  const insert = db.prepare('INSERT INTO scan_results(scan_task_id,result_type,result_data,severity,source_tool) VALUES(?,?,?,?,?)');
+  for (let i = 0; i < 35; i++) insert.run('s','scan_agent_step',JSON.stringify({ reason: 'AUDIT_ONLY_' + i }),'info','scan-agent');
+  for (let i = 0; i < 20; i++) insert.run('child','information',JSON.stringify({ note: 'ordinary observation ' + i }),'info','nikto');
+  insert.run('child','web_vuln',JSON.stringify({ finding: 'CURRENT_CRITICAL_EVIDENCE', url: target + 'app/' }),'critical','nikto');
+  insert.run('foreign-child','web_vuln',JSON.stringify({ finding: 'FOREIGN_EVIDENCE', url: target + 'app/' }),'critical','nikto');
+  replies = [plan([])];
+  const generated = await generatePlaybook('s', null, { scanTaskIds: ['s','child','foreign-child'] });
+  assert.equal(generated.ok, true, generated.error);
+  const prompt = prompts[0].at(-1).content;
+  assert.match(prompt, /CURRENT_CRITICAL_EVIDENCE/);
+  assert.doesNotMatch(prompt, /AUDIT_ONLY_|FOREIGN_EVIDENCE/);
+  const { planScanSources } = await import('../src/services/planScanSources.js');
+  assert.deepEqual(planScanSources(db, target, ['s','child','foreign-child']).map(row => row.scan_task_id), ['s','child']);
+});
+
 test('persistent unsupported dependencies are rejected without saving or executing a plan',async t=>{
   const db=await fixture(t);replies=[plan(['scan_results']),plan(['report'])];
   const result=await generatePlaybook('s');

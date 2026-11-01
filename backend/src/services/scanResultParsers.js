@@ -63,7 +63,7 @@ function legacyParseResults(scanType, stdout) {
       // Skip: lines starting with "-", "-----", "Nikto v", "Target", "Start", "End", "requests"
       const osvdbLine = /^\+\s+(OSVDB-\d+):\s+(\S+)\s+(.+)/;   // + OSVDB-XXX: /path/: finding
       const pathLine  = /^\+\s+(\/\S+):\s+(.+)/;                 // + /path: finding
-      const infoLine  = /^\+\s+(The\s+.+|Cookie\s+.+|Allowed\s+.+|Server\s+.+)/i;  // + The X-Frame...
+      const infoLine  = /^\+\s+(The\s+.+|Cookie\s+.+|Allowed\s+.+|Server\s+.+|Hostname\s+.+)/i;  // + The X-Frame...
 
       for (const line of lines) {
         // Skip header/footer lines
@@ -451,7 +451,13 @@ export function parseResults(scanType, output = '') {
   return legacyParseResults(scanType,output);
 }
 
-const isToolProgressLine = line => /^(?:\s*$|[-=]{3,}|Nikto v|Starting Nmap|\[INF\]|\[WRN\])/.test(line);
+const isToolProgressLine = (line, scanType) => {
+  if (/^(?:\s*$|[-=]{3,}|Nikto v|Starting Nmap|\[INF\]|\[WRN\])/.test(line)) return true;
+  if (scanType !== 'web_scan_nikto') return false;
+  // Nikto 2.x metadata and completion records are evidence, not discoveries.
+  // Unknown lines still remain unparsed and therefore incomplete.
+  return /^(?:- Nikto v|- \*+ SSL support not available|[+]?\s*\*{5,}|\+\s+(?:Target (?:IP|Hostname|Port):|SSL Info:|Start Time:|End Time:|Server:|Root page \/ redirects to:|No CGI Directories found|\d+ requests: \d+ error\(s\) and \d+ item\(s\) reported on remote host|\d+ host\(s\) tested)|\s*(?:Ciphers:|Issuer:|Portions of the server's headers|the Nikto database or are newer|to submit this information|for a Nikto update))/.test(line);
+};
 
 // Diagnostics never pretend that log lines are tool-reported vulnerabilities.
 export function parseScanOutput(scanType, stdout='', stderr='') {
@@ -463,14 +469,15 @@ export function parseScanOutput(scanType, stdout='', stderr='') {
     unparsed=0;ignored=0;
     for(const line of lines) {
       if(parseResults(scanType,line).some(r=>r.result_type!=='raw_output')) continue;
-      if (isToolProgressLine(line)) ignored++;
+      if (isToolProgressLine(line,scanType)) ignored++;
       else unparsed++;
     }
   }
   if(stdout || stderr) records.push({result_type:'scan_evidence',source_tool:SCAN_TOOL_MAP[scanType] || null,severity:'info',
     result_data:{stdout,stderr,output:stdout,parser_version:1,unparsed_lines:unparsed,
       note:'工具输出证据；未识别内容不视为漏洞，日志行数不是发现数'}});
-  return {records,diagnostics:{parser_version:1,tool_reported_count:null,output_lines:lines.length,
+  const reported = scanType === 'web_scan_nikto' ? stdout.match(/\d+ requests:\s*\d+ error\(s\) and (\d+) item\(s\) reported/i) : null;
+  return {records,diagnostics:{parser_version:1,tool_reported_count:reported ? Number(reported[1]) : null,output_lines:lines.length,
     parsed_records:records.filter(r=>r.result_type!=='scan_evidence').length,unparsed_lines:unparsed,
     ignored_lines:ignored,ignored_reason:ignored?'recognized tool banners/progress':null,merged_records:0}};
 }
@@ -488,7 +495,7 @@ export function createScanOutputCollector(scanType) {
     if(!line.trim()) return;
     lines++;
     const rows=parseResults(scanType,line).filter(r=>r.result_type!=='raw_output');
-    if(!rows.length) { if(isToolProgressLine(line)) ignored++; else unparsed++; }
+    if(!rows.length) { if(isToolProgressLine(line,scanType)) ignored++; else unparsed++; }
     streamed.push(...rows);
   };
   return {

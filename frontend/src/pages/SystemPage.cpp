@@ -1,12 +1,12 @@
 #include "../widgets/WorkbenchTabs.h"
 #include "SystemPage.h"
-#include "DeployConfigPage.h"
 #include "DongleVerificationPage.h"
 #include "services/dongle/DongleService.h"
 #include "../Theme.h"
 #include "../UiUtil.h"
 #include "../ApiClient.h"
 #include <QVBoxLayout>
+#include <QTabBar>
 #include <QHBoxLayout>
 #include <QPushButton>
 #include <QHeaderView>
@@ -44,7 +44,7 @@ void SystemPage::setupUI() {
   scrollArea->setFrameShape(QFrame::NoFrame);
   auto *container = new QWidget;
   auto *layout = new QVBoxLayout(container);
-  m_tabs = new WorkbenchTabs;
+  m_tabs = new ActiveWorkbenchTabs;
 
   // ── Users tab ─────────────────────────────────────────────────────
   auto *userW = new QWidget;
@@ -83,11 +83,6 @@ void SystemPage::setupUI() {
   connect(delBtn, &QPushButton::clicked, this, &SystemPage::onDeleteUser);
 
   m_tabs->addTab(userW, "用户管理");
-
-  // ── Deploy config tab (moved from top-level navigation) ───────────
-  // All roles can access (matches old top-level page behavior)
-  m_deployTab = new DeployConfigPage(m_api, m_role, m_username, this);
-  m_tabs->addTab(m_deployTab, QStringLiteral("资源部署"));
 
   // ── Permissions tab (admin only) ──────────────────────────────────
   if (m_role == "admin") {
@@ -552,4 +547,12 @@ void SystemPage::onSavePermissions() {
       m_permTable->setToolTip("权限配置已保存并立即生效");
     }
   });
+}
+
+void SystemPage::selectSection(const QString &section)
+{
+  const QMap<QString, QString> names{{"users", "用户管理"}, {"permissions", "权限管理"}, {"license", "加密锁校验"}};
+  const QString title = names.value(section);
+  for (int i = 0; i < m_tabs->count(); ++i)
+    if (!title.isEmpty() && m_tabs->tabText(i) == title) { m_tabs->setCurrentIndex(i); m_tabs->tabBar()->hide(); return; }
 }

@@ -117,7 +117,9 @@ class CodeEditor : public QPlainTextEdit {
     explicit CodeEditor(QWidget *parent) : QPlainTextEdit(parent), m_gutter(new LineNumbers(this)) {
         setReadOnly(true);
         setLineWrapMode(QPlainTextEdit::NoWrap);
-        setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+        auto codeFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+        codeFont.setPointSize(13);
+        setFont(codeFont);
         new SourceHighlighter(document());
         connect(this, &QPlainTextEdit::blockCountChanged, this, [this]() { margin(); });
         connect(this, &QPlainTextEdit::updateRequest, this, [this](const QRect &r, int dy) {
@@ -204,12 +206,12 @@ SourceScanDetailDialog::SourceScanDetailDialog(ApiClient *api,const QStringList 
   auto *split=new QSplitter(Qt::Horizontal);split->setObjectName("sourceScanThreePanes");split->setChildrenCollapsible(false);layout->addWidget(split,1);
   auto *navigation=new QWidget(split);navigation->setMinimumWidth(190);
   auto *navigationLayout=new QVBoxLayout(navigation);navigationLayout->setContentsMargins(0,0,0,0);navigationLayout->setSpacing(7);
-  auto *navigationTitle=new QLabel(QStringLiteral("文件导航"));navigationTitle->setStyleSheet("font-size:14px;font-weight:600;color:#24465a;");navigationLayout->addWidget(navigationTitle);
-  m_fileSummary=new QLabel;m_fileSummary->setObjectName("sourceScanFileSummary");m_fileSummary->setStyleSheet("font-size:12px;color:#64748b;");navigationLayout->addWidget(m_fileSummary);
+  auto *navigationTitle=new QLabel(QStringLiteral("文件导航"));navigationTitle->setStyleSheet("font-size:16px;font-weight:600;color:#24465a;");navigationLayout->addWidget(navigationTitle);
+  m_fileSummary=new QLabel;m_fileSummary->setObjectName("sourceScanFileSummary");m_fileSummary->setStyleSheet("font-size:14px;color:#64748b;");navigationLayout->addWidget(m_fileSummary);
   m_fileSearch=new QLineEdit;m_fileSearch->setObjectName("sourceScanFileSearch");m_fileSearch->setPlaceholderText(QStringLiteral("查找文件或路径"));m_fileSearch->setClearButtonEnabled(true);
-  m_fileSearch->setStyleSheet(QStringLiteral("QLineEdit{background:white;border:1px solid #dbe5eb;border-radius:6px;padding:6px 8px;font-size:13px;} QLineEdit:focus{border-color:#6598ad;}"));navigationLayout->addWidget(m_fileSearch);
+  m_fileSearch->setStyleSheet(QStringLiteral("QLineEdit{background:white;border:1px solid #dbe5eb;border-radius:6px;padding:6px 8px;font-size:15px;} QLineEdit:focus{border-color:#6598ad;}"));navigationLayout->addWidget(m_fileSearch);
   m_tree=new QTreeWidget;m_tree->setObjectName("sourceScanFileTree");m_tree->setHeaderHidden(true);m_tree->setUniformRowHeights(true);m_tree->setIndentation(18);m_tree->setIconSize(QSize(20,20));m_tree->setTextElideMode(Qt::ElideMiddle);
-  m_tree->setStyleSheet(QStringLiteral("QTreeWidget{border:1px solid #dbe5eb;border-radius:8px;background:#fbfdfe;font-size:13px;outline:0;} QTreeWidget::item{padding:4px 5px;min-height:22px;border-radius:4px;} QTreeWidget::item:hover{background:#edf4f7;} QTreeWidget::item:selected,QTreeWidget::branch:selected{background:#deedf3;color:#163e52;}"));navigationLayout->addWidget(m_tree,1);
+  m_tree->setStyleSheet(QStringLiteral("QTreeWidget{border:1px solid #dbe5eb;border-radius:8px;background:#fbfdfe;font-size:15px;outline:0;} QTreeWidget::item{padding:4px 5px;min-height:22px;border-radius:4px;} QTreeWidget::item:hover{background:#edf4f7;} QTreeWidget::item:selected,QTreeWidget::branch:selected{background:#deedf3;color:#163e52;}"));navigationLayout->addWidget(m_tree,1);
   auto *middle=new QWidget(split);auto *center=new QVBoxLayout(middle);center->setContentsMargins(0,0,0,0);
   m_location=new QLabel(QStringLiteral("请选择文件或扫描发现"));m_location->setObjectName("sourceScanLocation");m_location->setTextFormat(Qt::PlainText);m_location->setWordWrap(true);center->addWidget(m_location);
   m_codeNotice=new QLabel;m_codeNotice->setTextFormat(Qt::PlainText);m_codeNotice->setWordWrap(true);center->addWidget(m_codeNotice);
