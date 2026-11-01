@@ -30,13 +30,16 @@ public:
 
   /// Pre-fill the target input (used when embedded in FlowPage workbench)
   void setTarget(const QString &target);
+  void selectAttackCategory(int category);
+  int attackCategory() const { return m_currentCategory; }
+  void enableRibbonWorkspace();
 
   /// Load and display a specific run by ID (used by FlowPage workbench
   /// when a pipeline's execute step produces a run).
   void showRun(const QString &runId, bool focus = true);
   void focusDetails();
   void showExecutionError(const QString &message);
-  void setPipelineContext(const QString &pipelineId, const QString &status, const QString &runId, const QString &target = {});
+  void setPipelineContext(const QString &pipelineId, const QString &status, const QString &runId, const QString &target = {}, bool intelligent = false);
 
   void clearRunContext();
 
@@ -46,6 +49,11 @@ signals:
   void runCompleted(const QString &runId);
   void runSelected(const QString &runId);
   void findingVerificationChanged(const QString &pipelineId);
+  void assessmentRequested(const QString &pipelineId);
+  void categoryViewChanged(int category);
+  void planReviewRequested();
+  void existingPlaybookRequested();
+  void findingAttackRequested();
 
 public slots:
   void onRefreshRuns();
@@ -64,6 +72,8 @@ private slots:
 private:
   void setupUI();
   void loadPlaybooks();
+  void renderRunList();
+  void resetExecutionView(bool scopeChanged);
   void loadPlaybooksByGroup(const QStringList &groups);
   void loadRunDetails(const QString &runId);
   void applyRunDetails(const QString &runId, const QJsonObject &data, int selectionRevision);
@@ -77,6 +87,8 @@ private:
   TaskExecutionPanel *m_taskMonitor;
   QWidget *m_standaloneControls;
   QLabel *m_pipelineHint;
+  QPushButton *m_reviewPlan = nullptr;
+  QWidget *m_taskAttackActions = nullptr;
   QComboBox *m_playbookCombo;
   QLineEdit *m_targetInput;
   QPushButton *m_execBtn;
@@ -95,6 +107,17 @@ private:
   QRadioButton *m_catTamper;
   QRadioButton *m_catDeviceCtrl;
   QButtonGroup *m_catGroup;
+  QWidget *m_categoryPanel = nullptr;
+  QLabel *m_runScopeNote = nullptr;
+  QLabel *m_catalogueStatus = nullptr;
+  QJsonArray m_allRuns;
+  int m_currentCategory = 0;
+  int m_playbookRequest = 0;
+  bool m_catalogueFresh = false;
+  bool m_launching = false;
+  bool m_previewLoading = false;
+  bool m_previewReady = false;
+  int m_previewRequest = 0;
 
   // Evidence display
   QLabel *m_evidenceLabel;

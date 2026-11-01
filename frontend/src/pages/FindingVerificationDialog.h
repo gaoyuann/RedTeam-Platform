@@ -21,10 +21,21 @@ class FindingVerificationDialog : public QDialog {
 public:
   FindingVerificationDialog(ApiClient *api, const QString &pipeline, const QList<qint64> &findings, QWidget *parent=nullptr,
       const QString &existingVerificationId={}, const QString &existingAttemptId={});
+  void showPayloadWorkspace();
+  void showPlanWorkspace();
+signals:
+  void assessmentRequested(const QString &pipelineId);
+  void verificationStarted(const QString &pipelineId);
+  void payloadsChanged(const QString &pipelineId);
 protected:
   void done(int result) override;
   void resizeEvent(QResizeEvent *event) override;
+  void showEvent(QShowEvent *event) override;
+  bool eventFilter(QObject *watched, QEvent *event) override;
 private:
+  bool m_initialGeometryApplied=false;
+  bool m_dragging=false;
+  QPoint m_dragOffset;
   bool allowDiscardDraft();
   void addFinding(qint64 finding);
   void addExistingFinding(const QString &id, qint64 finding, const QString &state={});
@@ -67,6 +78,7 @@ private:
   QGroupBox *m_resultSummary;
   QPlainTextEdit *m_planSummary;
   QPushButton *m_prepareSimple, *m_confirmSimple, *m_startSimple;
+  QPushButton *m_assess = nullptr;
   QTimer *m_timer;
   QPushButton *m_systemEvidence, *m_save, *m_start, *m_confirmButton, *m_generate;
   QJsonObject m_detail;
@@ -78,6 +90,8 @@ private:
   QPlainTextEdit *m_collectedCode, *m_pythonCode;
   QPlainTextEdit *m_sourceRequestCode;
   QPlainTextEdit *m_verificationCode;
+  QPlainTextEdit *m_payloadNotes;
+  QPushButton *m_copyPayload, *m_exportPayload;
   QLabel *m_currentPayloadStatus;
   QLabel *m_prepareFeedback;
   QJsonArray m_currentPayloadItems;

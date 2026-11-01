@@ -1,6 +1,7 @@
 import { getDb } from '../db/connection.js';
 import { callLlm } from './llmClient.js';
 import { loadTargetProfile } from './targetDiscovery.js';
+import { planObservationTypesExcluded } from './planScanSources.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -54,12 +55,12 @@ function getScanResults(db, scanTaskIds) {
   return db.prepare(
     `SELECT rowid AS result_id, scan_task_id, result_type, result_data, severity, mitre_technique_id, source_tool
      FROM scan_results WHERE scan_task_id IN (${placeholders})
-     AND result_type NOT IN ('lan_scope', 'lan_host_discovery', 'scan_evidence', 'network_context', 'network_link', 'raw_output', 'scan_error', 'scan_warning')
+     AND result_type NOT IN (${planObservationTypesExcluded.map(() => '?').join(',')})
      ORDER BY CASE severity
        WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2
        WHEN 'low' THEN 3 ELSE 4 END
      LIMIT ?`
-  ).all(...ids, MAX_FINDINGS_ENTRIES);
+  ).all(...ids, ...planObservationTypesExcluded, MAX_FINDINGS_ENTRIES);
 }
 
 // ── Helper: validate and normalize LLM JSON output ─────────────────────────
@@ -151,7 +152,8 @@ export async function analyzeScanResults(scanTaskIds, options = {}) {
   // Gather all scan results
   const results = getScanResults(db, ids);
   const findingsSummary = buildFindingsSummary(results);
-  const eligibleCount=db.prepare(`SELECT COUNT(*) n FROM scan_results WHERE scan_task_id IN (${placeholders}) AND result_type NOT IN ('lan_scope','lan_host_discovery','scan_evidence','network_context','network_link','raw_output','scan_error','scan_warning')`).get(...ids).n;
+  const eligibleCount=db.prepare(`SELECT COUNT(*) n FROM scan_results WHERE scan_task_id IN (${placeholders})
+    AND result_type NOT IN (${planObservationTypesExcluded.map(() => '?').join(',')})`).get(...ids, ...planObservationTypesExcluded).n;
 
   // Determine which scan types were run
   const scanTypesRun = [...new Set(tasks.map(t => t.scan_type))];

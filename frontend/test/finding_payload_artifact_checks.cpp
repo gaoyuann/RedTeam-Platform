@@ -15,6 +15,11 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTest>
+#include <QClipboard>
+#include <QFileDialog>
+#include <QTemporaryDir>
+#include <QDir>
+#include <QSignalSpy>
 #include <functional>
 
 static void verify(bool condition,const char *message) {if(!condition)qFatal("%s",message);}
@@ -52,7 +57,8 @@ int main(int argc,char **argv) {
         }
         QJsonArray payloadItems;
         if(first && collected)payloadItems.append(QJsonObject{{"id","scan:pc1:script1"},{"name","Fixture script"},{"origin","scan"},{"code","printf fixture"}});
-        if(first && codeGenerated)payloadItems.append(QJsonObject{{"id","generated:vc1:repro.c"},{"name","repro.c"},{"origin","generated"},{"code",generatedCode},{"artifact_id","vc1"},{"execution_supported",true}});
+        if(first && codeGenerated)payloadItems.append(QJsonObject{{"id","generated:vc1:repro.c"},{"name","repro.c"},{"origin","generated"},{"code",generatedCode},{"artifact_id","vc1"},{"execution_supported",true},
+          {"run_conditions",QJsonArray{"Local fixture"}},{"expected_results",QJsonArray{"Fixture marker"}}});
         data={{"current_payload",QJsonObject{{"state",payloadItems.isEmpty()?"missing":"available"},{"items",payloadItems}}},{"id",first?"fv1":"fv2"},{"finding_id",first?101:102},{"revision",0},{"state","needs_conditions"},{"eligible",true},
           {"finding",QJsonObject{{"result_data",first&&!sourceAsString?QJsonValue(finding):QJsonValue(QString::fromUtf8(QJsonDocument(finding).toJson(QJsonDocument::Compact)))}}},
           {"verification_code",first&&codeGenerated?QJsonArray{QJsonObject{{"id","vc1"},{"state","ready"},{"result",QJsonObject{{"files",QJsonArray{QJsonObject{{"filename","repro.c"},{"language","c"},{"source",generatedCode}}}},{"run_conditions",QJsonArray{"Local fixture"}},{"model_inferences",QJsonArray{"Suspected input issue"}}}}}}:QJsonArray()},
@@ -67,6 +73,7 @@ int main(int argc,char **argv) {
   verify(server.listen(QHostAddress::LocalHost,0),"mock API starts");
   ApiClient api(QStringLiteral("http://127.0.0.1:%1").arg(server.serverPort()));
   FindingVerificationDialog dialog(&api,"ap",{101,102});dialog.show();
+  QSignalSpy payloadChanges(&dialog,&FindingVerificationDialog::payloadsChanged);
   auto *collect=dialog.findChild<QPushButton*>("findingCollectPayloads"),*rewrite=dialog.findChild<QPushButton*>("findingRewritePython");
   auto *original=dialog.findChild<QPlainTextEdit*>("findingCollectedPayload"),*python=dialog.findChild<QPlainTextEdit*>("findingPythonPayload");
   QTableWidget *items=nullptr;for(auto *table:dialog.findChildren<QTableWidget*>())if(table->columnCount()==6)items=table;
@@ -93,9 +100,31 @@ int main(int argc,char **argv) {
   auto *generated=dialog.findChild<QPlainTextEdit*>("findingVerificationSource");
   verify(waitFor([&]{return generated->toPlainText().contains(generatedCode);}),"full code survives API response and display without log truncation");
   verify(codeInput["authorization_confirmed"].toBool() && codeInput["automatic_context"].toBool(),"one click requests server-resolved context");
-  verify(!QApplication::activeModalWidget() && !codeInput.contains("source") && !codeInput.contains("environment"),"no context form or invented client inputs");
+  verify(QApplication::activeModalWidget()==&dialog && !codeInput.contains("source") && !codeInput.contains("environment"),"generation keeps the workspace modal without opening a context form or inventing client inputs");
+  verify(!codeInput["force_regenerate"].toBool(),"missing payload first uses server-side lookup and reuse");
   verify(!dialog.findChild<QPlainTextEdit*>("findingVerificationCodeNotes"),"unused metadata viewer is not allocated");
   verify(!codeButton->isVisible(),"existing payload does not show another generation entry");
+  auto *notes=dialog.findChild<QPlainTextEdit*>("findingPayloadNotes");
+  verify(notes && notes->toPlainText().contains("Local fixture") && notes->toPlainText().contains("Fixture marker"),"selected payload explains conditions and expected results beside full code");
+  verify(!payloadChanges.isEmpty(),"new code notifies the parent task to refresh payload summaries");
+  const QString capture=qEnvironmentVariable("REDTEAM_PAYLOAD_SCREENSHOT_DIR");
+  if(!capture.isEmpty()) {
+    QDir().mkpath(capture);
+    for(const QSize size:{QSize(1024,600),QSize(1366,768)}) {
+      dialog.resize(size);QApplication::processEvents();
+      verify(dialog.grab().save(capture+QString("/payload-code-%1x%2.png").arg(size.width()).arg(size.height())),"payload code and explanation screenshot is saved");
+    }
+  }
+  dialog.findChild<QPushButton*>("findingCopyPayload")->click();
+  verify(QApplication::clipboard()->text()==generatedCode,"copy preserves the complete selected source code");
+  QTemporaryDir exported;verify(exported.isValid(),"temporary export directory is available");
+  const QString exportPath=exported.path()+"/repro.c";
+  QTimer::singleShot(100,[&]{
+    auto *save=qobject_cast<QFileDialog*>(QApplication::activeModalWidget());
+    verify(save,"export opens a file chooser");save->selectFile(exportPath);QMetaObject::invokeMethod(save,"accept",Qt::QueuedConnection);
+  });
+  dialog.findChild<QPushButton*>("findingExportPayload")->click();
+  QFile saved(exportPath);verify(saved.open(QIODevice::ReadOnly) && saved.readAll()==generatedCode.toUtf8(),"export writes exactly the selected code without execution");
   auto *prepareCode=dialog.findChild<QPushButton*>("findingPrepareCode");
   verify(prepareCode && prepareCode->isVisible() && prepareCode->isEnabled(),"generated executable artifacts expose local test preparation");
   prepareCode->click();
@@ -112,6 +141,7 @@ int main(int argc,char **argv) {
   auto *payloadChoice=dialog.findChild<QComboBox*>("findingVerificationCodeHistory");
   verify(waitFor([&]{return payloadChoice->count()==2 && payloadChoice->isVisible();}),"only payloads linked to this finding are selectable");
   payloadChoice->setCurrentIndex(0);verify(generated->toPlainText()=="printf fixture","collected scan payload is shown in the same code viewer");
+  verify(!notes->toPlainText().contains("Local fixture") && notes->toPlainText().contains(QStringLiteral("扫描")),"switching payload updates its explanation without carrying generated metadata");
   verify(!prepareCode->isVisible(),"scan reference text is not treated as an executable local program");
   generated->selectAll();original->selectAll();python->selectAll();QTest::qWait(2200);
   verify(generated->textCursor().hasSelection(),"refresh preserves current payload code selection");
@@ -130,6 +160,8 @@ int main(int argc,char **argv) {
   verify(waitFor([&]{return preparations==2 && prepare->isEnabled();}),"legacy JSON-string source findings also use bounded source preparation");
   for(int row=0;row<items->rowCount();row++)if(items->item(row,0)->data(Qt::UserRole)=="fv2")items->setCurrentCell(row,0);
   verify(waitFor([&]{return dialog.findChild<QGroupBox*>("findingPayloadArtifacts")->isHidden() && original->toPlainText().isEmpty() && python->toPlainText().isEmpty();}),"switching findings clears old private script content");
+  verify(notes->toPlainText().isEmpty() && !dialog.findChild<QPushButton*>("findingCopyPayload")->isEnabled()
+    && !dialog.findChild<QPushButton*>("findingExportPayload")->isEnabled(),"empty findings clear source explanations and disable code actions");
   verify(waitFor([&]{return items->item(items->currentRow(),3)->text()=="Other fixture";}),"legacy JSON-string finding keeps its title");
   verify(waitFor([&]{return prepare->isEnabled();}),"legacy finding preparation remains available");
   prepare->click();

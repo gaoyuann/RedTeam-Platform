@@ -5,6 +5,7 @@
 #include "../ApiClient.h"
 #include "../Theme.h"
 #include "../UiUtil.h"
+#include "../UiTypography.h"
 
 #include <QApplication>
 #include <QComboBox>
@@ -27,6 +28,7 @@
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QFrame>
+#include <QDialog>
 #include <QGraphicsEllipseItem>
 #include <QGraphicsRectItem>
 #include <QGraphicsLineItem>
@@ -60,6 +62,7 @@
 #include <QVBoxLayout>
 #include <QtMath>
 #include <QWheelEvent>
+#include <QTextLayout>
 #include <algorithm>
 
 // ── Anonymous namespace: helper functions ──────────────────────────────────
@@ -293,6 +296,7 @@ protected:
     void wheelEvent(QWheelEvent *event) override {
         if (event->modifiers() & Qt::ControlModifier) {
             const qreal factor = event->angleDelta().y() > 0 ? 1.12 : (1.0 / 1.12);
+            setProperty("autoFit", false);
             scale(factor, factor);
             event->accept();
             return;
@@ -1044,8 +1048,8 @@ TopologyPage::~TopologyPage() {
 void TopologyPage::setupUI() {
     setStyleSheet(Theme::PageStyle);
     auto *rootLayout = new QVBoxLayout(this);
-    rootLayout->setContentsMargins(12, 10, 12, 10);
-    rootLayout->setSpacing(8);
+    rootLayout->setContentsMargins(12, 8, 12, 8);
+    rootLayout->setSpacing(6);
     auto *workspace = new QSplitter(Qt::Horizontal, this);
     workspace->setObjectName("topologyWorkspace");
     workspace->setChildrenCollapsible(false);
@@ -1055,7 +1059,7 @@ void TopologyPage::setupUI() {
     auto *canvasPanel = new QWidget;
     auto *canvasLayout = new QVBoxLayout(canvasPanel);
     canvasLayout->setContentsMargins(0, 0, 0, 0);
-    canvasLayout->setSpacing(8);
+    canvasLayout->setSpacing(6);
     auto *sourcePanel = new QWidget;
     sourcePanel->setObjectName("topologySources");
     auto *sourceLayout = new QVBoxLayout(sourcePanel);
@@ -1165,6 +1169,7 @@ void TopologyPage::setupUI() {
     inspector->setObjectName("topologyInspector");
     auto *inspectorLayout = new QVBoxLayout(inspector);
     auto *inspectorTabs = new WorkbenchTabs;
+    inspectorTabs->setObjectName(QStringLiteral("topologyInspectorTabs"));
     inspectorLayout->addWidget(inspectorTabs);
     auto *nodesPage = new QWidget;
     auto *nodesLayout = new QVBoxLayout(nodesPage);
@@ -1407,6 +1412,7 @@ void TopologyPage::setupUI() {
     auto *updateTopologyButton = new QPushButton(QStringLiteral("更新拓扑"));
     UiUtil::styleToolbarButton(updateTopologyButton);
     updateTopologyButton->setToolTip(QStringLiteral("用当前任务的已有扫描证据更新拓扑，不重新扫描；已保存的展示修改会被替换"));
+    updateTopologyButton->setObjectName("topologyUpdateButton");
     toolbar->addWidget(updateTopologyButton);
     connect(updateTopologyButton, &QPushButton::clicked, this, [this]() {
         if (m_documentDirty || m_editorDirty) {
@@ -1431,42 +1437,74 @@ void TopologyPage::setupUI() {
     toolbar->addWidget(zoomOutButton);
     toolbar->addWidget(resetViewButton);
     toolbar->addWidget(zoomInButton);
+    editButton->setObjectName("topologyEditMenu");
+    zoomOutButton->setObjectName("topologyZoomOut");
+    zoomInButton->setObjectName("topologyZoomIn");
+    resetViewButton->setObjectName("topologyFitView");
+    infoButton->setObjectName("topologyInfoButton");
     toolbar->addWidget(editButton);
     toolbar->addWidget(m_saveTopologyButton);
     rootLayout->addLayout(toolbar);
-    connect(sourcesButton, &QPushButton::clicked, this, [=]() { sideTabs->setCurrentIndex(1); });
-    connect(inspectorButton, &QPushButton::clicked, this, [=]() { sideTabs->setCurrentIndex(0); });
-    connect(infoButton, &QPushButton::clicked, this, [=]() { sideTabs->setCurrentIndex(2); });
+    connect(sourcesButton, &QPushButton::clicked, this, [=]() {
+        const bool close = sideTabs->isVisible() && sideTabs->currentIndex() == 1;
+        sideTabs->setCurrentIndex(1); sideTabs->setVisible(!close);
+    });
+    connect(inspectorButton, &QPushButton::clicked, this, [=]() {
+        const bool close = sideTabs->isVisible() && sideTabs->currentIndex() == 0;
+        sideTabs->setCurrentIndex(0); sideTabs->setVisible(!close);
+    });
+    connect(infoButton, &QPushButton::clicked, this, [=]() {
+        const bool close = sideTabs->isVisible() && sideTabs->currentIndex() == 2;
+        sideTabs->setCurrentIndex(2); sideTabs->setVisible(!close);
+    });
 
     auto *titleRow = new QHBoxLayout;
     m_canvasTitleLabel = new QLabel(QStringLiteral("等待拓扑文件"));
     m_canvasTitleLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_canvasTitleLabel->setWordWrap(true);
     m_canvasTitleLabel->setMinimumWidth(0);
-    m_canvasTitleLabel->setStyleSheet("font-weight:600;font-size:15px;");
+    m_canvasTitleLabel->setStyleSheet("font-weight:600;font-size:12px;");
     m_statsLabel = new QLabel(QStringLiteral("节点 -- | 连线 --"));
     titleRow->addWidget(m_canvasTitleLabel, 1);
     titleRow->addWidget(m_statsLabel);
     canvasLayout->addLayout(titleRow);
+    auto *actionPanel = new QWidget(canvasPanel);
+    actionPanel->setObjectName("topologySelectedActions");
+    auto *actionLayout = new QVBoxLayout(actionPanel);
+    actionLayout->setContentsMargins(0,0,0,0);
+    actionLayout->setSpacing(6);
     auto *nodeActions = new QHBoxLayout;
     m_nodeTestTargetCombo = new QComboBox(canvasPanel);
     m_nodeTestTargetCombo->setObjectName("topologyNodeTestTarget");
     m_nodeTestTargetCombo->setMinimumContentsLength(18);
     m_nodeTestTargetCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     m_nodeTestTargetCombo->setEnabled(false);
-    m_nodeTestButton = new QPushButton(QStringLiteral("对所选目标发起扫描"), canvasPanel);
+    m_nodeTestButton = new QPushButton(QStringLiteral("发起扫描"), canvasPanel);
     m_nodeTestButton->setProperty("primary",true);
     m_nodeTestButton->setObjectName("testSelectedTopologyNode");
     m_nodeTestButton->setEnabled(false);
-    m_nodeVerifyButton = new QPushButton(QStringLiteral("验证此节点漏洞"), canvasPanel);
+    m_nodeVerifyButton = new QPushButton(QStringLiteral("验证漏洞"), canvasPanel);
     m_nodeVerifyButton->setObjectName("verifySelectedTopologyNode");
     m_nodeVerifyButton->setEnabled(false);
     nodeActions->addWidget(m_nodeTestTargetCombo,1);
     nodeActions->addWidget(m_nodeTestButton);
+    m_viewAssetTopologyButton = new QPushButton(QStringLiteral("在拓扑中查看"), canvasPanel);
+    m_viewAssetTopologyButton->setObjectName("viewSelectedAssetTopology");
+    m_viewAssetTopologyButton->setEnabled(false);
+    m_viewAssetTopologyButton->hide();
+    nodeActions->addWidget(m_viewAssetTopologyButton);
+    connect(m_viewAssetTopologyButton, &QPushButton::clicked, this, [this]() {
+        if (!currentSelectedNode()) return;
+        emit topologyViewRequested();
+        if (auto *item = m_nodeItems.value(m_selectedNodeId)) m_graphView->centerOn(item);
+    });
     nodeActions->addWidget(m_nodeVerifyButton);
-    canvasLayout->addLayout(nodeActions);
+    actionLayout->addLayout(nodeActions);
     m_nodeActionHint = new QLabel(QStringLiteral("下一步：点击主机，选择已发现的服务发起扫描；已有漏洞的节点可直接进入验证。"),canvasPanel);
     m_nodeActionHint->setWordWrap(true);
-    canvasLayout->addWidget(m_nodeActionHint);
+    actionLayout->addWidget(m_nodeActionHint);
+    canvasLayout->addWidget(actionPanel);
+    actionPanel->hide();
     connect(m_nodeTestButton,&QPushButton::clicked,this,&TopologyPage::onTestSelectedNode);
     connect(m_nodeVerifyButton,&QPushButton::clicked,this,&TopologyPage::onVerifySelectedNode);
     connect(m_nodeTestTargetCombo,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int) {
@@ -1475,9 +1513,18 @@ void TopologyPage::setupUI() {
     m_graphScene = new QGraphicsScene(this);
     m_graphView = new TopologyGraphicsView(this);
     m_graphView->setObjectName("topologyCanvas");
+    m_emptyCanvas = new QLabel(QStringLiteral("暂无网络拓扑\n先完成探测，或选择已有扫描记录。"), m_graphView->viewport());
+    m_emptyCanvas->setObjectName("topologyEmptyState");
+    m_emptyCanvas->setAlignment(Qt::AlignCenter);
+    m_emptyCanvas->setWordWrap(true);
+    m_emptyCanvas->setStyleSheet("font-size:14px;color:#8498b4;background:#f8fbff;padding:25px;");
+    m_emptyCanvas->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_graphView->viewport()->installEventFilter(this);
     m_graphView->setScene(m_graphScene);
     m_graphView->setRenderHint(QPainter::Antialiasing, true);
     m_graphView->setDragMode(QGraphicsView::ScrollHandDrag);
+    m_graphView->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_graphView->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_graphView->setBackgroundBrush(QColor(Theme::Background));
     m_graphView->setMinimumSize(0, 160);
     m_graphView->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -2218,18 +2265,23 @@ void TopologyPage::refreshLinkedTasks()
 
 // ── Document Population ──────────────────────────────────────────────────
 
+void TopologyPage::updateCanvasHeading() {
+    int serviceCount = 0;
+    for (const auto &node : m_topologyDocument.nodes) serviceCount += node.services.size();
+    m_canvasTitleLabel->setText(QStringLiteral("网络拓扑"));
+    m_canvasTitleLabel->setToolTip(m_topologyDocument.summary);
+    m_statsLabel->setText(QStringLiteral("节点 %1 | 连线 %2 | 服务 %3")
+        .arg(m_topologyDocument.nodes.size()).arg(m_topologyDocument.edges.size()).arg(serviceCount));
+}
+
 void TopologyPage::populateTopologyDocument() {
     if (m_topologyDocument.generatedAt.trimmed().isEmpty()) {
         m_topologyDocument.generatedAt = QDateTime::currentDateTime().toString(Qt::ISODate);
     }
-    m_canvasTitleLabel->setText(
-        m_topologyDocument.summary.isEmpty()
-            ? QStringLiteral("源主机、服务器与目标路径")
-            : m_topologyDocument.summary);
     const QString dirtySuffix = m_documentDirty
         ? QStringLiteral("当前有未保存修改。")
         : QStringLiteral("当前拓扑已与本地文件同步。");
-    m_canvasSubtitleLabel->setText(
+    m_canvasSubtitleLabel->setText(m_topologyDocument.summary + QStringLiteral("\n") +
         QStringLiteral("节点 %1 个，连线 %2 条。可直接拖动主机位置，通过“节点与连线”编辑信息。%3")
             .arg(m_topologyDocument.nodes.size())
             .arg(m_topologyDocument.edges.size())
@@ -2240,16 +2292,7 @@ void TopologyPage::populateTopologyDocument() {
         m_summaryLabel->setText(QStringLiteral("当前拓扑文件：%1")
             .arg(m_loadedTopologyPath.isEmpty() ? defaultTopologyDocumentPath() : m_loadedTopologyPath));
     }
-    if (m_statsLabel) {
-        int serviceCount = 0;
-        for (const TopologyNodeRecord &node : m_topologyDocument.nodes) {
-            serviceCount += node.services.size();
-        }
-        m_statsLabel->setText(QStringLiteral("节点 %1 | 连线 %2 | 服务 %3")
-            .arg(m_topologyDocument.nodes.size())
-            .arg(m_topologyDocument.edges.size())
-            .arg(serviceCount));
-    }
+    updateCanvasHeading();
     if (m_scopeLabel) {
         m_scopeLabel->setText(QStringLiteral("目标：%1 | 扫描：%2 | 生成时间：%3")
             .arg(m_topologyDocument.target.isEmpty() ? QStringLiteral("--") : m_topologyDocument.target)
@@ -2287,11 +2330,17 @@ void TopologyPage::populateTopologyDocument() {
 void TopologyPage::populateDocumentPlaceholder(const QString &title,
                                                 const QString &detail) {
     m_topologyDocument = {};
+    if (m_assetTable) m_assetTable->setRowCount(0);
     m_loadedTopologyPath.clear();
     m_selectedNodeId.clear();
     m_selectedEdgeId.clear();
     m_documentDirty = false;
     m_editorDirty = false;
+    if (m_emptyCanvas) {
+        m_emptyCanvas->setText(title + QStringLiteral("\n") + detail);
+        m_emptyCanvas->setGeometry(m_graphView->viewport()->rect());
+        m_emptyCanvas->show(); m_emptyCanvas->raise();
+    }
     m_canvasTitleLabel->setText(title);
     m_canvasSubtitleLabel->setText(detail);
 
@@ -2318,6 +2367,12 @@ void TopologyPage::populateDocumentPlaceholder(const QString &title,
 // ── Render Topology Scene ────────────────────────────────────────────────
 
 void TopologyPage::renderTopologyScene() {
+    m_fitWhenVisible = true;
+    if (m_emptyCanvas) {
+        m_emptyCanvas->setVisible(m_topologyDocument.nodes.isEmpty());
+        m_emptyCanvas->setGeometry(m_graphView->viewport()->rect());
+        m_emptyCanvas->raise();
+    }
     // Clearing old graphics is an internal refresh, not a user deselection.
     const QSignalBlocker selectionBlocker(m_graphScene);
     ++m_sceneGen;  // 场景重建 — 上一轮未完成的动效回调全部失效
@@ -2397,6 +2452,8 @@ void TopologyPage::renderTopologyScene() {
         };
         m_graphScene->addItem(ellipse);
         m_nodeItems.insert(node.id, ellipse);
+        const QString mode = property("workspaceMode").toString();
+        if (!mode.isEmpty()) ellipse->setFlag(QGraphicsItem::ItemIsMovable, mode == "edit");
 
         QString primaryLabel = topologyNodePrimaryLabel(node);
         // The generated scanner name used to combine its role and IP in one
@@ -2415,21 +2472,33 @@ void TopologyPage::renderTopologyScene() {
 
         // All rows use the same font source and their actual graphics bounds.
         // No separately painted footer can collide with a larger system font.
-        QFont titleFont = font();
+        QFont titleFont = Theme::topologyFont(font());
         titleFont.setBold(true);
-        const QFont detailFont = font();
+        const QFont detailFont = Theme::topologyFont(font());
         const QFontMetricsF titleMetrics(titleFont), detailMetrics(detailFont);
         const qreal addressWidth = node.ip.trimmed().isEmpty() ? 0
             : qMax(titleMetrics.horizontalAdvance(node.ip.trimmed()),
                    detailMetrics.horizontalAdvance(node.ip.trimmed()));
-        const qreal textWidth = qMax(180.0, qMax(addressWidth, detailMetrics.horizontalAdvance(footer)) + 4);
+        const qreal textWidth = qMax(180.0, addressWidth + 4);
         auto *labels = new QGraphicsItemGroup(ellipse);
         qreal textHeight = 0;
         auto addRow = [&](const QString &value, const QFont &rowFont, const QColor &color) {
             if (value.isEmpty()) return;
             if (textHeight > 0) textHeight += 5;
-            auto *text = new QGraphicsSimpleTextItem(
-                QFontMetricsF(rowFont).elidedText(value, Qt::ElideRight, textWidth), labels);
+            QTextLayout wrapped(value, rowFont);
+            QTextOption option;
+            option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+            wrapped.setTextOption(option);
+            QStringList lines;
+            wrapped.beginLayout();
+            while (true) {
+                auto line = wrapped.createLine();
+                if (!line.isValid()) break;
+                line.setLineWidth(textWidth);
+                lines.append(value.mid(line.textStart(), line.textLength()));
+            }
+            wrapped.endLayout();
+            auto *text = new QGraphicsSimpleTextItem(lines.join(QStringLiteral("\n")), labels);
             text->setFont(rowFont);
             text->setBrush(color);
             text->setPos(0, textHeight);
@@ -2444,6 +2513,39 @@ void TopologyPage::renderTopologyScene() {
         ellipse->setRect(-cardWidth / 2, -cardHeight / 2, cardWidth, cardHeight);
         ellipse->setTransformOriginPoint(ellipse->rect().center());
         labels->setPos(ellipse->rect().left() + 60, -textHeight / 2);
+    }
+
+    // Positions from older archives and backend lanes predate measured cards.
+    // Resolve collisions in the view after text layout, preserving document
+    // coordinates until the user explicitly drags a node.
+    QList<QGraphicsItem *> ordered;
+    for (const auto &node : m_topologyDocument.nodes) ordered.append(m_nodeItems.value(node.id));
+    std::stable_sort(ordered.begin(), ordered.end(), [](QGraphicsItem *a, QGraphicsItem *b) {
+        return a->y() == b->y() ? a->x() < b->x() : a->y() < b->y();
+    });
+    qreal horizontalGap = 72;
+    for (const auto &edge : m_topologyDocument.edges)
+        horizontalGap = qMax(horizontalGap, QFontMetricsF(Theme::topologyFont(font())).horizontalAdvance(fallbackEdgeLabel(edge)) + 24);
+    QList<QGraphicsItem *> placed;
+    for (auto *item : ordered) {
+        bool moved;
+        do {
+            moved = false;
+            for (auto *previous : placed) {
+                const QRectF bounds = previous->sceneBoundingRect();
+                if (!bounds.adjusted(-horizontalGap, -36, horizontalGap, 36).intersects(item->sceneBoundingRect())) continue;
+                const QPointF delta = item->pos() - previous->pos();
+                const qreal halfWidth = (item->boundingRect().width() + bounds.width()) / 2 + horizontalGap;
+                const qreal halfHeight = (item->boundingRect().height() + bounds.height()) / 2 + 36;
+                if (qAbs(delta.x()) / halfWidth >= qAbs(delta.y()) / halfHeight)
+                    item->setX(bounds.right() + item->boundingRect().width() / 2 + horizontalGap + 1);
+                else
+                    item->setY(bounds.bottom() + item->boundingRect().height() / 2 + 37);
+                moved = true;
+                break;
+            }
+        } while (moved);
+        placed.append(item);
     }
 
     // Connect the measured card boundaries; z-values keep edges below nodes.
@@ -2476,7 +2578,7 @@ void TopologyPage::renderTopologyScene() {
         m_graphScene->addItem(line);
         m_edgeItems.insert(edge.id, line);
 
-        auto *edgeText = m_graphScene->addSimpleText(relationLabel);
+        auto *edgeText = m_graphScene->addSimpleText(relationLabel, Theme::topologyFont(font()));
         edgeText->setBrush(QColor(selected ? Theme::Primary : Theme::MutedText));
         edgeText->setParentItem(line);  // 跟随连线淡入/拖动
         edgeText->setZValue(1.2);
@@ -2579,6 +2681,7 @@ void TopologyPage::fxFadeIn(QGraphicsItem *item, quint64 gen, int delayMs, qreal
 // ── Node / Edge List Population ──────────────────────────────────────────
 
 void TopologyPage::populateNodeList() {
+    refreshAssetTable();
     const QSignalBlocker selectionBlocker(m_nodeListWidget);
     const QString currentNodeId =
         m_nodeListWidget->currentItem()
@@ -2698,6 +2801,7 @@ void TopologyPage::showNodeDetail(const TopologyNodeRecord &node) {
     QHostAddress hostAddress;
     const bool validHost=node.deviceType!="network_segment" && (hostAddress.setAddress(host)
         || QRegularExpression(QStringLiteral("^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$")).match(host).hasMatch());
+    findChild<QWidget*>("topologySelectedActions")->setVisible(validHost);
     m_nodeTestTargetCombo->clear();
     if(validHost) {
         m_nodeTestTargetCombo->addItem(QStringLiteral("主机：%1").arg(host),host);
@@ -2739,9 +2843,10 @@ void TopologyPage::showNodeDetail(const TopologyNodeRecord &node) {
     }
     m_nodeTestTargetCombo->setEnabled(validHost);
     m_nodeTestButton->setEnabled(validHost);
+    m_viewAssetTopologyButton->setEnabled(validHost);
     m_nodeTestButton->setToolTip(QStringLiteral("打开目标已填写的任务表单；核对目标与授权后才开始服务和漏洞检查"));
     const int findingCount=node.findings.size();
-    m_nodeVerifyButton->setText(QStringLiteral("验证此节点漏洞（%1）").arg(findingCount));
+    m_nodeVerifyButton->setText(QStringLiteral("验证漏洞（%1）").arg(findingCount));
     m_nodeVerifyButton->setEnabled(validHost && !m_pipelineId.isEmpty() && findingCount>0);
     m_nodeVerifyButton->setToolTip(m_pipelineId.isEmpty()?QStringLiteral("独立拓扑仅提供资产发现，请先对所选目标建立测试任务")
         : findingCount?QStringLiteral("打开本节点已有漏洞的方案、载荷、执行证据与复核窗口")
@@ -2757,6 +2862,8 @@ void TopologyPage::showNodeDetail(const TopologyNodeRecord &node) {
 }
 
 void TopologyPage::showEdgeDetail(const TopologyEdgeRecord &edge) {
+    findChild<QWidget*>("topologySelectedActions")->hide();
+    m_viewAssetTopologyButton->setEnabled(false);
     m_nodeTestTargetCombo->clear();m_nodeTestTargetCombo->setEnabled(false);
     m_nodeTestButton->setEnabled(false);m_nodeVerifyButton->setEnabled(false);
     m_nodeActionHint->setText(QStringLiteral("已选择连接。请选择具体主机，再检查服务或验证已有漏洞。"));
@@ -2784,6 +2891,8 @@ void TopologyPage::showEdgeDetail(const TopologyEdgeRecord &edge) {
 }
 
 void TopologyPage::showOverviewDetail() {
+    findChild<QWidget*>("topologySelectedActions")->hide();
+    m_viewAssetTopologyButton->setEnabled(false);
     m_syncingSelection = true;
     m_detailStack->setCurrentIndex(0);
     m_nodeNameEdit->clear();
@@ -2801,7 +2910,7 @@ void TopologyPage::showOverviewDetail() {
     m_nodeScanButton->setEnabled(false);
     m_nodeTestTargetCombo->clear();m_nodeTestTargetCombo->setEnabled(false);
     m_nodeTestButton->setEnabled(false);m_nodeVerifyButton->setEnabled(false);
-    m_nodeVerifyButton->setText(QStringLiteral("验证此节点漏洞"));
+    m_nodeVerifyButton->setText(QStringLiteral("验证漏洞"));
     m_nodeActionHint->setText(QStringLiteral("下一步：点击主机，选择已发现的服务发起扫描；已有漏洞的节点可直接进入验证。"));
     m_edgeLabelEdit->clear();
     m_edgeTypeCombo->setCurrentIndex(0);
@@ -2816,6 +2925,7 @@ void TopologyPage::showOverviewDetail() {
 // ── Selection Sync ───────────────────────────────────────────────────────
 
 void TopologyPage::syncSelectionToNode(const QString &nodeId) {
+    const bool changed = m_selectedNodeId != nodeId || !m_selectedEdgeId.isEmpty();
     m_syncingSelection = true;
     for (int row = 0; row < m_nodeListWidget->count(); ++row) {
         QListWidgetItem *item = m_nodeListWidget->item(row);
@@ -2833,6 +2943,12 @@ void TopologyPage::syncSelectionToNode(const QString &nodeId) {
         }
     }
     m_syncingSelection = false;
+    // Signals emitted while synchronizing are deliberately ignored. Asset-table
+    // selection also enters here, so commit its object context explicitly.
+    m_selectedNodeId = nodeId;
+    m_selectedEdgeId.clear();
+    if (changed)
+        if (const auto *node = currentSelectedNode()) showNodeDetail(*node);
 }
 
 void TopologyPage::syncSelectionToEdge(const QString &edgeId) {
@@ -2923,12 +3039,14 @@ void TopologyPage::onSceneSelectionChanged() {
 
 void TopologyPage::onZoomIn() {
     if (m_graphView) {
+        m_graphView->setProperty("autoFit", false);
         m_graphView->scale(1.12, 1.12);
     }
 }
 
 void TopologyPage::onZoomOut() {
     if (m_graphView) {
+        m_graphView->setProperty("autoFit", false);
         m_graphView->scale(1.0 / 1.12, 1.0 / 1.12);
     }
 }
@@ -2937,10 +3055,15 @@ void TopologyPage::onResetView() {
     if (!m_graphView || !m_graphScene) {
         return;
     }
+    m_graphView->setProperty("autoFit", true);
     m_graphView->resetTransform();
     m_graphView->fitInView(
         m_graphScene->itemsBoundingRect().adjusted(-50, -50, 50, 100),
         Qt::KeepAspectRatio);
+    if (m_graphView->transform().m11() > 1.0) m_graphView->resetTransform();
+    m_graphView->centerOn(m_graphScene->itemsBoundingRect().center());
+    if (m_graphView->isVisible() && m_graphView->viewport()->width() > 120 && m_graphView->viewport()->height() > 120)
+        m_fitWhenVisible = false;
 }
 
 // ── Add / Remove Nodes & Edges ──────────────────────────────────────────
@@ -3395,4 +3518,129 @@ bool TopologyPage::loadTopologyDocumentFromPath(const QString &path,
 
 QString TopologyPage::nodeDisplayTitle(const TopologyNodeRecord &node) const {
     return defaultNodeTitle(node);
+}
+
+void TopologyPage::selectWorkspaceMode(const QString &mode)
+{
+    const QString previousMode = property("workspaceMode").toString();
+    setProperty("workspaceMode", mode);
+    if (mode != "assets" && previousMode != mode) {
+        m_fitWhenVisible = true;
+        QTimer::singleShot(0, this, &TopologyPage::fitVisibleWorkspace);
+    }
+    for (const auto &name : {"topologyZoomOut", "topologyZoomIn", "topologyFitView", "topologyEditMenu", "topologySourcesButton", "topologyInspectorButton", "topologyInfoButton"})
+        if (auto *button = findChild<QPushButton *>(name)) button->setVisible(mode != "assets");
+    m_saveTopologyButton->setVisible(mode != "assets");
+    m_nodeActionHint->setVisible(mode != "assets");
+    m_nodeTestTargetCombo->setVisible(true);
+    m_nodeTestButton->setVisible(true);
+    m_nodeTestButton->setText(QStringLiteral("发起扫描"));
+    m_viewAssetTopologyButton->setVisible(mode == "assets");
+    m_nodeVerifyButton->setVisible(mode != "assets");
+    if (auto *button = findChild<QPushButton *>("topologyUpdateButton")) button->setText(mode == "assets" ? QStringLiteral("刷新资产清单") : QStringLiteral("更新拓扑"));
+    auto *sideTabs = findChild<QTabWidget *>(QStringLiteral("topologySideTabs"));
+    if (sideTabs) { sideTabs->setVisible(mode != "display"); sideTabs->tabBar()->setVisible(mode != "assets"); }
+    if (mode == "assets" && !m_assetTable) {
+        m_assetTable = new QTableWidget(0, 7, m_graphView->parentWidget());
+        m_assetTable->setObjectName("discoveredAssetTable");
+        m_assetTable->setHorizontalHeaderLabels({"资产名称", "地址", "设备类型", "操作系统", "服务 / 端口", "状态", "来源"});
+        m_assetTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        m_assetTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+        m_assetTable->setSelectionMode(QAbstractItemView::SingleSelection);
+        m_assetTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+        m_assetTable->verticalHeader()->hide();
+        if (auto *layout = qobject_cast<QVBoxLayout *>(m_graphView->parentWidget()->layout()))
+            layout->insertWidget(layout->indexOf(m_graphView), m_assetTable, 1);
+        UiUtil::EmptyHint::attach(m_assetTable, QStringLiteral("尚未发现资产；在左侧填写范围并开始探测，或选择已有记录。"));
+        connect(m_assetTable, &QTableWidget::currentCellChanged, this, [this](int row, int, int, int) {
+            if (auto *item = m_assetTable->item(row, 0)) syncSelectionToNode(item->data(Qt::UserRole).toString());
+        });
+        connect(m_assetTable, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
+            if (row < 0 || row >= m_assetTable->rowCount()) return;
+            auto *dialog = new QDialog(this); dialog->setAttribute(Qt::WA_DeleteOnClose);
+            dialog->setObjectName("assetDetailsDialog"); dialog->setWindowTitle(QStringLiteral("资产详情")); dialog->resize(600, 420);
+            auto *layout = new QVBoxLayout(dialog); auto *text = new QPlainTextEdit(dialog); text->setReadOnly(true);
+            QStringList lines;
+            for (int column = 0; column < m_assetTable->columnCount(); ++column)
+                lines << m_assetTable->horizontalHeaderItem(column)->text() + QStringLiteral("：") + m_assetTable->item(row, column)->text();
+            text->setPlainText(lines.join("\n\n")); layout->addWidget(text);
+            auto *close = new QPushButton(QStringLiteral("关闭"), dialog); connect(close, &QPushButton::clicked, dialog, &QDialog::close);
+            layout->addWidget(close, 0, Qt::AlignRight); dialog->show();
+        });
+    }
+    if (m_assetTable) m_assetTable->setVisible(mode == "assets");
+    m_graphView->setVisible(mode != "assets");
+    if (mode != "assets") updateCanvasHeading();
+    if (auto *legend = findChild<QLabel *>("topologyLegend")) legend->setVisible(mode != "assets");
+    for (auto *item : m_nodeItems) item->setFlag(QGraphicsItem::ItemIsMovable, mode == "edit");
+    if (mode == "assets" || mode == "discover") {
+        if (sideTabs) sideTabs->setCurrentIndex(1);
+        m_targetInput->setFocus();
+        if (mode == "assets") refreshAssetTable();
+    } else if (mode == "edit" || mode == "annotate") {
+        if (sideTabs) sideTabs->setCurrentIndex(0);
+        if (auto *tabs = findChild<QTabWidget *>(QStringLiteral("topologyInspectorTabs"))) tabs->setCurrentIndex(2);
+        m_detailHintLabel->setText(mode == "annotate" ? QStringLiteral("信息标注：选择节点或连线，维护备注、服务与证据说明。")
+            : QStringLiteral("拓扑编辑：选择节点或连线后编辑属性；可拖动节点调整位置。"));
+        if (mode == "annotate") m_nodeNoteEdit->setFocus(); else m_nodeNameEdit->setFocus();
+    } else m_graphView->setFocus();
+    const QList<QWidget *> properties{m_nodeNameEdit, m_nodeIpEdit, m_nodeHostNameEdit, m_nodeOsEdit,
+        m_nodeTypeEdit, m_nodeVendorEdit, m_nodeStatusCombo, m_edgeSourceCombo, m_edgeTargetCombo, m_edgeTypeCombo};
+    for (auto *field : properties) {
+        field->setVisible(mode != "annotate");
+        if (auto *form = qobject_cast<QFormLayout *>(field->parentWidget()->layout()))
+            if (auto *label = form->labelForField(field)) label->setVisible(mode != "annotate");
+    }
+}
+
+void TopologyPage::refreshAssetTable()
+{
+    if (!m_assetTable) return;
+    const QSignalBlocker block(m_assetTable);
+    m_assetTable->setRowCount(0);
+    int index = 0;
+    const QMap<QString,QString> deviceNames{{"host", "主机"}, {"server", "服务器"}, {"router", "路由设备"}, {"switch", "交换设备"}, {"workstation", "终端"}};
+    for (const auto &node : m_topologyDocument.nodes) {
+        if (node.deviceType == "scanner" || node.deviceType == "network_segment" || node.tags.contains("local-request")) continue;
+        m_assetTable->insertRow(index);
+        QStringList services;
+        for (const auto &service : node.services) services << service.port + "/" + service.protocol + " " + service.service;
+        const QString origin = node.tags.contains("configured-gateway") || node.tags.contains("default-gateway") ? QStringLiteral("配置网关")
+            : node.provenance.value("source").toString() == "manual" ? QStringLiteral("人工维护")
+            : !node.scan.isEmpty() || node.provenance.contains("scan_task_id") ? QStringLiteral("扫描记录") : QStringLiteral("来源待核对");
+        const QStringList cells{nodeDisplayTitle(node), node.ip, deviceNames.value(node.deviceType, node.deviceType), node.osName, services.join("; "), nodeStatusLabel(node.status), origin};
+        for (int column = 0; column < cells.size(); ++column) {
+            auto *item = new QTableWidgetItem(cells[column].isEmpty() ? QStringLiteral("未识别") : cells[column]);
+            item->setData(Qt::UserRole, node.id); item->setToolTip(cells[column].toHtmlEscaped()); m_assetTable->setItem(index, column, item);
+        }
+        ++index;
+    }
+    for (int row = 0; row < m_assetTable->rowCount(); ++row)
+        if (m_assetTable->item(row, 0)->data(Qt::UserRole).toString() == m_selectedNodeId)
+            m_assetTable->setCurrentCell(row, 0);
+    if (property("workspaceMode").toString() == "assets") {
+        m_canvasTitleLabel->setText(QStringLiteral("资产清单"));
+        m_statsLabel->setText(QStringLiteral("资产 %1 台").arg(index));
+    }
+}
+
+bool TopologyPage::eventFilter(QObject *object, QEvent *event)
+{
+    if (m_graphView && object == m_graphView->viewport() && (event->type() == QEvent::Resize || event->type() == QEvent::Show)) {
+        if (m_graphView->property("autoFit").toBool()) m_fitWhenVisible = true;
+        if (m_fitWhenVisible) QTimer::singleShot(0, this, &TopologyPage::fitVisibleWorkspace);
+    }
+    if (m_graphView && object == m_graphView->viewport() && event->type() == QEvent::Resize && m_emptyCanvas) {
+        m_emptyCanvas->setGeometry(m_graphView->viewport()->rect());
+        m_emptyCanvas->setVisible(m_topologyDocument.nodes.isEmpty());
+        m_emptyCanvas->raise();
+    }
+    return QWidget::eventFilter(object, event);
+}
+
+void TopologyPage::fitVisibleWorkspace()
+{
+    if (!m_fitWhenVisible || !m_graphView->isVisible() || m_topologyDocument.nodes.isEmpty()
+        || m_graphView->viewport()->width() <= 120 || m_graphView->viewport()->height() <= 120) return;
+    onResetView();
 }

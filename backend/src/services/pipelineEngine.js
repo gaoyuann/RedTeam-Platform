@@ -1,6 +1,6 @@
 import {clearPostRequests} from './scanPostRequests.js';
 import {clearScanSessionAuth} from './scanSessionAuth.js';
-import {isScanAgent,isDiscoveryTask,validateScanAgentMode} from './scanAgentConfig.js';
+import {isScanAgent,isDiscoveryTask,isIntelligentWorkflow,validateScanAgentMode} from './scanAgentConfig.js';
 import {runScanAgent} from './scanAgent.js';
 import {isWebAgent,clearWebCredentials,hasWebScanSchema} from './webScanConfig.js';
 import { pipelineScans } from './scanResultQuery.js';
@@ -15,6 +15,7 @@ import { analyzeScanResults } from './scanAnalyzer.js';
 import { loadTargetProfile } from './targetDiscovery.js';
 import { appendTaskLog, broadcastTaskEvent } from './taskActivity.js';
 import { recommendForScans } from './playbookRecommendations.js';
+import { createTaskPlan, transitionTaskPlan } from './taskPlan.js';
 
 // ── Track running pipelines for cancellation ──────────────────────────────
 const runningPipelines = new Set();
@@ -575,6 +576,8 @@ async function runPipelineExecution(db, pipeline, playbookId, analysisData) {
     let reviewedPlan = null;
     try { reviewedPlan = JSON.parse(playbook?.metadata || '{}').task_plan; } catch {}
     const taskPlan = db.prepare('SELECT state, revision, approved_playbook_id FROM task_plans WHERE pipeline_id = ?').get(pipelineId);
+    if (isIntelligentWorkflow(pipelineConfig) && !taskPlan)
+      throw new Error('智能测试缺少已审阅的任务预案，不能直接执行来源模板');
     if (taskPlan && (taskPlan.state !== 'approved' || taskPlan.approved_playbook_id !== playbookId))
       throw new Error('任务预案未经批准或执行快照不匹配');
     const engineType = taskPlan ? 'mechanical' : 'auto';
@@ -697,7 +700,7 @@ export async function runPipeline(pipelineId) {
       } else {
         failPipeline(db, pipelineId, `扫描阶段失败: ${scanResult.error}`);
       }
-      return { ok: scanResult.ok !== false, pipeline_id: pipelineId, status: 'failed', error: scanResult.error };
+      return { ok: scanResult.ok !== false, pipeline_id: pipelineId, status: scanResult.cancelled ? 'cancelled' : 'failed', error: scanResult.error };
     }
 
     // Discovery is a finished collection task, not a paused vulnerability run.
@@ -712,6 +715,14 @@ export async function runPipeline(pipelineId) {
       return {ok:true,pipeline_id:pipelineId,status:'completed'};
     }
 
+    if (pipelineConfig.workflow_mode === 'staged') {
+      if (isCancelled(pipelineId)) return {ok:false,pipeline_id:pipelineId,status:'cancelled'};
+      updateStatus(db,pipelineId,'completed',{result:{workflow_mode:'staged',next_action:'select_finding',scan_task_ids:scanResult.scanTaskIds}});
+      runningPipelines.delete(pipelineId);
+      pipelineLog(pipelineId,'扫描阶段已结束；请选择具体漏洞编制预案、准备载荷并确认验证，扫描完成不代表验证成立');
+      return {ok:true,pipeline_id:pipelineId,status:'completed'};
+    }
+
     // ── Step 1: Analyze ─────────────────────────────────────────────────
     pipelineLog(pipelineId, '=== 步骤 1: 分析 ===');
     const analysisResult = await runPipelineAnalysis(db, pipeline, scanResult.scanTaskIds);
@@ -722,6 +733,12 @@ export async function runPipeline(pipelineId) {
         failPipeline(db, pipelineId, `分析阶段失败: ${analysisResult.error}`);
       }
       return { ok: false, pipeline_id: pipelineId, status: 'failed', error: analysisResult.error };
+    }
+    if (isIntelligentWorkflow(pipelineConfig) && analysisResult.fallback) {
+      const error = '模型分析未完成，已保留扫描结果与降级参考；请检查模型连接后新建测试，未自动编制或执行预案';
+      updateStep(db, pipelineId, 1, 'failed', { step_type: STEP_ANALYZE, error_message: error });
+      failPipeline(db, pipelineId, error);
+      return { ok: false, pipeline_id: pipelineId, status: 'failed', error };
     }
 
     // Source demonstrations require an explicit object list before generation.
@@ -753,7 +770,7 @@ export async function runPipeline(pipelineId) {
     // ── Approval gate ─────────────────────────────────────────────────
     // After generating the playbook, optionally pause for human approval
     // before proceeding to the execute step.
-    const requireApproval = pipelineConfig.require_approval !== false || generateResult.requiresApproval; // default: true
+    const requireApproval = isIntelligentWorkflow(pipelineConfig) || pipelineConfig.require_approval !== false || generateResult.requiresApproval; // default: true
     if (requireApproval) {
       const pausedResult = {
         scan_task_ids: scanResult.scanTaskIds,
@@ -771,7 +788,27 @@ export async function runPipeline(pipelineId) {
         paused_at: 'generate',
         paused_at_time: new Date().toISOString(),
       };
-      updateStatus(db, pipelineId, 'awaiting_approval', { result: pausedResult });
+      if (isIntelligentWorkflow(pipelineConfig)) {
+        try { db.transaction(() => {
+          // Create and submit in the same transaction as the pause: a client
+          // must never observe an intelligent task waiting without its plan.
+          updateStatus(db, pipelineId, 'awaiting_approval', { result: pausedResult });
+          const current = db.prepare('SELECT * FROM pipelines WHERE pipeline_id=?').get(pipelineId);
+          const owner = db.prepare('SELECT username,role FROM users WHERE username=? AND is_active=1').get(current.created_by);
+          if (!owner) throw new Error('任务所有者不可用，无法自动编制预案');
+          if (generateResult.method === 'matched' && generateResult.recommendations
+              .some(item => item.playbook_id === generateResult.playbookId && item.match_status === 'needs_input'))
+            throw new Error('候选预案缺少具体入口或执行条件；已保留扫描与分析，请补充目标条件后新建测试');
+          const actor = { sub: owner.username, role: owner.role };
+          const draft = createTaskPlan(db, current, actor, generateResult.playbookId);
+          transitionTaskPlan(db, current, actor, 'submit', { revision: draft.revision,
+            note: '系统依据本次扫描与模型分析自动编制并送审；尚未批准或执行。' });
+        })(); } catch (error) {
+          updateStep(db, pipelineId, 2, 'failed', { step_type: STEP_GENERATE, error_message: error.message });
+          throw error;
+        }
+        pipelineLog(pipelineId, '已自动编制任务预案并送审；请在漏洞利用预案中核对后批准此版本，尚未执行');
+      } else updateStatus(db, pipelineId, 'awaiting_approval', { result: pausedResult });
       runningPipelines.delete(pipelineId);
       pipelineLog(pipelineId, '等待人工确认后执行（require_approval=true）');
       return { ok: true, pipeline_id: pipelineId, status: 'awaiting_approval' };
@@ -933,6 +970,8 @@ export async function resumePipelineAfterApproval(pipelineId) {
   // Parse analysis result and config
   let analysisData = {};
   try { analysisData = JSON.parse(pipeline.analysis_result || '{}'); } catch {}
+  let resumeConfig = {};
+  try { resumeConfig = JSON.parse(pipeline.config || '{}'); } catch {}
 
   const playbookId = pipeline.generated_playbook_id;
   if (!playbookId) {
@@ -941,6 +980,8 @@ export async function resumePipelineAfterApproval(pipelineId) {
   }
 
   const taskPlan = db.prepare('SELECT state, approved_playbook_id FROM task_plans WHERE pipeline_id = ?').get(pipelineId);
+  if (isIntelligentWorkflow(resumeConfig) && !taskPlan)
+    return { ok: false, error: '智能测试缺少已审阅的任务预案，不能直接恢复执行' };
   if (taskPlan && (taskPlan.state !== 'approved' || taskPlan.approved_playbook_id !== playbookId))
     return { ok: false, error: '任务预案未经批准或执行快照不匹配' };
 
@@ -977,7 +1018,8 @@ export async function resumePipelineAfterApproval(pipelineId) {
 
     updateStatus(db, pipelineId, 'completed', { result: finalResult });
     runningPipelines.delete(pipelineId);
-    pipelineLog(pipelineId, '流水线全部完成（审批后）');
+    pipelineLog(pipelineId, prevResult.manual_scan_continuation
+      ? '人工选择预案的执行已结束；原扫描失败和已有发现继续保留' : '流水线全部完成（审批后）');
     return { ok: true, pipeline_id: pipelineId, status: 'completed' };
   } catch (err) {
     failPipeline(db, pipelineId, `流水线恢复执行异常: ${err.message}`);

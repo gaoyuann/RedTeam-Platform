@@ -152,7 +152,7 @@ int main(int argc, char **argv) {
         for (auto *group : page.m_nodeItems.value(nodeId)->childItems()) {
             for (auto *child : group->childItems()) {
                 auto *text = dynamic_cast<QGraphicsSimpleTextItem *>(child);
-                if (text) labels.append(text->text());
+                if (text) labels.append(QString(text->text()).remove('\n'));
             }
         }
         return labels;
@@ -353,11 +353,48 @@ int main(int argc, char **argv) {
                 const QRectF interior = page.m_nodeItems.value(id)->sceneBoundingRect().adjusted(1, 1, -1, -1);
                 if (interior.contains(line->line().p1()) || interior.contains(line->line().p2())) return 13;
             }
+            const auto cards = page.m_nodeItems.values();
+            for (int i = 0; i < cards.size(); ++i)
+                for (int j = i + 1; j < cards.size(); ++j)
+                    if (cards[i]->sceneBoundingRect().adjusted(-24,-12,24,12)
+                        .intersects(cards[j]->sceneBoundingRect())) return 61;
             page.onResetView();
+            if (page.m_graphView->transform().m11() > 1.001) return 62;
             if (argc > 1 && points == 16 && !namedTarget
                 && !page.grab().save(QString::fromLocal8Bit(argv[1]) + ".large-font.png")) return 14;
         }
     }
+    page.setFont(originalFont);
+    TopologyDocument crowded;
+    for (int i = 0; i < 3; ++i) {
+        TopologyNodeRecord node;
+        node.id=QString("crowded-%1").arg(i);
+        node.ip=QString("192.0.2.%1").arg(i+1);
+        node.displayName=i==1 ? QStringLiteral("包含很长中文名称的目标业务系统服务器，需要完整显示节点信息") : node.ip;
+        node.x=i*100;node.y=0;node.deviceType="host";
+        crowded.nodes.append(node);
+    }
+    for (int pass = 0; pass < 2; ++pass) {
+        page.m_topologyDocument=crowded;
+        page.populateTopologyDocument();
+        const auto cards=page.m_nodeItems.values();
+        for (int i=0;i<cards.size();++i) {
+            if (page.m_topologyDocument.nodes[i].x != crowded.nodes[i].x) return 63;
+            for (int j=i+1;j<cards.size();++j)
+                if (cards[i]->sceneBoundingRect().adjusted(-24,-12,24,12)
+                    .intersects(cards[j]->sceneBoundingRect())) return 64;
+            for (auto *group : cards[i]->childItems())
+                for (auto *child : group->childItems())
+                    if (auto *text=dynamic_cast<QGraphicsSimpleTextItem*>(child)) {
+                        if (text->text().contains(QChar(0x2026))) return 65;
+                        if (!cards[i]->boundingRect().contains(text->mapRectToItem(cards[i],text->boundingRect()))) return 66;
+                    }
+        }
+        page.onResetView();
+        const QRectF visible=page.m_graphView->mapToScene(page.m_graphView->viewport()->rect()).boundingRect();
+        for (auto *card : cards) if (!visible.contains(card->sceneBoundingRect())) return 67;
+    }
+    if (argc>1 && !page.grab().save(QString::fromLocal8Bit(argv[1])+".crowded.png")) return 68;
     // A delayed topology response keeps the current node inspector visible;
     // progress stays in the page rather than opening a modal dialog.
     QTcpServer topologyServer;

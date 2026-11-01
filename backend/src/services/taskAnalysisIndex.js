@@ -1,3 +1,4 @@
+import { visibleTasksSql } from './taskDeletion.js';
 import { taskDisplayText } from './taskExecution.js';
 
 const categories = ['risk_assessment', 'tech_stack', 'attack_surface', 'recommended_strategy'];
@@ -38,7 +39,7 @@ export function taskAnalysisIndex(db, actor, query) {
       p.updated_at, p.config, p.analysis_result, s.status AS analysis_status, s.output_data
     FROM pipelines p LEFT JOIN pipeline_steps s ON s.id = (
       SELECT MAX(id) FROM pipeline_steps WHERE pipeline_id = p.pipeline_id AND step_type = 'analyze'
-    ) WHERE (? = 'admin' OR p.created_by = ?) ORDER BY p.updated_at DESC, p.pipeline_id ASC`)
+    ) WHERE (? = 'admin' OR p.created_by = ?) AND ${visibleTasksSql(db,'p')} ORDER BY p.updated_at DESC, p.pipeline_id ASC`)
     .all(actor.role, actor.username);
   const needle = search.trim().toLowerCase();
   const records = [];

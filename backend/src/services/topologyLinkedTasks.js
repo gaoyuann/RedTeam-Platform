@@ -1,9 +1,10 @@
+import { visibleTasksSql } from './taskDeletion.js';
 import { pipelineScans } from './scanResultQuery.js';
 import { summarizeScanRecords } from './scanResultCatalog.js';
 
 export function topologyLinkedTasks(db, actor, {pipeline_id,scan_task_id,node_id}) {
   // Link metadata is server-authored at task creation and is immutable afterwards.
-  const tasks=db.prepare(`SELECT * FROM pipelines WHERE json_valid(config)
+  const tasks=db.prepare(`SELECT * FROM pipelines WHERE ${visibleTasksSql(db)} AND json_valid(config)
     AND json_extract(config,'$.topology_source.node_id')=?
     AND json_extract(config,?)=? AND (?='admin' OR created_by=?) ORDER BY id DESC LIMIT 50`)
     .all(node_id,pipeline_id?'$.topology_source.pipeline_id':'$.topology_source.scan_task_id',

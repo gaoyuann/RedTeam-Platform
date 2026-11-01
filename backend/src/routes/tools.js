@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { runTool, IMAGE_MAP, VIRTUAL_TOOLS } from '../tools/toolRunner.js';
 import { getEngine } from '../tools/containerEngine.js';
+import { describeTool, imageCapabilities } from '../services/toolInventory.js';
 import { exec as execCb } from 'child_process';
 import { promisify } from 'util';
 
@@ -29,6 +30,7 @@ export default function (db) {
       let engineVersion = null;
       let images = [];
       const imageSizes = {};
+      let imageInventoryStatus = 'unavailable';
 
       if (engine !== 'host') {
         try {
@@ -50,10 +52,12 @@ export default function (db) {
               if (size) imageSizes[repoTag] = size;
             }
           }
-        } catch {}
+          imageInventoryStatus = 'ok';
+        } catch { imageInventoryStatus = 'error'; }
       }
 
-      const expectedImages = [...new Set(Object.values(IMAGE_MAP))].map(name => `${name}:latest`);
+      const expectedImages = [...new Set(Object.values(IMAGE_MAP))]
+        .filter(name => name !== 'builtin').map(name => `${name}:latest`);
       const loadedImages = expectedImages.filter(e => images.includes(e));
 
       res.json({
@@ -63,10 +67,12 @@ export default function (db) {
           engineVersion,
           images: images.filter(i => i.startsWith('rt-')),
           imageSizes,
+          imageCapabilities,
+          imageInventoryStatus,
           expectedImages,
           loadedCount: loadedImages.length,
           expectedCount: expectedImages.length,
-          allLoaded: loadedImages.length === expectedImages.length,
+          allLoaded: imageInventoryStatus === 'ok' && loadedImages.length === expectedImages.length,
         },
       });
     } catch (err) {
@@ -80,10 +86,11 @@ export default function (db) {
       toolId,
       image,
       virtual: VIRTUAL_TOOLS.has(toolId),
+      ...describeTool(toolId, image, VIRTUAL_TOOLS.has(toolId)),
     }));
     // Add virtual tools
     for (const v of VIRTUAL_TOOLS) {
-      if (!Object.hasOwn(IMAGE_MAP, v)) tools.push({ toolId: v, image: null, virtual: true });
+      if (!Object.hasOwn(IMAGE_MAP, v)) tools.push({ toolId: v, image: null, virtual: true, ...describeTool(v, null, true) });
     }
     res.json({ status: 'ok', data: tools, meta: { total: tools.length } });
   });

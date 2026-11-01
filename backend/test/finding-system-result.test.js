@@ -358,3 +358,25 @@ test('finding execution snapshots preserve parent identity and reject mismatched
   assert.equal(findingVerificationExecution(f.db,pipeline).total,1);
  }finally{f.db.close();}
 });
+
+test('execution scene projection uses saved current classification and marks changed evidence stale', async () => {
+ const f=await setup();try {
+  const {classificationInput}=await import('../src/services/findingClassificationStore.js');
+  const row=f.db.prepare('SELECT * FROM scan_results WHERE id=1').get();
+  const scan=f.db.prepare("SELECT * FROM scan_tasks WHERE scan_task_id='system-s'").get();
+  const source=classificationInput(row,scan);
+  const result={schema_version:1,categories:['tampering-deception'],reason:'Fixture classification',confidence:'medium',missing_conditions:[]};
+  f.db.prepare('INSERT INTO finding_classifications(pipeline_id,finding_id,input_hash,input_data,result,created_by) VALUES(?,?,?,?,?,?)')
+   .run('system-p',1,source.input_hash,JSON.stringify(source.input),JSON.stringify(result),'fixture-user');
+  const pipeline=f.db.prepare("SELECT * FROM pipelines WHERE pipeline_id='system-p'").get();
+  let output=findingVerificationExecution(f.db,pipeline);
+  assert.equal(output.items[0].classification.state,'classified');
+  assert.deepEqual(output.items[0].classification.categories,['tampering-deception']);
+  f.db.prepare("UPDATE scan_results SET result_data=? WHERE id=1").run('{"title":"changed evidence"}');
+  output=findingVerificationExecution(f.db,pipeline);
+  assert.equal(output.items[0].classification.state,'stale');
+  f.db.exec('DROP TABLE finding_classifications');
+  output=findingVerificationExecution(f.db,pipeline);
+  assert.equal(output.items[0].classification.state,'unavailable');
+ }finally{f.db.close();}
+});

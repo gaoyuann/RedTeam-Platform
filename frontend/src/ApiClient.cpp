@@ -126,6 +126,8 @@ void ApiClient::handleReply(
                << "url:" << reply->url().toString();
 
       result["status"] = "error";
+      result["transport_error"] = statusCode == 0;
+      result["http_status"] = statusCode;
       result["error"] = QJsonObject{
           {"message", errMsg},
           {"code", errCode.isEmpty() ? QString::number(reply->error()) : errCode}};

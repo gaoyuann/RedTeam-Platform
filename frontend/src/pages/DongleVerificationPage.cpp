@@ -68,20 +68,6 @@ void DongleVerificationPage::buildUi() {
     layout->setContentsMargins(16, 14, 16, 18);
     layout->setSpacing(12);
 
-    auto *header = makePanel(content);
-    auto *headerLayout = new QVBoxLayout(header);
-    headerLayout->setContentsMargins(18, 16, 18, 16);
-    auto *title = new QLabel(QStringLiteral("系统管理 / 加密锁校验"), header);
-    QFont titleFont = title->font();
-    titleFont.setPointSize(17);
-    titleFont.setBold(true);
-    title->setFont(titleFont);
-    headerLayout->addWidget(title);
-    auto *hint = new QLabel(QStringLiteral("将加密锁插入运行客户端的电脑。注册并启用后，登录前和运行期间都会校验设备；拔出后将锁定界面，重新插入后自动恢复。"), header);
-    hint->setWordWrap(true);
-    headerLayout->addWidget(hint);
-    layout->addWidget(header);
-
     auto *policy = makePanel(content);
     auto *policyLayout = new QVBoxLayout(policy);
     policyLayout->setContentsMargins(16, 14, 16, 16);
@@ -95,6 +81,10 @@ void DongleVerificationPage::buildUi() {
     connect(m_enabledCheckBox, &QCheckBox::toggled, this, &DongleVerificationPage::saveEnabledState);
     form->addRow(QStringLiteral("校验开关"), m_enabledCheckBox);
     policyLayout->addLayout(form);
+    auto *hint = new QLabel(QStringLiteral("启用后需保持加密锁连接，拔出将锁定界面，重新插入后自动恢复。"), policy);
+    hint->setWordWrap(true);
+    hint->setStyleSheet(QStringLiteral("color:#526174; font-size:13px;"));
+    policyLayout->addWidget(hint);
     m_registeredLabel = new QLabel(policy);
     m_registeredLabel->setWordWrap(true);
     policyLayout->addWidget(m_registeredLabel);

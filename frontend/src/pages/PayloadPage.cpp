@@ -109,18 +109,18 @@ void PayloadPage::setupUI() {
 
   // Name + category — 层次同 Playbook 概要卡片：标题/元信息/弱化描述
   m_nameLabel = new QLabel;
-  m_nameLabel->setStyleSheet("font-size:16px; font-weight:700; color:#172033;");
+  m_nameLabel->setStyleSheet("font-size:18px; font-weight:700; color:#172033;");
   m_nameLabel->setWordWrap(true);
   detailLayout->addWidget(m_nameLabel);
 
   m_categoryLabel = new QLabel;
-  m_categoryLabel->setStyleSheet("font-size:12px; color:#7f8c8d;");
+  m_categoryLabel->setStyleSheet("font-size:14px; color:#7f8c8d;");
   m_categoryLabel->setVisible(false);
   detailLayout->addWidget(m_categoryLabel);
 
   m_descLabel = new QLabel;
   m_descLabel->setWordWrap(true);
-  m_descLabel->setStyleSheet("font-size:13px; color:#51606f;");
+  m_descLabel->setStyleSheet("font-size:15px; color:#51606f;");
   // 长文本 QLabel 的 minimumSizeHint 会把 splitter 右栏撑宽挤瘪左栏，取消水平约束
   m_descLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
   detailLayout->addWidget(m_descLabel);
@@ -139,7 +139,7 @@ void PayloadPage::setupUI() {
     e->setReadOnly(true);
     e->setFrameShape(QFrame::NoFrame);
     e->setStyleSheet(mono
-      ? "QTextEdit{background:transparent; border:none; font-family:monospace; font-size:12px;}"
+      ? "QTextEdit{background:transparent; border:none; font-family:monospace; font-size:14px;}"
       : "QTextEdit{background:transparent; border:none;}");
     l->addWidget(e);
     *editBox = e;
@@ -175,7 +175,7 @@ void PayloadPage::setupUI() {
   // Placeholder for when no payload is selected
   m_placeholderLabel = new QLabel(QStringLiteral("选择左侧载荷查看详情"));
   m_placeholderLabel->setAlignment(Qt::AlignCenter);
-  m_placeholderLabel->setStyleSheet("color: #888; font-size: 14px;");
+  m_placeholderLabel->setStyleSheet("color: #888; font-size: 16px;");
 
   m_detailStack = new QStackedWidget;
   m_detailStack->addWidget(m_placeholderLabel);
