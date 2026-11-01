@@ -201,9 +201,24 @@ static void showFindingSummary(QTreeWidgetItem *item, const QJsonObject &record,
   const auto match = record["payload_match"].toObject();
   const QMap<QString, QString> payloadLabels{{"linked", "已关联（待核对条件）"}, {"stale", "关联已失效"},
     {"candidate", "有匹配候选"}, {"none", "暂无匹配"}};
-  item->setText(3, payloadLabels.value(match["status"].toString(), QStringLiteral("待匹配")));
-  item->setToolTip(3, match["name"].toString() + "\n" + match["match_basis"].toString()
-    + QStringLiteral("\n匹配或关联不代表可执行；载荷版本、消费方式和条件须在准备测试时核对。"));
+  const auto code = record["payload_code"].toObject();
+  QString codeLabel = QStringLiteral("状态未提供");
+  if (code["schema_version"].toInt() == 1) {
+    const QMap<QString, QString> codeLabels{{"missing", "暂无代码"}, {"unavailable", "状态未提供"},
+      {"generating", "生成中"}, {"needs_information", "缺少生成条件"}, {"error", "生成失败，可重试"}, {"interrupted", "生成已中断"}};
+    codeLabel = codeLabels.value(code["state"].toString(), QStringLiteral("状态未提供"));
+    if (code["state"] == "available") {
+      QStringList sources;
+      if (code["scan_count"].toInt() > 0) sources << QStringLiteral("扫描 %1 份").arg(code["scan_count"].toInt());
+      if (code["generated_count"].toInt() > 0) sources << QStringLiteral("AI 生成 %1 份").arg(code["generated_count"].toInt());
+      if (!sources.isEmpty()) codeLabel = sources.join(QStringLiteral("、"));
+    }
+  }
+  item->setText(3, QStringLiteral("库：%1\n代码：%2")
+    .arg(payloadLabels.value(match["status"].toString(), QStringLiteral("待匹配")), codeLabel));
+  item->setForeground(3, QColor("#2563eb"));
+  item->setToolTip(3, item->text(3) + "\n" + match["name"].toString() + "\n" + match["match_basis"].toString()
+    + QStringLiteral("\n点击查看 / 生成此漏洞载荷。代码已生成不代表已绑定、执行或验证真实目标。\n匹配或关联不代表可执行；载荷版本、消费方式和条件须在准备测试时核对。"));
   // A single-scan response does not carry the task verification summary.
   if (!aggregate || !record.contains("verification")) {
     item->setText(6, QStringLiteral("状态未提供"));
@@ -695,11 +710,13 @@ void ScanPage::setStatusText(const QString &text) {
 
 void ScanPage::resizeResultColumns() {
   const int classificationWidth = m_resultTree->isColumnHidden(8) ? 0 : 166;
-  const int available = qMax(260, m_resultTree->viewport()->width() - 260 - classificationWidth - (m_sourceResultsView && !m_sourceRecordsMode ? 90 : 0));
+  const int payloadWidth = m_resultTree->isColumnHidden(3) ? 0 : 180;
+  const int available = qMax(260, m_resultTree->viewport()->width() - 260 - classificationWidth - payloadWidth);
   m_resultTree->setColumnWidth(0, 52);
   m_resultTree->setColumnWidth(4, 72);
   m_resultTree->setColumnWidth(6, 136);
   m_resultTree->setColumnWidth(8, 166);
+  m_resultTree->setColumnWidth(3, 180);
   m_resultTree->setColumnWidth(1, available * 3 / 5);
   m_resultTree->setColumnWidth(5, available - available * 3 / 5);
 }
@@ -743,7 +760,7 @@ void ScanPage::openRecordDetails(QTreeWidgetItem *item) {
   connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::close);
   const qint64 id = item->data(0, Qt::UserRole+1).toLongLong();
   if (!m_pipelineId.isEmpty() && item->data(0, Qt::UserRole+2).toString() == "vulnerability" && id > 0) {
-    auto *prepare = buttons->addButton(QStringLiteral("准备验证"), QDialogButtonBox::ActionRole);
+    auto *prepare = buttons->addButton(QStringLiteral("逐漏洞攻击测试"), QDialogButtonBox::ActionRole);
     prepare->setObjectName("prepareFindingVerification");
     const QString pipeline = m_pipelineId;
     const int scope = m_scopeRevision;
@@ -845,7 +862,7 @@ void ScanPage::setScanProgress(const QString &text, bool active, int finished, i
   if (m_scanProgress->property("progressColor").toString() != color) {
     m_scanProgress->setProperty("progressColor", color);
     m_scanProgress->setStyleSheet(QStringLiteral("QProgressBar { border:0;border-radius:6px;background:#e2e8f0; } QProgressBar::chunk { background:%1;border-radius:6px; }").arg(color));
-    m_progressState->setStyleSheet(QStringLiteral("color:%1;background:transparent;border:none;font-size:16px;font-weight:600;").arg(color));
+    m_progressState->setStyleSheet(QStringLiteral("color:%1;background:transparent;border:none;font-size:14px;font-weight:600;").arg(color));
   }
   const QString explanation = !detail.isEmpty() ? detail : failed
       ? QStringLiteral("请在检查详情中查看错误原因，读取失败时可点击刷新重试。") : warning && !active
@@ -1251,15 +1268,15 @@ void ScanPage::setupUI() {
   setStyleSheet(Theme::PageStyle + QStringLiteral(
       "QWidget#scanPage { background:#f3f6fb; }"
       "QFrame#scanTasksPanel, QFrame#scanDetailsPanel { background:#ffffff; border:1px solid #dbe3ef; border-radius:14px; }"
-      "QLabel#scanPanelTitle { color:#172033; font-size:17px; font-weight:700; }"
-      "QLabel#scanPanelHint { color:#64748b; font-size:16px; }"
+      "QLabel#scanPanelTitle { color:#172033; font-size:14px; font-weight:700; }"
+      "QLabel#scanPanelHint { color:#64748b; font-size:14px; }"
       "QTabWidget#scanDetailTabs::pane { border:none; background:#ffffff; padding:0; }"
       "QTableWidget, QTreeWidget { background:#ffffff; alternate-background-color:#f8fbff; border:1px solid #e2e8f0; border-radius:8px; }"
       "QTableWidget::item, QTreeWidget::item { padding:7px 6px; border:none; }"
       "QTableWidget::item:selected, QTreeWidget::item:selected { background:#dbeafe; color:#1e3a8a; }"
       "QHeaderView::section { background:#f1f5f9; color:#475569; border:none; border-bottom:1px solid #e2e8f0; padding:8px 6px; font-weight:600; }"
-      "QWidget#scanPage QPushButton { min-height:28px; padding:0 9px; font-size:17px; }"
-      "QWidget#scanPage QComboBox { min-height:28px; padding:0 7px; font-size:17px; }"
+      "QWidget#scanPage QPushButton { min-height:28px; padding:0 9px; font-size:13px; }"
+      "QWidget#scanPage QComboBox { min-height:28px; padding:0 7px; font-size:14px; }"
       "QTabWidget#scanWorkspaces::pane { border:none; background:transparent; }"
       "QSplitter::handle { background:transparent; }"
       "QSplitter::handle:hover { background:#dbeafe; }"));
@@ -1307,7 +1324,7 @@ void ScanPage::setupUI() {
     auto *label = new QLabel("端口扫描"); label->setStyleSheet(Theme::SectionStyle);
     headerH->addWidget(label);
     m_portScanCount = new QLabel;
-    m_portScanCount->setStyleSheet("color:#64748b; font-size:17px;");
+    m_portScanCount->setStyleSheet("color:#64748b; font-size:14px;");
     headerH->addWidget(m_portScanCount);
     headerH->addStretch();
     layout->addLayout(headerH);
@@ -1372,7 +1389,7 @@ void ScanPage::setupUI() {
     auto *label = new QLabel("系统漏洞扫描"); label->setStyleSheet(Theme::SectionStyle);
     headerH->addWidget(label);
     m_vulnScanCount = new QLabel;
-    m_vulnScanCount->setStyleSheet("color:#64748b; font-size:17px;");
+    m_vulnScanCount->setStyleSheet("color:#64748b; font-size:14px;");
     headerH->addWidget(m_vulnScanCount);
     headerH->addStretch();
     layout->addLayout(headerH);
@@ -1439,7 +1456,7 @@ void ScanPage::setupUI() {
     auto *label = new QLabel("网站漏洞扫描"); label->setStyleSheet(Theme::SectionStyle);
     headerH->addWidget(label);
     m_webScanCount = new QLabel;
-    m_webScanCount->setStyleSheet("color:#64748b; font-size:17px;");
+    m_webScanCount->setStyleSheet("color:#64748b; font-size:14px;");
     headerH->addWidget(m_webScanCount);
     headerH->addStretch();
     layout->addLayout(headerH);
@@ -1528,7 +1545,7 @@ void ScanPage::setupUI() {
     auto *label = new QLabel("弱口令扫描"); label->setStyleSheet(Theme::SectionStyle);
     headerH->addWidget(label);
     m_bruteForceCount = new QLabel;
-    m_bruteForceCount->setStyleSheet("color:#64748b; font-size:17px;");
+    m_bruteForceCount->setStyleSheet("color:#64748b; font-size:14px;");
     headerH->addWidget(m_bruteForceCount);
     headerH->addStretch();
     layout->addLayout(headerH);
@@ -1621,7 +1638,7 @@ void ScanPage::setupUI() {
     h->addWidget(m_sourceAdaptiveCheck, 5, 1, 1, 2);
     auto *hint = new QLabel("可提交源码地址、选择远端源码目录或指定程序运行入口；源码读取由远端 CScan 完成。也可进入上方“源码扫描”创建关联验证任务的源码审计。");
     hint->setWordWrap(true);
-    hint->setStyleSheet("color:#64748b; font-size:16px;");
+    hint->setStyleSheet("color:#64748b; font-size:14px;");
     h->addWidget(hint, 6, 0, 1, 3);
     auto *btn = new QPushButton("创建并开始测试");
     btn->setProperty("primary", true);
@@ -1633,7 +1650,7 @@ void ScanPage::setupUI() {
     auto *label = new QLabel("程序漏洞测试"); label->setStyleSheet(Theme::SectionStyle);
     headerH->addWidget(label);
     m_sourceScanCount = new QLabel;
-    m_sourceScanCount->setStyleSheet("color:#64748b; font-size:17px;");
+    m_sourceScanCount->setStyleSheet("color:#64748b; font-size:14px;");
     headerH->addWidget(m_sourceScanCount);
     headerH->addStretch();
     layout->addLayout(headerH);
@@ -1702,7 +1719,7 @@ void ScanPage::setupUI() {
     auto *submissionMessage = new QLabel(formDialog);
     submissionMessage->setObjectName("scanSubmissionMessage");
     submissionMessage->setTextFormat(Qt::PlainText); submissionMessage->setWordWrap(true);
-    submissionMessage->setStyleSheet("font-size:16px;color:#ad6128;padding:8px 0;");
+    submissionMessage->setStyleSheet("font-size:14px;color:#ad6128;padding:8px 0;");
     submissionMessage->hide(); dialogLayout->addWidget(submissionMessage);
     auto *cancel = new QDialogButtonBox(QDialogButtonBox::Cancel, formDialog);
     UiUtil::styleDialogButtons(cancel);
@@ -1830,16 +1847,16 @@ void ScanPage::setupUI() {
   m_progressText->setObjectName("scanProgressText");
   m_progressText->setTextFormat(Qt::PlainText);
   m_progressText->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-  m_progressText->setStyleSheet("color:#334155;background:transparent;border:none;font-size:17px;");
+  m_progressText->setStyleSheet("color:#334155;background:transparent;border:none;font-size:14px;");
   progressLayout->addWidget(m_progressText);
   m_progressText->hide();
   m_progressValue = new QLabel(QStringLiteral("--%"));
   m_progressValue->setObjectName("scanProgressValue");
-  m_progressValue->setStyleSheet("color:#334155;background:transparent;border:none;font-size:18px;font-weight:600;");
+  m_progressValue->setStyleSheet("color:#334155;background:transparent;border:none;font-size:14px;font-weight:600;");
 
   m_progressState = new QLabel(QStringLiteral("● 待开始"));
   m_progressState->setObjectName("scanProgressState");
-  m_progressState->setStyleSheet("color:#64748b;background:transparent;border:none;font-size:16px;font-weight:600;");
+  m_progressState->setStyleSheet("color:#64748b;background:transparent;border:none;font-size:14px;font-weight:600;");
 
   m_scanProgress = new QProgressBar;
   m_scanProgress->setObjectName("scanProgressBar");
@@ -1939,16 +1956,19 @@ void ScanPage::setupUI() {
   m_resultTree->installEventFilter(this);
   connect(m_resultTree, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem *item, int column) {
     if (column == 1) openRecordDetails(item);
+    if (column == 3 && item->parent() && item->data(0, Qt::UserRole+2).toString() == "vulnerability")
+      openFindingPayload(item->data(0, Qt::UserRole+1).toLongLong());
     if (column == 8) showClassificationDetails(item);
   });
   UiUtil::EmptyHint::attach(m_resultTree, QStringLiteral("扫描完成后在此展示结果"));
   m_resultTree->setHeaderLabels({"选择 / 编号", "漏洞名称 / 记录内容", "来源工具", "载荷情况",
     "严重性", "目标与位置", "测试状态", "验证结论", "AI 场景分类"});
   // Keep identity and independent status/result visible first; location and source remain horizontally reachable.
-  const QList<int> visualOrder{0, 4, 1, 5, 8, 6, 7, 3, 2};
+  const QList<int> visualOrder{0, 4, 1, 3, 5, 8, 6, 7, 2};
   for (int visual = 0; visual < visualOrder.size(); ++visual)
     m_resultTree->header()->moveSection(m_resultTree->header()->visualIndex(visualOrder[visual]), visual);
   m_resultTree->headerItem()->setToolTip(0, "稳定发现 ID；扫描结果表自增编号，用于跨筛选、分页和验证追溯。");
+  m_resultTree->headerItem()->setToolTip(3, "库中匹配与本漏洞代码分别展示；点击漏洞的载荷状态查看或生成代码。");
   m_resultTree->headerItem()->setToolTip(7, "来自系统验证目标与证据；不将工具成功或人工意见替代为自动结论。");
   m_resultTree->headerItem()->setToolTip(8, "按需求中的五类攻击场景进行候选归类；点击查看依据和待补条件，不代表攻击成功。");
   m_resultTree->setAlternatingRowColors(true);
@@ -1960,7 +1980,7 @@ void ScanPage::setupUI() {
   auto *selectionBar = listHeader;
   m_listTitle = new QLabel(QStringLiteral("漏洞候选"));
   m_listTitle->setObjectName("scanListTitle");
-  m_listTitle->setStyleSheet("color:#334155;font-size:17px;font-weight:600;background:transparent;border:none;");
+  m_listTitle->setStyleSheet("color:#334155;font-size:14px;font-weight:600;background:transparent;border:none;");
   m_listTitle->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
   listHeader->addWidget(m_listTitle, 1);
   m_selectAllFindings = new FindingSelectAllCheckBox("全选");
@@ -1972,16 +1992,16 @@ void ScanPage::setupUI() {
   m_selectAllFindings->setToolTip("仅选择当前筛选下已加载的漏洞，包含折叠分组；加载更多后可再次全选。");
   m_findingSelectionCount = new QLabel;
   m_findingSelectionCount->setObjectName("findingSelectionCount");
-  m_findingSelectionCount->setStyleSheet("QLabel#findingSelectionCount { color:#64748b; font-size:16px; }");
+  m_findingSelectionCount->setStyleSheet("QLabel#findingSelectionCount { color:#64748b; font-size:14px; }");
   m_openCheckedFindings = new QPushButton("打开勾选");
   m_openCheckedFindings->setObjectName("openCheckedFindings");
   m_openCheckedFindings->setToolTip("只打开当前列表勾选的漏洞；打开窗口不会启动验证。");
-  auto *payloadButton = new QPushButton(QStringLiteral("载荷管理"));
+  auto *payloadButton = new QPushButton(QStringLiteral("查看 / 生成载荷"));
   payloadButton->setObjectName("scanPayloadWorkspace");
   connect(payloadButton, &QPushButton::clicked, this, &ScanPage::openPayloadWorkspace);
-  payloadButton->setToolTip(QStringLiteral("载荷生成与管理"));
-  m_prepareFinding = new QPushButton(QStringLiteral("准备验证"));
-  m_prepareFinding->setToolTip(QStringLiteral("对当前漏洞编制预案 / 创建验证任务；打开窗口不会执行测试。"));
+  payloadButton->setToolTip(QStringLiteral("打开选中漏洞的载荷代码；未选择漏洞时可从当前任务中选择。"));
+  m_prepareFinding = new QPushButton(QStringLiteral("逐漏洞攻击测试"));
+  m_prepareFinding->setToolTip(QStringLiteral("带入当前发现和目标，选择已有方案或按需生成；打开窗口不会执行测试。"));
   m_prepareFinding->setObjectName("prepareSelectedFinding");
   m_prepareFinding->setEnabled(false);
   connect(m_prepareFinding, &QPushButton::clicked, this, &ScanPage::prepareCurrentFinding);
@@ -2063,6 +2083,8 @@ void ScanPage::setupUI() {
     // Copy the most useful column (data column = 1 for child items, 0 for group items)
     QString text = item->text(1).isEmpty() ? item->text(0) : item->text(1);
     menu.addAction("复制内容", [text]() { QApplication::clipboard()->setText(text); });
+    if (!m_pipelineId.isEmpty() && item->parent() && item->data(0, Qt::UserRole+2).toString() == "vulnerability")
+      menu.addAction("查看 / 生成此漏洞载荷代码", [this, item]() { openFindingPayload(item->data(0, Qt::UserRole+1).toLongLong()); });
     if (m_allScanResults && item->parent() && item->data(0, Qt::UserRole+2).toString() == "vulnerability")
       menu.addAction("查看 / 关联匹配载荷", [this, item]() { showPayloadMatches(item); });
     if (!m_pipelineId.isEmpty() && item->data(0,Qt::UserRole+1).toLongLong()>0
@@ -2090,7 +2112,7 @@ void ScanPage::setupUI() {
     const QStringList attackable = {"vulnerability", "web_vuln", "sql_injection", "credential"};
     if (m_pipelineId.isEmpty() && !m_allScanResults && !m_currentTaskTarget.isEmpty() && attackable.contains(resultType)) {
       menu.addSeparator();
-      menu.addAction("编制预案 / 创建验证任务", [this, item]() {
+      menu.addAction("逐漏洞攻击测试", [this, item]() {
         m_resultTree->setCurrentItem(item);
         prepareCurrentFinding();
       });
@@ -2226,7 +2248,7 @@ void ScanPage::setupUI() {
   m_scanIssueSummary = new QLabel(this);
   m_scanIssueSummary->setObjectName("scanIssueSummary");
   m_scanIssueSummary->setTextFormat(Qt::PlainText); m_scanIssueSummary->setWordWrap(true);
-  m_scanIssueSummary->setStyleSheet("color:#92400e;background:#fffbeb;padding:6px 10px;font-size:17px;");
+  m_scanIssueSummary->setStyleSheet("color:#92400e;background:#fffbeb;padding:6px 10px;font-size:14px;");
   m_scanIssueSummary->hide(); mainLayout->insertWidget(1, m_scanIssueSummary);
   connect(scanWorkspaces, &QTabWidget::currentChanged, networkToolbar, [networkToolbar](int index) {
     networkToolbar->setVisible(index == 0);
@@ -2578,20 +2600,19 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
   m_resultTree->setRootIsDecorated(!candidatesOnly);
   m_resultTree->setHeaderLabels({"选择", "漏洞名称 / 记录内容", "来源工具", "载荷情况", "严重性", "目标 / 位置", "验证状态", "验证结论", "AI 场景分类"});
   m_resultTree->setColumnHidden(8, !m_allScanResults);
-  for (int column : {2, 3, 7}) m_resultTree->setColumnHidden(column, true);
+  for (int column : {2, 7}) m_resultTree->setColumnHidden(column, true);
+  m_resultTree->setColumnHidden(3, m_pipelineId.isEmpty());
   if (sourceTable) {
-    m_resultTree->setHeaderLabels({"选择", "漏洞名称", "来源工具", "CWE", "严重性", "源码文件 / 行号", "验证状态", "验证结论", "AI 场景分类"});
-    m_resultTree->setColumnHidden(3, false);
+    m_resultTree->setHeaderLabels({"选择", "漏洞名称 / CWE", "来源工具", "载荷情况", "严重性", "源码文件 / 行号", "验证状态", "验证结论", "AI 场景分类"});
     m_resultTree->setColumnHidden(7, false);
-    m_resultTree->setColumnWidth(3, 90);
   }
   for (QTreeWidgetItemIterator it(m_resultTree); *it; ++it) {
     if (!(*it)->parent()) continue;
     if (sourceTable) {
       const auto data=QJsonDocument::fromJson((*it)->toolTip(1).toUtf8()).object();
-      (*it)->setText(1,data["title"].toString((*it)->text(1)));
-      (*it)->setText(3,data["cwe"].toString(QStringLiteral("—")));
-      (*it)->setToolTip(3,QStringLiteral("漏洞类别"));
+      QString title = data["title"].toString((*it)->text(1));
+      if (!data["cwe"].toString().isEmpty() && !title.contains(data["cwe"].toString())) title += " · " + data["cwe"].toString();
+      (*it)->setText(1,title);
       (*it)->setText(5,QStringLiteral("%1:%2").arg(data["file"].toString()).arg(data["start_line"].toInt()));
     }
     (*it)->setToolTip(0, QStringLiteral("发现编号：") + (*it)->text(0));
@@ -4085,6 +4106,7 @@ void ScanPage::openFindingVerification(const QList<qint64> &ids) {
     return;
   }
   auto *dialog=new FindingVerificationDialog(m_api,m_pipelineId,ids,this);
+  watchPayloadChanges(dialog);
   dialog->setObjectName("scanAuxFindingVerification");
   const QString pipeline=m_pipelineId;
   connect(dialog, &FindingVerificationDialog::assessmentRequested, this, [this,pipeline](const QString &id) {
@@ -4170,7 +4192,40 @@ void ScanPage::selectScanType(const QString &type)
 
 void ScanPage::openPayloadWorkspace()
 {
+  auto *item = m_resultTree->currentItem();
+  if (!m_pipelineId.isEmpty() && item && item->parent() && item->data(0, Qt::UserRole+2).toString() == "vulnerability") {
+    openFindingPayload(item->data(0, Qt::UserRole+1).toLongLong());
+    return;
+  }
   openFindingPicker(true);
+}
+
+void ScanPage::openFindingPayload(qint64 findingId)
+{
+  if (m_pipelineId.isEmpty() || findingId <= 0 || !m_scanResultsFresh || m_scanPageBusy) return;
+  auto *dialog = new FindingVerificationDialog(m_api, m_pipelineId, {findingId}, this);
+  watchPayloadChanges(dialog);
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  dialog->setObjectName("scanAuxPayloadVerification");
+  const QString pipeline = m_pipelineId;
+  connect(dialog, &FindingVerificationDialog::assessmentRequested, this, [this,pipeline](const QString &id) {
+    if (pipeline == m_pipelineId && id == pipeline) emit assessmentRequested(id);
+  });
+  connect(dialog, &QDialog::finished, this, [this,pipeline]() {
+    if (pipeline != m_pipelineId) return;
+    onRefreshTasks(); emit findingVerificationChanged(pipeline);
+  });
+  dialog->showPayloadWorkspace();
+  dialog->show();
+}
+
+void ScanPage::watchPayloadChanges(FindingVerificationDialog *dialog)
+{
+  connect(dialog, &FindingVerificationDialog::payloadsChanged, this, [this](const QString &pipeline) {
+    if (pipeline != m_pipelineId) return;
+    if (m_allScanResults) onRefreshTasks();
+    else if (!m_selectedTaskId.isEmpty()) loadResults(m_selectedTaskId);
+  });
 }
 
 void ScanPage::openVerificationWorkspace()
@@ -4183,11 +4238,11 @@ void ScanPage::openFindingPicker(bool payload)
   auto *picker = new QDialog(this);
   picker->setObjectName("scanAuxPayloadPicker");
   picker->setAttribute(Qt::WA_DeleteOnClose);
-  picker->setWindowTitle(payload ? QStringLiteral("载荷生成与管理 · 选择任务漏洞") : QStringLiteral("编制预案 · 选择任务漏洞"));
+  picker->setWindowTitle(payload ? QStringLiteral("载荷生成与管理 · 选择任务漏洞") : QStringLiteral("逐漏洞攻击测试 · 选择任务漏洞"));
   picker->resize(780, 420);
   auto *layout = new QVBoxLayout(picker);
   auto *hint = new QLabel;
-  hint->setText(QStringLiteral("选择漏洞后编制预案、准备参数与载荷；尚无测试记录时会建立记录。执行需单独确认。"));
+  hint->setText(QStringLiteral("选择当前任务漏洞，沿用发现中的目标；可选已有方案，AI 生成与载荷准备按需使用，执行需确认。"));
   hint->setTextFormat(Qt::PlainText);
   hint->setWordWrap(true); layout->addWidget(hint);
   auto *list = new QTableWidget(0, 3, picker);
@@ -4200,7 +4255,7 @@ void ScanPage::openFindingPicker(bool payload)
   list->setTextElideMode(Qt::ElideRight);
   layout->addWidget(list, 1);
   auto *buttons = new QDialogButtonBox(QDialogButtonBox::Open | QDialogButtonBox::Close, picker);
-  buttons->button(QDialogButtonBox::Open)->setText(payload ? QStringLiteral("打开载荷工作区") : QStringLiteral("编制漏洞预案"));
+  buttons->button(QDialogButtonBox::Open)->setText(payload ? QStringLiteral("打开载荷工作区") : QStringLiteral("打开攻击测试"));
   buttons->button(QDialogButtonBox::Open)->setEnabled(false);
   auto *more = new QPushButton(QStringLiteral("读取任务漏洞"), picker);
   layout->addWidget(more, 0, Qt::AlignLeft);
@@ -4209,6 +4264,7 @@ void ScanPage::openFindingPicker(bool payload)
     if (pipeline.isEmpty() || pipeline != m_pipelineId || scope != m_scopeRevision || list->currentRow() < 0) { picker->close(); return; }
     const qint64 id = list->item(list->currentRow(), 0)->text().toLongLong();
     auto *dialog = new FindingVerificationDialog(m_api, pipeline, {id}, this);
+    watchPayloadChanges(dialog);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setObjectName("scanAuxPayloadVerification");
     connect(dialog, &FindingVerificationDialog::assessmentRequested, this, [this,pipeline](const QString &id) {
@@ -4298,8 +4354,8 @@ void ScanPage::enableRibbonWorkspace()
     if (label->property("duplicateFeatureTitle").toBool()
         || label->text() == QStringLiteral("按类型查看任务与扫描结果")) label->hide();
   }
-  m_compactStatus->setStyleSheet("font-size:16px;color:#b87727;");
-  m_listTitle->setStyleSheet("font-size:17px;font-weight:600;color:#2c4668;padding:2px 0;");
+  m_compactStatus->setStyleSheet("font-size:14px;color:#b87727;");
+  m_listTitle->setStyleSheet("font-size:14px;font-weight:600;color:#2c4668;padding:2px 0;");
   setProperty("ribbonWorkspace", true);
 }
 

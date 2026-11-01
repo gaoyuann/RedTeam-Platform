@@ -26,6 +26,7 @@ public:
   void useSourcePlaybook(const QString &playbookId);
   void openFindingPlans(const QList<qint64> &findingIds);
   void showGlobalPlan();
+  void chooseExistingPlan();
   void showFindingPlanList();
 
 signals:
@@ -43,6 +44,7 @@ private:
   void loadSources(int requestVersion);
   void render();
   void updateControls();
+  void applySelectionState(const QJsonObject &response);
   void markDirty();
   void editStep();
   void showStep();
@@ -71,6 +73,8 @@ private:
   bool m_busy = false;
   bool m_dirty = false;
   bool m_rendering = false;
+  bool m_canContinueFailedScan = false;
+  QString m_selectionReason;
   QString m_pendingSourcePlaybookId;
   QLabel *m_status;
   QLabel *m_reviewSummary;

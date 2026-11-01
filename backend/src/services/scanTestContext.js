@@ -1,3 +1,4 @@
+import { isTaskDeleted, visibleTasksSql } from './taskDeletion.js';
 import { currentActor } from '../middleware/recordAccess.js';
 import { hasScanIntegrity } from './scanResultStore.js';
 import { insertNumberedTask } from './taskIdentity.js';
@@ -16,8 +17,10 @@ export function continueScanTest(db, actor, scanId) {
     const scan = db.prepare('SELECT * FROM scan_tasks WHERE scan_task_id=?').get(scanId);
     if (!scan) fail(404, '扫描不存在');
     if (scan.created_by !== actor.sub && actor.role !== 'admin') fail(403, '没有权限访问此扫描');
+    if (isTaskDeleted(db, scan.pipeline_id)) fail(409, '原测试任务已删除，请新建任务');
     const linked = db.prepare(`SELECT * FROM pipelines WHERE pipeline_id=? OR
       instr(',' || replace(coalesce(scan_task_id,''),' ','') || ',', ',' || ? || ',')>0 ORDER BY id`).all(scan.pipeline_id || '', scanId);
+    if (linked.some(task => isTaskDeleted(db,task.pipeline_id))) fail(409, '原测试任务已删除，请新建任务');
     if (linked.length) {
       if (linked.length !== 1 || linked[0].created_by !== scan.created_by
           || !pipelineScans(db, linked[0]).some(row => row.scan_task_id === scanId))
@@ -33,7 +36,7 @@ export function continueScanTest(db, actor, scanId) {
       fail(409, '扫描工具停止情况未确认，请核对原扫描后再继续');
     if (!['port_scan', 'vuln_scan', 'web_scan', 'web_scan_nikto', 'web_scan_sqlmap', 'web_parameter_scan', 'api_fuzz', 'auth_audit', 'brute_force'].includes(scan.scan_type))
       fail(400, '此扫描类型请使用原专项测试流程');
-    if (db.prepare(`SELECT count(*) n FROM pipelines WHERE created_by=? AND status IN ('created','running')`).get(actor.sub).n >= 20)
+    if (db.prepare(`SELECT count(*) n FROM pipelines WHERE created_by=? AND status IN ('created','running') AND ${visibleTasksSql(db)}`).get(actor.sub).n >= 20)
       fail(429, '活跃测试任务数量已达上限(20)');
     const config = { workflow_mode: 'staged', task_mode: 'assessment', task_name: `扫描后续测试 · ${scan.target}`,
       auto_execute: false, require_approval: true, source_scan_task_id: scanId,

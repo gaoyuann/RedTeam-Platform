@@ -52,6 +52,8 @@ private:
     void openRibbonFeature(const QString &id);
     void syncRibbonForPage(int page);
     void showTaskCenter();
+    void showHome();
+    void openHomeTask(const QString &pipelineId);
     void openTaskStage(int stage);
     void updateTaskContext();
     void updateFeaturePresentation();

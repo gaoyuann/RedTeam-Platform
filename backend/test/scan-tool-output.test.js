@@ -1,10 +1,10 @@
 import test,{mock} from 'node:test';
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
-let current;
+let current,spawnReady;
 await mock.module('child_process',{namedExports:{execFile:()=>{throw new Error('unexpected external command');},spawn:()=>{
  const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();
- child.kill=()=>{queueMicrotask(()=>child.emit('close',-1));return true;};current=child;return child;
+ child.kill=()=>{queueMicrotask(()=>child.emit('close',-1));return true;};current=child;spawnReady?.(child);return child;
 }}});
 await mock.module('../src/tools/containerEngine.js',{namedExports:{getEngine:async()=> 'host'}});
 const {runTool}=await import('../src/tools/toolRunner.js');
@@ -12,9 +12,12 @@ const {runTool}=await import('../src/tools/toolRunner.js');
 test('runner passes full chunks before evidence cap, preserving nonzero/timeout/abort output',async t=>{
  for(const mode of ['nonzero','timeout','abort','limit']) await t.test(mode,async()=>{
   const controller=new AbortController();const chunks=[];
+  const spawned=new Promise(resolve=>{spawnReady=resolve;});
   const promise=runTool('nmap',[],{timeout:mode==='timeout'?10:1000,maxOutputKB:1,signal:controller.signal,
     onOutput:(data,channel)=>chunks.push([data.toString(),channel])});
-  await new Promise(r=>setImmediate(r));
+  // Wait for the actual mock spawn in a microtask, so fixture output precedes
+  // the 10ms timeout even when the test runner shares CPU with a Qt build.
+  await spawned;
   const output='recognized fixture output\n'+(mode==='limit'?'x'.repeat(1500):'');
   current.stdout.emit('data',Buffer.from(output));
   if(mode==='abort') controller.abort();

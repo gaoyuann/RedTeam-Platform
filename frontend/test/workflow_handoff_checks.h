@@ -90,4 +90,49 @@ static void runWorkflowHandoffChecks(const std::function<void(bool, const char *
     verify(results->m_state->text().contains("已有 1 次逐漏洞测试记录") && results->m_state->text().contains("可生成"),
       "assessment recognizes child verification results and report readiness without a global run");
   }
+  {
+    contextFailure = false;
+    FlowPage flow(&api,"admin","fixture-user"); flow.setRibbonNavigation(true); flow.resize(1366,850); flow.show();
+    const int before = server.requests.value("POST /api/pipelines/task-a/verifications");
+    flow.openFindingAttackWorkspace("task-a",{123}); flow.openTaskAnalysis("task-b");
+    verify(awaitCondition([&]{return flow.taskContextReady() && flow.selectedTaskId()=="task-b";}),
+      "direct finding attack waits for the selected task context");
+    verify(server.requests.value("POST /api/pipelines/task-a/verifications")==before,
+      "abandoned attack handoff cannot create a verification for the previous task");
+    flow.openFindingAttackWorkspace("task-a",{123});
+    QPointer<FindingVerificationDialog> attack;
+    verify(awaitCondition([&]{attack=flow.findChild<FindingVerificationDialog*>("taskFindingVerification");
+        return attack && attack->m_target->text()=="http://task-a.invalid/item";}),
+      "direct finding attack inherits the concrete scan target");
+    verify(flow.workspaceStage()==5 && flow.m_planTab->m_planViews->currentWidget()!=flow.m_planTab->m_findingPlans,
+      "finding attack opens in the attack module without visiting the per-finding plan list");
+    verify(attack->m_sources->isVisible() && attack->m_useSource->isVisible()
+        && !attack->m_sourceChooser->isChecked(),
+      "existing finding schemes remain visible without expanding advanced options or generating a plan");
+    flow.m_execTab->selectAttackCategory(1);
+    flow.openFindingAttackWorkspace("task-a",{123});
+    verify(flow.m_execTab->attackCategory()==0, "direct finding attack clears unrelated scenario filters");
+    verify(flow.findChildren<FindingVerificationDialog*>("taskFindingVerification").size()==1
+        && server.requests.value("POST /api/pipelines/task-a/verifications")==before+1,
+      "repeated attack clicks preserve one verification editor and its draft");
+    auto *chooseExisting = flow.m_execTab->findChild<QPushButton *>("executionChoosePlaybook");
+    auto *chooseFinding = flow.m_execTab->findChild<QPushButton *>("executionFindingAttack");
+    verify(chooseExisting && chooseFinding && chooseExisting->isVisible() && chooseFinding->isVisible(),
+      "current-task attack module exposes existing playbooks and per-finding attacks side by side");
+    const auto folder = qEnvironmentVariable("REDTEAM_HANDOFF_SCREENSHOT_DIR");
+    if (!folder.isEmpty()) {
+      QDir().mkpath(folder);
+      verify(flow.grab().save(folder + "/attack-options.png"), "both task attack choices are captured");
+      verify(attack->grab().save(folder + "/finding-attack.png"), "direct finding attack editor is captured");
+    }
+    for (auto it=server.requests.cbegin();it!=server.requests.cend();++it)
+      verify(!it.key().startsWith("POST ") || (!it.key().endsWith("/generate") && !it.key().endsWith("/execute")
+          && !it.key().endsWith("/confirm") && !it.key().endsWith("/plan")),
+        "opening either attack choice never generates a plan or starts execution");
+    flow.openTaskAnalysis("task-b");
+    verify(awaitCondition([&]{return flow.taskContextReady() && flow.selectedTaskId()=="task-b";}),
+      "switching tasks invalidates the direct attack editor context");
+    verify(!attack || !attack->isVisible(), "previous task attack editor closes on an explicit task switch");
+  }
+
 }

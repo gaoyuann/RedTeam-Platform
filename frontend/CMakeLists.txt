@@ -74,6 +74,7 @@ set(HEADERS
     src/AppStyle.h
     src/Theme.h
     src/UiTypography.h
+    src/UiDisplayScaling.h
     src/widgets/WorkbenchTabs.h
     src/widgets/MetricCard.h
     src/widgets/ScanResultOverview.h
@@ -192,11 +193,21 @@ if(BUILD_UI_CHECKS)
   foreach(UI_SCALE IN ITEMS 1 1.25 1.5)
     add_test(NAME ui-context-${UI_SCALE} COMMAND RedTeam-Platform-Batch16Checks)
     set_tests_properties(ui-context-${UI_SCALE} PROPERTIES
-      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${UI_SCALE}"
-      # Aggregate suite: 500+ assertions; per-scenario bounded waits stay unchanged.
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${UI_SCALE};REDTEAM_CONTEXT_SEGMENT=details"
+      TIMEOUT 120
+    )
+    add_test(NAME ui-context-${UI_SCALE}-workflow COMMAND RedTeam-Platform-Batch16Checks)
+    set_tests_properties(ui-context-${UI_SCALE}-workflow PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${UI_SCALE};REDTEAM_CONTEXT_SEGMENT=workflow"
+      # Keep every assertion and timeout; bound the expanded suite in two groups.
       TIMEOUT 120
     )
   endforeach()
+  add_test(NAME ui-task-journey COMMAND RedTeam-Platform-Batch16Checks)
+  set_tests_properties(ui-task-journey PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;REDTEAM_TASK_JOURNEY_ONLY=1"
+    TIMEOUT 30
+  )
 endif()
 
 if(BUILD_UI_CHECKS)
@@ -270,4 +281,13 @@ if(BUILD_UI_CHECKS)
   target_link_libraries(PentagiSourceHostChecks PRIVATE Qt5::Widgets Qt5::Network Qt5::Test)
   add_test(NAME pentagi-source-host COMMAND PentagiSourceHostChecks)
   set_tests_properties(pentagi-source-host PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+endif()
+
+if(BUILD_UI_CHECKS)
+  add_executable(RedTeam-LoginChecks src/ApiClient.cpp src/LoginDialog.cpp
+    src/LocalLoginStore.h test/login_checks.cpp)
+  target_include_directories(RedTeam-LoginChecks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(RedTeam-LoginChecks Qt5::Widgets Qt5::Network Qt5::Test)
+  add_test(NAME ui-login COMMAND RedTeam-LoginChecks)
+  set_tests_properties(ui-login PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 endif()

@@ -12,8 +12,18 @@ static void runScanPresentationChecks(const std::function<void(bool, const char 
   QString state = "RUNNING";
   int delay = 0;
   QJsonObject standaloneTask;
-  server.handler = [&](const QString &, const QString &path) -> MockReply {
+  server.handler = [&](const QString &method, const QString &path) -> MockReply {
     const QUrl url(path); const QUrlQuery query(url);
+    if (url.path() == "/api/pipelines/stable/verifications" && method == "POST") {
+      const auto input=QJsonDocument::fromJson(server.requestBodies[method+" "+path]).object();
+      return {success(QJsonObject{{"id","payload-stable"},{"finding_id",input["finding_id"]},{"state","needs_conditions"}})};
+    }
+    if (url.path() == "/api/pipelines/stable/verifications/payload-stable")
+      return {success(QJsonObject{{"id","payload-stable"},{"finding_id",1},{"revision",0},{"eligible",true},
+        {"finding",QJsonObject{{"result_data","{\"title\":\"Cookie fixture\"}"}}},
+        {"current_payload",QJsonObject{{"state","available"},{"items",QJsonArray{QJsonObject{{"id","generated:code:repro.py"},
+          {"name","repro.py"},{"origin","generated"},{"code","print('fixture')"}}}}}},
+        {"plans",QJsonArray()},{"attempts",QJsonArray()},{"readiness",QJsonObject{{"ready",false}}}})};
     if (url.path() == "/api/pipelines/stable") {
       auto task = taskRecord("stable"); task["run_id"] = "";
       task["target"] = "fixture.invalid";
@@ -36,7 +46,9 @@ static void runScanPresentationChecks(const std::function<void(bool, const char 
         {"url", "https://fixture.invalid/login"}};
       rows.append(QJsonObject{{"id", i + 1}, {"scan_task_id", "scan-stable"}, {"result_type", "vulnerability"},
         {"category", "vulnerability"}, {"severity", "high"}, {"result_data",
-          QString::fromUtf8(QJsonDocument(evidence).toJson(QJsonDocument::Compact))}});
+          QString::fromUtf8(QJsonDocument(evidence).toJson(QJsonDocument::Compact))},
+        {"payload_match",QJsonObject{{"status","none"}}},
+        {"payload_code",i==0 ? QJsonValue(QJsonObject{{"schema_version",1},{"state","available"},{"scan_count",0},{"generated_count",1}}) : QJsonValue::Null}});
     }
     QJsonArray sources{QJsonObject{{"scan_task_id", "scan-stable"}, {"scan_type", otherScanType ? "web_scan" : "vuln_scan"},
         {"target", "fixture.invalid"}, {"status", state},
@@ -61,6 +73,39 @@ static void runScanPresentationChecks(const std::function<void(bool, const char 
   const QString capture = qEnvironmentVariable("REDTEAM_SCAN_SCREENSHOT_DIR");
   if (!capture.isEmpty()) QDir().mkpath(capture);
   auto *tree = page.m_resultTree;
+  verify(tree->font().pixelSize() >= 14, "scan findings retain a readable body font");
+  auto *payloadRow=tree->topLevelItem(0)->child(0);
+  verify(!tree->isColumnHidden(3) && payloadRow->text(3).contains(QStringLiteral("暂无匹配"))
+      && payloadRow->text(3).contains(QStringLiteral("AI 生成 1 份")),
+    "saved finding code remains visible even when the payload catalog has no match");
+  verify(tree->topLevelItem(0)->child(1)->text(3).contains(QStringLiteral("状态未提供")),
+    "older responses never claim there is no generated code");
+  tree->setCurrentItem(payloadRow);
+  emit tree->itemClicked(payloadRow,3);
+  auto *payloadDialog=page.findChild<FindingVerificationDialog*>("scanAuxPayloadVerification");
+  verify(payloadDialog && awaitCondition([&]{return payloadDialog->currentId()=="payload-stable" && !payloadDialog->m_loading;}),
+    "clicking payload status loads the selected finding directly");
+  verify(payloadDialog->m_tabs->currentIndex()==1
+      && payloadDialog->findChild<QPlainTextEdit*>("findingVerificationSource")->toPlainText()=="print('fixture')",
+    "the direct entry displays associated code without a second finding picker");
+  verify(server.requestBodies["POST /api/pipelines/stable/verifications"].contains("1")
+      && server.requests["POST /api/pipelines/stable/verifications/payload-stable/verification-code"]==0
+      && server.requests["POST /api/pipelines/stable/verifications/payload-stable/start"]==0,
+    "viewing a payload neither generates code nor executes a test");
+  payloadDialog->close();
+  verify(awaitCondition([&]{return !page.m_scanPageBusy;}),"closing the payload workspace refreshes the task's summaries");
+  page.m_pollTimer->stop();
+  page.openRecordDetails(tree->topLevelItem(0)->child(0));
+  auto *details = page.findChild<QDialog *>("scanAuxRecord");
+  auto *evidence = details ? details->findChild<QPlainTextEdit *>() : nullptr;
+  verify(evidence && evidence->font().pixelSize() >= 14 && evidence->isReadOnly(),
+    "finding evidence dialog uses the readable body font");
+  if (details) {
+    QApplication::processEvents();
+    if (!capture.isEmpty()) verify(details->grab().save(capture + "/finding-evidence.png"),
+      "readable finding evidence screenshot is saved");
+    details->close();
+  }
   auto *tasks = page.findChild<QFrame *>("scanTasksPanel");
   auto *views = page.findChild<QComboBox *>("scanViewPicker");
   auto *spaces = page.findChild<QTabWidget *>("scanWorkspaces");
@@ -304,6 +349,21 @@ static void runScanPresentationChecks(const std::function<void(bool, const char 
       const QRectF visible=topology->m_graphView->mapToScene(topology->m_graphView->viewport()->rect()).boundingRect();
       for(auto *card : topology->m_nodeItems)
         verify(visible.contains(card->sceneBoundingRect()),"opening the records panel refits the complete topology");
+      if (!capture.isEmpty()) {
+        shell.resize(1366,850);
+        topology->m_nodeItems.value("presentation-0")->setSelected(true);
+        QApplication::processEvents(); QApplication::processEvents();
+        QTest::qWait(180); // Wait for tab underline animation before capturing.
+        verify(shell.grab().save(capture + "/topology-properties.png"),
+          "topology property editor and reference node screenshot is saved");
+        for (auto *item : topology->m_graphScene->items()) {
+          auto *text = dynamic_cast<QGraphicsSimpleTextItem *>(item);
+          if (text && text->text() == QStringLiteral("源主机"))
+            qInfo() << "Typography reference: node pixels" << text->font().pixelSize()
+              << "canvas scale" << topology->m_graphView->transform().m11()
+              << "field pixels" << topology->m_nodeNameEdit->font().pixelSize();
+        }
+      }
       topology->onZoomIn();
       const qreal zoom=topology->m_graphView->transform().m11();
       shell.resize(1100,740);QApplication::processEvents();QApplication::processEvents();

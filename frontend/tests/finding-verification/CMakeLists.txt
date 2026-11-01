@@ -9,6 +9,15 @@ add_executable(finding-verification-smoke FindingVerificationSmoke.cpp
 target_include_directories(finding-verification-smoke PRIVATE ../../src)
 target_link_libraries(finding-verification-smoke Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Network Qt5::Test)
 enable_testing()
+add_executable(finding-verification-window FindingVerificationWindow.cpp
+  ../../src/pages/FindingVerificationDialog.cpp ../../src/pages/FindingVerificationDialog.h
+  ../../src/ApiClient.cpp ../../src/ApiClient.h)
+target_include_directories(finding-verification-window PRIVATE ../../src)
+target_link_libraries(finding-verification-window Qt5::Widgets Qt5::Network Qt5::Test)
+foreach(UI_SCALE IN ITEMS 1 1.5 2)
+  add_test(NAME finding-window-${UI_SCALE} COMMAND finding-verification-window)
+  set_tests_properties(finding-window-${UI_SCALE} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${UI_SCALE}" TIMEOUT 20)
+endforeach()
 add_test(NAME finding-verification-smoke COMMAND finding-verification-smoke)
 set_tests_properties(finding-verification-smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 

@@ -105,7 +105,17 @@ TaskExecutionPanel::TaskExecutionPanel(ApiClient *api, const QString &role, cons
 {
   setObjectName("taskExecutionPanel");
   setStyleSheet(Theme::PageStyle);
-  auto *outer = new QVBoxLayout(this);
+  auto *root = new QVBoxLayout(this);
+  root->setContentsMargins(0, 0, 0, 0);
+  auto *scroll = new QScrollArea(this);
+  scroll->setObjectName("executionPanelScroll");
+  scroll->setWidgetResizable(true);
+  scroll->setFrameShape(QFrame::NoFrame);
+  auto *body = new QWidget(scroll);
+  scroll->setWidget(body);
+  root->addWidget(scroll);
+  auto *outer = new QVBoxLayout(body);
+  outer->setSizeConstraint(QLayout::SetMinimumSize);
   outer->setContentsMargins(8, 8, 8, 8);
   auto *heading = new QHBoxLayout;
   m_title = label(this);
@@ -128,6 +138,7 @@ TaskExecutionPanel::TaskExecutionPanel(ApiClient *api, const QString &role, cons
   auto *parentContent = new QVBoxLayout(parentBody);
   parentContent->setContentsMargins(0, 0, 0, 0);
   parentContent->setSpacing(4);
+  parentContent->setSizeConstraint(QLayout::SetMinimumSize);
   m_parentState = label(parentBody);
   parentContent->addWidget(m_parentState);
   parentContent->addWidget(m_identity);
@@ -135,6 +146,7 @@ TaskExecutionPanel::TaskExecutionPanel(ApiClient *api, const QString &role, cons
   parentScroll->setObjectName("executionPlanSummaryScroll");
   parentScroll->setFrameShape(QFrame::NoFrame);
   parentScroll->setWidgetResizable(true);
+  parentScroll->setMinimumHeight(180);
   parentScroll->setMaximumHeight(240);
   parentScroll->setWidget(parentBody);
   parentLayout->addWidget(parentScroll);
@@ -217,6 +229,7 @@ TaskExecutionPanel::TaskExecutionPanel(ApiClient *api, const QString &role, cons
   m_detail->setAcceptRichText(false);
   splitter->addWidget(m_tabs);
   splitter->addWidget(detailCard);
+  splitter->setMinimumHeight(280);
   splitter->setChildrenCollapsible(false);
   splitter->setStretchFactor(0, 3);
   splitter->setStretchFactor(1, 2);

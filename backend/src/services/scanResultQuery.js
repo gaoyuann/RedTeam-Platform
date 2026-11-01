@@ -7,6 +7,7 @@ import { isTargetInScope, taskScope } from './taskScope.js';
 import { scanCoverage } from './scanCoverage.js';
 import { getPayloadIndex } from './payloadLoader.js';
 import { findingPayloadSummary } from './findingPayloads.js';
+import { findingPayloadCodeSummaries } from './findingPayloadCodeSummary.js';
 import {visibleSourceScanRecords,sourceScanResultState} from './sourceScanResults.js';
 import { findingClassification } from './findingClassificationStore.js';
 
@@ -75,10 +76,12 @@ export function scanPage(db,pipeline,query={}) {
   const filtered=publicRows.filter(r=>(category==='all'||r.category===category) && (!query.scan_task_id||r.scan_task_id===query.scan_task_id));
   const selected=filtered.filter(r=>r.id>after).slice(0,limit);
   const payloadIndex = selected.some(row=>row.category==='vulnerability') ? getPayloadIndex(db) : null;
+  const payloadCode = findingPayloadCodeSummaries(db, pipeline.pipeline_id, selected.filter(row=>row.category==='vulnerability').map(row=>row.id));
   const records=selected.length?db.prepare(`SELECT * FROM scan_results WHERE id IN (${selected.map(()=>'?').join(',')}) ORDER BY id`).all(...selected.map(r=>r.id))
     .map(row=>({...publicScanRecord(row),verification:verificationSummary(db,row.id,pipeline.pipeline_id),
       classification:findingClassification(db,pipeline.pipeline_id,row,collection.scans.find(scan=>scan.scan_task_id===row.scan_task_id)),
-      payload_match:payloadIndex ? findingPayloadSummary(db,row,payloadIndex) : null})):[];
+      payload_match:payloadIndex ? findingPayloadSummary(db,row,payloadIndex) : null,
+      payload_code:payloadCode.get(row.id) || null})):[];
   const processIds=collection.rows.filter(r=>['web_agent_step','web_scan_summary','scan_agent_step','scan_agent_summary','scan_capability_assessment'].includes(r.result_type) && (!query.scan_task_id || r.scan_task_id===query.scan_task_id)).map(r=>r.id);
   const process=processIds.length?db.prepare(`SELECT * FROM scan_results WHERE id IN (${processIds.slice(-100).map(()=>'?')}) ORDER BY id`).all(...processIds.slice(-100)).map(publicScanRecord):[];
   return {web_scan_process:process,web_scan_process_truncated:processIds.length>100,scan_summary:collection.summary,scan_coverage:collection.coverage,scan_records:records,

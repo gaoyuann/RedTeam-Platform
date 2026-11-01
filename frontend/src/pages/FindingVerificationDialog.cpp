@@ -31,8 +31,23 @@
 #include <QScreen>
 #include <QResizeEvent>
 #include <QWindow>
+#include <QFileDialog>
+#include <QSaveFile>
+#include <QFileInfo>
+#include <QClipboard>
+#include <QFontDatabase>
+#include <QApplication>
+#include <QMouseEvent>
+#include <QShowEvent>
+#include <QToolButton>
 
 namespace {
+class WorkspaceLayout : public QVBoxLayout {
+public:
+  using QVBoxLayout::QVBoxLayout;
+  // Wrapped labels must not make the expanding splitter's preferred height a scroll minimum.
+  bool hasHeightForWidth() const override {return false;}
+};
 QJsonObject findingObject(const QJsonValue &value) {
   return value.isObject()?value.toObject():QJsonDocument::fromJson(value.toString().toUtf8()).object();
 }
@@ -268,9 +283,27 @@ FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QStrin
     const QString &existingVerificationId,const QString &existingAttemptId)
   :QDialog(parent),m_api(api),m_pipeline(pipeline) {
   setWindowTitle("漏洞预案与攻击测试 · "+pipeline);setWindowFlag(Qt::WindowMaximizeButtonHint,true);
+  setWindowModality(Qt::WindowModal);
+  setSizeGripEnabled(true);
   const auto *screen=widgetScreen(parent);
-  resize(QSize(1360,860).boundedTo(screen?screen->availableGeometry().size():QSize(1360,860)));
-  auto *layout=new QVBoxLayout(this);
+  const QSize available=screen?screen->availableGeometry().size():QSize(1280,800);
+  resize(QSize(1120,720).boundedTo(QSize(available.width()*9/10,available.height()*9/10)));
+  auto *windowLayout=new QVBoxLayout(this);
+  auto *titleBar=new QWidget(this);titleBar->setObjectName("findingWindowTitleBar");
+  titleBar->setCursor(Qt::SizeAllCursor);titleBar->setToolTip("拖动此处移动窗口，双击切换最大化");titleBar->installEventFilter(this);
+  auto *titleLayout=new QHBoxLayout(titleBar);titleLayout->setContentsMargins(4,0,0,0);
+  auto *title=new QLabel(windowTitle(),titleBar);title->setObjectName("findingWindowTitle");title->setTextFormat(Qt::PlainText);
+  title->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);title->installEventFilter(this);titleLayout->addWidget(title,1);
+  connect(this,&QWidget::windowTitleChanged,title,&QLabel::setText);
+  auto *maximize=new QToolButton(titleBar);maximize->setObjectName("findingWindowMaximize");maximize->setText("□");maximize->setToolTip("最大化 / 还原");
+  connect(maximize,&QToolButton::clicked,this,[this]{isMaximized()?showNormal():showMaximized();});titleLayout->addWidget(maximize);
+  auto *titleClose=new QToolButton(titleBar);titleClose->setObjectName("findingWindowClose");titleClose->setText("×");titleClose->setToolTip("关闭窗口");
+  connect(titleClose,&QToolButton::clicked,this,&QDialog::close);titleLayout->addWidget(titleClose);windowLayout->addWidget(titleBar);
+  // An unusually small desktop can scroll the entire workspace while the title stays reachable.
+  auto *workspaceScroll=new QScrollArea(this);workspaceScroll->setObjectName("findingWorkspaceScroll");
+  workspaceScroll->setFrameShape(QFrame::NoFrame);workspaceScroll->setWidgetResizable(true);
+  auto *workspace=new QWidget;auto *layout=new WorkspaceLayout(workspace);layout->setContentsMargins(0,0,0,0);
+  workspaceScroll->setWidget(workspace);windowLayout->addWidget(workspaceScroll,1);
   auto *identityLabel = new QLabel(QStringLiteral("任务ID：%1 · 核对授权范围并确认本次执行").arg(pipeline), this);
   identityLabel->setObjectName("findingTaskIdentity");
   identityLabel->setTextFormat(Qt::PlainText);
@@ -292,17 +325,17 @@ FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QStrin
   auto *mainHost=new QWidget;auto *hostLayout=new QVBoxLayout(mainHost);hostLayout->setContentsMargins(0,0,0,0);hostLayout->addWidget(scroll,1);tabs->addTab(mainHost,"漏洞与测试");
   auto section=[mainLayout](const QString &title){auto *box=new QGroupBox(title);auto *content=new QVBoxLayout(box);mainLayout->addWidget(box);return content;};
   auto *findingSection=section("当前漏洞");m_context=new QPlainTextEdit;m_context->setReadOnly(true);m_context->setMaximumHeight(80);findingSection->addWidget(m_context);
-  auto *sourceSection=section("本次漏洞预案");
-  auto *planHelp=new QLabel("先准备本次测试，核对实际入口和缺失条件；载荷代码与执行结果分别在上方标签查看。");
+  auto *sourceSection=section("本次漏洞测试");
+  auto *planHelp=new QLabel("可直接选用已有方案，核对目标和条件后开始测试；自动准备、AI 调整和载荷生成按需使用。");
   planHelp->setWordWrap(true);sourceSection->addWidget(planHelp);
-  m_planSummary=new QPlainTextEdit;m_planSummary->setReadOnly(true);m_planSummary->setMinimumHeight(130);m_planSummary->setMaximumHeight(130);sourceSection->addWidget(m_planSummary);
-  m_sourceChooser=new QGroupBox("高级设置：方案与载荷");m_sourceChooser->setObjectName("findingAdvancedSettings");m_sourceChooser->setCheckable(true);m_sourceChooser->setChecked(false);
-  auto *chooserLayout=new QVBoxLayout(m_sourceChooser);auto *candidateBody=new QWidget;auto *candidateLayout=new QVBoxLayout(candidateBody);candidateLayout->setContentsMargins(0,0,0,0);chooserLayout->addWidget(candidateBody);sourceSection->addWidget(m_sourceChooser);
+  m_planSummary=new QPlainTextEdit;m_planSummary->setReadOnly(true);m_planSummary->setMinimumHeight(130);m_planSummary->setMaximumHeight(130);
+  m_sourceChooser=new QGroupBox("更多：方案搜索与载荷");m_sourceChooser->setObjectName("findingAdvancedSettings");m_sourceChooser->setCheckable(true);m_sourceChooser->setChecked(false);
+  auto *chooserLayout=new QVBoxLayout(m_sourceChooser);auto *candidateBody=new QWidget;auto *candidateLayout=new QVBoxLayout(candidateBody);candidateLayout->setContentsMargins(0,0,0,0);chooserLayout->addWidget(candidateBody);
   candidateBody->hide();connect(m_sourceChooser,&QGroupBox::toggled,candidateBody,&QWidget::setVisible);
-  m_sources=new QComboBox;m_sources->setMinimumContentsLength(16);candidateLayout->addWidget(m_sources);
-  m_sourcePreview=new QPlainTextEdit;m_sourcePreview->setReadOnly(true);m_sourcePreview->setMaximumHeight(75);m_sourcePreview->hide();candidateLayout->addWidget(m_sourcePreview);
+  m_sources=new QComboBox;m_sources->setMinimumContentsLength(16);sourceSection->addWidget(m_sources);
+  m_sourcePreview=new QPlainTextEdit;m_sourcePreview->setReadOnly(true);m_sourcePreview->setMaximumHeight(75);m_sourcePreview->hide();sourceSection->addWidget(m_sourcePreview);
   auto *sourceActions=new QHBoxLayout;m_useSource=new QPushButton("使用此方案");m_prepareSimple=new QPushButton("准备本次测试");m_adjustAI=new QPushButton("AI 辅助调整当前方案");
-  candidateLayout->addWidget(m_useSource);sourceActions->addWidget(m_prepareSimple);sourceActions->addWidget(m_adjustAI);sourceSection->addLayout(sourceActions);
+  sourceSection->addWidget(m_useSource);sourceSection->addWidget(m_planSummary);sourceActions->addWidget(m_prepareSimple);sourceActions->addWidget(m_adjustAI);sourceSection->addLayout(sourceActions);sourceSection->addWidget(m_sourceChooser);
   m_prepareFeedback=new QLabel;m_prepareFeedback->setObjectName("findingPrepareFeedback");m_prepareFeedback->setTextFormat(Qt::PlainText);m_prepareFeedback->setWordWrap(true);sourceSection->addWidget(m_prepareFeedback);
   auto *browse=new QHBoxLayout;m_sourceSearch=new QLineEdit;m_sourceSearch->setPlaceholderText("无合适候选？搜索其他方案");auto *search=new QPushButton("浏览其他方案");
   m_sourcesPrevious=new QPushButton("上一页");m_sourcesNext=new QPushButton("下一页");browse->addWidget(m_sourceSearch,1);browse->addWidget(search);browse->addWidget(m_sourcesPrevious);browse->addWidget(m_sourcesNext);candidateLayout->addLayout(browse);
@@ -332,7 +365,29 @@ FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QStrin
     if(payload["execution_supported"].toBool())action("/code-plan",{{"expected_revision",m_revision},{"artifact_id",payload["artifact_id"]}},true);
   });
   m_verificationCodeHistory=new QComboBox;m_verificationCodeHistory->setObjectName("findingVerificationCodeHistory");codeLayout->addWidget(m_verificationCodeHistory);
-  m_verificationCode=new QPlainTextEdit;m_verificationCode->setReadOnly(true);m_verificationCode->setMinimumHeight(300);m_verificationCode->setObjectName("findingVerificationSource");codeLayout->addWidget(m_verificationCode,1);
+  auto *codeActions=new QHBoxLayout;
+  m_copyPayload=new QPushButton("复制代码");m_copyPayload->setObjectName("findingCopyPayload");
+  m_exportPayload=new QPushButton("导出代码");m_exportPayload->setObjectName("findingExportPayload");
+  codeActions->addWidget(m_copyPayload);codeActions->addWidget(m_exportPayload);codeActions->addStretch();codeLayout->addLayout(codeActions);
+  auto *payloadCodeColumns=new QSplitter(Qt::Horizontal);
+  m_verificationCode=new QPlainTextEdit;m_verificationCode->setReadOnly(true);m_verificationCode->setMinimumHeight(250);m_verificationCode->setObjectName("findingVerificationSource");
+  m_verificationCode->setLineWrapMode(QPlainTextEdit::NoWrap);m_verificationCode->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+  m_payloadNotes=new QPlainTextEdit;m_payloadNotes->setReadOnly(true);m_payloadNotes->setObjectName("findingPayloadNotes");
+  m_payloadNotes->setPlaceholderText("选择载荷后查看来源、适用条件与说明");
+  payloadCodeColumns->addWidget(m_verificationCode);payloadCodeColumns->addWidget(m_payloadNotes);payloadCodeColumns->setSizes({650,300});codeLayout->addWidget(payloadCodeColumns,1);
+  connect(m_copyPayload,&QPushButton::clicked,this,[this]{QApplication::clipboard()->setText(m_verificationCode->toPlainText());});
+  connect(m_exportPayload,&QPushButton::clicked,this,[this]{
+    const int index=m_verificationCodeHistory->currentIndex();
+    if(index<0 || index>=m_currentPayloadItems.size())return;
+    const auto payload=m_currentPayloadItems[index].toObject();const auto code=payload["code"].toString().toUtf8();
+    const QPointer<FindingVerificationDialog> guard(this);
+    const QString name=QFileInfo(payload["name"].toString()).fileName();
+    const auto path=QFileDialog::getSaveFileName(this,"导出当前载荷代码",name.isEmpty()?"payload.txt":name,"所有文件 (*)");
+    if(!guard || path.isEmpty())return;
+    QSaveFile file(path);
+    if(!file.open(QIODevice::WriteOnly) || file.write(code)!=code.size() || !file.commit())
+      QMessageBox::warning(this,"导出失败",file.errorString());
+  });
   connect(m_generateVerificationCode,&QPushButton::clicked,this,&FindingVerificationDialog::generateVerificationCode);
   connect(m_verificationCodeHistory,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this]{showVerificationCode();});
   m_artifactBox=new QGroupBox("源码漏洞载荷");m_artifactBox->setObjectName("findingPayloadArtifacts");
@@ -410,7 +465,10 @@ FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QStrin
   connect(m_unbindPayload,&QPushButton::clicked,this,[this]{if(m_bindStep->currentIndex()>=0)action("/payloads/unbind",{{"expected_revision",m_revision},{"step_id",m_bindStep->currentData().toString()}},true);});
   connect(m_resolvePayload,&QPushButton::clicked,this,[this]{if(m_bindStep->currentIndex()<0){setStatus("请先手动选择步骤。");return;}action("/payloads/prepare",{{"expected_revision",m_revision},{"step_id",m_bindStep->currentData().toString()}},false);});
   connect(m_startSimple,&QPushButton::clicked,this,&FindingVerificationDialog::startCurrent);
-  auto *resultWidget=new QWidget;resultWidget->setObjectName("findingResultsPage");auto *resultLayout=new QVBoxLayout(resultWidget);tabs->addTab(resultWidget,"测试结果与历史");
+  auto *resultWidget=new QWidget;resultWidget->setObjectName("findingResultsPage");tabs->addTab(resultWidget,"测试结果与历史");
+  auto *resultHost=new QVBoxLayout(resultWidget);resultHost->setContentsMargins(0,0,0,0);
+  auto *resultScroll=new QScrollArea;resultScroll->setObjectName("findingResultsScroll");resultScroll->setWidgetResizable(true);
+  auto *resultContent=new QWidget;auto *resultLayout=new QVBoxLayout(resultContent);resultScroll->setWidget(resultContent);resultHost->addWidget(resultScroll);
   resultLayout->setContentsMargins(6,6,6,6);resultLayout->setSpacing(4);
   m_assess = new QPushButton(QStringLiteral("汇总证据并进入评估与报告"));
   m_assess->setObjectName("assessFindingResults");
@@ -463,8 +521,8 @@ FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QStrin
   m_note=new QPlainTextEdit;m_note->setPlaceholderText("对照保存的成功判据，说明实际证据及判定限制");m_note->setMinimumHeight(70);m_note->setMaximumHeight(100);reviewLayout->addWidget(m_note);auto *review=new QPushButton("保存人工意见");reviewLayout->addWidget(review);
   reviewLayout->addWidget(new QLabel("本次尝试的完整判断依据、限制与复核历史"));m_evidence=new QPlainTextEdit;m_evidence->setReadOnly(true);m_evidence->setMinimumHeight(160);reviewLayout->addWidget(m_evidence,1);
   const QString budgetHint="默认最多 2 次尝试，每次 5 分钟。关闭窗口停止待执行队列；当前调用继续，可重新打开查看或取消。";
-  auto *budget=new QLabel(budgetHint);budget->setObjectName("findingBudgetHint");layout->addWidget(budget);
-  m_queueLabel=new QLabel;m_queueLabel->setObjectName("findingQueueSummary");m_queueLabel->setWordWrap(true);layout->addWidget(m_queueLabel);
+  auto *budget=new QLabel(budgetHint);budget->setObjectName("findingBudgetHint");budget->setWordWrap(true);budget->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);layout->addWidget(budget);
+  m_queueLabel=new QLabel;m_queueLabel->setObjectName("findingQueueSummary");m_queueLabel->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);layout->addWidget(m_queueLabel);
   m_status=new QLabel;m_status->setWordWrap(true);m_status->setMaximumHeight(36);m_status->hide();layout->addWidget(m_status);
   auto *global=new QHBoxLayout;auto *refresh=new QPushButton("刷新");auto *queue=new QPushButton("顺序测试已就绪漏洞");m_queueButton=queue;auto *cancel=new QPushButton("取消当前验证并停止队列");auto *close=new QPushButton("关闭窗口");
   queue->setToolTip(budgetHint);close->setToolTip(budgetHint);
@@ -588,7 +646,10 @@ void FindingVerificationDialog::load(bool editor) {
   const auto edits=m_editGeneration;
   QPointer<FindingVerificationDialog> self(this);
   m_api->get(base()+"/"+id,10000,[self,id,editor,context,edits](const QJsonObject &r){if(!self || self->m_finished)return;self->m_loading=false;if(self->m_reloadEditor || self->currentId()!=id || self->m_contextGeneration!=context){const bool switched=self->currentId()!=id || self->m_contextGeneration!=context;self->m_reloadEditor=false;self->load(switched || edits==self->m_editGeneration);return;}if(r["status"]!="ok"){self->setStatus(r["error"].toObject()["message"].toString());return;}
+    const auto previous=self->m_details.value(id);
     self->m_detail=r["data"].toObject();
+    const bool payloadChanged=!previous.isEmpty() && (previous["current_payload"]!=self->m_detail["current_payload"]
+      || previous["verification_code"]!=self->m_detail["verification_code"]);
     const auto taskNumber = self->m_detail["task_no"].toString(self->m_pipeline);
     self->setWindowTitle(QStringLiteral("漏洞预案与攻击测试 · %1").arg(taskNumber));
     if (auto *label = self->findChild<QLabel*>("findingTaskIdentity")) {
@@ -606,7 +667,7 @@ void FindingVerificationDialog::load(bool editor) {
     QStringList overview;
     const auto savedPlans=self->m_detail["plans"].toArray();
     if(self->m_detail["eligible"]==false) overview<<"\n"+self->m_detail["ineligibility_reason"].toString();
-    else if(savedPlans.isEmpty()) overview<<"\n下一步：点击“准备本次测试”，或展开高级方案选择。准备测试不会执行目标请求。";
+    else if(savedPlans.isEmpty()) overview<<"\n下一步：选用已有方案；需要自动准备时可点击“准备本次测试”。准备和选用方案均不会执行目标请求。";
     else {
       const auto saved=savedPlans.first().toObject();
       overview<<self->confirmationText(self->m_detail)
@@ -638,6 +699,7 @@ void FindingVerificationDialog::load(bool editor) {
     self->m_payloads->blockSignals(true);self->m_payloads->clear();for(const auto &v:self->m_matches){const auto payload=v.toObject();self->m_payloads->addItem(payload["name"].toString()+ (payload["created_here"].toBool()?" · 本次新生成":" · 已有载荷"),payload["payload_id"].toString());}
     self->m_payloads->setCurrentIndex(self->m_payloads->findData(selectedPayload));self->m_payloads->blockSignals(false);
     self->showPayloadPreview();self->renderPayloadArtifacts();self->updateButtons();self->updateQueue();
+    if(payloadChanged)emit self->payloadsChanged(self->m_pipeline);
     if(!self->m_detail["reason"].toString().isEmpty())self->setStatus(self->m_detail["reason"].toString());
     if(!self->m_queueStarting && !self->m_queueRunId.isEmpty() && summary["run_id"].toString()==self->m_queueRunId && self->m_activeQueue==id && QStringList{"completed","failed","aborted","unknown"}.contains(state)){self->m_activeQueue.clear();self->m_queueRunId.clear();self->m_items->setEnabled(true);self->updateButtons();if(state=="unknown"||state=="aborted")self->m_queue.clear();self->executeNext();}
   });
@@ -650,7 +712,14 @@ void FindingVerificationDialog::action(const QString &path,const QJsonObject &bo
       self->m_pendingPayload=r["data"].toObject()["payload_id"].toString();
       self->setStatus(r["data"].toObject()["state"]=="generated"?"本次新生成载荷，尚未验证。请预览后手动绑定步骤。":"已找到库中载荷，请预览后手动绑定步骤。");
     }
-    if(path=="/verification-code")self->m_verificationCodeHistory->setCurrentIndex(-1);
+    if(path=="/verification-code") {
+      self->m_verificationCodeHistory->setCurrentIndex(-1);
+      if(r["status"]=="ok") {
+        const auto result=r["data"].toObject();
+        self->setStatus(result["reused"].toBool()?QString("已复用适配的已有载荷，未调用模型；尚未执行测试。"):
+          result["state"]=="needs_information"?QString("尚缺生成条件：")+join(result["result"].toObject()["missing_information"].toArray()):QString("载荷已生成并保存，尚未执行测试。"));
+      }
+    }
     self->load(editor && r["status"]=="ok" && edits==self->m_editGeneration);});
 }
 void FindingVerificationDialog::setStatus(const QString &text) {
@@ -668,9 +737,53 @@ void FindingVerificationDialog::done(int result) {
 void FindingVerificationDialog::resizeEvent(QResizeEvent *event) {
   QDialog::resizeEvent(event);
   for(const auto &name:{"findingEvidenceHint","findingBudgetHint"})if(auto *hint=findChild<QLabel*>(name))hint->setVisible(width()>=1200);
-  if(auto *queue=findChild<QLabel*>("findingQueueSummary")){queue->setWordWrap(width()>=1200);queue->setText(width()>=1200?queue->toolTip():queue->fontMetrics().elidedText(queue->toolTip().simplified(),Qt::ElideRight,qMax(100,width()-22)));}
+  if(auto *queue=findChild<QLabel*>("findingQueueSummary"))queue->setText(queue->fontMetrics().elidedText(queue->toolTip().simplified(),Qt::ElideRight,qMax(100,width()-22)));
   for(auto *label:{m_automaticSummary,m_manualSummary})if(label && !label->toolTip().isEmpty())label->setText(label->fontMetrics().elidedText(label->toolTip(),Qt::ElideRight,label->width()));
   if(m_resultBasis && !m_resultBasis->toolTip().isEmpty())m_resultBasis->setText(m_resultBasis->fontMetrics().elidedText((m_evidenceAttempt.isEmpty()?QString():QString("系统依据："))+m_resultBasis->toolTip(),Qt::ElideRight,m_resultBasis->width()));
+}
+void FindingVerificationDialog::showEvent(QShowEvent *event) {
+  QDialog::showEvent(event);
+  // Anchor native stacking to the real top-level window, even when the QObject
+  // owner is a scan page nested inside a stacked workspace.
+  if(parentWidget() && windowHandle()) {
+    auto *owner=parentWidget()->window();
+    if(owner->windowHandle())windowHandle()->setTransientParent(owner->windowHandle());
+  }
+  if(m_initialGeometryApplied)return;
+  m_initialGeometryApplied=true;
+  const auto *screen=widgetScreen(this);
+  if(!screen)return;
+  const QRect available=screen->availableGeometry().adjusted(16,16,-16,-16);
+  // Keep the complete frame, including desktop decorations, on the current screen.
+  const QSize decoration=frameGeometry().size()-size();
+  resize(size().boundedTo((available.size()-decoration).expandedTo(QSize(1,1))));
+  const QPoint center=parentWidget()?parentWidget()->window()->frameGeometry().center():available.center();
+  const QSize frame=frameGeometry().size();
+  move(qBound(available.left(),center.x()-frame.width()/2,qMax(available.left(),available.right()-frame.width()+1)),
+       qBound(available.top(),center.y()-frame.height()/2,qMax(available.top(),available.bottom()-frame.height()+1)));
+  raise();activateWindow();
+}
+bool FindingVerificationDialog::eventFilter(QObject *watched,QEvent *event) {
+  if(event->type()==QEvent::MouseButtonDblClick) {
+    auto *mouse=static_cast<QMouseEvent*>(event);
+    if(mouse->button()==Qt::LeftButton){m_dragging=false;isMaximized()?showNormal():showMaximized();return true;}
+  } else if(event->type()==QEvent::MouseButtonPress) {
+    auto *mouse=static_cast<QMouseEvent*>(event);
+    if(mouse->button()==Qt::LeftButton && !isMaximized()) {
+      // Let the compositor handle Wayland movement; retain a fallback for other desktops.
+#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
+      if(windowHandle() && windowHandle()->startSystemMove())return true;
+#endif
+      m_dragging=true;m_dragOffset=mouse->globalPos()-frameGeometry().topLeft();return true;
+    }
+  } else if(event->type()==QEvent::MouseMove && m_dragging) {
+    auto *mouse=static_cast<QMouseEvent*>(event);
+    if(mouse->buttons() & Qt::LeftButton){move(mouse->globalPos()-m_dragOffset);return true;}
+    m_dragging=false;
+  } else if(event->type()==QEvent::MouseButtonRelease && m_dragging) {
+    m_dragging=false;return true;
+  }
+  return QDialog::eventFilter(watched,event);
 }
 void FindingVerificationDialog::cancelCurrent() {
   ++m_attemptSelectionGeneration;m_pendingAttemptRunId.clear();
@@ -1051,7 +1164,7 @@ void FindingVerificationDialog::updateQueue() {
   const auto budget=attemptBudgetText(m_detail);
   const auto queueText=QString("已勾选 %1 条，其中 %2 条就绪 · %3").arg(selected).arg(ready).arg(budget)+(missing.isEmpty()?QString():"\n未就绪："+missing.join("；"));
   if(auto *hint=findChild<QLabel*>("findingBudgetHint"))hint->setText(budget+"。保存新方案不恢复次数；人工意见可选。关闭窗口停止待执行队列；当前调用继续。");
-  m_queueLabel->setToolTip(queueText);m_queueLabel->setWordWrap(width()>=1200);m_queueLabel->setText(width()>=1200?queueText:m_queueLabel->fontMetrics().elidedText(queueText.simplified(),Qt::ElideRight,qMax(100,width()-22)));
+  m_queueLabel->setToolTip(queueText);m_queueLabel->setText(m_queueLabel->fontMetrics().elidedText(queueText.simplified(),Qt::ElideRight,qMax(100,width()-22)));
   m_queueButton->setText(QString("顺序测试 %1 条已就绪漏洞").arg(ready));
   m_queueButton->setToolTip(queueText+"\n人工意见为可选补充，不影响是否就绪。保存新方案不恢复尝试次数。");
   m_queueButton->setEnabled(ready>0&&!m_busy&&!m_queuePreparing&&!m_queueStarting&&m_activeQueue.isEmpty());
@@ -1074,15 +1187,31 @@ void FindingVerificationDialog::generateVerificationCode() {
   m_verificationCodeHistory->setCurrentIndex(-1);
   action("/verification-code",{{"expected_revision",m_revision},
     {"request_id",QUuid::createUuid().toString(QUuid::WithoutBraces)},
-    {"authorization_confirmed",true},{"automatic_context",true}},false);
+    {"authorization_confirmed",true},{"automatic_context",true},
+    {"force_regenerate",!m_currentPayloadItems.isEmpty()}},false);
 }
 void FindingVerificationDialog::showVerificationCode() {
   const int index=m_verificationCodeHistory->currentIndex();
   const auto current=m_detail["current_payload"].toObject();
-  QString code,status;
+  QString code,status;QStringList notes;
   if(index>=0 && index<m_currentPayloadItems.size()){
     const auto payload=m_currentPayloadItems[index].toObject();code=payload["code"].toString();
-    status=payload["name"].toString()+" · "+(payload["origin"]=="scan"?QString("扫描载荷"):QString("AI 生成"))+" · 未验证真实目标";
+    const auto origin=payload["origin"].toString();
+    const QString source=origin=="scan"?QString("扫描载荷"):origin=="library"?QString("载荷库复用"):payload["reused"].toBool()?QString("已有代码复用"):QString("AI 生成");
+    status=payload["name"].toString()+" · "+source+" · 未验证真实目标";
+    notes << "文件："+payload["name"].toString() << "语言："+payload["language"].toString("未记录")
+      << "来源："+(origin=="scan"?QString("从当前扫描收集的原始载荷"):origin=="library"?QString("载荷库中适配当前漏洞的结构化工具参数"):QString("针对当前漏洞的本地验证程序"));
+    for(const auto &field:{"purpose","usage","safety_notes"}) {
+      const QMap<QString,QString> labels{{"purpose","作用"},{"usage","使用说明"},{"safety_notes","注意事项"}};
+      if(!readable(payload[field]).isEmpty())notes << labels.value(field)+"：\n"+readable(payload[field]);
+    }
+    for(const auto &field:{"run_conditions","dependencies","expected_results","failure_reasons","model_inferences"}) {
+      const QMap<QString,QString> labels{{"run_conditions","运行条件"},{"dependencies","依赖"},{"expected_results","预期结果"},{"failure_reasons","可能失败原因"},{"model_inferences","模型推断（未核实）"}};
+      QStringList lines;for(const auto &value:payload[field].toArray())if(!readable(value).isEmpty())lines << readable(value);
+      if(!lines.isEmpty())notes << labels.value(field)+"：\n"+lines.join("\n");
+    }
+    notes << "代码生成、步骤绑定、执行结果分别记录。生成和导出不会执行代码；本地模拟不证明真实目标漏洞成立。";
+    if(payload["stale"].toBool())notes << "漏洞记录已变化或旧载荷缺少来源指纹，请重新生成后再准备测试。";
     for(const auto &attempt:m_detail["attempts"].toArray())for(const auto &e:attempt.toObject()["evidence"].toArray()) {
       const auto link=e.toObject()["evidence_data"].toObject()["finding_verification"].toObject();
       if(link["artifact_consumed"].toBool() && link["artifact_id"]==payload["artifact_id"])
@@ -1096,6 +1225,8 @@ void FindingVerificationDialog::showVerificationCode() {
     if(!current["reason"].toString().isEmpty())status+="："+current["reason"].toString();
   }
   m_currentPayloadStatus->setText(status);
+  m_copyPayload->setEnabled(!code.isEmpty());m_exportPayload->setEnabled(!code.isEmpty());
+  const QString explanation=notes.join("\n\n");if(m_payloadNotes->toPlainText()!=explanation)m_payloadNotes->setPlainText(explanation);
   m_verificationCode->setVisible(!code.isEmpty());
   if(m_verificationCode->toPlainText()!=code)m_verificationCode->setPlainText(code);
   updateButtons();

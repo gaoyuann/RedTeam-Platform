@@ -1018,7 +1018,8 @@ export async function resumePipelineAfterApproval(pipelineId) {
 
     updateStatus(db, pipelineId, 'completed', { result: finalResult });
     runningPipelines.delete(pipelineId);
-    pipelineLog(pipelineId, '流水线全部完成（审批后）');
+    pipelineLog(pipelineId, prevResult.manual_scan_continuation
+      ? '人工选择预案的执行已结束；原扫描失败和已有发现继续保留' : '流水线全部完成（审批后）');
     return { ok: true, pipeline_id: pipelineId, status: 'completed' };
   } catch (err) {
     failPipeline(db, pipelineId, `流水线恢复执行异常: ${err.message}`);

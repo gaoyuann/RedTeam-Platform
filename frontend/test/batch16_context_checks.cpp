@@ -10,6 +10,7 @@
 #include "WsClient.h"
 #include "AppStyle.h"
 #include "UiTypography.h"
+#include "UiDisplayScaling.h"
 #include "StyleDark.h"
 #include "widgets/ScanResultOverview.h"
 #include "widgets/ModuleRibbon.h"
@@ -173,11 +174,14 @@ static bool awaitCondition(const std::function<bool()> &condition)
 #include "workflow_handoff_checks.h"
 #include "finding_plan_checks.h"
 #include "scan_presentation_checks.h"
+#include "deployment_resource_checks.h"
 #include "web_scan_start_checks.h"
 #include "intelligent_workflow_checks.h"
 #include "page_components_checks.h"
 
 #include "unified_shell_workflow_checks.h"
+#include "task_continuity_checks.h"
+#include "manual_task_plan_checks.h"
 
 static void runTaskListRefreshChecks(const std::function<void(bool, const char *)> &verify)
 {
@@ -211,12 +215,179 @@ static void runTaskListRefreshChecks(const std::function<void(bool, const char *
       "removing selected task cannot select a different task at its old row");
   }
 
+static void runCompactLayoutChecks(const std::function<void(bool, const char *)> &verify)
+{
+  verify(Theme::uiFont().pixelSize()==14 && Theme::uiFont().weight()==QFont::Normal,
+    "default Chinese font uses normal 14 logical pixels without point-size inflation");
+  verify(qAbs(Theme::missingDisplayScale(2,1,1)-2)<0.001,
+    "WSLg missing 200 percent desktop scaling is restored");
+  verify(qAbs(Theme::missingDisplayScale(2,2,1)-1)<0.001,
+    "correctly scaled desktops cannot be doubled again");
+  verify(qAbs(Theme::missingDisplayScale(1.5,1,1)-1.5)<0.001,
+    "fractional host scaling remains supported");
+  verify(Theme::missingDisplayScale(2,1,2)==1 && Theme::missingDisplayScale(0,1,1)==1
+      && Theme::missingDisplayScale(2,0,1)==1,
+    "unknown screens and multi-monitor mappings never trigger guessed global scaling");
+  QProcessEnvironment scaleEnvironment;
+  verify(!Theme::hasExplicitDisplayScaling(scaleEnvironment), "default display environment permits detection");
+  scaleEnvironment.insert("QT_SCALE_FACTOR","1.25");
+  verify(Theme::hasExplicitDisplayScaling(scaleEnvironment), "explicit user scale is preserved");
+  scaleEnvironment.remove("QT_SCALE_FACTOR"); scaleEnvironment.insert("QT_ENABLE_HIGHDPI_SCALING","0");
+  verify(Theme::hasExplicitDisplayScaling(scaleEnvironment), "explicit automatic DPI opt-out is preserved");
+  const auto previousStyle=qApp->styleSheet();
+  qApp->setStyleSheet(Theme::GlobalStyle + Theme::ButtonStyle + Theme::ItemViewStyle);
+  MockServer server;
+  server.handler=[](const QString &,const QString &path)->MockReply {
+    if(QUrl(path).path().endsWith("/execution")) return {success(executionRecord("compact"))};
+    return {success(QJsonArray{})};
+  };
+  ApiClient api(QStringLiteral("http://127.0.0.1:%1").arg(server.serverPort()));
+  MainWindow shell(&api,"admin","fixture-user");
+  shell.m_dongleTimer->stop();shell.m_ws->disconnectFromServer();
+  shell.resize(1024,600);shell.show();shell.openRibbonFeature("attacks.data");
+  const QString context=QStringLiteral("当前任务：TASK-20261031-000008 · 很长的安全测试任务名称 · http://127.0.0.1:8080/app/long/path/").repeated(3);
+  shell.m_contextLabel->setText(context);shell.m_contextLabel->setToolTip(context);
+  QTest::qWait(80);
+  for(int index=0;index<shell.m_navList->count();++index)
+    verify(shell.m_navList->viewport()->rect().contains(shell.m_navList->visualItemRect(shell.m_navList->item(index))),
+      "all seven module names fit at the minimum window width");
+  for(auto *button:{shell.m_newTaskButton,shell.m_switchTaskButton,shell.m_overviewButton,shell.m_resultsButton}) {
+    const QRect area(button->mapTo(shell.m_contextBar,QPoint()),button->size());
+    verify(shell.m_contextBar->rect().contains(area),"long task name cannot push task action buttons outside the task bar");
+  }
+  verify(shell.m_contextLabel->text()==context && shell.m_contextLabel->toolTip()==context,
+    "elided context retains complete task text and tooltip");
+  TaskExecutionPanel panel(&api,"admin","fixture-user");panel.resize(1024,480);
+  panel.setPrimaryPlan(true);panel.setTaskContext("compact","run-compact","compact.invalid");panel.show();
+  verify(awaitCondition([&]{return !panel.m_busy && !panel.m_snapshot.isEmpty();}),"compact execution snapshot loads");
+  QTest::qWait(100);
+  for(auto *card:panel.findChildren<QFrame*>()) {
+    if(!card->property("metricCard").toBool())continue;
+    for(const QString name:{QString("metricTitle"),QString("metricValue")}) {
+      auto *text=card->findChild<QLabel*>(name);
+      verify(text && text->height()>=text->fontMetrics().height(),"execution metric title and value retain a complete text line");
+    }
+  }
+  auto *scroll=panel.findChild<QScrollArea*>("executionPanelScroll");
+  verify(scroll && scroll->verticalScrollBar()->maximum()>0,"small execution workspace scrolls instead of squeezing summary and record tables");
+  const QString folder=qEnvironmentVariable("REDTEAM_COMPACT_SCREENSHOT_DIR");
+  if(!folder.isEmpty()) {
+    QDir().mkpath(folder);shell.grab().save(folder+"/task-bar.png");panel.grab().save(folder+"/execution-top.png");
+    scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());QTest::qWait(40);
+    panel.grab().save(folder+"/execution-bottom.png");
+  }
+  qApp->setStyleSheet(previousStyle);
+}
+
+static void runHomeWorkflowChecks(const std::function<void(bool, const char *)> &verify)
+{
+  const auto previousStyle = qApp->styleSheet();
+  qApp->setStyleSheet(Theme::GlobalStyle + Theme::ButtonStyle + Theme::ItemViewStyle);
+  MockServer server;
+  bool unavailable = false;
+  QJsonObject created;
+  server.handler = [&](const QString &method, const QString &path) -> MockReply {
+    const auto route = QUrl(path).path();
+    if (method == "POST" && route == "/api/pipelines") {
+      created = QJsonDocument::fromJson(server.requestBodies.value("POST /api/pipelines")).object();
+      auto task = taskRecord("new-home"); task["config"] = created["config"]; task["run_id"] = "";
+      return {success(task)};
+    }
+    if (route == "/api/pipelines") return unavailable
+        ? MockReply{QJsonObject{{"status", "error"}}} : MockReply{success(QJsonArray{taskRecord("home-task")})};
+    if (route == "/api/pipelines/home-task") return {success(taskRecord("home-task"))};
+    if (route == "/api/pipelines/late-home") return {success(taskRecord("late-home")), 150};
+    if (route == "/api/pipelines/new-home") {
+      auto task = taskRecord("new-home"); task["config"] = created["config"]; task["run_id"] = "";
+      return {success(task)};
+    }
+    if (route.endsWith("/execution")) return {success(executionRecord("home-task"))};
+    if (route.endsWith("/results")) return {success(resultsRecord("home-task"))};
+    if (route.startsWith("/api/reports/index")) return {success(QJsonObject{{"total", 0}})};
+    if (route == "/api/kg/stats") return {success(QJsonObject{{"node_count", 0}, {"edge_count", 0}})};
+    return {success(QJsonArray{})};
+  };
+  ApiClient api(QStringLiteral("http://127.0.0.1:%1").arg(server.serverPort()));
+  MainWindow shell(&api, "user", "fixture-user");
+  shell.m_dongleTimer->stop(); shell.m_ws->disconnectFromServer(); shell.resize(1024, 600); shell.show();
+  auto *home = shell.m_dashboardPage;
+  auto *homeButton = shell.findChild<QPushButton *>("ribbonHome");
+  verify(awaitCondition([&] { return home->m_pendingResponses == 0 && home->m_recentTable->rowCount() == 1; }), "home loads visible task data");
+  verify(shell.m_stackWidget->currentWidget() == home && shell.m_navList->currentRow() == -1
+      && homeButton->isChecked() && !shell.m_taskGate->isVisible() && !shell.m_ribbon->isVisible()
+      && !shell.m_contextBar->isVisible() && !shell.m_flowPage, "startup presents a neutral home without task gates or task construction");
+  verify(!home->m_continueTaskButton->isEnabled(), "home does not invent a current task on startup");
+  const auto folder = qEnvironmentVariable("REDTEAM_HOME_SCREENSHOT_DIR");
+  if (!folder.isEmpty()) {
+    QDir().mkpath(folder);
+    QCoreApplication::processEvents();
+    verify(shell.grab().save(folder + "/home.png"), "home screenshot saved");
+    shell.resize(1366,850); QTest::qWait(40);
+    verify(shell.grab().save(folder + "/home-wide.png"), "wide home screenshot saved");
+    shell.resize(1024,600); QTest::qWait(40);
+  }
+  emit home->m_recentTable->cellDoubleClicked(0, 0);
+  verify(awaitCondition([&] { return shell.m_flowPage && shell.m_flowPage->taskContextReady()
+      && shell.m_activeFeature == "evaluation.results"; }), "recent task opens its saved result stage");
+  auto *flow = shell.m_flowPage;
+  shell.openRibbonFeature("scans.web");
+  homeButton->click();
+  verify(shell.m_stackWidget->currentWidget() == home && flow->selectedTaskId() == "home-task"
+      && home->m_continueTaskButton->isEnabled(), "returning home retains the current task");
+  home->m_continueTaskButton->click();
+  verify(shell.m_stackWidget->currentWidget() == flow && flow == shell.m_flowPage
+      && flow->workspaceStage() == 1 && shell.m_activeFeature == "scans.web"
+      && !shell.m_taskGate->isVisible(), "continue restores the same task pages and scan filter");
+  shell.m_switchTaskButton->click();
+  verify(shell.m_activeFeature == "system.tasks" && flow->taskListVisible(), "task switch opens task management");
+  homeButton->click();
+  shell.openHomeTask("late-home"); shell.showHome();
+  verify(awaitCondition([&] { return flow->taskContextReady() && flow->selectedTaskId() == "late-home"; })
+      && shell.m_stackWidget->currentWidget() == home && shell.m_activeFeature.isEmpty(), "late task detail cannot navigate away from home");
+  shell.setDongleLocked(true, "fixture lock");
+  shell.showHome(); shell.openHomeTask("home-task");
+  verify(!homeButton->isEnabled() && shell.m_stackWidget->currentIndex() == 7 && flow->selectedTaskId() == "late-home", "home shortcuts respect dongle lock");
+  shell.setDongleLocked(false);
+  verify(shell.m_stackWidget->currentWidget() == home && homeButton->isChecked(), "unlock restores home");
+  QTimer::singleShot(30, &shell, [&] {
+    for (auto *widget : QApplication::topLevelWidgets())
+      if (auto *dialog = qobject_cast<QDialog *>(widget)) if (dialog->objectName() == "taskCreateDialog") dialog->reject();
+  });
+  shell.findChild<QPushButton *>("homeCreateTest")->click();
+  verify(shell.m_stackWidget->currentWidget() == home && server.requests.value("POST /api/pipelines") == 0, "cancelling home creation leaves the current task intact");
+  QTimer::singleShot(30, &shell, [&] {
+    for (auto *widget : QApplication::topLevelWidgets()) {
+      auto *dialog = qobject_cast<QDialog *>(widget);
+      if (!dialog || dialog->objectName() != "taskCreateDialog") continue;
+      dialog->findChild<QLineEdit *>("taskTargetInput")->setText("https://home.invalid");
+      dialog->findChild<QCheckBox *>("taskAuthorizationCheck")->setChecked(true);
+      dialog->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->click();
+    }
+  });
+  shell.findChild<QPushButton *>("homeCreateTest")->click();
+  verify(awaitCondition([&] { return flow->selectedTaskId() == "new-home" && flow->taskContextReady()
+      && shell.m_stackWidget->currentWidget() == flow && flow->workspaceStage() == 1; }), "creating from home enters the same task scan workspace");
+  verify(created["config"].toObject()["task_mode"] == "assessment"
+      && server.requests.value("POST /api/pipelines") == 1
+      && server.requests.value("POST /api/pipelines/new-home/start") == 1, "home creates and starts exactly one complete test task");
+  shell.showHome(); unavailable = true; home->refresh();
+  verify(awaitCondition([&] { return home->m_pendingResponses == 0; }) && home->m_recentTable->rowCount() == 0,
+      "home refresh failure clears stale task shortcuts");
+  for (auto it = server.requests.cbegin(); it != server.requests.cend(); ++it)
+    if (it.key().startsWith("POST ")) verify(it.key() == "POST /api/pipelines" || it.key() == "POST /api/pipelines/new-home/start",
+        "home navigation never starts scans or execution");
+  qApp->setStyleSheet(previousStyle);
+}
+
 int main(int argc, char **argv)
 {
   QTemporaryDir isolatedSettings;
   if (!isolatedSettings.isValid()) return 1;
   qputenv("XDG_CONFIG_HOME", isolatedSettings.path().toUtf8());
   qputenv("XDG_DATA_HOME", isolatedSettings.path().toUtf8());
+  Theme::enableHighDpiScaling();
+  Theme::applyWslDisplayScaling(QFileInfo(QString::fromLocal8Bit(argv[0])).absoluteDir()
+      .filePath(QStringLiteral("RedTeam-Platform")));
   QApplication app(argc, argv);
   app.setFont(Theme::uiFont());
   app.setQuitOnLastWindowClosed(false);
@@ -230,6 +401,23 @@ int main(int argc, char **argv)
     std::cout << "PASS " << name << std::endl;
   };
   runPageComponentsChecks(verify);
+  if (qEnvironmentVariableIsSet("REDTEAM_MANUAL_PLAN_ONLY")) {
+    runManualTaskPlanChecks(verify);
+    std::cout << "TOTAL " << checks << " manual plan checks passed" << std::endl;
+    return 0;
+  }
+  if (qEnvironmentVariableIsSet("REDTEAM_TASK_JOURNEY_ONLY")) {
+    runTaskContinuityChecks(verify);
+    runTaskContinuityChecks(verify, true);
+    std::cout << "TOTAL " << checks << " continuous task journey checks passed" << std::endl;
+    return 0;
+  }
+  if(qEnvironmentVariableIsSet("REDTEAM_COMPACT_ONLY")) {
+    runCompactLayoutChecks(verify);
+    std::cout << "TOTAL " << checks << " compact layout checks passed" << std::endl;
+    return 0;
+  }
+
   if (qEnvironmentVariableIsSet("REDTEAM_TASK_LIST_ONLY")) {
     runTaskListRefreshChecks(verify);
     std::cout << "TOTAL " << checks << " task list checks passed" << std::endl;
@@ -246,12 +434,27 @@ int main(int argc, char **argv)
     std::cout << "TOTAL " << checks << " Web start checks passed" << std::endl;
     return 0;
   }
+  const QString screenshotDirectory = qEnvironmentVariable("REDTEAM_RIBBON_SCREENSHOT_DIR");
+  const QString contextSegment = qEnvironmentVariable("REDTEAM_CONTEXT_SEGMENT");
+  if (contextSegment != "details") {
+  runHomeWorkflowChecks(verify);
+  if (qEnvironmentVariableIsSet("REDTEAM_HOME_ONLY")) {
+    std::cout << "TOTAL " << checks << " home checks passed" << std::endl;
+    return 0;
+  }
   runUnifiedShellWorkflowChecks(verify);
   if (qEnvironmentVariableIsSet("REDTEAM_UNIFIED_ONLY")) {
     std::cout << "TOTAL " << checks << " unified shell checks passed" << std::endl;
     return 0;
   }
-  const QString screenshotDirectory = qEnvironmentVariable("REDTEAM_RIBBON_SCREENSHOT_DIR");
+  runTaskContinuityChecks(verify);
+  runTaskContinuityChecks(verify, true);
+  runManualTaskPlanChecks(verify);
+  runDeploymentResourceChecks(verify);
+  if (qEnvironmentVariableIsSet("REDTEAM_RESOURCES_ONLY")) {
+    std::cout << "TOTAL " << checks << " resource checks passed" << std::endl;
+    return 0;
+  }
   if (qEnvironmentVariableIsSet("REDTEAM_HANDOFF_ONLY")) {
     runWorkflowHandoffChecks(verify);
     runFindingPlanChecks(verify);
@@ -262,6 +465,11 @@ int main(int argc, char **argv)
   if (qEnvironmentVariableIsSet("REDTEAM_INTELLIGENT_ONLY")) {
     std::cout << "TOTAL " << checks << " intelligent workflow checks passed" << std::endl;
     return 0;
+  }
+  if (contextSegment == "workflow") {
+    std::cout << "TOTAL " << checks << " workflow checks passed" << std::endl;
+    return 0;
+  }
   }
   const auto saveRibbonScreenshot = [&](MainWindow &window, const QString &name, const QSize &size = QSize(1600, 1000)) {
     if (screenshotDirectory.isEmpty()) return;
@@ -352,6 +560,7 @@ int main(int argc, char **argv)
     ApiClient ribbonApi(QStringLiteral("http://127.0.0.1:%1").arg(ribbonServer.serverPort()));
     MainWindow shell(&ribbonApi, "admin", "fixture-user");
     shell.m_dongleTimer->stop(); shell.m_ws->disconnectFromServer(); shell.show(); QCoreApplication::processEvents();
+    shell.openRibbonFeature("resources.discovery"); // Geometry checks require the feature ribbon to be visible.
     const QList<QStringList> expectedFeatures{
       {"网络拓扑探测", "网络拓扑编辑", "网络拓扑展示", "网络拓扑信息标注"},
       {"系统漏洞扫描", "Web漏洞扫描", "端口扫描", "弱口令扫描", "后门探测"},
@@ -377,13 +586,14 @@ int main(int argc, char **argv)
     }
     shell.m_ribbon->setActiveFeature("resources.discovery");
     shell.m_dongleTimer->stop(); shell.m_ws->disconnectFromServer(); shell.show();
-    verify(!shell.findChild<QPushButton *>("ribbonTaskCenter") && !shell.findChild<QPushButton *>("ribbonHome"), "title has no extra task or workbench navigation");
+    verify(!shell.findChild<QPushButton *>("ribbonTaskCenter") && shell.findChild<QPushButton *>("ribbonHome"), "title provides a permanent home entry beside the modules");
     shell.openRibbonFeature("plans.task");
     verify(shell.m_taskGate->isVisible() && shell.m_featureTitle->text() == QStringLiteral("漏洞利用预案"), "task-dependent feature presents its own page and explicit task selection");
     shell.m_chooseTaskButton->click();
     verify(awaitCondition([&]() {return shell.m_flowPage->m_flowListFresh && shell.m_flowPage->m_flowTable->rowCount() == 1;}), "feature task selector loads the actual task list");
     shell.m_flowPage->onFlowDoubleClicked(0);
-    verify(awaitCondition([&]() {return shell.m_flowPage->taskContextReady() && shell.m_activeFeature == "plans.task";}), "selecting a task returns to the requested feature");
+    verify(awaitCondition([&]() {return shell.m_flowPage->taskContextReady() && shell.m_activeFeature == "evaluation.results";}), "task management resumes the selected task by its saved state");
+    shell.openRibbonFeature("plans.task");
     verify(!shell.m_taskGate->isVisible() && shell.m_flowPage->m_stageTabs->currentWidget() == shell.m_flowPage->m_planTab, "task selection opens the visible plan content");
     for (const auto &id : QStringList{"scans.ports", "scans.system", "scans.web", "scans.passwords"}) {
       shell.openRibbonFeature(id);
@@ -488,13 +698,15 @@ int main(int argc, char **argv)
     shell.m_chooseTaskButton->click();
     verify(shell.m_flowPage->m_stack->currentIndex() == 0 && !shell.m_taskGate->isVisible(), "choosing a replacement task keeps the task list visible instead of reopening the old task");
     shell.m_flowPage->openTaskAnalysis("D");
+    shell.openRibbonFeature("plans.task");
     verify(awaitCondition([&]() {return shell.m_flowPage->taskContextReady() && shell.m_taskGate->isVisible();}),
       "selecting the same incompatible task again still shows its reason instead of a mismatched page");
     shell.m_chooseTaskButton->click();
     verify(awaitCondition([&]() {return shell.m_flowPage->m_flowListFresh && shell.m_flowPage->m_flowTable->rowCount() == 1;}), "replacement task selector loads visible tasks");
     shell.m_flowPage->onFlowDoubleClicked(0);
     verify(awaitCondition([&]() {return shell.m_flowPage->selectedTaskId() == "R" && shell.m_flowPage->taskContextReady()
-      && shell.m_activeFeature == "plans.task";}), "replacement selection resumes the originally requested plan feature");
+      && shell.m_activeFeature == "evaluation.results";}), "replacement selection from task management follows saved task state");
+    shell.openRibbonFeature("plans.task");
     for (const auto &id : QStringList{"plans.task", "scans.web", "topology.display", "system.permissions"}) {
       shell.openRibbonFeature(id); shell.resize(1024, 600); QTest::qWait(30);
       verify(shell.size() == QSize(1024, 600), "small-height workspace respects the existing minimum window size");
@@ -542,8 +754,8 @@ int main(int argc, char **argv)
     shell.m_switchTaskButton->click();
     verify(awaitCondition([&]() {return shell.m_flowPage->m_flowListFresh && shell.m_flowPage->m_flowTable->rowCount() == 1;}), "switch task is directly reachable in current context");
     shell.m_flowPage->onFlowDoubleClicked(0);
-    verify(awaitCondition([&]() {return shell.m_flowPage->selectedTaskId() == "R" && shell.m_flowPage->taskContextReady() && shell.m_activeFeature == "scans.web";}),
-      "choosing another task keeps the requested function instead of resetting the workflow");
+    verify(awaitCondition([&]() {return shell.m_flowPage->selectedTaskId() == "R" && shell.m_flowPage->taskContextReady() && shell.m_activeFeature == "evaluation.results";}),
+      "task switching is performed in task management and resumes saved progress");
     app.setStyleSheet(reviewOriginalStyle);
   }
   {
@@ -716,6 +928,13 @@ int main(int argc, char **argv)
     verify(awaitCondition([&]() {return tasks.m_pendingTaskActions.isEmpty();}) && tasks.m_selectedPipelineId == "B"
       && tasks.m_stack->currentIndex() == 1 && tasks.m_statusLabel->text().contains("delete fixture failure"),
       "failed task deletion retains the selected workspace and shows the failure");
+    bool visibleFailure = false;
+    for (auto *notice : tasks.findChildren<QMessageBox*>())
+      if (notice->windowTitle() == QStringLiteral("删除任务失败")) {
+        visibleFailure = notice->isVisible() && notice->windowModality() == Qt::NonModal;
+        notice->close();
+      }
+    verify(visibleFailure, "delete failure remains visible without blocking other task interactions");
     rejectDelete = false; acceptDelete(); tasks.openTaskAnalysis("A");
     verify(awaitCondition([&]() {return tasks.taskContextReady() && tasks.m_pendingTaskActions.isEmpty();})
       && tasks.m_selectedPipelineId == "A" && tasks.m_stack->currentIndex() == 1,
@@ -809,11 +1028,10 @@ int main(int argc, char **argv)
     verify(shell.m_stackWidget->count() == 12 && !shell.m_flowPage && !shell.m_analysisPage,
       "startup preserves navigation slots while deferring unused modules");
     for (int index = 1; index < 7; ++index) {
-      if (index == 2) continue; // Asset discovery is the composition graph's initial function.
       verify(shell.m_stackWidget->widget(index)->property("deferredModule").toBool(), "unopened module retains a lightweight placeholder");
     }
-    verify(shell.m_activeFeature == "resources.discovery" && shell.m_stackWidget->currentIndex() == 2,
-      "initial page is the composition graph asset discovery function");
+    verify(shell.m_activeFeature.isEmpty() && shell.m_stackWidget->currentIndex() == 0,
+      "initial page is home without opening a task or asset discovery");
     verify(!startupServer.requests.value("GET /api/playbooks?includeGenerated=true")
       && !startupServer.requests.value("GET /api/users")
       && !startupServer.requests.value("GET /api/config"),
@@ -1106,8 +1324,8 @@ int main(int argc, char **argv)
     verify(aggregate.m_resultCategory->currentData() == "vulnerability"
       && aggregate.m_resultSource->itemText(0) == "全部扫描任务", "default filter is vulnerability with one task selector");
     verify(aggregate.m_resultTree->rootIndex().isValid(), "candidate-only view hides redundant group header");
-    verify(aggregate.m_resultTree->isColumnHidden(2) && aggregate.m_resultTree->isColumnHidden(3)
-      && aggregate.m_resultTree->isColumnHidden(7), "source payload and separate conclusion retained in model but hidden from main table");
+    verify(aggregate.m_resultTree->isColumnHidden(2) && !aggregate.m_resultTree->isColumnHidden(3)
+      && aggregate.m_resultTree->isColumnHidden(7), "task finding table exposes payload status while retaining source and conclusion in details");
     aggregate.resize(1024, 600); app.processEvents();
     verify(aggregate.m_resultTree->width() > 900 && !aggregate.m_statusLabel->isVisible(), "full-width first screen has no task sidebar or blue status block");
     auto *taskManager = aggregate.findChild<QDialog*>("scanAuxTasks");
@@ -1713,25 +1931,33 @@ int main(int argc, char **argv)
   flow.setReturnPage(3, QStringLiteral("智能分析"));
   int returnedPage = -1;
   QObject::connect(&flow, &FlowPage::returnPageRequested, &flow, [&](int page) { returnedPage = page; });
+  const QString returningTask = flow.selectedTaskId();
   flow.onBackToList();
   QTest::qWait(350);
   verify(returnedPage == 3 && flow.m_stack->currentIndex() == 0, "return keeps exact source page");
-  verify(flow.m_selectedPipelineId.isEmpty() && flow.m_aiPanel->m_pipelineId.isEmpty(), "return clears task and AI identity");
+  verify(flow.selectedTaskId() == returningTask && flow.m_aiPanel->m_pipelineId == returningTask
+      && flow.findChild<QPushButton *>("taskListContinue")->isVisible(),
+      "returning to the list retains task scope and provides continue current task");
+  flow.findChild<QPushButton *>("taskListContinue")->click();
+  verify(flow.m_stack->currentIndex() == 1 && flow.selectedTaskId() == returningTask,
+      "continuing from the list reuses the saved task instead of selecting again");
+  flow.leaveSelectedTask();
+  verify(flow.m_selectedPipelineId.isEmpty() && flow.m_aiPanel->m_pipelineId.isEmpty(), "explicit exit clears task and AI identity");
   verify(flow.m_analysisTab->m_pipeline.value("pipeline_id").toString().isEmpty()
       && flow.m_analysisTab->m_items.isEmpty() && flow.m_analysisTab->m_table->rowCount() == 0
       && flow.m_planTab->m_pipeline.value("pipeline_id").toString().isEmpty()
-      && flow.m_planTab->m_steps->rowCount() == 0, "return clears analysis and plan content");
-  verify(flow.m_scanTab->m_scopedTasks && flow.m_scanTab->m_scopeTaskIds.isEmpty() && flow.m_scanTab->m_selectedTaskId.isEmpty(), "return blocks global fallback and clears scan scope");
+      && flow.m_planTab->m_steps->rowCount() == 0, "explicit exit clears analysis and plan content");
+  verify(flow.m_scanTab->m_scopedTasks && flow.m_scanTab->m_scopeTaskIds.isEmpty() && flow.m_scanTab->m_selectedTaskId.isEmpty(), "explicit exit blocks global fallback and clears scan scope");
   verify(flow.m_scanTab->m_portScanTable->rowCount() == 0 && !flow.m_scanTab->m_pollTimer->isActive(), "late scan response cannot revive rows or polling");
-  verify(flow.m_scanTab->m_portTargetInput->text().isEmpty() && flow.m_scanTab->m_currentTarget.isEmpty() && flow.m_scanTab->m_currentTaskTarget.isEmpty(), "return clears every scan target");
-  verify(flow.m_execTab->m_taskMonitor->m_pipelineId.isEmpty() && flow.m_evalTab->m_taskResults->m_pipelineId.isEmpty(), "return clears execution and result identity");
-  verify(flow.m_evalTab->m_taskResults->m_snapshot.isEmpty() && flow.m_evalTab->m_taskResults->m_report.isEmpty(), "return clears snapshot and report content");
-  verify(flow.m_startBtn->isHidden() && flow.m_approveBtn->isHidden() && flow.m_resultBtn->isHidden() && flow.m_moreBtn->isHidden(), "return clears task toolbar");
-  verify(!flow.m_cancelAction->isVisible() && !flow.m_deleteAction->isVisible() && !flow.m_reportAction->isVisible(), "return clears task menu");
-  verify(flow.m_logPanel->m_pipelineId.isEmpty() && !flow.m_logToggleBtn->isEnabled(), "return clears task logs");
+  verify(flow.m_scanTab->m_portTargetInput->text().isEmpty() && flow.m_scanTab->m_currentTarget.isEmpty() && flow.m_scanTab->m_currentTaskTarget.isEmpty(), "explicit exit clears every scan target");
+  verify(flow.m_execTab->m_taskMonitor->m_pipelineId.isEmpty() && flow.m_evalTab->m_taskResults->m_pipelineId.isEmpty(), "explicit exit clears execution and result identity");
+  verify(flow.m_evalTab->m_taskResults->m_snapshot.isEmpty() && flow.m_evalTab->m_taskResults->m_report.isEmpty(), "explicit exit clears snapshot and report content");
+  verify(flow.m_startBtn->isHidden() && flow.m_approveBtn->isHidden() && flow.m_resultBtn->isHidden() && flow.m_moreBtn->isHidden(), "explicit exit clears task toolbar");
+  verify(!flow.m_cancelAction->isVisible() && !flow.m_deleteAction->isVisible() && !flow.m_reportAction->isVisible(), "explicit exit clears task menu");
+  verify(flow.m_logPanel->m_pipelineId.isEmpty() && !flow.m_logToggleBtn->isEnabled(), "explicit exit clears task logs");
   bool phasesPending = flow.m_stepIndicator->phases().size() == 6;
   for (const auto &phase : flow.m_stepIndicator->phases()) phasesPending = phasesPending && phase.status == "pending";
-  verify(phasesPending, "return clears previous phase completion");
+  verify(phasesPending, "explicit exit clears previous phase completion");
   const int requestsAfterReturn = server.requests.value("GET /api/scan-tasks");
   flow.m_scanTab->onRefreshTasks();
   QTest::qWait(50);
@@ -1747,7 +1973,7 @@ int main(int argc, char **argv)
   const int oldDetailRequests = server.requests.value("GET /api/scan-tasks/scan-A");
   emit flow.m_scanTab->m_portScanTable->cellClicked(0, 0);
   verify(awaitCondition([&]() { return server.requests.value("GET /api/scan-tasks/scan-A") > oldDetailRequests; }), "delayed scan detail request is in flight");
-  flow.onBackToList();
+  flow.leaveSelectedTask();
   delayedScans = false;
   flow.openTaskAnalysis("A");
   verify(awaitCondition([&]() { return flow.m_scanTab->m_portScanTable->rowCount() == 1; }), "fresh scoped child list loads");
@@ -1756,7 +1982,7 @@ int main(int argc, char **argv)
   flow.m_scanTab->m_currentTarget = QStringLiteral("fresh-context-marker");
   QTest::qWait(350);
   verify(flow.m_scanTab->m_currentTarget == "fresh-context-marker", "old same-ID scan response cannot overwrite reopened context");
-  flow.onBackToList();
+  flow.leaveSelectedTask();
   QTest::qWait(350);
   verify(flow.m_scanTab->m_currentTarget.isEmpty() && flow.m_scanTab->m_resultTree->topLevelItemCount() == 0, "late scan detail cannot restore old target or results");
   {
@@ -2017,6 +2243,7 @@ int main(int argc, char **argv)
     "ribbon retains existing account and navigation permission boundaries");
   auto *toggle = window.findChild<QPushButton*>("navigationToggle");
   verify(toggle && window.m_navList->flow() == QListView::LeftToRight, "header has horizontal collapsible navigation");
+  window.openRibbonFeature("resources.discovery"); // Home intentionally hides the subfunction collapse control.
   window.resize(1024, 600);
   QTest::qWait(100);
   auto *moduleBar = window.findChild<QFrame*>("ribbonModuleBar");
@@ -2027,9 +2254,9 @@ int main(int argc, char **argv)
   verify(!window.findChild<QFrame*>("appTopBar") && !window.findChild<QLabel *>("platformTitle")
     && window.windowTitle() == QStringLiteral("信息系统安全智能化测试平台"),
     "platform name appears in the window title without a duplicate banner");
-  verify(!window.findChild<QPushButton *>("ribbonTaskCenter") && !window.findChild<QPushButton *>("ribbonHome")
+  verify(!window.findChild<QPushButton *>("ribbonTaskCenter") && window.findChild<QPushButton *>("ribbonHome")
     && !window.findChild<QPushButton *>("ribbonKnowledge") && window.m_ribbon,
-    "only composition graph module navigation is present in the title area");
+    "home and composition graph module navigation are present in the title area");
   // Topology, scans, plans, attacks, evaluation, resources, system.
   const int expectedHosts[] = {2, 1, 1, 1, 1, 2, 1};
   for (int row = 0; row < 7; ++row) {
@@ -2182,13 +2409,13 @@ int main(int argc, char **argv)
   flow.m_planTab->useSourcePlaybook("generated-source");
   QTest::qWait(50);
   verify(server.requests.value("POST /api/pipelines/source/plan") == 1, "reopening the same generated source preserves the existing draft");
-  flow.onBackToList();
+  flow.leaveSelectedTask();
   savedPlan = {};
   flow.openTaskAnalysis("source");
   verify(awaitCondition([&]() { return flow.m_planTab->m_source->count() == 1; }), "saved source playbook can be recovered after reopening without a draft");
   flow.m_planTab->m_create->click();
   verify(awaitCondition([&]() { return flow.m_planTab->m_steps->rowCount() == 2; }), "recovered source playbook creates a draft with executable steps");
-  flow.onBackToList();
+  flow.leaveSelectedTask();
   savedPlan = {};
   generationDelay = 250;
   flow.openTaskAnalysis("source");
@@ -2197,7 +2424,7 @@ int main(int argc, char **argv)
   const int previousDrafts = server.requests.value("POST /api/pipelines/source/plan");
   flow.m_analysisTab->m_planButton->click();
   verify(awaitCondition([&]() { return server.requests.value("POST /api/scan-tasks/scan-source/generate-playbook") > previousGenerations; }), "delayed generation is in flight");
-  flow.onBackToList();
+  flow.leaveSelectedTask();
   QTest::qWait(350);
   verify(server.requests.value("POST /api/pipelines/source/plan") == previousDrafts
       && flow.m_planTab->m_steps->rowCount() == 0 && flow.m_selectedPipelineId.isEmpty(),
@@ -2236,8 +2463,10 @@ int main(int argc, char **argv)
     auto first = taskRecord("identity-a"), second = taskRecord("identity-b");
     first["task_no"] = firstNumber; second["task_no"] = secondNumber;
     first["status"] = "completed"; second["status"] = "failed";
-    const QString longTarget = "http://192.0.2.40/vulnerabilities/sqli/";
-    const QString longName = longTarget + QStringLiteral(" 安全测试 20261023-131901");
+    // Include a realistic deep path so the narrow view needs more lines than
+    // the two-line timestamp even with the compact body font.
+    const QString longTarget = "http://192.0.2.40/vulnerabilities/sqli/details/parameters-and-evidence/";
+    const QString longName = longTarget + QStringLiteral(" 安全测试 20261023-131901 · 多入口扫描与验证证据归档任务");
     first["target"] = longTarget;
     first["config"] = QJsonObject{{"task_name", longName}, {"test_type", "web"}};
     first["created_at"] = "2026-10-23T05:28:41Z"; first["created_by"] = "admin";
@@ -2804,7 +3033,8 @@ int main(int argc, char **argv)
     sourcePage.renderGroupedResults(finalRecords);
     verify(sourcePage.m_resultTree->topLevelItemCount()==1 && !sourcePage.m_resultTree->isHidden() && !sourcePage.m_sourceDetailButton->isHidden(),"source scans expose the saved vulnerability list alongside the source evidence dialog entry");
     auto *row=sourcePage.m_resultTree->topLevelItem(0)->child(0);
-    verify(row->text(1)=="Unchecked copy" && row->text(3)=="CWE-120" && row->text(5)=="src/input.c:12","source table exposes title, category and source location");
+    verify(row->text(1)=="Unchecked copy · CWE-120" && row->text(3).contains(QStringLiteral("代码：状态未提供"))
+      && row->text(5)=="src/input.c:12","source table keeps CWE in the title and reserves payload status for associated code");
     verify(!sourcePage.m_resultTree->isColumnHidden(7) && !sourcePage.m_openCheckedFindings->isHidden(),"source findings expose verification conclusions and the batch preparation entry");
     sourcePage.setCurrentFindingsChecked(true);
     verify(sourcePage.selectableFindingItems().size()==1 && row->checkState(0)==Qt::Checked && sourcePage.m_openCheckedFindings->isEnabled(),"saved source findings can be selected directly without opening a second list");

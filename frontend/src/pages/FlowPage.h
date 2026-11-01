@@ -49,6 +49,8 @@ public:
   void switchToStageTab(int idx);
   void setRibbonNavigation(bool enabled);
   void showTaskList();
+  void openManagedTask(const QString &pipelineId);
+  void resumeCurrentTask();
   void requestWorkspaceStage(int stage);
   bool hasSelectedTask() const;
   int workspaceStage() const;
@@ -67,6 +69,7 @@ public:
   void useTaskPlaybook(const QString &playbookId);
   bool taskListVisible() const { return m_stack->currentIndex() == 0; }
   void openFindingWorkspace(const QString &pipelineId, const QList<qint64> &findingIds);
+  void openFindingAttackWorkspace(const QString &pipelineId, const QList<qint64> &findingIds);
   void setReturnPage(int page, const QString &title);
   void createTestForTarget(const QString &target, const QJsonObject &topologySource = {});
   void createAssessmentTask();
@@ -80,6 +83,7 @@ signals:
   void taskReportOpened();
   void assessmentTaskOpened();
   void taskCreationFailed();
+  void managedTaskOpened();
   void workspaceStageChanged(int stage);
 
 public slots:
@@ -118,12 +122,13 @@ private:
   void applyTaskAction(const QString &pipelineId, bool remove);
   QSet<QString> m_pendingTaskActions;
   void loadFlowDetail(const QString &pipelineId);
-  void openManagedTask(const QString &pipelineId);
+
   bool m_resumeTaskStage = false;
   void clearRunContext();
   void showTaskDetailError(const QString &message);
   void showAssessment(const QString &pipelineId);
   QList<qint64> m_pendingFindingIds;
+  QList<qint64> m_pendingFindingAttackIds;
 
   QString statusText(const QString &status) const;
   QString statusIcon(const QString &status) const;

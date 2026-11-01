@@ -52,6 +52,8 @@ signals:
   void assessmentRequested(const QString &pipelineId);
   void categoryViewChanged(int category);
   void planReviewRequested();
+  void existingPlaybookRequested();
+  void findingAttackRequested();
 
 public slots:
   void onRefreshRuns();
@@ -86,6 +88,7 @@ private:
   QWidget *m_standaloneControls;
   QLabel *m_pipelineHint;
   QPushButton *m_reviewPlan = nullptr;
+  QWidget *m_taskAttackActions = nullptr;
   QComboBox *m_playbookCombo;
   QLineEdit *m_targetInput;
   QPushButton *m_execBtn;

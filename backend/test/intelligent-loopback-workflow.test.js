@@ -52,7 +52,7 @@ async function until(check) {
   assert.fail('Real local task did not reach its expected state');
 }
 
-for (const workflow of ['original', 'intelligent']) test(`${workflow}: API creation -> actual scan -> review -> real curl -> evidence -> report and export`, async t => {
+for (const workflow of ['original', 'intelligent', 'manual_recovery', 'manual_scan_only']) test(`${workflow}: task -> review -> real curl -> evidence -> report and export`, async t => {
   modelCalls = 0;
   const db = getDb(':memory:'); t.after(closeDb);
   await runMigrations(db, fileURLToPath(new URL('../src/db/migrations/', import.meta.url)));
@@ -78,25 +78,47 @@ for (const workflow of ['original', 'intelligent']) test(`${workflow}: API creat
   };
   const task = await request('', { target, request_id: 'loopback-full-task', config: {
     task_mode: 'assessment', ...(workflow === 'intelligent' ? { workflow_mode: 'intelligent' } : {}), authorization_confirmed: true,
+    auto_execute: workflow !== 'manual_scan_only',
     authorization_scope: target, task_scope: { includes: [target], excludes: [], execution_location: 'scanner', discovery_budget: 0 },
   } });
-  await request('/' + task.pipeline_id + '/start', {});
+  const manual = workflow.startsWith('manual_');
+  if (manual) {
+    // A retained partial scan mirrors the real failure: a completed detection
+    // and its candidate survive, but a different child check timed out. Only
+    // the approved curl steps below perform new work, against loopback alone.
+    db.prepare("UPDATE pipelines SET status='failed',error_message='scan incomplete' WHERE pipeline_id=?").run(task.pipeline_id);
+    db.prepare("INSERT INTO pipeline_steps(pipeline_id,step_order,step_type,status,error_message) VALUES (?,0,'scan','failed','scan incomplete')").run(task.pipeline_id);
+    db.prepare("INSERT INTO scan_tasks(scan_task_id,pipeline_id,target,scan_type,status,created_by) VALUES ('retained',?,?,'web_scan','COMPLETED','loopback-owner')").run(task.pipeline_id,target);
+    db.prepare("INSERT INTO scan_results(scan_task_id,result_type,severity,source_tool,result_data) VALUES ('retained','web_vuln','medium','nikto','{}')").run();
+    db.prepare("INSERT INTO scan_tool_runs(tool_run_id,scan_task_id,tool_id,state,started_at,completed_at,outcome) VALUES ('retained-call','retained','nikto','completed',datetime('now'),datetime('now'),?)").run(JSON.stringify({stopped:true,tool_started:true,exit_code:0,parser_coverage_known:true}));
+    db.prepare("UPDATE pipelines SET scan_task_id='retained' WHERE pipeline_id=?").run(task.pipeline_id);
+    db.prepare("INSERT INTO playbooks(playbook_id,name,target_type,roles_allowed) VALUES ('preset','Local response observation','[\"any\"]','[\"admin\",\"user\"]')").run();
+    for (let index=0;index<2;index++) db.prepare("INSERT INTO playbook_steps(playbook_id,step_index,step_id,name,tool_id,args_template) VALUES ('preset',?,?,'Observe headers','curl',?)")
+      .run(index,'observe_'+index,JSON.stringify(['--head','<target>']));
+  } else await request('/' + task.pipeline_id + '/start', {});
   const row = () => db.prepare('SELECT * FROM pipelines WHERE pipeline_id=?').get(task.pipeline_id);
   await until(() => row().status !== 'running');
-  assert.equal(row().status, 'awaiting_approval', row().error_message);
+  assert.equal(row().status, manual ? 'failed' : 'awaiting_approval', row().error_message);
   assert.equal(methods.filter(method => method === 'HEAD').length, 0);
   const scans = db.prepare('SELECT * FROM scan_tasks WHERE pipeline_id=? ORDER BY id').all(task.pipeline_id);
-  assert.equal(scans[0].scan_type, 'react_scan');
-  assert.ok(scans.some(scan => scan.scan_type === 'app_discovery'));
+  if (!manual) {
+    assert.equal(scans[0].scan_type, 'react_scan');
+    assert.ok(scans.some(scan => scan.scan_type === 'app_discovery'));
+  }
   let plan = await request('/' + task.pipeline_id + '/plan');
-  if (workflow === 'original') {
+  if (workflow === 'original' || manual) {
     assert.equal(plan, null);
-    const draft = await request('/' + task.pipeline_id + '/plan', { playbook_id: row().generated_playbook_id });
+    const draft = await request('/' + task.pipeline_id + '/plan', {
+      playbook_id: manual ? 'preset' : row().generated_playbook_id,
+      ...(manual ? {continue_after_scan_failure:true} : {}),
+    });
     plan = await request('/' + task.pipeline_id + '/plan/submit', { revision: draft.revision });
   }
   assert.equal(plan.state, 'submitted');
   assert.equal(plan.content.steps.length, 2);
-  await request('/' + task.pipeline_id + '/plan/approve', { revision: plan.revision });
+  await request('/' + task.pipeline_id + '/plan/approve', {
+    revision: plan.revision, ...(workflow === 'manual_scan_only' ? {enable_execution:true} : {}),
+  });
   await until(() => !['running', 'awaiting_approval'].includes(row().status));
   assert.equal(row().status, 'completed', row().error_message);
   assert.equal(methods.filter(method => method === 'HEAD').length, 2);
@@ -112,5 +134,11 @@ for (const workflow of ['original', 'intelligent']) test(`${workflow}: API creat
   const exported = await fetch(endpoint + '/tasks/' + task.pipeline_id + '/results/reports/' + report.report.report_id + '/export?format=json');
   assert.equal(exported.status, 200);
   assert.ok((await exported.text()).includes(task.pipeline_id));
-  assert.equal(modelCalls, 4);
+  assert.equal(modelCalls, manual ? 0 : 4);
+  if (manual) {
+    assert.equal(db.prepare("SELECT status FROM pipeline_steps WHERE pipeline_id=? AND step_type='scan'").get(task.pipeline_id).status,'failed');
+    assert.equal(JSON.parse(row().result).manual_scan_continuation.scan_error,'scan incomplete');
+    assert.equal(db.prepare('SELECT count(*) n FROM execution_runs').get().n,1);
+    assert.equal(db.prepare("SELECT count(*) n FROM scan_results WHERE scan_task_id='retained'").get().n,1);
+  }
 });

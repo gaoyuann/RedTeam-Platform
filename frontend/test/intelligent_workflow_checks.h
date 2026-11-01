@@ -78,7 +78,7 @@ static void runIntelligentWorkflowChecks(const std::function<void(bool, const ch
   verify(awaitCondition([&] { return flow.taskContextReady() && flow.m_lastDisplayedDetail["status"] == "running"; }),
     "intelligent test retains its task while scanning");
   verify(flow.m_stageTabs->tabBar()->isHidden(),
-    "main ribbon owns stage navigation without a second workbench tab bar");
+    "ribbon mode uses module navigation instead of repeating the full workflow tabs");
   flow.m_stageTabs->setCurrentIndex(2);
   verify(flow.selectedTaskId() == "intelligent-test" && flow.workspaceStage() == 2,
     "opening task analysis from scanning retains the same task");

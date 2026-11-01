@@ -99,7 +99,7 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   auto *optional = new QLabel(QStringLiteral("整体编排预案；具体漏洞的预案、执行版本和证据分别保存。"), this);
   optional->setObjectName("optionalPlanHint");
   optional->setWordWrap(true);
-  optional->setStyleSheet("font-size:16px;color:#7187a5;padding:2px 0;");
+  optional->setStyleSheet("font-size:14px;color:#7187a5;padding:2px 0;");
   layout->addWidget(optional);
   m_status = new QLabel(this);
   m_status->setObjectName(QStringLiteral("planStatusLabel"));
@@ -115,7 +115,7 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   m_scope = new QLabel(this);
   m_scope->setTextFormat(Qt::PlainText);
   m_scope->setWordWrap(true);
-  m_scope->setStyleSheet(QStringLiteral("color:#64748b; font-size:16px;"));
+  m_scope->setStyleSheet(QStringLiteral("color:#64748b; font-size:14px;"));
   auto *scopeBox = new QGroupBox(QStringLiteral("任务来源与范围"), this);
   scopeBox->setObjectName("planScopeDetails");
   scopeBox->setCheckable(true); scopeBox->setChecked(false);
@@ -274,7 +274,7 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
   auto *footer = new QLabel(QStringLiteral("草稿只修改当前任务，来源预案保持原样。提审后锁定编辑，修改须返回编辑并重新提审；批准的执行版本仅保存在所属任务，执行前检查仍需通过。"), this);
   footer->setObjectName("planVersionHint");
   footer->setWordWrap(true);
-  footer->setStyleSheet(QStringLiteral("font-size:16px; color:#64748b;"));
+  footer->setStyleSheet(QStringLiteral("font-size:14px; color:#64748b;"));
   layout->addWidget(footer);
   // Scroll editable content while keeping save/review actions visible.
   auto *body = new QWidget(this);
@@ -293,7 +293,9 @@ TaskPlanPage::TaskPlanPage(ApiClient *api, const QString &role, QWidget *parent)
 
   connect(m_refresh, &QPushButton::clicked, this, [this]() { refresh(true); });
   connect(m_create, &QPushButton::clicked, this, [this]() {
-    mutate({}, {{"playbook_id", m_source->currentData().toString()}});
+    QJsonObject body{{"playbook_id", m_source->currentData().toString()}};
+    if (m_canContinueFailedScan) body["continue_after_scan_failure"] = true;
+    mutate({}, body);
   });
   connect(m_name, &QLineEdit::textChanged, this, [this](const QString &name) {
     if (m_rendering) return;
@@ -382,6 +384,8 @@ void TaskPlanPage::clearTaskContext()
   if (m_findingPlans) m_findingPlans->setTask({});
   if (m_planViews) m_planViews->setCurrentWidget(m_globalPlan);
   m_pipeline = {};
+  m_canContinueFailedScan = false;
+  m_selectionReason.clear();
   m_plan = {};
   m_content = {};
   m_busy = false;
@@ -398,6 +402,7 @@ void TaskPlanPage::setTaskContext(const QJsonObject &pipeline)
   const bool statusChanged = pipeline["status"] != m_pipeline.value("status");
   if (changed) clearTaskContext();
   m_pipeline = pipeline;
+  if (changed || statusChanged) { m_canContinueFailedScan = false; m_selectionReason.clear(); }
   if (changed) {
     const auto config = pipeline["config"].isObject() ? pipeline["config"].toObject()
       : QJsonDocument::fromJson(pipeline["config"].toString().toUtf8()).object();
@@ -427,6 +432,7 @@ void TaskPlanPage::refresh(bool discard)
     if (QMessageBox::question(this, QStringLiteral("刷新预案"), QStringLiteral("刷新会丢弃未保存修改，是否继续？")) != QMessageBox::Yes) return;
   }
   m_busy = true;
+  if (m_plan.isEmpty()) m_source->clear();
   updateControls();
   message(QStringLiteral("正在加载任务预案…"));
   const int context = m_contextVersion;
@@ -448,6 +454,7 @@ void TaskPlanPage::refresh(bool discard)
       guard->updateControls();
       return;
     }
+    guard->applySelectionState(response);
     guard->m_plan = response["data"].toObject();
     guard->m_content = guard->m_plan.value("content").toObject();
     guard->m_dirty = false;
@@ -492,6 +499,14 @@ void TaskPlanPage::showGlobalPlan()
   if (!m_dirty && !m_busy) refresh();
 }
 
+void TaskPlanPage::chooseExistingPlan()
+{
+  showGlobalPlan();
+  if (usesFindingPlans()) return; // Preserve historical staged-task semantics.
+  m_technicalDetails->setChecked(true);
+  m_source->setFocus(Qt::OtherFocusReason);
+}
+
 void TaskPlanPage::openFindingPlans(const QList<qint64> &findingIds)
 {
   if (m_pipeline["pipeline_id"].toString().isEmpty() || findingIds.isEmpty()) return;
@@ -525,6 +540,7 @@ void TaskPlanPage::loadSources(int requestVersion)
       guard->updateControls();
       return;
     }
+    guard->applySelectionState(response);
     for (const auto &value : response["data"].toArray()) {
       const auto playbook = value.toObject();
       guard->m_source->addItem(playbook["name"].toString(), playbook["playbook_id"].toString());
@@ -537,6 +553,7 @@ void TaskPlanPage::loadSources(int requestVersion)
         ? QStringLiteral("尚未生成本任务的验证预案。点击“生成攻击测试预案”，选定对象后会生成步骤并自动建立草稿。")
         : QStringLiteral("已找到本任务生成的验证预案；选择来源并建立草稿即可查看执行步骤。"));
     guard->updateControls();
+    if (!guard->m_selectionReason.isEmpty()) guard->message(guard->m_selectionReason);
   });
 }
 
@@ -639,7 +656,19 @@ void TaskPlanPage::render()
       ? QStringLiteral("选择当前任务的漏洞编制预案，填写方法、参数与预期证据，再单独确认攻击测试。")
       : QStringLiteral("当前任务不在待审批阶段；可从漏洞列表编制逐漏洞预案，或等待全局预案进入审批。"), status == "failed");
   }
+  if (m_plan.isEmpty() && !m_selectionReason.isEmpty()) message(m_selectionReason);
   updateControls();
+}
+
+void TaskPlanPage::applySelectionState(const QJsonObject &response)
+{
+  const auto selection = response.value("meta").toObject().value("plan_selection").toObject();
+  m_canContinueFailedScan = selection.value("can_create_from_existing").toBool()
+      && selection.value("requires_scan_failure_confirmation").toBool()
+      && selection.value("pipeline_status").toString() == "failed";
+  m_selectionReason = selection.value("reason").toString();
+  const auto status = selection.value("pipeline_status").toString();
+  if (!status.isEmpty()) m_pipeline["status"] = status;
 }
 
 void TaskPlanPage::updateControls()
@@ -656,7 +685,7 @@ void TaskPlanPage::updateControls()
   const bool selected = m_steps->currentRow() >= 0;
   const bool sourceMode =QStringList{"source_assisted","program_dynamic"}.contains( config["scan_mode"].toString());
   const bool intelligent = config["workflow_mode"] == "intelligent";
-  const bool technical = m_technicalDetails->isChecked() || state == "draft";
+  const bool technical = m_technicalDetails->isChecked() || state == "draft" || m_canContinueFailedScan;
   m_planConfiguration->setVisible(technical);
   m_stepEditor->setVisible(technical);
   m_steps->setColumnHidden(1, !technical);
@@ -665,7 +694,7 @@ void TaskPlanPage::updateControls()
   if (auto *hint = findChild<QLabel *>("optionalPlanHint")) hint->setVisible(!intelligent);
   if (auto *footer = findChild<QLabel *>("planVersionHint")) footer->setVisible(technical);
   m_technicalDetails->setEnabled(!m_pipeline.isEmpty() && state != "draft");
-  m_create->setVisible(!intelligent);
+  m_create->setVisible(!intelligent || m_canContinueFailedScan);
   m_save->setVisible(!intelligent || state == "draft");
   m_submit->setVisible(!intelligent || state == "draft");
   m_approve->setText(intelligent ? QStringLiteral("确认方案并开始测试") : QStringLiteral("批准此版本并执行"));
@@ -674,8 +703,11 @@ void TaskPlanPage::updateControls()
   m_generateSource->setVisible(sourceMode && m_plan.isEmpty());
   m_generateSource->setEnabled(waiting && !m_busy && !m_dirty);
   m_refresh->setEnabled(!m_busy && !m_pipeline.isEmpty());
-  m_source->setEnabled(waiting && m_plan.isEmpty() && !m_busy);
-  m_create->setEnabled(waiting && m_plan.isEmpty() && !m_busy && m_source->count() > 0);
+  const bool canSelect = waiting || m_canContinueFailedScan;
+  m_source->setEnabled(canSelect && m_plan.isEmpty() && !m_busy);
+  m_create->setEnabled(canSelect && m_plan.isEmpty() && !m_busy && m_source->count() > 0);
+  m_create->setText(m_canContinueFailedScan ? QStringLiteral("基于已有发现建立草稿") : QStringLiteral("建立任务草稿"));
+  m_create->setToolTip(m_canContinueFailedScan ? m_selectionReason : QString());
   m_name->setEnabled(editable);
   m_notes->setReadOnly(!editable);
   m_stepName->setEnabled(editable && selected);
@@ -777,19 +809,26 @@ void TaskPlanPage::transition(const QString &action)
   QString note;
   const int context = m_contextVersion;
   const auto revision = m_plan.value("revision");
+  const auto config = m_pipeline.value("config").isObject() ? m_pipeline.value("config").toObject()
+      : QJsonDocument::fromJson(m_pipeline.value("config").toString().toUtf8()).object();
+  const bool enableExecution = action == "approve" && config.value("auto_execute") == false;
   if (action == "reject") {
     bool accepted = false;
     note = QInputDialog::getMultiLineText(this, QStringLiteral("驳回预案"), QStringLiteral("请填写驳回原因："), {}, &accepted);
     if (!accepted || note.trimmed().isEmpty()) return;
   }
   if (action == "approve") {
-    const auto prompt = QStringLiteral("批准任务 %1 的预案 v%2 并启动执行？\n目标：%3\n执行采用已提审步骤的独立快照；不会接受模型临时新增步骤。")
+    auto prompt = QStringLiteral("批准任务 %1 的预案 v%2 并启动执行？\n目标：%3\n执行采用已提审步骤的独立快照；不会接受模型临时新增步骤。")
         .arg(UiUtil::taskIdentifier(m_pipeline)).arg(m_plan.value("revision").toInt()).arg(m_pipeline.value("target").toString());
+    if (enableExecution)
+      prompt += QStringLiteral("\n\n此任务原先未启用执行。确认后将启用本任务执行，并立即运行当前提审版本。");
     if (QMessageBox::question(this, QStringLiteral("确认批准并执行"), prompt,
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) return;
   }
   if (context != m_contextVersion || revision != m_plan.value("revision")) return;
-  mutate('/' + action, {{"revision", revision}, {"note", note}}, false,
+  QJsonObject body{{"revision", revision}, {"note", note}};
+  if (enableExecution) body["enable_execution"] = true;
+  mutate('/' + action, body, false,
       action == "approve" ? std::function<void()>([this]() { emit executionStarted(); }) : nullptr);
 }
 
@@ -815,6 +854,7 @@ void TaskPlanPage::mutate(const QString &suffix, const QJsonObject &body, bool p
       guard->updateControls();
       return;
     }
+    guard->applySelectionState(response);
     guard->m_plan = response["data"].toObject();
     guard->m_content = guard->m_plan.value("content").toObject();
     guard->m_dirty = false;
@@ -858,13 +898,18 @@ void TaskPlanPage::addCandidate(const QString &category, int index, const QJsonV
 
 void TaskPlanPage::useSourcePlaybook(const QString &playbookId)
 {
-  if (m_dirty || m_pipeline.value("status").toString() != "awaiting_approval") {
-    message(QStringLiteral("仅待审批任务可建立演示草稿；请等待加载并先保存现有编辑。"), true);
+  if (playbookId.isEmpty() || m_pipeline.value("pipeline_id").toString().isEmpty()) return;
+  if (m_dirty) {
+    message(QStringLiteral("请先保存现有编辑，再选择来源预案。"), true);
     return;
   }
   if (m_busy) {
     m_pendingSourcePlaybookId = playbookId;
-    message(QStringLiteral("验证预案已生成，任务草稿加载完成后会自动加入。"));
+    message(QStringLiteral("正在核对本任务方案；加载完成后使用所选预案。"));
+    return;
+  }
+  if (m_pipeline.value("status").toString() != "awaiting_approval" && !m_canContinueFailedScan) {
+    message(m_selectionReason.isEmpty() ? QStringLiteral("当前任务暂不能建立预案草稿，请核对任务状态。") : m_selectionReason, true);
     return;
   }
   if (!m_plan.isEmpty()) {
@@ -872,7 +917,9 @@ void TaskPlanPage::useSourcePlaybook(const QString &playbookId)
     else message(QStringLiteral("当前任务已有草稿，已保留。新预案已保存，可在扫描页预览；现有草稿不会自动替换。"), true);
     return;
   }
-  mutate({}, {{"playbook_id", playbookId}});
+  QJsonObject body{{"playbook_id",playbookId}};
+  if (m_canContinueFailedScan) body["continue_after_scan_failure"] = true;
+  mutate({},body);
 }
 
 void TaskPlanPage::sendCandidate(const QJsonObject &candidate)

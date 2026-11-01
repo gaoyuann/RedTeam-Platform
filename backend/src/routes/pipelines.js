@@ -1,9 +1,9 @@
+import { deleteTask, isTaskDeleted, visibleTasksSql } from '../services/taskDeletion.js';
 import {putPostRequests,clearPostRequests} from '../services/scanPostRequests.js';
 import {isTargetInScope} from '../services/taskScope.js';
 import {putScanSessionAuth,clearScanSessionAuth} from '../services/scanSessionAuth.js';
 import {defaultScanAgent,isScanAgent,isDiscoveryTask,isIntelligentWorkflow,scanAgentBusy,isSourceTask,validateScanAgentMode} from '../services/scanAgentConfig.js';
 import {validateWebScanConfig,isWebAgent,hasWebScanSchema,putWebCredentials,clearWebCredentials,webTargetBusy} from '../services/webScanConfig.js';
-import { hasStatistics } from '../services/findingInstances.js';
 import { hasScanIntegrity } from '../services/scanResultStore.js';
 import findingVerificationRoutes from './findingVerifications.js';
 import {isProgramMode} from '../services/programScan.js';
@@ -99,7 +99,7 @@ function canModifyPipeline(req, pipeline) {
 /** Enforce pipeline creation limits. */
 function checkPipelineLimits(db, username) {
   const userActive = db.prepare(
-    "SELECT COUNT(*) AS n FROM pipelines WHERE created_by = ? AND status IN ('created','running')"
+    `SELECT COUNT(*) AS n FROM pipelines WHERE created_by = ? AND status IN ('created','running') AND ${visibleTasksSql(db)}`
   ).get(username).n;
   if (userActive >= 20) return '活跃流水线数量已达上限(20)';
 
@@ -143,6 +143,12 @@ export default function (db) {
   const router = Router();
   router.use(requireActor(db));
   const assistantRequests = new Set();
+  // Deleted tasks remain readable as report provenance, but cannot be changed or restarted.
+  router.use('/:id', (req,res,next) => {
+    if (!['GET','HEAD','DELETE'].includes(req.method) && isTaskDeleted(db,req.params.id))
+      return res.status(409).json({status:'error',error:{message:'任务已删除，请新建任务'}});
+    next();
+  });
   router.use('/:id/results', taskResultsRoutes(db));
   router.use('/:id/verifications', findingVerificationRoutes(db));
 
@@ -174,7 +180,7 @@ export default function (db) {
     const exact = isTaskIdentifier(needle);
     const totals = db.prepare(`SELECT count(*) visible_total,
       COALESCE(SUM(status='running'),0) running, COALESCE(SUM(status='awaiting_approval'),0) awaiting_approval,
-      COALESCE(SUM(status='completed'),0) completed FROM pipelines WHERE (?='admin' OR created_by=?)`)
+      COALESCE(SUM(status='completed'),0) completed FROM pipelines WHERE (?='admin' OR created_by=?) AND ${visibleTasksSql(db)}`)
       .get(req.user.role, req.user.sub);
     // Compact clients retain task identity/search metadata without loading large results.
     // Older databases may not have task_no yet; the default response is unchanged.
@@ -184,7 +190,7 @@ export default function (db) {
     const compact = req.query.view === 'list';
     const columns = compact ? listFields.join(', ') : '*';
     const found = exact ? visibleTaskLookup(db, req.user, needle) : null;
-    const visible = exact ? (found ? [found] : []) : db.prepare(`SELECT ${columns} FROM pipelines WHERE (?='admin' OR created_by=?) ORDER BY created_at DESC,id DESC`)
+    const visible = exact ? (found ? [found] : []) : db.prepare(`SELECT ${columns} FROM pipelines WHERE (?='admin' OR created_by=?) AND ${visibleTasksSql(db)} ORDER BY created_at DESC,id DESC`)
       .all(req.user.role, req.user.sub);
     const rows = visible.map(row => compact && exact
       ? Object.fromEntries(listFields.map(key => [key, row[key]])) : row).filter(row => {
@@ -466,20 +472,11 @@ export default function (db) {
     if (!canModifyPipeline(req, pipeline)) {
       return res.status(403).json({ status: 'error', error: { message: '没有权限删除此流水线' } });
     }
-    if (['running', 'awaiting_approval'].includes(pipeline.status)) {
-      return res.status(400).json({ status: 'error', error: { message: '运行中或待确认的流水线不能删除，请先取消' } });
+    try { deleteTask(db, pipeline, req.user); }
+    catch (error) {
+      if (error.status) return res.status(error.status).json({status:'error',error:{message:error.message}});
+      throw error;
     }
-    if(hasScanIntegrity(db) && db.prepare(`SELECT 1 FROM scan_tool_runs r JOIN scan_tasks s USING(scan_task_id)
-      WHERE s.pipeline_id=? AND (r.state='running' OR json_extract(r.outcome,'$.stopped')=0)`).get(pipeline.pipeline_id))
-      return res.status(409).json({status:'error',error:{message:'工具停止未确认，须保留任务来源'}});
-    if(db.prepare("SELECT 1 FROM pipelines WHERE json_extract(config,'$.retry_of_pipeline_id')=?").get(pipeline.pipeline_id))
-      return res.status(409).json({status:'error',error:{message:'存在关联重试，须保留原任务来源'}});
-
-    if(hasStatistics(db) && db.prepare(`SELECT 1 FROM finding_instances WHERE pipeline_id=?
-      UNION ALL SELECT 1 FROM task_baselines WHERE pipeline_id=?
-      UNION ALL SELECT 1 FROM test_reports WHERE pipeline_id=? LIMIT 1`).get(req.params.id,req.params.id,req.params.id))
-      return res.status(409).json({status:'error',error:{message:'任务存在漏洞实例、基准或冻结报告引用，须保留统计来源'}});
-    db.prepare('DELETE FROM pipelines WHERE pipeline_id = ?').run(req.params.id);
     auditLog(db, 'pipeline_delete', req.params.id, req.user.role, pipeline.target, {});
     res.json({ status: 'ok', data: { deleted: true } });
   });
@@ -570,6 +567,7 @@ export default function (db) {
     const requestId=req.body?.request_id;
     if(typeof requestId!=='string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(requestId))return res.status(400).json({status:'error',error:{message:'需要有效重试请求编号'}});
     const known=db.prepare("SELECT * FROM pipelines WHERE created_by=? AND json_extract(config,'$.retry_of_pipeline_id')=? AND json_extract(config,'$.retry_request_id')=?").get(req.user.sub,original.pipeline_id,requestId);
+    if(known && isTaskDeleted(db,known.pipeline_id)) return res.status(409).json({status:'error',error:{message:'原重试任务已删除，请重新发起重试'}});
     if(known)return res.status(200).json({status:'ok',data:{...known,config:JSON.parse(known.config)}});
     if(isDiscoveryTask(config)||isScanAgent(config)?scanAgentBusy(db,original.target):webTargetBusy(db,original.target))
       return res.status(409).json({status:'error',error:{message:'该应用仍有活动扫描或工具停止未确认'}});

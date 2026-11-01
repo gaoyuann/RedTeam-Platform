@@ -2,6 +2,8 @@
 
 static void runUnifiedShellWorkflowChecks(const std::function<void(bool, const char *)> &verify)
 {
+  const auto previousStyle = qApp->styleSheet();
+  qApp->setStyleSheet(Theme::GlobalStyle + Theme::ButtonStyle + Theme::ItemViewStyle);
   MockServer server;
   bool childActive = false;
   auto task = taskRecord("unified-task"); task["status"] = "running"; task["run_id"] = "";
@@ -56,10 +58,12 @@ static void runUnifiedShellWorkflowChecks(const std::function<void(bool, const c
     const QPoint position = flow->m_flowTable->visualItemRect(flow->m_flowTable->item(0,0)).center();
     QTest::mouseClick(flow->m_flowTable->viewport(), Qt::LeftButton, Qt::NoModifier, position);
     QTest::mouseDClick(flow->m_flowTable->viewport(), Qt::LeftButton, Qt::NoModifier, position);
-    verify(awaitCondition([&] { return flow->taskContextReady() && !flow->taskListVisible(); }),
+    verify(awaitCondition([&] { return flow->taskContextReady() && !flow->taskListVisible()
+        && flow->m_lastDisplayedDetail.value("status") == task.value("status")
+        && flow->m_lastDisplayedDetail.value("run_id") == task.value("run_id"); }),
       "double clicking task management opens its task in the main window");
-    verify(flow->m_stageTabs->tabBar()->isHidden() && flow->m_backBtn->isHidden(),
-      "task opening does not reveal a second workbench navigation");
+    verify(flow->m_stageTabs->tabBar()->isHidden() && !flow->m_backBtn->isHidden(),
+      "main modules own navigation while return to task management stays reachable");
   };
   openFromList();
   verify(flow->workspaceStage() == 1 && shell.m_navList->currentRow() == 1,
@@ -69,6 +73,11 @@ static void runUnifiedShellWorkflowChecks(const std::function<void(bool, const c
     verify(flow->selectedTaskId() == "unified-task" && flow->workspaceStage() == entry.second
         && shell.m_stackWidget->currentWidget() == flow && flow->scanTab() == scan && flow->execTab() == execution,
       "main modules reuse the same task and page instances after opening from management");
+    verify(flow->m_stageTabs->tabBar()->isHidden(), "each module omits the complete task workflow tab row");
+    for (int stage = 0; stage < flow->m_stageTabs->count(); ++stage)
+      verify(flow->m_stageTabs->widget(stage)->isVisible() == (stage == entry.second),
+        "only the page owned by the selected module is visible");
+    capture(entry.first);
   }
   task["status"] = "awaiting_approval"; task["generated_playbook_id"] = "fixture-plan";
   openFromList();
@@ -99,11 +108,12 @@ static void runUnifiedShellWorkflowChecks(const std::function<void(bool, const c
     "task overview offers the same task selector");
   flow->onFlowDoubleClicked(0);
   verify(awaitCondition([&] { return flow->taskContextReady() && !flow->taskListVisible()
-      && shell.m_activeFeature == "evaluation.results"; }),
-    "selecting from overview resumes the chosen task instead of returning to the task list");
+      && flow->workspaceStage() == 0 && !shell.m_selectingFeatureTask && shell.m_pendingTaskFeature.isEmpty(); }),
+    "selecting the current task from overview retains that stage and closes task management");
   shell.switchToPage(11);
   verify(shell.m_stackWidget->currentWidget() == flow && shell.m_stackWidget->widget(11)->property("deferredModule").toBool(),
     "legacy attack page identifiers resolve into the same main task page");
   for (auto it = server.requests.cbegin(); it != server.requests.cend(); ++it)
     verify(it.key().startsWith("GET "), "opening tasks and switching modules never creates a scan or attack");
+  qApp->setStyleSheet(previousStyle);
 }

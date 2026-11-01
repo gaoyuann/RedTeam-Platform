@@ -100,6 +100,28 @@ void ExecutionPage::setupUI() {
     if (!m_pipelineId.isEmpty() && m_pipelineStatus == "awaiting_approval") emit planReviewRequested();
   });
 
+  m_taskAttackActions = new QWidget(this);
+  m_taskAttackActions->setObjectName("taskAttackActions");
+  auto *taskActions = new QHBoxLayout(m_taskAttackActions);
+  taskActions->setContentsMargins(0, 0, 0, 0);
+  auto *choosePlan = new QPushButton(QStringLiteral("选择已有预案"), m_taskAttackActions);
+  choosePlan->setObjectName("executionChoosePlaybook");
+  choosePlan->setToolTip(QStringLiteral("沿用当前任务目标，选择已有预案并审阅执行；不要求逐漏洞生成。"));
+  connect(choosePlan, &QPushButton::clicked, this, [this]() {
+    if (!m_pipelineId.isEmpty() && m_pipelineStatus != "loading") emit existingPlaybookRequested();
+  });
+  auto *findingAttack = new QPushButton(QStringLiteral("逐漏洞攻击测试"), m_taskAttackActions);
+  findingAttack->setObjectName("executionFindingAttack");
+  findingAttack->setToolTip(QStringLiteral("选择当前任务的扫描发现，使用已有方案或按需生成，确认后执行。"));
+  connect(findingAttack, &QPushButton::clicked, this, [this]() {
+    if (!m_pipelineId.isEmpty() && m_pipelineStatus != "loading") emit findingAttackRequested();
+  });
+  taskActions->addWidget(choosePlan);
+  taskActions->addWidget(findingAttack);
+  taskActions->addStretch();
+  m_taskAttackActions->hide();
+  mainLayout->addWidget(m_taskAttackActions);
+
   // ── Attack category filter ─────────────────────────────────────────
   auto *catH = new QHBoxLayout;
   catH->addWidget(new QLabel("攻击类型:"));
@@ -613,12 +635,16 @@ void ExecutionPage::setPipelineContext(const QString &pipelineId, const QString 
   m_targetInput->setReadOnly(scoped);
   m_standaloneControls->setVisible(!scoped);
   m_pipelineHint->setVisible(scoped);
+  m_taskAttackActions->setVisible(scoped);
+  m_taskAttackActions->setEnabled(scoped && status != "loading");
   m_reviewPlan->setVisible(scoped && status == "awaiting_approval");
   m_reviewPlan->setEnabled(scoped && status == "awaiting_approval");
   m_execBtn->setEnabled(!scoped);
   m_execBtn->setText(QStringLiteral("执行"));
   m_pipelineHint->setText(scoped && status == "awaiting_approval"
-    ? QStringLiteral("扫描与分析已保存。请审阅本任务方案并确认执行，当前尚未启动攻击测试。")
+    ? QStringLiteral("可选择已有预案并审阅执行，也可对扫描发现逐漏洞攻击测试；不要求逐漏洞生成预案。")
+    : scoped && status == "failed" && runId.isEmpty()
+    ? QStringLiteral("前序测试未完整成功。已有漏洞发现可继续复核；点击“选择已有预案”，核对条件后建立草稿并批准执行。")
     : intelligent ? QStringLiteral("执行已确认的本次方案；下方展示步骤、工具调用和证据。执行完成不代表漏洞成立。")
     : QStringLiteral("逐漏洞测试可从漏洞列表直接开始；双击下方记录查看历史。全局预案为可选批量编排，状态见主预案详情。"));
   if (changed) {

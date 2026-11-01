@@ -11,6 +11,7 @@ class QTableWidget;
 class MetricCard;
 class DistributionPanel;
 class QTimer;
+class QPushButton;
 
 class DashboardPage : public QWidget {
   Q_OBJECT
@@ -18,9 +19,13 @@ public:
   explicit DashboardPage(ApiClient *api, QWidget *parent = nullptr);
   void refresh();
   void scheduleRefresh();
+  void setCurrentTask(const QString &summary);
 
 signals:
   void openTasksRequested();
+  void createTestRequested();
+  void continueTaskRequested();
+  void openTaskRequested(const QString &pipelineId);
 
 private:
   void showEvent(QShowEvent *event) override;
@@ -42,6 +47,8 @@ private:
   bool m_dirty = false;
   bool m_hasBeenShown = false;
   ApiClient *m_api;
+  QLabel *m_currentTaskLabel = nullptr;
+  QPushButton *m_continueTaskButton = nullptr;
   MetricCard *m_taskCard = nullptr;
   MetricCard *m_assetCard = nullptr;
   MetricCard *m_findingCard = nullptr;

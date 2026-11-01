@@ -74,14 +74,14 @@ ModuleRibbon::ModuleRibbon(bool administrator, QWidget *parent)
     setStyleSheet(QStringLiteral(
         "QWidget#moduleRibbon { background:#ffffff; border-bottom:1px solid #dbe3ef; }"
         "QToolButton { color:#334b6b; border:1px solid transparent; border-radius:6px;"
-        " padding:3px 9px; font-size:17px; font-weight:600; background:transparent; }"
+        " padding:3px 9px; font-size:13px; font-weight:400; background:transparent; }"
         "QToolButton:hover { background:#f1f5ff; border-color:#dce6fa; }"
         "QToolButton:checked { color:#245fd6; background:#edf3ff; border-color:#cdddfb; }"
         "QToolButton:disabled { color:#a8b2c2; background:transparent; border-color:transparent; }"));
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     root->addWidget(m_pages);
-    setFixedHeight(72);
+    setFixedHeight(42);
     m_selection->setExclusive(true);
     for (int module = 0; module < moduleNames().size(); ++module) {
         auto *scroll = new QScrollArea(m_pages);
@@ -101,15 +101,15 @@ ModuleRibbon::ModuleRibbon(bool administrator, QWidget *parent)
         content->setAutoFillBackground(true);
         scroll->viewport()->setPalette(palette);
         auto *groups = new QHBoxLayout(content);
-        groups->setContentsMargins(14, 4, 14, 2);
-        groups->setSpacing(12);
+        groups->setContentsMargins(10, 4, 10, 4);
+        groups->setSpacing(8);
         QStringList groupNames;
         for (const auto &entry : features())
             if (entry.module == module && !groupNames.contains(entry.group)) groupNames << entry.group;
         for (const auto &name : groupNames) {
             auto *group = new QWidget(content);
             auto *vertical = new QVBoxLayout(group);
-            vertical->setContentsMargins(0, 0, 8, 0);
+            vertical->setContentsMargins(0, 0, 4, 0);
             vertical->setSpacing(2);
             auto *commands = new QHBoxLayout;
             commands->setSpacing(4);
@@ -118,23 +118,17 @@ ModuleRibbon::ModuleRibbon(bool administrator, QWidget *parent)
                 auto *button = new QToolButton(group);
                 button->setObjectName(QStringLiteral("ribbon.%1").arg(entry.id));
                 button->setProperty("featureId", entry.id);
-                QString label = entry.title;
-                if (label == QStringLiteral("大语言模型LLM部署配置")) label = QStringLiteral("大语言模型LLM\n部署配置");
-                else if (label.endsWith(QStringLiteral("部署配置"))) label.insert(label.size() - 4, '\n');
-                else if (label.endsWith(QStringLiteral("攻击测试"))) label.insert(label.size() - 4, '\n');
-                else if (label == QStringLiteral("测试报告自动智能生成")) label = QStringLiteral("测试报告\n自动智能生成");
-                else if (label.size() > 7) label.insert(4, '\n');
-                button->setText(label);
+                button->setText(entry.title);
                 button->setAccessibleName(entry.title);
                 button->setIcon(QIcon(QStringLiteral(":/icons/shell/%1.svg").arg(entry.icon)));
-                button->setIconSize(QSize(18, 18));
+                button->setIconSize(QSize(14, 14));
                 button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
                 button->setCheckable(true);
-                QFont commandFont = button->font(); commandFont.setPixelSize(17);
-                commandFont.setWeight(QFont::DemiBold); button->setFont(commandFont);
+                QFont commandFont = button->font(); commandFont.setPixelSize(13);
+                commandFont.setWeight(QFont::Normal); button->setFont(commandFont);
                 button->ensurePolished();
-                button->setFixedWidth(qMax(90, button->sizeHint().width()));
-                button->setFixedHeight(60);
+                button->setFixedWidth(qMax(72, button->sizeHint().width()));
+                button->setFixedHeight(30);
                 m_selection->addButton(button);
                 button->setEnabled(canOpen(entry.id));
                 button->setToolTip(!entry.implemented ? entry.title + QStringLiteral(" · 暂未实现")

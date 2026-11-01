@@ -22,6 +22,7 @@ class ApiClient;
 class RemoteSourcePicker;
 class ScanResultOverview;
 class SourceScanDetailDialog;
+class FindingVerificationDialog;
 
 class ScanPage : public QWidget {
   Q_OBJECT
@@ -108,6 +109,8 @@ private:
   QPushButton *m_showAllRecords = nullptr;
   void prepareCurrentFinding();
   void openFindingPicker(bool payload);
+  void openFindingPayload(qint64 findingId);
+  void watchPayloadChanges(FindingVerificationDialog *dialog);
   void updatePrepareFindingButton();
   QPushButton *m_prepareFinding = nullptr;
   bool m_testContextBusy = false;

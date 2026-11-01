@@ -5,6 +5,7 @@
 #include "../ApiClient.h"
 #include "../Theme.h"
 #include "../UiUtil.h"
+#include "../UiTypography.h"
 
 #include <QApplication>
 #include <QComboBox>
@@ -1462,7 +1463,7 @@ void TopologyPage::setupUI() {
     m_canvasTitleLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_canvasTitleLabel->setWordWrap(true);
     m_canvasTitleLabel->setMinimumWidth(0);
-    m_canvasTitleLabel->setStyleSheet("font-weight:600;font-size:15px;");
+    m_canvasTitleLabel->setStyleSheet("font-weight:600;font-size:12px;");
     m_statsLabel = new QLabel(QStringLiteral("节点 -- | 连线 --"));
     titleRow->addWidget(m_canvasTitleLabel, 1);
     titleRow->addWidget(m_statsLabel);
@@ -2471,9 +2472,9 @@ void TopologyPage::renderTopologyScene() {
 
         // All rows use the same font source and their actual graphics bounds.
         // No separately painted footer can collide with a larger system font.
-        QFont titleFont = font();
+        QFont titleFont = Theme::topologyFont(font());
         titleFont.setBold(true);
-        const QFont detailFont = font();
+        const QFont detailFont = Theme::topologyFont(font());
         const QFontMetricsF titleMetrics(titleFont), detailMetrics(detailFont);
         const qreal addressWidth = node.ip.trimmed().isEmpty() ? 0
             : qMax(titleMetrics.horizontalAdvance(node.ip.trimmed()),
@@ -2524,7 +2525,7 @@ void TopologyPage::renderTopologyScene() {
     });
     qreal horizontalGap = 72;
     for (const auto &edge : m_topologyDocument.edges)
-        horizontalGap = qMax(horizontalGap, QFontMetricsF(QFont()).horizontalAdvance(fallbackEdgeLabel(edge)) + 24);
+        horizontalGap = qMax(horizontalGap, QFontMetricsF(Theme::topologyFont(font())).horizontalAdvance(fallbackEdgeLabel(edge)) + 24);
     QList<QGraphicsItem *> placed;
     for (auto *item : ordered) {
         bool moved;
@@ -2577,7 +2578,7 @@ void TopologyPage::renderTopologyScene() {
         m_graphScene->addItem(line);
         m_edgeItems.insert(edge.id, line);
 
-        auto *edgeText = m_graphScene->addSimpleText(relationLabel);
+        auto *edgeText = m_graphScene->addSimpleText(relationLabel, Theme::topologyFont(font()));
         edgeText->setBrush(QColor(selected ? Theme::Primary : Theme::MutedText));
         edgeText->setParentItem(line);  // 跟随连线淡入/拖动
         edgeText->setZValue(1.2);

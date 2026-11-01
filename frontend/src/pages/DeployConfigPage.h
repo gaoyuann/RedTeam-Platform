@@ -8,6 +8,11 @@
 #include <QComboBox>
 #include <QCheckBox>
 #include <QMap>
+#include <QJsonArray>
+#include <QJsonObject>
+
+class QScrollArea;
+class QTabWidget;
 
 class ApiClient;
 
@@ -39,6 +44,8 @@ private:
   void onLabAction(const QString &action, const QString &name);
   void onLabVerify(const QString &name);
   void fitTableHeight(QTableWidget *t, int cap);
+  void renderResourceTables();
+  void filterResources();
 
   ApiClient *m_api;
   QMap<QString, QWidget *> m_sections;
@@ -47,6 +54,19 @@ private:
   bool m_llmBusy = false;
   bool m_sandboxBusy = false;
   QMap<QString, int> m_readVersions;
+  QScrollArea *m_formScroll;
+  QTabWidget *m_resourceTabs;
+  QWidget *m_resourceToolbar;
+  QLineEdit *m_resourceSearch;
+  QComboBox *m_resourceType;
+  QLabel *m_resourceHeading;
+  QLabel *m_resourceSummary;
+  QJsonArray m_tools;
+  QJsonObject m_containerStatus;
+  bool m_toolsLoaded = false;
+  bool m_imagesLoaded = false;
+  bool m_toolsLoading = false;
+  bool m_imagesLoading = false;
 
   // Platform status
   QLabel *m_versionLabel;       // 启动时间

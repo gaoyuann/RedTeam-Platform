@@ -8,11 +8,59 @@
 #include <QFrame>
 #include "../Theme.h"
 #include "../UiUtil.h"
+#include "../widgets/WorkbenchTabs.h"
 #include <QMenu>
 #include <QApplication>
 #include <QClipboard>
 #include <QPointer>
 #include <QUrl>
+#include <QSet>
+#include <QTabBar>
+
+namespace {
+QString compactStatusStyle(const char *style)
+{
+  return QString::fromLatin1(style) + QStringLiteral(" font-size:14px; padding:4px 8px; border-radius:5px;");
+}
+
+void styleResourceTable(QTableWidget *table)
+{
+  table->setShowGrid(false);
+  table->verticalHeader()->hide();
+  table->verticalHeader()->setDefaultSectionSize(38);
+  table->horizontalHeader()->setFixedHeight(36);
+  table->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+  table->horizontalHeader()->setMinimumSectionSize(72);
+  table->setSelectionBehavior(QAbstractItemView::SelectRows);
+  table->setSelectionMode(QAbstractItemView::SingleSelection);
+  table->setWordWrap(false);
+  table->setTextElideMode(Qt::ElideRight);
+  table->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+  table->setMinimumHeight(150);
+  table->setStyleSheet(QStringLiteral(
+    "QTableWidget { background:white; alternate-background-color:#f8fafc; border:1px solid #e2e8f0;"
+    " border-radius:6px; color:#26364b; selection-background-color:#eaf2ff; selection-color:#1d4ed8; }"
+    "QTableWidget::item { padding:0 10px; border-bottom:1px solid #edf1f6; }"
+    "QTableWidget::item:hover { background:#f1f6ff; }"
+    "QHeaderView::section { background:#f5f7fb; color:#526174; font-size:15px; font-weight:600;"
+    " padding:0 10px; border:none; border-bottom:1px solid #e2e8f0; }"));
+}
+
+QTableWidgetItem *resourceItem(const QString &text)
+{
+  auto *item = new QTableWidgetItem(text);
+  item->setToolTip(text.toHtmlEscaped());
+  return item;
+}
+
+// Compare the tag separator after the last slash so registry ports stay intact.
+QPair<QString, QString> imageParts(const QString &image)
+{
+  const int colon = image.lastIndexOf(':');
+  if (colon > image.lastIndexOf('/')) return {image.left(colon), image.mid(colon + 1)};
+  return {image, QStringLiteral("latest")};
+}
+}
 
 DeployConfigPage::DeployConfigPage(ApiClient *api, const QString &role, const QString &username, QWidget *parent)
     : QWidget(parent), m_api(api) {
@@ -24,6 +72,7 @@ void DeployConfigPage::setupUI() {
   setStyleSheet(Theme::PageStyle);
 
   auto *scrollArea = new QScrollArea(this);
+  m_formScroll = scrollArea;
   scrollArea->setWidgetResizable(true);
   scrollArea->setFrameShape(QFrame::NoFrame);
   auto *container = new QWidget;
@@ -36,7 +85,7 @@ void DeployConfigPage::setupUI() {
   auto *platH = new QHBoxLayout;
   m_checkBtn = new QPushButton("检测后端连接");
   m_engineLabel = new QLabel("未检测");
-  m_engineLabel->setStyleSheet("font-size: 14px; font-weight: bold;");
+  m_engineLabel->setStyleSheet("font-size: 16px; font-weight: bold;");
   platH->addWidget(m_checkBtn);
   platH->addWidget(m_engineLabel);
   platH->addStretch();
@@ -54,9 +103,9 @@ void DeployConfigPage::setupUI() {
     auto *box = new QVBoxLayout;
     box->setSpacing(1);
     auto *cap = new QLabel(caption);
-    cap->setStyleSheet("font-size:11px; color:#7f8c8d;");
+    cap->setStyleSheet("font-size:13px; color:#7f8c8d;");
     auto *val = new QLabel("-");
-    val->setStyleSheet("font-size:14px; font-weight:600; color:#172033;");
+    val->setStyleSheet("font-size:16px; font-weight:600; color:#172033;");
     box->addWidget(cap);
     box->addWidget(val);
     statL->addLayout(box);
@@ -69,7 +118,7 @@ void DeployConfigPage::setupUI() {
   layout->addWidget(statCard);
 
   m_dbTablesCaption = new QLabel("数据库表行数 · 点击「检测后端连接」获取");
-  m_dbTablesCaption->setStyleSheet("font-size:12px; color:#7f8c8d;");
+  m_dbTablesCaption->setStyleSheet("font-size:14px; color:#7f8c8d;");
   layout->addWidget(m_dbTablesCaption);
   auto *tablesFlow = new QWidget;
   m_dbTablesGrid = new QGridLayout(tablesFlow);
@@ -117,57 +166,78 @@ void DeployConfigPage::setupUI() {
   connect(m_llmTestBtn, &QPushButton::clicked, this, &DeployConfigPage::onTestLlmConnection);
 
   // ── 3. Sandbox Config ─────────────────────────────────────────────
-  auto *sbLabel = new QLabel("沙箱运行环境配置"); sbLabel->setStyleSheet(Theme::SectionStyle);
+  auto *sbLabel = new QLabel("沙箱运行环境");
+  sbLabel->setStyleSheet("font-size:18px; font-weight:600; color:#172033;");
   layout->addWidget(sbLabel);
 
   auto *sbH = new QHBoxLayout;
+  sbH->setSpacing(12);
   m_sandboxEnabled = new QCheckBox("启用沙箱");
   sbH->addWidget(m_sandboxEnabled);
+  sbH->addSpacing(12);
   sbH->addWidget(new QLabel("容器引擎:"));
   m_sandboxType = new QComboBox;
   m_sandboxType->addItem("自动", "auto");
   m_sandboxType->addItem("Podman", "podman");
   m_sandboxType->addItem("Docker", "docker");
   m_sandboxType->addItem("无", "none");
+  m_sandboxType->setMinimumWidth(140);
   sbH->addWidget(m_sandboxType);
+  sbH->addStretch();
   m_sandboxSaveBtn = new QPushButton("保存沙箱配置");
   m_sandboxSaveBtn->setProperty("primary", true);
   sbH->addWidget(m_sandboxSaveBtn);
-  m_sandboxStatusLabel = new QLabel;
-  sbH->addWidget(m_sandboxStatusLabel);
-  sbH->addStretch();
   layout->addLayout(sbH);
+  m_sandboxStatusLabel = new QLabel;
+  m_sandboxStatusLabel->setWordWrap(true);
+  m_sandboxStatusLabel->setTextFormat(Qt::PlainText);
+  m_sandboxStatusLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+  layout->addWidget(m_sandboxStatusLabel);
   connect(m_sandboxSaveBtn, &QPushButton::clicked, this, &DeployConfigPage::onSaveSandboxConfig);
 
   // ── 4. Container Images (existing) ────────────────────────────────
-  auto *imgLabel = new QLabel("容器镜像状态"); imgLabel->setStyleSheet(Theme::SectionStyle);
+  auto *imgLabel = new QLabel("容器镜像"); imgLabel->setStyleSheet(Theme::SectionStyle);
   layout->addWidget(imgLabel);
-  m_imageTable = new QTableWidget(0, 3);
+  m_imageTable = new QTableWidget(0, 6);
+  m_imageTable->setObjectName("deploymentImages");
   UiUtil::EmptyHint::attach(m_imageTable, QStringLiteral("暂无镜像 · 点击刷新获取"));
-  m_imageTable->setHorizontalHeaderLabels({"镜像", "标签", "大小"});
+  m_imageTable->setHorizontalHeaderLabels({"镜像名称", "标签", "本地状态", "大小", "关联工具", "适用能力（按需）"});
   m_imageTable->setAlternatingRowColors(true);
   m_imageTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_imageTable->setSortingEnabled(true);
   m_imageTable->setContextMenuPolicy(Qt::CustomContextMenu);
+  styleResourceTable(m_imageTable);
+  m_imageTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
   m_imageTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-  m_imageTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-  m_imageTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
-  // 不再参与视口高度均摊：高度随内容走（fitTableHeight），整页自然滚动
+  m_imageTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
+  m_imageTable->setColumnWidth(1, 100);
+  m_imageTable->setColumnWidth(2, 110);
+  m_imageTable->setColumnWidth(3, 100);
+  m_imageTable->setColumnWidth(4, 100);
+  m_imageTable->horizontalHeaderItem(5)->setToolTip(QStringLiteral("按实际测试内容选择镜像；清单中的镜像无需全部安装。"));
+  m_imageTable->horizontalHeaderItem(3)->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+  m_imageTable->sortItems(0, Qt::AscendingOrder);
   layout->addWidget(m_imageTable);
 
   // ── 5. Tool List (existing) ───────────────────────────────────────
   auto *toolLabel = new QLabel("工具列表"); toolLabel->setStyleSheet(Theme::SectionStyle);
   layout->addWidget(toolLabel);
-  m_toolTable = new QTableWidget(0, 3);
+  m_toolTable = new QTableWidget(0, 5);
+  m_toolTable->setObjectName("deploymentTools");
   UiUtil::EmptyHint::attach(m_toolTable, QStringLiteral("暂无工具"));
-  m_toolTable->setHorizontalHeaderLabels({"工具编号", "镜像", "类型"});
+  m_toolTable->setHorizontalHeaderLabels({"工具编号", "用途", "运行方式", "依赖镜像", "镜像状态"});
   m_toolTable->setAlternatingRowColors(true);
   m_toolTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_toolTable->setSortingEnabled(true);
   m_toolTable->setContextMenuPolicy(Qt::CustomContextMenu);
-  m_toolTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+  styleResourceTable(m_toolTable);
+  m_toolTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
   m_toolTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
-  m_toolTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+  m_toolTable->setColumnWidth(0, 180);
+  m_toolTable->setColumnWidth(2, 120);
+  m_toolTable->setColumnWidth(3, 165);
+  m_toolTable->setColumnWidth(4, 110);
+  m_toolTable->sortItems(0, Qt::AscendingOrder);
   layout->addWidget(m_toolTable);
 
   // ── 6. System Config (existing) ───────────────────────────────────
@@ -186,7 +256,9 @@ void DeployConfigPage::setupUI() {
   layout->addWidget(m_configTable);
 
   // ── 7. Test Labs (测试靶场) ────────────────────────────────────────
-  auto *labHeaderH = new QHBoxLayout;
+  auto *labHeader = new QWidget;
+  auto *labHeaderH = new QHBoxLayout(labHeader);
+  labHeaderH->setContentsMargins(0, 0, 0, 0);
   auto *labLabel = new QLabel("测试靶场"); labLabel->setStyleSheet(Theme::SectionStyle);
   m_labRefreshBtn = new QPushButton("刷新列表");
   m_labStatusLabel = new QLabel;
@@ -194,7 +266,7 @@ void DeployConfigPage::setupUI() {
   labHeaderH->addStretch();
   labHeaderH->addWidget(m_labRefreshBtn);
   labHeaderH->addWidget(m_labStatusLabel);
-  layout->addLayout(labHeaderH);
+  layout->addWidget(labHeader);
 
   m_labTable = new QTableWidget(0, 3);
   UiUtil::EmptyHint::attach(m_labTable, QStringLiteral("暂无靶场环境"));
@@ -261,7 +333,7 @@ void DeployConfigPage::setupUI() {
   // Reuse each existing form as a section, without duplicating API or submit logic.
   const QMap<QWidget *, QString> anchors{{platLabel, "status"}, {llmLabel, "llm"},
     {sbLabel, "runtime"}, {imgLabel, "images"}, {toolLabel, "tools"},
-    {cfgLabel, "config"}, {labLabel, "labs"}, {m_refreshBtn, "refresh"}};
+    {cfgLabel, "config"}, {labHeader, "labs"}, {m_refreshBtn, "refresh"}};
   const int originalCount = layout->count();
   QList<QLayoutItem *> originalItems;
   for (int i = 0; i < originalCount; ++i) originalItems << layout->takeAt(0);
@@ -290,6 +362,61 @@ void DeployConfigPage::setupUI() {
   // setLayout reparents all existing controls, including those in nested forms.
   for (auto it = sectionLayouts.cbegin(); it != sectionLayouts.cend(); ++it)
     m_sections.value(it.key())->setLayout(it.value());
+
+  // Runtime settings occupy their natural height, independently of the forms
+  // scroll area. The image inventory receives all remaining workspace height.
+  auto *runtimeCard = m_sections.value("runtime");
+  layout->removeWidget(runtimeCard);
+  runtimeCard->setParent(this);
+  runtimeCard->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+  runtimeCard->setAttribute(Qt::WA_StyledBackground, true);
+  runtimeCard->setStyleSheet("QWidget[objectName=\"deploySection.runtime\"] { background:white; border:1px solid #e2e8f0; border-radius:8px; }");
+  runtimeCard->layout()->setContentsMargins(16, 8, 16, 8);
+  runtimeCard->layout()->setSpacing(6);
+  runtimeCard->hide();
+
+  // Resource pages share a full-height table; forms keep their existing scroll area.
+  m_resourceTabs = new WorkbenchTabs(this);
+  m_resourceTabs->setObjectName("deploymentResourceTabs");
+  for (const auto &id : {QStringLiteral("tools"), QStringLiteral("images")}) {
+    auto *section = m_sections.value(id);
+    layout->removeWidget(section);
+    section->layout()->itemAt(0)->widget()->hide();
+    qobject_cast<QVBoxLayout *>(section->layout())->setStretch(1, 1);
+    m_resourceTabs->addTab(section, id == "tools" ? QStringLiteral("工具列表") : QStringLiteral("容器镜像"));
+  }
+  auto *refresh = m_sections.value("refresh");
+  layout->removeWidget(refresh);
+  refresh->hide();
+  m_resourceToolbar = new QWidget(this);
+  auto *toolbar = new QHBoxLayout(m_resourceToolbar);
+  toolbar->setContentsMargins(0, 0, 0, 0);
+  toolbar->setSpacing(10);
+  m_resourceHeading = new QLabel(QStringLiteral("容器镜像"), m_resourceToolbar);
+  m_resourceHeading->setStyleSheet("font-size:17px; font-weight:600; color:#172033;");
+  m_resourceHeading->hide();
+  m_resourceSearch = new QLineEdit(m_resourceToolbar);
+  m_resourceSearch->setClearButtonEnabled(true);
+  m_resourceSearch->setMaxLength(120);
+  m_resourceSearch->setPlaceholderText(QStringLiteral("搜索工具、用途或镜像"));
+  m_resourceType = new QComboBox(m_resourceToolbar);
+  m_resourceType->addItem(QStringLiteral("全部运行方式"), "all");
+  m_resourceType->addItem(QStringLiteral("容器工具"), "container");
+  m_resourceType->addItem(QStringLiteral("内置处理器"), "builtin");
+  m_resourceType->addItem(QStringLiteral("虚拟工具"), "virtual");
+  m_resourceSummary = new QLabel(m_resourceToolbar);
+  m_resourceSummary->setStyleSheet("color:#526174; font-size:15px;");
+  toolbar->addWidget(m_resourceHeading);
+  toolbar->addWidget(m_resourceSummary);
+  toolbar->addStretch();
+  toolbar->addWidget(m_resourceSearch, 1);
+  toolbar->addWidget(m_resourceType);
+  toolbar->addWidget(m_refreshBtn);
+  m_refreshBtn->setText(QStringLiteral("刷新"));
+  m_refreshBtn->setFixedWidth(76);
+  connect(m_resourceSearch, &QLineEdit::textChanged, this, &DeployConfigPage::filterResources);
+  connect(m_resourceType, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &DeployConfigPage::filterResources);
+  connect(m_resourceTabs, &QTabWidget::currentChanged, this, &DeployConfigPage::filterResources);
   layout->addStretch();
   container->setMaximumWidth(1120);
   scrollArea->setAlignment(Qt::AlignTop | Qt::AlignLeft);
@@ -300,7 +427,15 @@ void DeployConfigPage::setupUI() {
   scrollArea->setWidget(container);
   auto *outerLayout = new QVBoxLayout(this);
   outerLayout->setContentsMargins(24, 0, 24, 20);
+  outerLayout->setSpacing(12);
+  outerLayout->addWidget(runtimeCard);
+  outerLayout->addWidget(m_resourceToolbar);
   outerLayout->addWidget(scrollArea);
+  outerLayout->addWidget(m_resourceTabs, 1);
+  m_resourceTabs->hide();
+  m_resourceSearch->hide();
+  m_resourceType->hide();
+  m_resourceSummary->hide();
 }
 
 // ── Slot: Refresh all ────────────────────────────────────────────────
@@ -313,8 +448,7 @@ void DeployConfigPage::onRefresh() {
   loadLabList();
 }
 
-// 表格高度随内容走：行少收紧、行多在 cap 上限内滚动。
-// 四张表不再参与视口高度均摊，整页纵向自然滚动，互不挤压
+// 表单中的配置与靶场表格随内容收紧，行多时在 cap 上限内滚动。
 void DeployConfigPage::fitTableHeight(QTableWidget *t, int cap) {
   const int h = t->horizontalHeader()->height() +
                 qMax(t->rowCount(), 1) * t->verticalHeader()->defaultSectionSize() + 10;
@@ -366,10 +500,10 @@ void DeployConfigPage::onCheckBackend() {
     }
     const QString chipZero =
       "background:#f1f5f9; color:#94a3b8; border:1px solid #e2e8f0; "
-      "border-radius:7px; padding:3px 10px; font-size:12px;";
+      "border-radius:7px; padding:3px 10px; font-size:14px;";
     const QString chipData =
       "background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; "
-      "border-radius:7px; padding:3px 10px; font-size:12px; font-weight:600;";
+      "border-radius:7px; padding:3px 10px; font-size:14px; font-weight:600;";
     QStringList names = tables.keys();
     names.sort();
     const int cols = 5;
@@ -505,15 +639,15 @@ void DeployConfigPage::loadSandboxConfig() {
   const int version = ++m_readVersions["loadSandboxConfig"];
   if (m_sandboxBusy) return;
   m_sandboxLoaded = false; setSandboxControlsEnabled(false);
-  m_sandboxStatusLabel->setText(QStringLiteral("正在读取运行环境配置…")); m_sandboxStatusLabel->setStyleSheet(Theme::StatusInfoStyle);
+  m_sandboxStatusLabel->setText(QStringLiteral("正在读取运行环境配置…")); m_sandboxStatusLabel->setStyleSheet(compactStatusStyle(Theme::StatusInfoStyle));
   m_api->get("/api/config/sandbox", 3000, [this, guard, version](const QJsonObject &res) {
     if (!guard || version != m_readVersions["loadSandboxConfig"]) return;
     if (res["status"] != "ok" || !res["data"].isArray()) {
       m_sandboxStatusLabel->setText(QStringLiteral("运行环境配置读取失败，已有输入保留；请刷新重试。"));
-      m_sandboxStatusLabel->setStyleSheet(Theme::StatusErrorStyle); return;
+      m_sandboxStatusLabel->setStyleSheet(compactStatusStyle(Theme::StatusErrorStyle)); return;
     }
     m_sandboxLoaded = true; setSandboxControlsEnabled(true);
-    m_sandboxStatusLabel->setText(QStringLiteral("配置已读取")); m_sandboxStatusLabel->setStyleSheet(Theme::StatusInfoStyle);
+    m_sandboxStatusLabel->setText(QStringLiteral("配置已读取")); m_sandboxStatusLabel->setStyleSheet(compactStatusStyle(Theme::StatusInfoStyle));
     auto arr = res["data"].toArray();
     for (int i = 0; i < arr.size(); i++) {
       auto c = arr[i].toObject();
@@ -528,41 +662,17 @@ void DeployConfigPage::loadSandboxConfig() {
     }
   });
 
-  // Container status — also populates image table (was separate loadContainerStatus)
+  m_imagesLoaded = false;
+  m_imagesLoading = true;
+  m_containerStatus = {};
+  renderResourceTables();
   m_api->get("/api/tools/containers/status", 5000, [this, guard, version](const QJsonObject &res) {
     if (!guard || version != m_readVersions["loadSandboxConfig"]) return;
-    if (res["status"] != "ok" || !res["data"].isObject()) {
-      UiUtil::EmptyHint::setState(m_imageTable, QStringLiteral("镜像状态读取失败，请刷新重试"), true); return;
-    }
-    UiUtil::EmptyHint::setState(m_imageTable, QStringLiteral("暂无已加载镜像"));
-    auto d = res["data"].toObject();
-    QString engine = d["engine"].toString();
-    QString ver = d["engineVersion"].toString();
-    int loaded = d["loadedCount"].toInt(), total = d["expectedCount"].toInt();
-    m_engineLabel->setText(
-        QString("引擎: %1 %2 | 镜像: %3/%4").arg(engine, ver).arg(loaded).arg(total));
-
-    // Also populate image table (was loadContainerStatus)
-    auto imgs = d["images"].toArray();
-    // Also get image sizes from the backend if available
-    auto imgSizes = d["imageSizes"].toObject();
-    // 排序开启时逐行 setItem 会边填边重排，行错位（同 KG 统计/靶场表根因）
-    m_imageTable->setSortingEnabled(false);
-    m_imageTable->setRowCount(imgs.size());
-    for (int i = 0; i < imgs.size(); i++) {
-      QString img = imgs[i].toString();
-      auto parts = img.split(':');
-      QString repo = parts.value(0);
-      QString tag = parts.value(1, "latest");
-      m_imageTable->setItem(i, 0, new QTableWidgetItem(repo));
-      m_imageTable->setItem(i, 1, new QTableWidgetItem(tag));
-      // Try to get size from imageSizes object, fallback to empty
-      QString sizeStr = imgSizes[img].toString();
-      if (sizeStr.isEmpty()) sizeStr = imgSizes[repo].toString();
-      m_imageTable->setItem(i, 2, new QTableWidgetItem(sizeStr.isEmpty() ? "-" : sizeStr));
-    }
-    m_imageTable->setSortingEnabled(true);
-    fitTableHeight(m_imageTable, 300);
+    m_imagesLoading = false;
+    m_imagesLoaded = res["status"] == "ok" && res["data"].isObject()
+        && res["data"].toObject()["images"].isArray();
+    m_containerStatus = m_imagesLoaded ? res["data"].toObject() : QJsonObject();
+    renderResourceTables();
   });
 }
 
@@ -581,14 +691,14 @@ void DeployConfigPage::onSaveSandboxConfig() {
 
   setSandboxControlsEnabled(false);
   m_sandboxStatusLabel->setText("保存中...");
-  m_sandboxStatusLabel->setStyleSheet(Theme::StatusInfoStyle);
+  m_sandboxStatusLabel->setStyleSheet(compactStatusStyle(Theme::StatusInfoStyle));
   m_api->put("/api/config/sandbox/enabled", bodyEnabled, 3000, [this, guard, bodyEngine](const QJsonObject &enabledRes) {
     if (!guard) return;
     if (enabledRes["status"].toString() != "ok") {
       m_sandboxBusy = false;
       setSandboxControlsEnabled(true);
       m_sandboxStatusLabel->setText("保存失败");
-      m_sandboxStatusLabel->setStyleSheet(Theme::StatusErrorStyle);
+      m_sandboxStatusLabel->setStyleSheet(compactStatusStyle(Theme::StatusErrorStyle));
       return;
     }
     m_api->put("/api/config/sandbox/engine", bodyEngine, 3000, [this, guard](const QJsonObject &engineRes) {
@@ -597,10 +707,10 @@ void DeployConfigPage::onSaveSandboxConfig() {
       setSandboxControlsEnabled(true);
       if (engineRes["status"].toString() == "ok") {
         m_sandboxStatusLabel->setText("已保存");
-        m_sandboxStatusLabel->setStyleSheet(Theme::StatusSuccessStyle);
+        m_sandboxStatusLabel->setStyleSheet(compactStatusStyle(Theme::StatusSuccessStyle));
       } else {
         m_sandboxStatusLabel->setText(QStringLiteral("启用状态已保存，但引擎配置保存失败；请刷新核对。"));
-        m_sandboxStatusLabel->setStyleSheet(Theme::StatusErrorStyle);
+        m_sandboxStatusLabel->setStyleSheet(compactStatusStyle(Theme::StatusErrorStyle));
       }
     });
   });
@@ -610,31 +720,16 @@ void DeployConfigPage::onSaveSandboxConfig() {
 void DeployConfigPage::loadToolList() {
   const QPointer<DeployConfigPage> guard(this);
   const int version = ++m_readVersions["loadToolList"];
+  m_toolsLoaded = false;
+  m_toolsLoading = true;
+  m_tools = {};
+  renderResourceTables();
   m_api->get("/api/tools/list", 5000, [this, guard, version](const QJsonObject &res) {
     if (!guard || version != m_readVersions["loadToolList"]) return;
-    if (res["status"] != "ok" || !res["data"].isArray()) {
-      UiUtil::EmptyHint::setState(m_toolTable, QStringLiteral("工具列表读取失败，请刷新重试"), true); return;
-    }
-    UiUtil::EmptyHint::setState(m_toolTable, QStringLiteral("暂无工具列表记录"));
-    auto arr = res["data"].toArray();
-    m_toolTable->setSortingEnabled(false);
-    m_toolTable->setRowCount(arr.size());
-    for (int i = 0; i < arr.size(); i++) {
-      auto t = arr[i].toObject();
-      m_toolTable->setItem(i, 0, new QTableWidgetItem(t["toolId"].toString()));
-      QString img;
-      if (t["virtual"].toBool()) {
-        img = QStringLiteral("—（虚拟）");
-      } else if (t["image"].isNull() || t["image"].toString().isEmpty()) {
-        img = QStringLiteral("未配置");
-      } else {
-        img = t["image"].toString();
-      }
-      m_toolTable->setItem(i, 1, new QTableWidgetItem(img));
-      m_toolTable->setItem(i, 2, new QTableWidgetItem(t["virtual"].toBool() ? QStringLiteral("虚拟") : QStringLiteral("容器")));
-    }
-    m_toolTable->setSortingEnabled(true);
-    fitTableHeight(m_toolTable, 300);
+    m_toolsLoading = false;
+    m_toolsLoaded = res["status"] == "ok" && res["data"].isArray();
+    m_tools = m_toolsLoaded ? res["data"].toArray() : QJsonArray();
+    renderResourceTables();
   });
 }
 
@@ -801,15 +896,132 @@ void DeployConfigPage::tryParseLlmValue(const QString &jsonStr, QJsonObject &out
 
 void DeployConfigPage::showSection(const QString &section)
 {
-  const QString requested = section;
-  if (!m_sections.contains(requested)) return;
+  if (!m_sections.contains(section)) return;
+  const bool resources = section == "tools" || section == "images";
+  const bool runtime = section == "runtime";
+  setProperty("activeSection", section);
   for (auto it = m_sections.cbegin(); it != m_sections.cend(); ++it) {
-    const bool relatedImages = it.key() == "images" && (requested == "runtime" || requested == "tools");
-    it.value()->setVisible(it.key() == requested || relatedImages || it.key() == "refresh");
-    if (it.key() == requested && it.value()->layout()->count() > 0)
-      if (auto *heading = qobject_cast<QLabel *>(it.value()->layout()->itemAt(0)->widget())) heading->setVisible(requested != "llm");
+    if (it.key() == "images" || it.key() == "tools" || it.key() == "refresh") continue;
+    it.value()->setVisible(it.key() == section);
+    if (it.key() == section && it.value()->layout()->count() > 0)
+      if (auto *heading = qobject_cast<QLabel *>(it.value()->layout()->itemAt(0)->widget())) heading->setVisible(section != "llm");
   }
-  setProperty("activeSection", requested);
+  m_formScroll->setVisible(!resources && !runtime);
+  m_resourceHeading->setVisible(runtime);
+  m_resourceSearch->setMaximumWidth(runtime ? 420 : QWIDGETSIZE_MAX);
+  m_resourceTabs->setVisible(resources || runtime);
+  m_resourceTabs->tabBar()->setVisible(!runtime);
+  m_resourceTabs->setCurrentIndex(runtime || section == "images" ? 1 : 0);
+  m_resourceSearch->setVisible(resources || runtime);
+  m_resourceSummary->setVisible(resources || runtime);
+  filterResources();
+}
+
+void DeployConfigPage::renderResourceTables()
+{
+  const QString engine = m_containerStatus["engine"].toString();
+  const QString inventoryStatus = m_containerStatus["imageInventoryStatus"].toString();
+  const bool known = m_imagesLoaded && (inventoryStatus == "ok"
+      || (inventoryStatus.isEmpty() && (engine == "docker" || engine == "podman")));
+  QSet<QString> loaded;
+  for (const auto &value : m_containerStatus["images"].toArray()) loaded.insert(value.toString());
+  const auto sizes = m_containerStatus["imageSizes"].toObject();
+  QMap<QString, QStringList> dependents;
+  m_toolTable->setSortingEnabled(false);
+  m_toolTable->setRowCount(m_tools.size());
+  for (int row = 0; row < m_tools.size(); ++row) {
+    const auto tool = m_tools[row].toObject();
+    const QString id = tool["toolId"].toString();
+    const QString image = tool["image"].toString();
+    // Older servers return only virtual/image; preserve those records too.
+    const QString mode = tool["virtual"].toBool() ? "virtual" : image == "builtin" ? "builtin" : "container";
+    const QString reference = imageParts(image).first + ':' + imageParts(image).second;
+    if (mode == "container" && !image.isEmpty()) dependents[reference] << id;
+    const QString state = mode != "container" ? QStringLiteral("不适用")
+        : image.isEmpty() ? QStringLiteral("未配置")
+        : !known ? QStringLiteral("未确认") : loaded.contains(reference) ? QStringLiteral("已加载") : QStringLiteral("未安装");
+    const QStringList cells{id, tool["purpose"].toString(QStringLiteral("—")),
+      mode == "virtual" ? QStringLiteral("虚拟工具") : mode == "builtin" ? QStringLiteral("内置处理器") : QStringLiteral("容器工具"),
+      mode != "container" ? QStringLiteral("—") : image.isEmpty() ? QStringLiteral("未配置") : image, state};
+    for (int col = 0; col < cells.size(); ++col) m_toolTable->setItem(row, col, resourceItem(cells[col]));
+    m_toolTable->item(row, 0)->setData(Qt::UserRole, mode);
+    auto *status = m_toolTable->item(row, 4);
+    status->setForeground(QColor(state == QStringLiteral("已加载") ? Theme::Success
+        : state == QStringLiteral("未配置") ? Theme::Warning : Theme::TextSecondary));
+    status->setToolTip(state == QStringLiteral("已加载")
+        ? QStringLiteral("本地存在依赖镜像；工具执行状态需在任务中核实。")
+        : state == QStringLiteral("未安装") ? QStringLiteral("使用此工具时需要安装对应镜像；可按实际测试内容选择工具，无需全部安装。")
+        : state == QStringLiteral("未确认") ? QStringLiteral("尚未取得有效的容器镜像清单，请刷新重试。") : state);
+  }
+  m_toolTable->setSortingEnabled(true);
+  QSet<QString> references = loaded;
+  for (const auto &value : m_containerStatus["expectedImages"].toArray())
+    if (value.toString() != "builtin:latest") references.insert(value.toString());
+  for (auto it = dependents.cbegin(); it != dependents.cend(); ++it)
+    references.insert(it.key());
+  QStringList sorted = references.values(); sorted.sort();
+  m_imageTable->setSortingEnabled(false);
+  m_imageTable->setRowCount(sorted.size());
+  const auto capabilities = m_containerStatus["imageCapabilities"].toObject();
+  for (int row = 0; row < sorted.size(); ++row) {
+    const auto parts = imageParts(sorted[row]);
+    const auto tools = dependents.value(sorted[row]);
+    const QString state = !known ? QStringLiteral("未确认") : loaded.contains(sorted[row]) ? QStringLiteral("已加载") : QStringLiteral("未安装");
+    const QString size = sizes[sorted[row]].toString(sizes[parts.first].toString(QStringLiteral("—")));
+    const QStringList cells{parts.first, parts.second, state, loaded.contains(sorted[row]) ? size : QStringLiteral("—"),
+      m_toolsLoaded ? QStringLiteral("%1 个工具").arg(tools.size()) : QStringLiteral("未确认"),
+      capabilities[parts.first].toString(QStringLiteral("—"))};
+    for (int col = 0; col < cells.size(); ++col) m_imageTable->setItem(row, col, resourceItem(cells[col]));
+    m_imageTable->item(row, 2)->setForeground(QColor(known && loaded.contains(sorted[row]) ? Theme::Success : Theme::TextSecondary));
+    m_imageTable->item(row, 2)->setToolTip(state == QStringLiteral("未安装")
+        ? QStringLiteral("本地未安装此标签的镜像；使用关联工具时按需安装。")
+        : state == QStringLiteral("已加载") ? QStringLiteral("本地存在此镜像，不代表容器正在运行或工具已通过检查。")
+        : QStringLiteral("尚未取得有效的容器镜像清单，请刷新重试。"));
+    m_imageTable->item(row, 3)->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    m_imageTable->item(row, 4)->setToolTip(tools.join(QStringLiteral("、")).toHtmlEscaped());
+    m_imageTable->item(row, 4)->setData(Qt::UserRole, tools.join(' '));
+    m_imageTable->item(row, 5)->setToolTip(capabilities[parts.first].isString()
+        ? QStringLiteral("用于%1；使用关联工具时需要对应镜像，按实际测试内容选择安装。")
+            .arg(capabilities[parts.first].toString())
+        : QStringLiteral("当前服务未提供此镜像的适用能力信息。"));
+  }
+  m_imageTable->setSortingEnabled(true);
+  UiUtil::EmptyHint::setState(m_toolTable, m_toolsLoading ? QStringLiteral("正在读取工具列表…")
+      : m_toolsLoaded ? QStringLiteral("暂无匹配工具") : QStringLiteral("工具列表读取失败，请刷新重试"), !m_toolsLoaded && !m_toolsLoading);
+  UiUtil::EmptyHint::setState(m_imageTable, m_imagesLoading ? QStringLiteral("正在读取镜像清单…")
+      : known ? QStringLiteral("暂无匹配镜像") : QStringLiteral("镜像清单未确认，请刷新重试"), !known && !m_imagesLoading);
+  filterResources();
+}
+
+void DeployConfigPage::filterResources()
+{
+  const bool tools = m_resourceTabs->currentIndex() == 0;
+  m_resourceType->setVisible(tools && property("activeSection").toString() == "tools");
+  m_resourceSearch->setPlaceholderText(tools ? QStringLiteral("搜索工具、用途或镜像") : QStringLiteral("搜索镜像、适用能力或关联工具"));
+  const QString query = m_resourceSearch->text().trimmed();
+  auto *table = tools ? m_toolTable : m_imageTable;
+  int visible = 0;
+  for (int row = 0; row < table->rowCount(); ++row) {
+    bool matches = query.isEmpty();
+    for (int col = 0; col < table->columnCount(); ++col) {
+      const auto *item = table->item(row, col);
+      if (item && (item->text().contains(query, Qt::CaseInsensitive)
+          || (!tools && col == 4 && item->data(Qt::UserRole).toString().contains(query, Qt::CaseInsensitive)))) matches = true;
+    }
+    if (tools && m_resourceType->currentData().toString() != "all")
+      matches = matches && table->item(row, 0)->data(Qt::UserRole).toString() == m_resourceType->currentData().toString();
+    table->setRowHidden(row, !matches);
+    if (matches) ++visible;
+  }
+  const bool known = tools ? m_toolsLoaded : m_imagesLoaded
+      && (m_containerStatus["imageInventoryStatus"].toString() == "ok"
+          || (m_containerStatus["imageInventoryStatus"].toString().isEmpty()
+              && QStringList{"docker", "podman"}.contains(m_containerStatus["engine"].toString())));
+  const bool loading = tools ? m_toolsLoading : m_imagesLoading;
+  m_resourceSummary->setText(loading ? QStringLiteral("正在读取…")
+      : known ? QStringLiteral("%1 / %2 项").arg(visible).arg(table->rowCount()) : QStringLiteral("状态未确认"));
+  if (auto *hint = table->viewport()->findChild<QLabel *>("itemViewEmptyHint", Qt::FindDirectChildrenOnly))
+    hint->setVisible(visible == 0);
 }
 
 void DeployConfigPage::setLlmControlsEnabled(bool enabled)

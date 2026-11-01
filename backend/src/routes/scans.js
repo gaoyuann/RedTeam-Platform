@@ -1,6 +1,10 @@
+import { isTaskDeleted, isScanTaskDeleted } from '../services/taskDeletion.js';
 import {createSourceFlowTask,dispatchSourceFlow} from '../services/sourceFlowWorkflow.js';
 import { hasStatistics } from '../services/findingInstances.js';
-import { publicScanRecord, summarizeScanRecords } from '../services/scanResultCatalog.js';
+import { publicScanRecord, summarizeScanRecords, resultCategory } from '../services/scanResultCatalog.js';
+import { findingPayloadCodeSummaries } from '../services/findingPayloadCodeSummary.js';
+import { findingPayloadSummary } from '../services/findingPayloads.js';
+import { getPayloadIndex } from '../services/payloadLoader.js';
 import { hasScanIntegrity } from '../services/scanResultStore.js';
 import { normalizeTopologyTarget } from '../services/nmapTopology.js';
 import { Router } from 'express';
@@ -38,7 +42,17 @@ export default function (db, dependencies={}) {
     }
   });
 
-  router.param('scanTaskId', recordParam(db, 'scan'));
+  const checkScanAccess = recordParam(db, 'scan');
+  router.param('scanTaskId', (req,res,next,id) => {
+    checkScanAccess(req,res,() => {
+      if (!['GET','HEAD','DELETE'].includes(req.method)) {
+        const task=db.prepare('SELECT * FROM scan_tasks WHERE scan_task_id=?').get(id);
+        if (isScanTaskDeleted(db,task))
+          return res.status(409).json({status:'error',error:{message:'所属测试任务已删除，请新建任务'}});
+      }
+      next();
+    },id);
+  });
   router.post('/:scanTaskId/test-context', (req,res,next) => {
     try { res.json({status:'ok',data:continueScanTest(db,req.user,req.params.scanTaskId)}); }
     catch(error) { next(error); }
@@ -120,6 +134,15 @@ export default function (db, dependencies={}) {
     row.source_preview=sourceScanPreview(row,row.results);
     row.results=visibleSourceScanRecords(row,row.results);
     if(!isProgramScan(row.scan_type)) row.results=row.results.map(publicScanRecord);
+    const pipeline=row.pipeline_id && db.prepare('SELECT * FROM pipelines WHERE pipeline_id=?').get(row.pipeline_id);
+    if(pipeline && (req.user?.role==='admin' || pipeline.created_by===req.user?.sub)) {
+      const findings=row.results.filter(result=>resultCategory(result)==='vulnerability');
+      const code=findingPayloadCodeSummaries(db,pipeline.pipeline_id,findings.map(result=>result.id));
+      const index=findings.length?getPayloadIndex(db):null;
+      row.results=row.results.map(result=>({...result,
+        payload_match:index?findingPayloadSummary(db,result,index):null,
+        payload_code:code.get(result.id) || null}));
+    }
     row.scan_summary=summarizeScanRecords(row.results);
     row.can_reparse_report=isProgramScan(row.scan_type) && !['PENDING','RUNNING'].includes(row.status)
       && !isScanActive(row.scan_task_id) && Boolean(retainedCscanReport(db,row.scan_task_id));
@@ -186,7 +209,7 @@ export default function (db, dependencies={}) {
       const pipelineId = parameters?.pipeline_id;
       if (pipelineId) {
         const pipeline = db.prepare('SELECT * FROM pipelines WHERE pipeline_id = ?').get(pipelineId);
-        if (!pipeline) return res.status(404).json({ status: 'error', error: { message: '任务不存在' } });
+        if (!pipeline || isTaskDeleted(db,pipelineId)) return res.status(404).json({ status: 'error', error: { message: '任务不存在' } });
         if (req.user.role !== 'admin' && req.user.sub !== pipeline.created_by)
           return res.status(403).json({ status: 'error', error: { message: '没有权限为此任务探测拓扑' } });
         let expectedTarget;

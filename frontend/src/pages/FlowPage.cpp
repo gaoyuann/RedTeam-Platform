@@ -252,7 +252,7 @@ static QString statusBadgeStyle(const QString &status)
     text = "#b42318"; background = "#fef3f2"; border = "#fee4e2";
   }
   return QString("QLabel { color:%1; background:%2; border:1px solid %3; "
-                 "border-radius:13px; padding:0 10px; font-size:16px; font-weight:500; }")
+                 "border-radius:13px; padding:0 10px; font-size:14px; font-weight:500; }")
       .arg(text, background, border);
 }
 
@@ -381,11 +381,21 @@ void FlowPage::setupListView()
   header->setStyleSheet(QStringLiteral("font-size:24px; font-weight:700; color:#12213c;"));
   auto *subtitle = new QLabel(
       QStringLiteral("填写目标发起测试，查看方案、执行进度和结果。"), m_listView);
-  subtitle->setStyleSheet(QStringLiteral("font-size:17px; color:#64748b;"));
+  subtitle->setStyleSheet(QStringLiteral("font-size:14px; color:#64748b;"));
   titleLayout->addWidget(header);
   titleLayout->addWidget(subtitle);
   headerLayout->addLayout(titleLayout);
   headerLayout->addStretch();
+
+  auto *continueTask = new QPushButton(QStringLiteral("继续当前任务"), m_listView);
+  continueTask->setObjectName("taskListContinue");
+  continueTask->hide();
+  connect(continueTask, &QPushButton::clicked, this, &FlowPage::resumeCurrentTask);
+  connect(this, &FlowPage::taskContextChanged, continueTask, [this, continueTask]() {
+    continueTask->setVisible(hasSelectedTask());
+    continueTask->setToolTip(taskContextSummary());
+  });
+  headerLayout->addWidget(continueTask);
 
   m_quickBtn = new QPushButton(QStringLiteral("＋ 发起测试"), m_listView);
   m_quickBtn->setProperty("primary", true);
@@ -569,7 +579,7 @@ void FlowPage::setupWorkbenchView()
 
   m_targetLabel = new QLabel(topBar);
   m_targetLabel->setTextFormat(Qt::PlainText);
-  m_targetLabel->setStyleSheet("font-size:17px; font-weight:600; color:#1e293b;");
+  m_targetLabel->setStyleSheet("font-size:14px; font-weight:600; color:#1e293b;");
   m_targetLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
   m_targetLabel->setMinimumWidth(80);
   auto *identityColumn = new QVBoxLayout;
@@ -580,7 +590,7 @@ void FlowPage::setupWorkbenchView()
   m_taskIdLabel->setObjectName("taskHeaderIdentity");
   m_taskIdLabel->setTextFormat(Qt::PlainText);
   m_taskIdLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-  m_taskIdLabel->setStyleSheet(QStringLiteral("font-size:16px; color:%1;").arg(Theme::TextSecondary));
+  m_taskIdLabel->setStyleSheet(QStringLiteral("font-size:14px; color:%1;").arg(Theme::TextSecondary));
   m_copyTaskId = new QPushButton(QStringLiteral("复制ID"), topBar);
   m_copyTaskId->setObjectName("copyTaskIdentity");
   m_copyTaskId->setProperty("compact", true);
@@ -645,7 +655,7 @@ void FlowPage::setupWorkbenchView()
   UiUtil::styleToolbarButton(m_moreBtn);
   m_moreBtn->setFixedWidth(36);
   auto *moreMenu = new QMenu(m_moreBtn);
-  moreMenu->setStyleSheet("QMenu { font-size:17px; padding:4px; }");
+  moreMenu->setStyleSheet("QMenu { font-size:14px; padding:4px; }");
   m_scanOptionsAction = moreMenu->addAction(QStringLiteral("高级扫描设置并启动…"));
   m_scanOptionsAction->setVisible(false);
   connect(m_scanOptionsAction, &QAction::triggered, this, [this]() { startFlow(true); });
@@ -681,7 +691,7 @@ void FlowPage::setupWorkbenchView()
   m_failureReason = new QLabel(m_workbenchView);
   m_failureReason->setObjectName("taskFailureReason");
   m_failureReason->setTextFormat(Qt::PlainText); m_failureReason->setWordWrap(true);
-  m_failureReason->setStyleSheet("color:#92400e;background:#fffbeb;padding:6px 10px;font-size:17px;");
+  m_failureReason->setStyleSheet("color:#92400e;background:#fffbeb;padding:6px 10px;font-size:14px;");
   m_failureReason->hide(); layout->addWidget(m_failureReason);
 
   // Six user-facing phases map to the existing four backend execution steps.
@@ -703,7 +713,7 @@ void FlowPage::setupWorkbenchView()
   layout->addWidget(progressFrame);
 
   // Task workbench tabs preserve the selected pipeline context.
-  m_stageTabs = new TaskWorkspaceTabs(m_workbenchView, false);
+  m_stageTabs = new TaskWorkspaceTabs(m_workbenchView, true);
   m_topoTab = new TopologyPage(m_api, m_role, m_username, m_stageTabs);
   connect(m_topoTab,&TopologyPage::testTargetRequested,this,[this](const QString &target) {
     createTestForTarget(target,m_topoTab->selectedTargetContext());
@@ -711,9 +721,8 @@ void FlowPage::setupWorkbenchView()
   connect(m_topoTab,&TopologyPage::linkedTaskRequested,this,&FlowPage::openTaskAnalysis);
   connect(m_topoTab,&TopologyPage::nodeFindingsRequested,this,[this](const QString &pipelineId,const QList<qint64> &ids) {
     if(pipelineId!=m_selectedPipelineId || ids.isEmpty()) return;
-    if (!taskContextReady()) { m_pendingFindingIds = ids; return; }
-    m_stageTabs->setCurrentWidget(m_planTab);
-    m_planTab->openFindingPlans(ids);
+    if (!taskContextReady()) { m_pendingFindingAttackIds = ids; return; }
+    openFindingAttackWorkspace(pipelineId, ids);
   });
   m_scanTab = new ScanPage(m_api, m_role, m_username, m_stageTabs);
   m_scanTab->setTaskScope({});
@@ -724,12 +733,12 @@ void FlowPage::setupWorkbenchView()
   m_stageTabs->addTab(m_overviewTab, QStringLiteral("任务概况"));
   m_stageTabs->addTab(m_scanTab, QStringLiteral("扫描发现"));
   m_analysisTab = new AnalysisPage(m_stageTabs);
-  m_stageTabs->addTab(m_analysisTab, QStringLiteral("智能分析"));
-  m_stageTabs->addTab(m_topoTab, QStringLiteral("资产与拓扑"));
+  m_stageTabs->addTab(m_analysisTab, QStringLiteral("分析依据"));
+  m_stageTabs->addTab(m_topoTab, QStringLiteral("资产拓扑"));
   m_planTab = new TaskPlanPage(m_api, m_role, m_stageTabs);
-  m_stageTabs->addTab(m_planTab, QStringLiteral("任务预案"));
+  m_stageTabs->addTab(m_planTab, QStringLiteral("测试方案"));
   m_stageTabs->addTab(m_execTab, QStringLiteral("执行验证"));
-  m_stageTabs->addTab(m_evalTab, QStringLiteral("结果评估"));
+  m_stageTabs->addTab(m_evalTab, QStringLiteral("结果报告"));
 
   connect(m_execTab, &ExecutionPage::runSelected, this, [this](const QString &runId) {
     if (!m_selectedPipelineId.isEmpty() || m_stack->currentIndex() != 1) return;
@@ -831,6 +840,14 @@ void FlowPage::setupWorkbenchView()
   connect(m_execTab, &ExecutionPage::findingVerificationChanged, this, refreshFindingVerifications);
   connect(m_scanTab, &ScanPage::assessmentRequested, this, &FlowPage::showAssessment);
   connect(m_execTab, &ExecutionPage::assessmentRequested, this, &FlowPage::showAssessment);
+  connect(m_execTab, &ExecutionPage::existingPlaybookRequested, this, [this]() {
+    if (!taskContextReady()) return;
+    m_planTab->chooseExistingPlan();
+    m_stageTabs->setCurrentWidget(m_planTab);
+  });
+  connect(m_execTab, &ExecutionPage::findingAttackRequested, this, [this]() {
+    if (taskContextReady()) m_scanTab->openVerificationWorkspace();
+  });
   connect(m_execTab, &ExecutionPage::planReviewRequested, this, [this]() {
     if (!taskContextReady()) return;
     m_planTab->showGlobalPlan();
@@ -838,9 +855,8 @@ void FlowPage::setupWorkbenchView()
   });
   connect(m_scanTab, &ScanPage::findingPlansRequested, this, [this](const QString &pipeline, const QList<qint64> &ids) {
     if (pipeline != m_selectedPipelineId || ids.isEmpty()) return;
-    if (!taskContextReady()) { m_pendingFindingIds = ids; return; }
-    m_stageTabs->setCurrentWidget(m_planTab);
-    m_planTab->openFindingPlans(ids);
+    if (!taskContextReady()) { m_pendingFindingAttackIds = ids; return; }
+    openFindingAttackWorkspace(pipeline, ids);
   });
   connect(m_planTab, &TaskPlanPage::assessmentRequested, this, &FlowPage::showAssessment);
   connect(m_planTab, &TaskPlanPage::findingExecutionStarted, this, [this](const QString &pipeline) {
@@ -1313,10 +1329,10 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
       const int requested = m_requestedStage;
       m_requestedStage = -1;
       if (m_stageTabs->isTabEnabled(requested)) m_stageTabs->setCurrentIndex(requested);
-    } else if (becameReady && isVisible() && m_pendingFindingIds.isEmpty()) {
+    } else if (becameReady && isVisible() && m_stack->currentIndex() == 1 && m_pendingFindingIds.isEmpty()) {
       m_planTab->showGlobalPlan();
       m_stageTabs->setCurrentWidget(m_planTab);
-    } else if (primaryPlan && isVisible() && !p["run_id"].toString().isEmpty()
+    } else if (primaryPlan && isVisible() && m_stack->currentIndex() == 1 && !p["run_id"].toString().isEmpty()
         && (status == "completed" || status == "failed") && m_stageTabs->currentWidget() == m_execTab) {
       m_stageTabs->setCurrentWidget(m_evalTab);
     }
@@ -1503,6 +1519,11 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
       m_stageTabs->setCurrentWidget(m_planTab);
       m_planTab->openFindingPlans(ids);
     }
+    if (!m_pendingFindingAttackIds.isEmpty() && !discovery) {
+      const auto ids = m_pendingFindingAttackIds;
+      m_pendingFindingAttackIds.clear();
+      openFindingAttackWorkspace(pipelineId, ids);
+    }
   });
 }
 
@@ -1536,9 +1557,9 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget, const QJ
   dlg.setStyleSheet(Theme::PageStyle + QStringLiteral(
       "QDialog#taskCreateDialog, QDialog#topologyTargetTaskDialog { background:%1; }"
       "QScrollArea#taskCreateScroll, QWidget#taskCreateBody { background:transparent; border:none; }"
-      "QLineEdit, QComboBox { min-height:22px; font-size:17px; }"
+      "QLineEdit, QComboBox { min-height:22px; font-size:14px; }"
       "QComboBox::drop-down { border:none; width:24px; }"
-      "QCheckBox { font-size:17px; spacing:8px; }")
+      "QCheckBox { font-size:14px; spacing:8px; }")
       .arg(Theme::Background));
   auto *l = new QVBoxLayout(&dlg);
   l->setSpacing(8);
@@ -1551,7 +1572,7 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget, const QJ
       ? QStringLiteral("以所选主机或服务为目标开始扫描，后续分析与验证归属此任务。")
       : QStringLiteral("先发现主机、端口与服务并生成拓扑，再从拓扑选择目标开展扫描。源码／程序测试沿用专项流程。"), &dlg);
   intro->setWordWrap(true);
-  intro->setStyleSheet(QStringLiteral("font-size:17px; color:%1;").arg(Theme::TextSecondary));
+  intro->setStyleSheet(QStringLiteral("font-size:14px; color:%1;").arg(Theme::TextSecondary));
   l->addWidget(intro);
 
   auto *scroll = new QScrollArea(&dlg);
@@ -1600,7 +1621,7 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget, const QJ
   form->addRow(QStringLiteral("测试目标"), targetInput);
   auto *targetError = new QLabel(basicCard);
   targetError->setObjectName("taskTargetError"); targetError->setWordWrap(true);
-  targetError->setStyleSheet(QStringLiteral("color:#b45309;font-size:16px;"));
+  targetError->setStyleSheet(QStringLiteral("color:#b45309;font-size:14px;"));
   targetError->hide(); form->addRow(targetError);
 
   auto *testType = new QComboBox(basicCard);
@@ -1665,14 +1686,14 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget, const QJ
   scopeLayout->setContentsMargins(16, 12, 16, 12);
   scopeLayout->setSpacing(6);
   auto *scopeTitle = new QLabel(QStringLiteral("本次授权目标"), scopeCard);
-  scopeTitle->setStyleSheet(QStringLiteral("font-size:17px; font-weight:600; color:%1;").arg(Theme::Text));
+  scopeTitle->setStyleSheet(QStringLiteral("font-size:14px; font-weight:600; color:%1;").arg(Theme::Text));
   scopeLayout->addWidget(scopeTitle);
   auto *scopeSummary = new QLabel(scopeCard);
   scopeSummary->setObjectName("taskScopeSummary");
   scopeSummary->setTextFormat(Qt::PlainText);
   scopeSummary->setWordWrap(true);
   scopeSummary->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-  scopeSummary->setStyleSheet(QStringLiteral("font-size:17px; color:%1;").arg(Theme::TextSecondary));
+  scopeSummary->setStyleSheet(QStringLiteral("font-size:14px; color:%1;").arg(Theme::TextSecondary));
   scopeLayout->addWidget(scopeSummary);
   optionsForm->addRow(scopeCard);
 
@@ -1686,7 +1707,7 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget, const QJ
   scanPolicyHint->setObjectName("scanOrchestratorHint");
   scanPolicyHint->setToolTip(QStringLiteral("资产探测仅采集基础网络信息；节点任务使用 ReAct 扫描，源码任务保留专项流程。"));
   scanPolicyHint->setWordWrap(true);
-  scanPolicyHint->setStyleSheet(QStringLiteral("font-size:16px; color:%1;").arg(Theme::TextSecondary));
+  scanPolicyHint->setStyleSheet(QStringLiteral("font-size:14px; color:%1;").arg(Theme::TextSecondary));
   l->addWidget(scanPolicyHint);
 
   auto *btns = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
@@ -1938,6 +1959,11 @@ void FlowPage::onFlowDoubleClicked(int row)
 
 void FlowPage::openManagedTask(const QString &pid)
 {
+  if (pid.isEmpty()) return;
+  if (pid == m_selectedPipelineId && taskContextReady()) {
+    resumeCurrentTask();
+    return;
+  }
   m_selectedPipelineId = pid;
   clearRunContext();
   m_resumeTaskStage = m_requestedStage < 0;
@@ -1953,6 +1979,16 @@ void FlowPage::openManagedTask(const QString &pid)
   m_stack->setCurrentIndex(1);
   // Refresh the embedded scan tab so it picks up any new scan tasks
   m_scanTab->onRefreshTasks();
+  emit managedTaskOpened();
+}
+
+void FlowPage::resumeCurrentTask()
+{
+  if (!hasSelectedTask()) return;
+  m_stack->setCurrentIndex(1);
+  emit managedTaskOpened();
+  emit taskContextChanged();
+  loadFlowDetail(m_selectedPipelineId);
 }
 
 void FlowPage::onFlowContextMenu(const QPoint &pos)
@@ -1986,10 +2022,7 @@ void FlowPage::onOpenFlow()
 void FlowPage::onBackToList()
 {
   const int returnPage = m_returnPage;
-  m_selectedPipelineId.clear();
-  emit taskContextChanged();
-  clearRunContext();
-  m_stack->setCurrentIndex(0);
+  showTaskList();
   if (returnPage >= 0) emit returnPageRequested(returnPage);
   else if (m_ribbonNavigation) emit taskListRequested();
   else refreshFlows();
@@ -2019,7 +2052,7 @@ void FlowPage::applyTaskAction(const QString &pipelineId, bool remove)
 {
   if (pipelineId.isEmpty() || m_pendingTaskActions.contains(pipelineId)) return;
   if (remove && QMessageBox::question(this, QStringLiteral("删除任务"),
-      QStringLiteral("确定删除此测试任务？此操作不可撤销。"), QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) return;
+      QStringLiteral("确定从任务列表删除此测试任务？扫描证据、报告及重试来源会保留，任务不能再次启动。"), QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) return;
   if (m_pendingTaskActions.contains(pipelineId)) return;
   m_pendingTaskActions.insert(pipelineId);
   if (pipelineId == m_selectedPipelineId) { m_cancelAction->setEnabled(false); m_deleteAction->setEnabled(false); }
@@ -2032,6 +2065,11 @@ void FlowPage::applyTaskAction(const QString &pipelineId, bool remove)
       const QString message = QStringLiteral("%1失败：%2").arg(remove ? QStringLiteral("删除任务") : QStringLiteral("取消任务"),
         response["error"].toObject()["message"].toString(QStringLiteral("服务未返回有效结果")));
       m_listState->setText(message);
+      auto *notice = new QMessageBox(QMessageBox::Warning,
+        remove ? QStringLiteral("删除任务失败") : QStringLiteral("取消任务失败"), message, QMessageBox::Ok, this);
+      notice->setAttribute(Qt::WA_DeleteOnClose);
+      notice->setWindowModality(Qt::NonModal);
+      notice->show();
       if (pipelineId == m_selectedPipelineId) { m_statusLabel->setText(message); m_statusLabel->setStyleSheet(Theme::StatusErrorStyle); }
       return;
     }
@@ -2178,6 +2216,7 @@ void FlowPage::clearRunContext()
   if (m_failureReason) m_failureReason->hide();
   m_statusLabel->show();
   m_pendingFindingIds.clear();
+  m_pendingFindingAttackIds.clear();
   for (auto *dialog : findChildren<QDialog *>("taskFindingVerification")) dialog->close();
   m_originTopologyButton->hide();
   m_originTopologyButton->setProperty("source",QVariant());
@@ -2278,6 +2317,11 @@ void FlowPage::useTaskPlaybook(const QString &playbookId)
 void FlowPage::openTaskAnalysis(const QString &pipelineId)
 {
   if (pipelineId.isEmpty()) return;
+  if (pipelineId == m_selectedPipelineId && taskContextReady()) {
+    requestWorkspaceStage(2);
+    loadFlowDetail(pipelineId);
+    return;
+  }
   m_requestedStage = -1;
   clearRunContext();
   m_selectedPipelineId = pipelineId;
@@ -2296,8 +2340,43 @@ void FlowPage::openTaskAnalysis(const QString &pipelineId)
 void FlowPage::openFindingWorkspace(const QString &pipelineId, const QList<qint64> &findingIds)
 {
   if (pipelineId.isEmpty() || findingIds.isEmpty()) return;
+  if (pipelineId == m_selectedPipelineId && taskContextReady()) {
+    requestWorkspaceStage(4);
+    m_planTab->openFindingPlans(findingIds);
+    return;
+  }
   openTaskAnalysis(pipelineId);
   m_pendingFindingIds = findingIds;
+}
+
+void FlowPage::openFindingAttackWorkspace(const QString &pipelineId, const QList<qint64> &findingIds)
+{
+  if (pipelineId.isEmpty() || findingIds.isEmpty()) return;
+  if (pipelineId != m_selectedPipelineId || !taskContextReady()) {
+    openTaskAnalysis(pipelineId);
+    m_pendingFindingAttackIds = findingIds;
+    return;
+  }
+  if (!supportsWorkspaceStage(5)) return;
+  m_execTab->selectAttackCategory(0);
+  requestWorkspaceStage(5);
+  for (auto *existing : findChildren<FindingVerificationDialog *>("taskFindingVerification")) {
+    if (existing->isVisible()) { existing->raise(); existing->activateWindow(); return; }
+  }
+  auto *dialog = new FindingVerificationDialog(m_api, pipelineId, findingIds, this);
+  dialog->setObjectName("taskFindingVerification");
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  connect(dialog, &FindingVerificationDialog::assessmentRequested, this, &FlowPage::showAssessment);
+  connect(dialog, &FindingVerificationDialog::verificationStarted, this, [this,pipelineId](const QString &id) {
+    if (id == pipelineId && pipelineId == m_selectedPipelineId) m_execTab->refreshTaskRecords();
+  });
+  connect(dialog, &QDialog::finished, this, [this,pipelineId]() {
+    if (pipelineId != m_selectedPipelineId) return;
+    m_scanTab->onRefreshTasks();
+    m_execTab->refreshTaskRecords();
+    m_evalTab->retryRun(m_workbenchRunId);
+  });
+  dialog->show();
 }
 
 void FlowPage::showAssessment(const QString &pipelineId)
@@ -2310,6 +2389,11 @@ void FlowPage::showAssessment(const QString &pipelineId)
 void FlowPage::openTaskReport(const QString &pipelineId, const QString &reportId)
 {
   if (pipelineId.isEmpty() || reportId.isEmpty()) return;
+  if (pipelineId == m_selectedPipelineId && taskContextReady()) {
+    requestWorkspaceStage(6);
+    m_evalTab->showReport(reportId);
+    return;
+  }
   m_requestedStage = -1;
   clearRunContext();
   m_selectedPipelineId = pipelineId;
@@ -2361,10 +2445,10 @@ void FlowPage::jumpToExecution(const QString &playbookId, const QString &target)
 void FlowPage::setRibbonNavigation(bool enabled)
 {
   m_ribbonNavigation = enabled;
-  // The main ribbon is the only stage navigation. Keep page instances and
-  // task state internally, without exposing a second task workflow.
+  // The main modules own navigation. Keep the existing stage pages and task
+  // state, but expose only the requested page inside each module.
   m_stageTabs->tabBar()->setVisible(!enabled);
-  m_backBtn->setVisible(!enabled);
+  m_backBtn->setVisible(true);
   if (auto *phases = findChild<QFrame *>(QStringLiteral("taskPhaseNavigation"))) phases->setVisible(!enabled);
   if (enabled) {
     m_targetLabel->hide(); m_taskIdLabel->hide(); m_copyTaskId->hide();
@@ -2400,6 +2484,7 @@ void FlowPage::requestWorkspaceStage(int stage)
   if (m_stageTabs->isTabEnabled(stage)) {
     m_requestedStage = -1;
     m_stageTabs->setCurrentIndex(stage);
+    if (stage == 4) m_planTab->showGlobalPlan();
   } else {
     m_requestedStage = -1;
     m_listState->setText(QStringLiteral("当前任务类型不支持此阶段，请选择其他测试任务。"));
