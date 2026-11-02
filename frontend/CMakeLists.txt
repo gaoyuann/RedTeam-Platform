@@ -292,7 +292,7 @@ endif()
 
 if(BUILD_UI_CHECKS)
   add_executable(RedTeam-LoginChecks src/ApiClient.cpp src/LoginDialog.cpp
-    src/LocalLoginStore.h test/login_checks.cpp)
+    src/LocalLoginStore.h test/login_checks.cpp resources/resources.qrc)
   target_include_directories(RedTeam-LoginChecks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(RedTeam-LoginChecks Qt5::Widgets Qt5::Network Qt5::Test)
   add_test(NAME ui-login COMMAND RedTeam-LoginChecks)

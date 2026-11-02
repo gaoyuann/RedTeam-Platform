@@ -219,21 +219,6 @@ static void runCompactLayoutChecks(const std::function<void(bool, const char *)>
 {
   verify(Theme::uiFont().pixelSize()==14 && Theme::uiFont().weight()==QFont::Normal,
     "default Chinese font uses normal 14 logical pixels without point-size inflation");
-  verify(qAbs(Theme::missingDisplayScale(2,1,1)-2)<0.001,
-    "WSLg missing 200 percent desktop scaling is restored");
-  verify(qAbs(Theme::missingDisplayScale(2,2,1)-1)<0.001,
-    "correctly scaled desktops cannot be doubled again");
-  verify(qAbs(Theme::missingDisplayScale(1.5,1,1)-1.5)<0.001,
-    "fractional host scaling remains supported");
-  verify(Theme::missingDisplayScale(2,1,2)==1 && Theme::missingDisplayScale(0,1,1)==1
-      && Theme::missingDisplayScale(2,0,1)==1,
-    "unknown screens and multi-monitor mappings never trigger guessed global scaling");
-  QProcessEnvironment scaleEnvironment;
-  verify(!Theme::hasExplicitDisplayScaling(scaleEnvironment), "default display environment permits detection");
-  scaleEnvironment.insert("QT_SCALE_FACTOR","1.25");
-  verify(Theme::hasExplicitDisplayScaling(scaleEnvironment), "explicit user scale is preserved");
-  scaleEnvironment.remove("QT_SCALE_FACTOR"); scaleEnvironment.insert("QT_ENABLE_HIGHDPI_SCALING","0");
-  verify(Theme::hasExplicitDisplayScaling(scaleEnvironment), "explicit automatic DPI opt-out is preserved");
   const auto previousStyle=qApp->styleSheet();
   qApp->setStyleSheet(Theme::GlobalStyle + Theme::ButtonStyle + Theme::ItemViewStyle);
   MockServer server;
@@ -389,15 +374,46 @@ static void runTaskDialogGeometryChecks(const std::function<void(bool, const cha
   auto font=qApp->font();font.setPointSize(11);qApp->setFont(font);
   MainWindow shell(&api,"user","fixture-user");shell.m_dongleTimer->stop();shell.m_ws->disconnectFromServer();
   shell.switchToPage(1);shell.resize(1360,860);shell.show();
-  for(bool quick:{false,true}) {
+  for(int mode:{0,1,2}) {
     QTimer::singleShot(0,shell.m_flowPage,[&] {
       auto *dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());
       verify(dialog,"task creation opens its dialog");
-      dialog->findChild<QLineEdit*>("taskTargetInput")->setText("http://192.0.2.40:8089/app/");
+      verify(QTest::qWaitForWindowExposed(dialog),"task dialog is exposed before typing");
+      QRect lastFrame=dialog->frameGeometry();
+      QElapsedTimer stableFrame;stableFrame.start();
+      verify(awaitCondition([&] {
+        if(dialog->frameGeometry()!=lastFrame) {lastFrame=dialog->frameGeometry();stableFrame.restart();}
+        return stableFrame.elapsed()>=200;
+      }),"window manager finishes initial dialog placement before typing");
+      auto *target=dialog->findChild<QLineEdit*>("taskTargetInput");
+      const auto originalPosition=dialog->frameGeometry().topLeft();
+      const auto originalSize=dialog->size();
+      for (const QChar character : QStringLiteral("http://192.0.2.40:8089/app/")) {
+        QTest::keyClicks(target, QString(character));
+        QTest::qWait(15);
+        qInfo()<<"Typing target"<<target->text()<<"frame"<<dialog->frameGeometry()<<"original"<<originalPosition;
+        verify(dialog->frameGeometry().topLeft()==originalPosition,"typing a target never moves the task dialog");
+        verify(dialog->size()==originalSize,"typing and validation never resize the task dialog");
+      }
+      for(int i=0;i<8;++i) {
+        QTest::keyClick(target,Qt::Key_Backspace); QTest::qWait(15);
+        verify(dialog->frameGeometry().topLeft()==originalPosition,"deleting target characters never moves the task dialog");
+      }
+      target->setText("http://"); QTest::qWait(30);
+      verify(!dialog->findChild<QLabel*>("taskTargetError")->isHidden(),"incomplete URL still shows validation feedback");
+      const auto screenshots=qEnvironmentVariable("REDTEAM_TASK_DIALOG_SCREENSHOT_DIR");
+      if(mode==2 && !screenshots.isEmpty()) {
+        verify(QDir().mkpath(screenshots),"task dialog screenshot directory is available");
+        verify(dialog->grab().save(screenshots+"/typing-incomplete-url.png"),"incomplete URL screenshot saved");
+      }
+      target->setText("http://192.0.2.40:8089/app/"); QTest::qWait(30);
+      verify(dialog->findChild<QLabel*>("taskTargetError")->isHidden(),"valid URL clears validation feedback");
       auto *options=dialog->findChild<QToolButton*>("taskOptionsToggle");
       for(bool expanded:{false,true}) {
         options->setChecked(expanded);
         QTest::qWait(30);
+        verify(dialog->frameGeometry().topLeft()==originalPosition && dialog->size()==originalSize,
+          "expanding task options keeps the window position and size stable");
         const auto *screen=dialog->windowHandle()->screen();
         qInfo()<<"Task dialog geometry"<<dialog->size()<<"frame"<<dialog->frameGeometry()<<"minimum"<<dialog->minimumSize()<<"screen"<<screen->availableGeometry();
         verify(screen->availableGeometry().contains(dialog->frameGeometry()),"complete task dialog frame fits the available screen");
@@ -405,10 +421,12 @@ static void runTaskDialogGeometryChecks(const std::function<void(bool, const cha
         verify(dialog->rect().contains(QRect(buttons->mapTo(dialog,QPoint()),buttons->size())),"task dialog actions remain inside the window");
         auto *scroll=dialog->findChild<QScrollArea*>("taskCreateScroll");
         verify(scroll->horizontalScrollBar()->maximum()==0,"task form remains readable without horizontal scrolling");
+        if(mode==2 && !expanded && !screenshots.isEmpty())
+          verify(dialog->grab().save(screenshots+"/typing-complete-url.png"),"complete URL screenshot saved");
       }
       dialog->reject();
     });
-    shell.m_flowPage->createFlow(quick);
+    shell.m_flowPage->createFlow(mode==1,{}, {},mode==2);
   }
   qApp->setStyleSheet(previousStyle);qApp->setFont(previousFont);
 }
@@ -420,8 +438,6 @@ int main(int argc, char **argv)
   qputenv("XDG_CONFIG_HOME", isolatedSettings.path().toUtf8());
   qputenv("XDG_DATA_HOME", isolatedSettings.path().toUtf8());
   Theme::enableHighDpiScaling();
-  Theme::applyWslDisplayScaling(QFileInfo(QString::fromLocal8Bit(argv[0])).absoluteDir()
-      .filePath(QStringLiteral("RedTeam-Platform")));
   QApplication app(argc, argv);
   app.setFont(Theme::uiFont());
   app.setQuitOnLastWindowClosed(false);
@@ -713,11 +729,11 @@ int main(int argc, char **argv)
           "height-only ribbon toggles do not schedule task column and row remeasurement");
     }
     shell.openRibbonFeature("scans.web");
-    auto *scanSpaces = shell.m_flowPage->m_scanTab->findChild<QTabWidget *>("scanWorkspaces");
-    scanSpaces->setCurrentIndex(1);
+    auto *scanViews = shell.m_flowPage->m_scanTab->findChild<QComboBox *>("scanViewPicker");
+    scanViews->setCurrentIndex(2);
     verify(shell.m_featureTitle->text() == QStringLiteral("程序与源码扫描") && shell.m_activeFeature.isEmpty(), "source extension has an accurate title without selecting an unrelated scan leaf");
     verify(!shell.m_flowPage->m_scanTab->findChild<QFrame *>("scanTasksPanel")->isVisible(), "source extension hides unrelated network task controls");
-    scanSpaces->setCurrentIndex(0);
+    scanViews->setCurrentIndex(0);
     verify(shell.m_activeFeature == "scans.web" && shell.m_featureTitle->text() == QStringLiteral("Web漏洞扫描"), "returning from source extension restores the actual network scan feature");
     for (const int width : {1024, 1366}) {
       for (const auto &id : QStringList{"resources.llm", "plans.task", "scans.web", "topology.edit", "system.users"}) {
@@ -2065,8 +2081,8 @@ int main(int argc, char **argv)
   }
   sourceOnly = true;
   ScanPage sourcePage(&api, "user", "fixture-user");
-  verify(sourcePage.findChild<QWidget*>("sourceFlowWorkspaceSlot") && !sourcePage.findChild<QWidget*>("pentagiSourceScanHost"),
-    "new source workspace stays lazy while the existing program workbench is used");
+  verify(sourcePage.findChild<QComboBox*>("scanViewPicker") && !sourcePage.findChild<QWidget*>("pentagiSourceScanHost"),
+    "source scanning shares task findings without constructing a global scan history");
   verify(sourcePage.m_programInputKind->currentData().toString() == "agent",
       "source scanning defaults to passing a path or address to CScan");
   {

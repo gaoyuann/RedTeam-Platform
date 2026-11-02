@@ -93,3 +93,47 @@ test('successful DVWA init output remains successful with exit code zero', () =>
   });
   assert.equal(result.success, true);
 });
+
+for (const stdout of [
+  'UPLOAD_RESULT: check server response above',
+  'DVWA ready (session: fixture-session, login_ok: 0)',
+  'FILE_TAMPER_FAILED: cannot write target file',
+  'FATAL: Failed to get CSRF token',
+  'VERIFIED: earlier check\nVERIFY_FAILED: Homepage not tampered',
+]) test(`exit zero does not hide business failure: ${stdout.split(':')[0]}`, () => {
+  const result = classifyToolResult('system-tools', { exitCode: 0, stdout, stderr: '' });
+  assert.equal(result.success, false);
+  assert.ok(result.error);
+  assert.equal(result.stdout, stdout);
+  assert.equal(result.exitCode, 0);
+});
+
+const loginPage = '<html><form action="login.php"><input name="password" type="password"></form></html>';
+for (const [stdout, stderr] of [
+  ['<html><title>404 Not Found</title><h1>Not Found</h1></html>', ''],
+  ['<html><title>403 Forbidden</title></html>', ''],
+  [loginPage, ''],
+  ['--- request finished ---', 'curl: (7) Failed to connect'],
+]) test(`HTTP shell failures survive successful final echo: ${stdout.slice(0, 30)}`, () => {
+  const result = classifyToolResult('system-tools', { exitCode: 0, stdout, stderr }, {
+    args: ['-c', 'curl -s -L -b /tmp/dvwa_jar.txt http://fixture.invalid/protected; echo done'],
+  });
+  assert.equal(result.success, false);
+  assert.ok(result.error);
+});
+
+test('HTTP response checks stay scoped to requests and allow ordinary login-page discovery', () => {
+  const errorPage = '<title>404 Not Found</title>';
+  assert.equal(classifyToolResult('cat', { exitCode: 0, stdout: errorPage }).success, true);
+  assert.equal(classifyToolResult('system-tools', { exitCode: 0, stdout: errorPage }, { args: ['-c', 'cat example.html'] }).success, true);
+  assert.equal(classifyToolResult('curl', { exitCode: 0, stdout: loginPage }, { args: ['http://fixture.invalid/login.php'] }).success, true);
+  assert.equal(classifyToolResult('curl', { exitCode: 0, stdout: loginPage }, { args: ['-b', '/tmp/jar', 'http://fixture.invalid/protected'] }).success, false);
+  for (const url of ['http://fixture.invalid/login.php', '--url=https://fixture.invalid/app/signin?next=account'])
+    assert.equal(classifyToolResult('curl', { exitCode: 0, stdout: loginPage }, { args: ['-b', '/tmp/jar', url] }).success, true);
+  const passwordChange = '<form action="/change-password"><input name="password" type="password"></form>';
+  assert.equal(classifyToolResult('curl', { exitCode: 0, stdout: passwordChange }, { args: ['-b', '/tmp/jar', 'http://fixture.invalid/account'] }).success, true);
+  const profile = '<form action="/profile"><input name="username"><input name="password" type="password"></form>';
+  assert.equal(classifyToolResult('curl', { exitCode: 0, stdout: profile }, { args: ['-b', '/tmp/jar', 'http://fixture.invalid/account'] }).success, true);
+  assert.equal(classifyToolResult('curl', { exitCode: 0, stdout: errorPage }, { args: ['http://fixture.invalid/missing'] }).success, false);
+  assert.equal(classifyToolResult('system-tools', { exitCode: 0, stdout: 'FILE_UPLOADED: fixture\nFILE_TAMPERED: fixture\nVERIFIED: fixture' }).success, true);
+});
