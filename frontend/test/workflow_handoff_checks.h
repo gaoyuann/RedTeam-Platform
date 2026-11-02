@@ -5,17 +5,33 @@ static void runWorkflowHandoffChecks(const std::function<void(bool, const char *
   qRegisterMetaType<QList<qint64>>("QList<qint64>");
   MockServer server;
   bool contextFailure = false;
+  bool failAdditionalFinding = false;
+  bool failedTask = false;
   server.handler = [&](const QString &method, const QString &path) {
     if (path.endsWith("/test-context")) return MockReply{contextFailure
       ? QJsonObject{{"status","error"},{"error",QJsonObject{{"message","fixture continuation failed"}}}}
       : success(QJsonObject{{"pipeline_id","task-a"},{"scan_task_id","scan-independent"}}), 120};
     for (const auto &id : {QString("task-a"), QString("task-b")}) {
-      if (path == "/api/pipelines/" + id) return MockReply{success(taskRecord(id)), 100};
+      if (path == "/api/pipelines/" + id) {
+        auto task = taskRecord(id);
+        if (failedTask) { task["status"] = "failed"; task["error_message"] = "fixture scan incomplete"; }
+        return MockReply{success(task), 100};
+      }
       if (path == "/api/pipelines/" + id + "/execution") return MockReply{success(executionRecord(id))};
       if (path.startsWith("/api/pipelines/" + id + "/results")) return MockReply{success(resultsRecord(id))};
     }
-    if (method == "POST" && path == "/api/pipelines/task-a/verifications")
-      return MockReply{success(QJsonObject{{"id","fv-a"},{"finding_id",123},{"state","needs_conditions"}})};
+    if (method == "POST" && path == "/api/pipelines/task-a/verifications") {
+      const int finding=QJsonDocument::fromJson(server.requestBodies[method+" "+path]).object()["finding_id"].toInt();
+      if(finding==124 && failAdditionalFinding) {
+        failAdditionalFinding=false;
+        return MockReply{QJsonObject{{"status","error"},{"error",QJsonObject{{"message","fixture additional finding failed"}}}},80};
+      }
+      return MockReply{success(QJsonObject{{"id",finding==123?"fv-a":"fv-b"},{"finding_id",finding},{"state","needs_conditions"}}),finding==124?80:0};
+    }
+    if (path == "/api/pipelines/task-a/verifications/fv-b")
+      return MockReply{success(QJsonObject{{"id","fv-b"},{"finding_id",124},{"revision",0},{"eligible",true},
+        {"state","needs_conditions"},{"finding",QJsonObject{{"id",124},{"severity","high"},{"result_data","{\"title\":\"second finding\"}"}}},
+        {"attempts",QJsonArray{}},{"plans",QJsonArray{}}})};
     if (path == "/api/pipelines/task-a/verifications/fv-a")
       return MockReply{success(QJsonObject{{"id","fv-a"},{"finding_id",123},{"revision",0},{"eligible",true},
         {"state","needs_conditions"},{"default_target","http://task-a.invalid/item"},
@@ -25,6 +41,27 @@ static void runWorkflowHandoffChecks(const std::function<void(bool, const char *
     return MockReply{success(QJsonArray{})};
   };
   ApiClient api(QStringLiteral("http://127.0.0.1:%1").arg(server.serverPort()));
+  {
+    ScanPage page(&api);
+    page.m_pipelineId="task-a";
+    page.updateStatusLabel({{"status","COMPLETED"},{"target","http://task-a.invalid"},{"scan_type","web_scan"}});
+    const QJsonObject first{{"id",123},{"result_type","web_vuln"},{"severity","high"},
+      {"result_data","{\"title\":\"first finding\"}"}};
+    auto second=first;second["id"]=124;
+    page.renderGroupedResults({first,second});
+    QSignalSpy scope(&page,&ScanPage::findingPlansRequested);
+    page.setCurrentFindingsChecked(true);
+    page.m_resultTree->setCurrentItem(page.m_resultTree->topLevelItem(0));
+    verify(page.m_prepareFinding->isEnabled(),"checked findings enable preparation even when the current row is a group");
+    page.m_prepareFinding->click();
+    verify(scope.count()==1 && qvariant_cast<QList<qint64>>(scope.first().at(1))==QList<qint64>({123,124}),
+      "select-all followed by the main test button carries every checked finding");
+    page.setCurrentFindingsChecked(false);
+    page.m_resultTree->setCurrentItem(page.selectableFindingItems().last());
+    page.m_prepareFinding->click();
+    verify(scope.count()==2 && qvariant_cast<QList<qint64>>(scope.last().at(1))==QList<qint64>{124},
+      "without checked rows the test button falls back to the current finding");
+  }
   {
     TopologyPage page(&api);
     TopologyNodeRecord first; first.id="host-192.0.2.10";first.assetId="asset-a";first.ip="192.0.2.10";first.deviceType="host";
@@ -89,6 +126,22 @@ static void runWorkflowHandoffChecks(const std::function<void(bool, const char *
     results->m_snapshot=snapshot;results->render();
     verify(results->m_state->text().contains("已有 1 次逐漏洞测试记录") && results->m_state->text().contains("可生成"),
       "assessment recognizes child verification results and report readiness without a global run");
+    snapshot=resultsRecord("task-a");
+    auto execution=snapshot["execution"].toObject();auto run=execution["run"].toObject();
+    run["status"]="COMPLETED";run["stop_reason"]="非可选步骤失败: system-tools";
+    run["counts"]=QJsonObject{{"returned",6},{"steps",6},{"succeeded",5},{"failed",1}};
+    execution["run"]=run;snapshot["execution"]=execution;
+    results->m_snapshot=snapshot;results->render();
+    verify(results->m_state->text().contains("待核对") && !results->m_state->text().contains("失败")
+        && results->m_state->toolTip()==run["stop_reason"].toString(),
+      "ended execution shows a concise review state and preserves the exact stop reason on demand");
+    verify(results->m_metrics[1]->findChild<QLabel *>("metricValue")->text()==QStringLiteral("6 / 6"),
+      "returned step count stays distinct from the execution outcome");
+    failedTask=true;flow.loadFlowDetail("task-a");
+    verify(awaitCondition([&]{return !flow.m_taskDetailBusy && flow.m_statusLabel->text().contains("待核对");})
+        && flow.m_failureReason->isHidden() && flow.m_statusLabel->toolTip()=="fixture scan incomplete",
+      "historical failed tasks retain diagnostics without a failure banner");
+    failedTask=false;
   }
   {
     contextFailure = false;
@@ -99,11 +152,22 @@ static void runWorkflowHandoffChecks(const std::function<void(bool, const char *
       "direct finding attack waits for the selected task context");
     verify(server.requests.value("POST /api/pipelines/task-a/verifications")==before,
       "abandoned attack handoff cannot create a verification for the previous task");
+    flow.openTaskAnalysis("task-a");
+    verify(awaitCondition([&]{return flow.taskContextReady() && flow.selectedTaskId()=="task-a";}),
+      "current task is ready before checking retained verification editors");
+    auto *foreign = new FindingVerificationDialog(&api,"task-b",{},&flow);
+    foreign->setObjectName("taskFindingVerification");foreign->show();
     flow.openFindingAttackWorkspace("task-a",{123});
     QPointer<FindingVerificationDialog> attack;
-    verify(awaitCondition([&]{attack=flow.findChild<FindingVerificationDialog*>("taskFindingVerification");
+    verify(awaitCondition([&]{
+        for(auto *dialog:flow.findChildren<FindingVerificationDialog*>("taskFindingVerification"))
+          if(dialog->pipelineId()=="task-a")attack=dialog;
         return attack && attack->m_target->text()=="http://task-a.invalid/item";}),
       "direct finding attack inherits the concrete scan target");
+    verify(attack!=foreign && foreign->m_items->rowCount()==0
+        && server.requests.value("POST /api/pipelines/task-b/verifications")==0,
+      "an editor retained for another task never receives the current task findings");
+    delete foreign;
     verify(flow.workspaceStage()==5 && flow.m_planTab->m_planViews->currentWidget()!=flow.m_planTab->m_findingPlans,
       "finding attack opens in the attack module without visiting the per-finding plan list");
     verify(attack->m_sources->isVisible() && attack->m_useSource->isVisible()
@@ -115,6 +179,28 @@ static void runWorkflowHandoffChecks(const std::function<void(bool, const char *
     verify(flow.findChildren<FindingVerificationDialog*>("taskFindingVerification").size()==1
         && server.requests.value("POST /api/pipelines/task-a/verifications")==before+1,
       "repeated attack clicks preserve one verification editor and its draft");
+    attack->m_name->setText("unsaved source verification plan");attack->m_dirty=true;
+    const auto original=attack->currentId();
+    failAdditionalFinding=true;
+    flow.openFindingAttackWorkspace("task-a",{123,124,124});
+    flow.openFindingAttackWorkspace("task-a",{123,124});
+    verify(awaitCondition([&]{return attack->m_status->text().contains("fixture additional finding failed");})
+        && attack->m_items->rowCount()==1 && attack->m_name->text()=="unsaved source verification plan",
+      "failed addition keeps existing findings and the current unsaved plan");
+    flow.openFindingAttackWorkspace("task-a",{123,124});
+    flow.openFindingAttackWorkspace("task-a",{123,124});
+    verify(awaitCondition([&]{return attack->m_items->rowCount()==2;}),
+      "reusing an open single-finding editor adds newly checked findings");
+    verify(flow.findChildren<FindingVerificationDialog*>("taskFindingVerification").size()==1
+        && attack->currentId()==original && attack->m_dirty && attack->m_name->text()=="unsaved source verification plan",
+      "expanding a finding selection preserves the editor and unsaved current plan");
+    verify(server.requests.value("POST /api/pipelines/task-a/verifications")==before+3,
+      "repeated and overlapping selections do not duplicate pending verification creation");
+    attack->m_items->item(1,0)->setCheckState(Qt::Unchecked);
+    flow.openFindingAttackWorkspace("task-a",{124});
+    verify(attack->m_items->rowCount()==2 && attack->m_items->item(1,0)->checkState()==Qt::Checked,
+      "selecting a loaded finding rechecks its existing row without losing other findings");
+    attack->m_dirty=false;
     auto *chooseExisting = flow.m_execTab->findChild<QPushButton *>("executionChoosePlaybook");
     auto *chooseFinding = flow.m_execTab->findChild<QPushButton *>("executionFindingAttack");
     verify(chooseExisting && chooseFinding && chooseExisting->isVisible() && chooseFinding->isVisible(),

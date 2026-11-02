@@ -68,6 +68,7 @@ const VIRTUAL_TOOLS = new Set(['upload_shell', 'webshell', 'webshell_health']);
 
 function getVolumeMounts(toolId, options = {}) {
   const mounts = [];
+  if (options.temporaryDirectory) mounts.push('-v', `${resolve(options.temporaryDirectory)}:/tmp`);
   const wordlistsDir = resolve(PROJECT_ROOT, 'data', 'wordlists');
   const nucleiTemplatesDir = resolve(PROJECT_ROOT, 'data', 'nuclei-templates');
   const outputDir = resolve(PROJECT_ROOT, 'data', 'output');
@@ -127,7 +128,7 @@ function runProcess(bin, args, options, executionMode, stopContainer) {
         timedOut, aborted, outputLimitExceeded, outputBytes, durationMs: Date.now() - started,
         processStopped: result.processStopped !== false && stopped !== false,
         ...(outputConsumerError ? {exitCode:-1,error:'Output collection failed: '+outputConsumerError} : {}),
-      })));
+      }, { args: options.toolArgs })));
     }
     function forceKill() {
       if (killed) return;
@@ -197,14 +198,14 @@ export async function runTool(toolId, args, options = {}) {
     if (SAST_TOOLS.has(toolId)) args = args.map(arg => arg === '--project=/src/project/.rt-compile-commands.json'
       ? '--project='+resolve(options.sourceDir,'.rt-host-compile-commands.json')
       : arg === '/src/project' ? resolve(options.sourceDir) : arg);
-    return runProcess(bin, args, { ...options, toolId }, 'host');
+    return runProcess(bin, args, { ...options, toolId, toolArgs: args }, 'host');
   }
 
   if(!options.privateOutputDir)ensureOutputDir();
   const name = `rt-tool-${randomUUID()}`;
   const containerArgs = ['run', '--rm', ...(SAST_TOOLS.has(toolId) || options.privateOutputDir ? ['--pull=never'] : []), '--name', name, ...(options.privateOutputDir && engine==='podman' ? ['--userns=keep-id'] : []), ...(options.privateOutputDir && process.getuid ? ['--user', `${process.getuid()}:${process.getgid()}`] : []), '--network', SAST_TOOLS.has(toolId) ? 'none' : 'host',
     ...getVolumeMounts(toolId, options), ...(PRIVILEGED_TOOLS.has(toolId) ? ['--privileged'] : []), image, bin, ...args];
-  return runProcess(engine, containerArgs, { ...options, toolId,privateContainerName:name }, engine, () => new Promise(resolveCleanup => {
+  return runProcess(engine, containerArgs, { ...options, toolId, toolArgs: args,privateContainerName:name }, engine, () => new Promise(resolveCleanup => {
     const cleanup = spawn(engine, ['rm', '-f', name], { stdio: 'ignore' });
     cleanup.on('error', () => resolveCleanup(false));
     const cleanupTimer = setTimeout(() => { cleanup.kill('SIGKILL'); resolveCleanup(false); }, 10000);

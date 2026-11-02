@@ -106,6 +106,67 @@ test('built-in HTTP observation without tool process remains usable',async t=>{
  assert.equal(r.ok,true);assert.equal(db.prepare('SELECT count(*) n FROM scan_tool_runs').get().n,0);
 });
 
+test('a successful observation plus a stopped timed-out API check continues with explicit incomplete coverage',async t=>{
+ const {db,p}=await fixture(t);let turns=0;
+ const r=await runScanAgent(db,p,{llm:async messages=>{
+  turns++;const candidates=JSON.parse(messages[1].content).candidates;
+  if(turns>2)return {ok:true,content:'{"action":"finish","reason":"保留超时记录"}'};
+  const c=candidates.find(c=>c.scan_type===(turns===1?'app_discovery':'api_fuzz'));
+  assert.ok(c);return {ok:true,content:JSON.stringify({action:'execute_check',check_id:c.check_id,evidence_id:c.source_record_id,reason:'已有来源证据'})};
+ },execute:async id=>{
+  const scan=db.prepare('SELECT scan_type FROM scan_tasks WHERE scan_task_id=?').get(id);
+  if(scan.scan_type==='app_discovery') {
+   db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data) VALUES (?,'http_probe',?)").run(id,JSON.stringify({url:p.target,status_code:200,body:'<h1>Fixture</h1>'}));
+   return {ok:true,status:'COMPLETED'};
+  }
+  db.prepare("INSERT INTO scan_tool_runs(tool_run_id,scan_task_id,tool_id,scan_type,state,started_at,outcome) VALUES (?,?,'arjun','api_fuzz','timed_out',?,?)")
+   .run(id,id,new Date().toISOString(),'{"tool_started":true,"stopped":true,"timed_out":true,"exit_code":137}');
+  return {ok:false,status:'PARTIAL'};
+ }});
+ assert.equal(r.ok,true);assert.equal(r.error,null);assert.equal(r.completeness,'incomplete');assert.match(r.warning,/arjun:工具超时/);
+ assert.equal(db.prepare("SELECT status FROM scan_tasks WHERE scan_type='react_scan'").get().status,'PARTIAL');
+ const summary=JSON.parse(db.prepare("SELECT result_data FROM scan_results WHERE result_type='scan_agent_summary'").get().result_data);
+ assert.equal(summary.complete,false);assert.equal(summary.usable_checks,1);assert.equal(summary.unusable_checks,1);
+ assert.deepEqual(summary.failure_reasons,['arjun:工具超时']);
+ assert.equal(db.prepare("SELECT count(*) n FROM task_checks WHERE scan_type='api_fuzz' AND state='partial'").get().n,1);
+});
+
+for(const mode of ['model-disconnect','unknown-stop','missing-stop','malformed-stop','cancel'])
+test('a prior usable observation cannot hide '+mode,async t=>{
+ const {db,p}=await fixture(t),controller=new AbortController();let turns=0,dispatches=0;
+ const result=await runScanAgent(db,p,{signal:controller.signal,llm:async messages=>{
+  turns++;
+  if(turns===2&&mode==='model-disconnect')return {ok:false};
+  if(turns===2&&mode==='cancel'){controller.abort();return {ok:false};}
+  const c=JSON.parse(messages[1].content).candidates.find(c=>c.scan_type===(turns===1?'app_discovery':'api_fuzz'));
+  return {ok:true,content:JSON.stringify({action:'execute_check',check_id:c.check_id,evidence_id:c.source_record_id,reason:'fixture observation'})};
+ },execute:async id=>{
+  dispatches++;
+  if(dispatches===1){
+   db.prepare("INSERT INTO scan_results(scan_task_id,result_type,result_data) VALUES (?,'http_probe',?)").run(id,JSON.stringify({url:p.target,status_code:200,body:'<h1>Fixture</h1>'}));
+   return {ok:true,status:'COMPLETED'};
+  }
+  const outcome=mode==='missing-stop'?'{}':mode==='malformed-stop'?'{broken':JSON.stringify({tool_started:true,stopped:false,exit_code:1});
+  db.prepare("INSERT INTO scan_tool_runs(tool_run_id,scan_task_id,tool_id,scan_type,state,started_at,outcome) VALUES (?,?,'arjun','api_fuzz','failed',datetime('now'),?)").run(id,id,outcome);
+  return {ok:false,status:'PARTIAL'};
+ }});
+ assert.equal(result.ok,false);assert.equal(result.completeness,'incomplete');assert.equal(result.warning,null);
+ assert.equal(result.cancelled,mode==='cancel');
+ assert.match(result.error,mode==='model-disconnect'?/模型不可用/:mode==='cancel'?/取消/:/停止未确认/);
+ const summary=JSON.parse(db.prepare("SELECT result_data FROM scan_results WHERE result_type='scan_agent_summary'").get().result_data);
+ assert.equal(summary.usable_checks,1);assert.equal(summary.complete,false);
+});
+
+test('all failed checks remain blocked even if a caller labels them PARTIAL',async t=>{
+ const {db,p}=await fixture(t);let turns=0;
+ const result=await runScanAgent(db,p,{llm:async messages=>++turns===1?choose(messages):{ok:true,content:'{"action":"finish","reason":"全部失败"}'},execute:async id=>{
+  db.prepare("INSERT INTO scan_tool_runs(tool_run_id,scan_task_id,tool_id,scan_type,state,started_at,outcome) VALUES (?,?,'http-discovery','app_discovery','failed',datetime('now'),?)").run(id,id,JSON.stringify({tool_started:true,stopped:true,exit_code:1,incomplete:true}));
+  return {ok:false,status:'PARTIAL'};
+ }});
+ assert.equal(result.ok,false);assert.equal(result.warning,null);assert.match(result.error,/执行证据/);
+ assert.equal(result.completeness,'incomplete');
+});
+
 test('one shared budget covers nested work and exhaustion prevents subsequent checks',async t=>{
  const {db,p}=await fixture(t);let calls=0;
  const r=await runScanAgent(db,p,{limits:{decisions:4,checks:4,pages:2,tools:1,sql_checks:1,duration_ms:10000,model_ms:1000},llm:choose,execute:async(id,_signal,budget)=>{

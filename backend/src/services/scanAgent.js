@@ -21,8 +21,8 @@ export async function runScanAgent(db,pipeline,{signal,execute,llm=callLlm,limit
  const authentication=scanSessionAuth(pipeline.pipeline_id,pipeline.created_by);
  const id=pipeline.pipeline_id,scope=taskScope(pipeline),controller=new AbortController();
  const abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
- const timer=setTimeout(abort,limits.duration_ms);let turns=0,dispatches=0,usable=0,unusable=0,finished=false,reason='调度预算已用尽',failure=false;
- const history=[],scanTaskIds=[],scopeTarget=pipeline.target;
+ const timer=setTimeout(abort,limits.duration_ms);let turns=0,dispatches=0,usable=0,unusable=0,finished=false,reason='调度预算已用尽',failure=false,complete=false;
+ const history=[],scanTaskIds=[],failureReasons=[],scopeTarget=pipeline.target;
  const auditId='scan_'+randomUUID().slice(0,12);
  db.prepare("INSERT INTO scan_tasks(scan_task_id,pipeline_id,target,scan_type,status,created_by,parameters,started_at) VALUES (?,?,?,'react_scan','RUNNING',?,?,?)")
   .run(auditId,id,scopeTarget,pipeline.created_by,JSON.stringify({scan_orchestrator:{version:1,mode:'react'}}),now());
@@ -68,11 +68,12 @@ export async function runScanAgent(db,pipeline,{signal,execute,llm=callLlm,limit
    dispatches++;store('scan_agent_step',{turn:turns,action:d.action,check_id:c.check_id,scan_type:c.scan_type,child_scan_id:child,evidence_id:c.source_record_id,state:'running',reason:d.reason});
    const result=await execute(child,controller.signal,budget);
    controller.signal.throwIfAborted();
-   const unresolved=db.prepare("SELECT 1 FROM scan_tool_runs WHERE scan_task_id=? AND (state='running' OR json_extract(outcome,'$.stopped')=0)").get(child);
+   const unresolved=db.prepare("SELECT 1 FROM scan_tool_runs WHERE scan_task_id=? AND (state='running' OR CASE WHEN json_valid(outcome) THEN json_extract(outcome,'$.stopped') ELSE NULL END IS NOT 1)").get(child);
    if(unresolved)throw Error('工具停止未确认，禁止继续派发');
    const assessment=assessCapability(db,child,c.scan_type);
    const state=assessment.operation_complete?'completed':assessment.detection_executed===false?'not_checked':result.status==='FAILED'?'failed':'partial';
    if(assessment.usable_for_analysis)usable++;else unusable++;
+   if(!assessment.usable_for_analysis)failureReasons.push(...assessment.failure_reasons);
    store('scan_capability_assessment',{check_id:c.check_id,child_scan_id:child,...assessment});
    if(budget.snapshot().exhausted)throw new ScanBudgetExceeded(budget.snapshot().exhausted);
    markCheck(db,c.check_id,state,{scanTaskId:child,reason:state==='completed'?null:'检查未完整完成，查看工具证据'});
@@ -103,10 +104,22 @@ export async function runScanAgent(db,pipeline,{signal,execute,llm=callLlm,limit
   completeCoverage(db,id,reason);
   const checks=db.prepare('SELECT state,count(*) n FROM task_checks WHERE pipeline_id=? GROUP BY state').all(id);
   const incomplete=checks.some(c=>!['completed','not_applicable'].includes(c.state));
-  const complete=finished&&!failure&&dispatches>0&&usable>0&&unusable===0&&!incomplete;
-  store('scan_agent_summary',{version:1,mode:'react',complete,decisions:turns,dispatches,usable_checks:usable,unusable_checks:unusable,budget:budget.snapshot(),reason,coverage:checks});
+  complete=finished&&!failure&&dispatches>0&&usable>0&&unusable===0&&!incomplete;
+  store('scan_agent_summary',{version:1,mode:'react',complete,decisions:turns,dispatches,usable_checks:usable,unusable_checks:unusable,budget:budget.snapshot(),reason,failure_reasons:[...new Set(failureReasons)],coverage:checks});
   db.prepare('UPDATE scan_tasks SET status=?,completed_at=?,error_message=? WHERE scan_task_id=?').run(signal?.aborted?'CANCELLED':failure?'FAILED':complete?'COMPLETED':'PARTIAL',now(),complete?null:reason,auditId);
  }
- const meaningful=usable>0 && unusable===0;
- return {ok:!failure&&dispatches>0&&!!meaningful,cancelled:!!signal?.aborted,scanTaskIds:[auditId,...scanTaskIds],totalResults:db.prepare('SELECT count(*) n FROM scan_results WHERE scan_task_id IN (SELECT scan_task_id FROM scan_tasks WHERE pipeline_id=?)').get(id).n,error:failure||!dispatches?reason:!meaningful?'检查未取得足够执行证据，不继续分析或生成预案':null};
+ // Ended checks can retain useful observations even when another check timed
+ // out or lacked prerequisites. Preserve PARTIAL and its evidence; only a
+ // complete capability contributes to usable, and fatal dispatch errors still
+ // block progression. Unknown stop must never be hidden by another success.
+ const stopped=scanTaskIds.every(id=>{
+  const type=db.prepare('SELECT scan_type FROM scan_tasks WHERE scan_task_id=?').get(id)?.scan_type;
+  return !assessCapability(db,id,type).gaps.includes('stop_unconfirmed');
+ });
+ const meaningful=usable>0 && stopped;
+ const details=[...new Set(failureReasons)].slice(0,6).join('；');
+ const ok=!failure&&dispatches>0&&meaningful;
+ return {ok,cancelled:!!signal?.aborted,scanTaskIds:[auditId,...scanTaskIds],totalResults:db.prepare('SELECT count(*) n FROM scan_results WHERE scan_task_id IN (SELECT scan_task_id FROM scan_tasks WHERE pipeline_id=?)').get(id).n,
+  completeness:complete?'complete':'incomplete',warning:ok&&!complete?`扫描部分完成，保留可用结果继续；未完成检查不视为成功${details?'；'+details:''}`:null,
+  error:failure||!dispatches?reason:!stopped?'工具停止未确认，禁止继续分析':!meaningful?`检查未取得足够执行证据，不继续分析或生成预案${details?'；'+details:''}`:null};
 }

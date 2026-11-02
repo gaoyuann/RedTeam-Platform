@@ -4,6 +4,7 @@
 #include <QJsonArray>
 #include <QList>
 #include <QMap>
+#include <QSet>
 #include <memory>
 class ApiClient;
 class QTableWidget;
@@ -23,6 +24,8 @@ public:
       const QString &existingVerificationId={}, const QString &existingAttemptId={});
   void showPayloadWorkspace();
   void showPlanWorkspace();
+  void addFindings(const QList<qint64> &findings);
+  QString pipelineId() const { return m_pipeline; }
 signals:
   void assessmentRequested(const QString &pipelineId);
   void verificationStarted(const QString &pipelineId);
@@ -38,6 +41,7 @@ private:
   QPoint m_dragOffset;
   bool allowDiscardDraft();
   void addFinding(qint64 finding);
+  QSet<qint64> m_requestedFindings;
   void addExistingFinding(const QString &id, qint64 finding, const QString &state={});
   void load(bool editor=false);
   void loadSources();

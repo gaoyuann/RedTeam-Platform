@@ -13,6 +13,7 @@
 
 static QColor colorForStatus(const QString &status)
 {
+  if (status == "partial") return QColor(Theme::Warning);
   if (status == "awaiting_approval") return QColor(Theme::Warning);
   if (status == "running" || status == "info") return QColor(Theme::Primary);
   if (status == "completed")  return QColor(Theme::Success);
@@ -24,6 +25,7 @@ static QColor colorForStatus(const QString &status)
 
 static QString labelForStatus(const QString &status)
 {
+  if (status == "partial") return QStringLiteral("部分完成");
   if (status == "running") return QStringLiteral("进行中");
   if (status == "info") return QStringLiteral("已有记录");
   if (status == "awaiting_approval") return QStringLiteral("待确认");

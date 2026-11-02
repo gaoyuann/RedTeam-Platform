@@ -3,9 +3,16 @@
 #include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QPointer>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QScreen>
 #include "ApiClient.h"
+#include "AppStyle.h"
 #include "LoginDialog.h"
 #include "LocalLoginStore.h"
+#include "StyleDark.h"
+#include "UiDisplayScaling.h"
+#include "UiTypography.h"
 
 class LoginServer : public QTcpServer {
 public:
@@ -64,12 +71,14 @@ private slots:
     QVERIFY(m_config.isValid());
     QSettings::setPath(QSettings::NativeFormat, QSettings::UserScope, m_config.path());
     QSettings::setPath(QSettings::NativeFormat, QSettings::SystemScope, m_config.path() + "/system");
+    qApp->setFont(Theme::uiFont());
   }
 
   void init() {
     QSettings settings("RedTeam", "RedTeam-Platform");
     settings.clear();
     settings.sync();
+    qApp->setStyleSheet(Theme::GlobalStyle + Theme::ButtonStyle + Theme::ItemViewStyle);
   }
 
   void cacheIsScopedAndRejectsInvalidData() {
@@ -121,7 +130,7 @@ private slots:
     submit(wrong, "wrong");
     QTRY_VERIFY(wrong.findChild<QPushButton *>("loginSubmit")->isEnabled());
     QCOMPARE(wrong.result(), int(QDialog::Rejected));
-    QVERIFY(wrong.findChild<QLabel *>("loginError")->text().contains(QStringLiteral("离线打开界面")));
+    QVERIFY(wrong.findChild<QLabel *>("loginError")->text().contains(QStringLiteral("校验未通过")));
   }
 
   void serverRejectionNeverUsesCache_data() {
@@ -163,33 +172,78 @@ private slots:
     QVERIFY(api.token().isEmpty());
   }
 
-  void guestEntryIgnoresLateLoginResponse() {
-    LoginServer server;
-    QVERIFY(server.listen(QHostAddress::LocalHost, 0));
-    server.delay = 150;
-    ApiClient api(server.url());
+  void unavailableServerRequiresCachedPassword() {
+    QTcpServer closedServer;
+    QVERIFY(closedServer.listen(QHostAddress::LocalHost, 0));
+    ApiClient api(QString("http://127.0.0.1:%1").arg(closedServer.serverPort()));
+    closedServer.close();
     LoginDialog login(&api);
     submit(login);
-    QTRY_COMPARE(server.requests, 1);
-    login.findChild<QPushButton *>("loginOffline")->click();
-    QCOMPARE(login.result(), int(QDialog::Accepted));
-    QCOMPARE(login.username(), QStringLiteral("离线访客"));
-    QCOMPARE(login.role(), QString("user"));
-    QTest::qWait(250);
+    QTRY_VERIFY(login.findChild<QPushButton *>("loginSubmit")->isEnabled());
+    QCOMPARE(login.result(), int(QDialog::Rejected));
+    QVERIFY(login.username().isEmpty());
+    QVERIFY(login.role().isEmpty());
     QVERIFY(api.token().isEmpty());
-    QCOMPARE(login.username(), QStringLiteral("离线访客"));
+    QVERIFY(login.findChild<QLabel *>("loginError")->text().contains(QStringLiteral("首次使用")));
     QSettings settings("RedTeam", "RedTeam-Platform");
     QVERIFY(settings.allKeys().isEmpty());
   }
 
-  void guestEntryNeedsNoConnectionOrCredentials() {
+  void loginAlwaysRequiresCredentials() {
     ApiClient api("http://fixture.invalid:3002");
     QSignalSpy errors(&api, &ApiClient::apiError);
     LoginDialog login(&api);
-    login.findChild<QPushButton *>("loginOffline")->click();
-    QCOMPARE(login.result(), int(QDialog::Accepted));
+    QVERIFY(!login.findChild<QPushButton *>("loginOffline"));
+    login.findChild<QPushButton *>("loginSubmit")->click();
+    QCOMPARE(login.result(), int(QDialog::Rejected));
+    QCOMPARE(login.findChild<QLabel *>("loginError")->text(), QStringLiteral("请输入用户名和密码"));
     QVERIFY(api.token().isEmpty());
     QCOMPARE(errors.count(), 0);
+  }
+
+  void originalLoginLayout_data() {
+    QTest::addColumn<bool>("dark");
+    QTest::newRow("light") << false;
+    QTest::newRow("dark") << true;
+  }
+
+  void originalLoginLayout() {
+    QFETCH(bool, dark);
+    QSettings settings("RedTeam", "RedTeam-Platform");
+    settings.setValue("appearance/dark", dark);
+    if (dark)
+      qApp->setStyleSheet(QString::fromUtf8(GLOBAL_STYLE_DARK) + Theme::DarkButtonStyle + Theme::ItemViewStyle);
+    ApiClient api("http://fixture.invalid:3002");
+    LoginDialog login(&api);
+    login.show();
+    QTest::qWait(40);
+    QVERIFY(QGuiApplication::primaryScreen()->availableGeometry().contains(login.frameGeometry()));
+    const auto *card = login.findChild<QFrame *>("loginCard");
+    QVERIFY(card);
+    QVERIFY(card->width() <= 480);
+    auto *scroll = login.findChild<QScrollArea *>("loginScroll");
+    QVERIFY(scroll);
+    QCOMPARE(scroll->horizontalScrollBar()->maximum(), 0);
+    for (const auto &name : {"loginUsername", "loginPassword", "loginRemember", "loginExit", "loginSubmit"}) {
+      auto *control = login.findChild<QWidget *>(name);
+      QVERIFY(control);
+      // QLineEdit's ensureWidgetVisible follows its cursor rectangle. Scroll
+      // the viewport itself to verify the complete control remains reachable.
+      const auto center = control->mapTo(scroll->widget(), control->rect().center());
+      scroll->verticalScrollBar()->setValue(center.y() - scroll->viewport()->height() / 2);
+      QCoreApplication::processEvents();
+      const QRect controlRect(control->mapTo(scroll->viewport(), QPoint()), control->size());
+      QVERIFY2(scroll->viewport()->rect().contains(controlRect), qPrintable(QString("%1: control %2,%3 %4x%5; viewport %6x%7")
+          .arg(name).arg(controlRect.x()).arg(controlRect.y()).arg(controlRect.width()).arg(controlRect.height())
+          .arg(scroll->viewport()->width()).arg(scroll->viewport()->height())));
+    }
+    const auto screenshots = qEnvironmentVariable("REDTEAM_LOGIN_SCREENSHOT_DIR");
+    if (!screenshots.isEmpty()) {
+      QVERIFY(QDir().mkpath(screenshots));
+      scroll->verticalScrollBar()->setValue(0);
+      QVERIFY(login.grab().save(screenshots + (dark ? "/dark-" : "/light-")
+          + qEnvironmentVariable("QT_SCALE_FACTOR", "native") + ".png"));
+    }
   }
 
   void timeoutIsClassifiedAsTransportFailure() {
@@ -219,5 +273,10 @@ private slots:
   }
 };
 
-QTEST_MAIN(LoginChecks)
+int main(int argc, char **argv) {
+  Theme::enableHighDpiScaling();
+  QApplication app(argc, argv);
+  LoginChecks checks;
+  return QTest::qExec(&checks, argc, argv);
+}
 #include "login_checks.moc"

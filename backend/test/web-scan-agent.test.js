@@ -107,6 +107,35 @@ test('pre-cancelled scans never authenticate or invoke models',async t=>{
   assert.equal(db.prepare("SELECT COUNT(*) n FROM scan_results WHERE result_type='sql_injection'").get().n,0);
 });
 
+test('anonymous login-only page reports missing authentication without asking a model to submit it',async t=>{
+  const db=database(t);let models=0,tools=0;
+  await scanWebAgent(task,{db,parent,anonymous:true,request:async()=>new Response(login),
+    llm:async()=>{models++;throw Error('login is not an actionable check');},runner:async()=>{tools++;}});
+  assert.equal(models,0);assert.equal(tools,0);
+  const summary=JSON.parse(db.prepare("SELECT result_data FROM scan_results WHERE result_type='web_scan_summary'").get().result_data);
+  assert.equal(summary.complete,false);assert.equal(summary.checks_started,0);assert.match(summary.reason,/缺少认证/);
+  assert.equal(db.prepare("SELECT count(*) n FROM scan_results WHERE result_type='sql_injection'").get().n,0);
+  assert.deepEqual(db.prepare("SELECT state FROM task_checks ORDER BY check_id").all().map(row=>row.state),
+    ['missing_condition','missing_condition','missing_condition','missing_condition']);
+});
+
+test('model receives concrete actions and rejected evidence retains a safe diagnostic before retry',async t=>{
+  const db=database(t);let turns=0,tools=0;
+  await scanWebAgent(task,{db,parent,anonymous:true,request:async()=>new Response('<form><input name="id" value="1"></form>'),
+    llm:async messages=>{
+      const input=JSON.parse(messages[1].content);turns++;
+      const action=input.available_actions.find(a=>a.action==='inspect_entry');
+      assert.ok(action);assert.equal(typeof action.evidence_id,'number');
+      if(turns===1)return response({...action,evidence_id:String(action.evidence_id),reason:'mistyped evidence'});
+      assert.equal(input.history.at(-1).rejection_code,'evidence_mismatch');
+      return response({action:'finish',reason:'记录未完成项'});
+    },runner:async()=>{tools++;}});
+  assert.equal(turns,2);assert.equal(tools,0);
+  const rejected=JSON.parse(db.prepare("SELECT result_data FROM scan_results WHERE result_type='web_agent_step' AND json_extract(result_data,'$.action')='invalid'").get().result_data);
+  assert.equal(rejected.rejection_code,'evidence_mismatch');
+  assert.equal(JSON.parse(db.prepare("SELECT result_data FROM scan_results WHERE result_type='web_scan_summary'").get().result_data).complete,false);
+});
+
 test('session refreshes once, rejects a second expiry and checks redirect scope',async()=>{
   let logins=0,reads=0;
   const session=createWebScanSession({target,credentials:credentials(),allowUrl:u=>u.startsWith(target),request:async(url,opts)=>{

@@ -1151,7 +1151,7 @@ void MainWindow::bindScanWorkspace(ScanPage *page)
     connect(page, &ScanPage::workspaceViewChanged, this, [this, page](bool source) {
         if (m_routingFeature || m_dongleLocked || !page->isVisible()) return;
         if (source) {
-            showAuxiliaryWorkspace(1, QStringLiteral("程序与源码扫描"), QStringLiteral("原有独立源码扫描扩展工作区；当前任务选择保留，创建与查看使用此工作区的扫描记录。"));
+            showAuxiliaryWorkspace(1, QStringLiteral("程序与源码扫描"), QStringLiteral("查看当前任务的源码漏洞；打开详情可查看文件树、源码和漏洞依据。"));
         } else {
             const QString id = page->selectedScanFeature();
             if (id.isEmpty()) {
