@@ -41,6 +41,8 @@ int main(int argc, char *argv[])
         displayInfo = displayInfo || argument == QStringLiteral("--display-info");
         rawDisplayInfo = rawDisplayInfo || argument == QStringLiteral("--display-info-raw");
     }
+    if (!rawDisplayInfo)
+        Theme::applyWslDisplayScaling(QFileInfo(QString::fromLocal8Bit(argv[0])).absoluteFilePath());
     if (displayInfo || rawDisplayInfo) {
         QApplication diagnostic(argc, argv);
         const auto json = QJsonDocument(Theme::displayScalingInfo()).toJson(QJsonDocument::Compact);

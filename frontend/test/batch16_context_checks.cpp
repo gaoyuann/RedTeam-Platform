@@ -219,6 +219,21 @@ static void runCompactLayoutChecks(const std::function<void(bool, const char *)>
 {
   verify(Theme::uiFont().pixelSize()==14 && Theme::uiFont().weight()==QFont::Normal,
     "default Chinese font uses normal 14 logical pixels without point-size inflation");
+  verify(qAbs(Theme::missingDisplayScale(2,1,1)-2)<0.001,
+    "WSLg missing 200 percent desktop scaling is restored");
+  verify(qAbs(Theme::missingDisplayScale(2,2,1)-1)<0.001,
+    "correctly scaled desktops cannot be doubled again");
+  verify(qAbs(Theme::missingDisplayScale(1.5,1,1)-1.5)<0.001,
+    "fractional host scaling remains supported");
+  verify(Theme::missingDisplayScale(2,1,2)==1 && Theme::missingDisplayScale(0,1,1)==1
+      && Theme::missingDisplayScale(2,0,1)==1,
+    "unknown screens and multi-monitor mappings never trigger guessed global scaling");
+  QProcessEnvironment scaleEnvironment;
+  verify(!Theme::hasExplicitDisplayScaling(scaleEnvironment), "default display environment permits detection");
+  scaleEnvironment.insert("QT_SCALE_FACTOR","1.25");
+  verify(Theme::hasExplicitDisplayScaling(scaleEnvironment), "explicit user scale is preserved");
+  scaleEnvironment.remove("QT_SCALE_FACTOR"); scaleEnvironment.insert("QT_ENABLE_HIGHDPI_SCALING","0");
+  verify(Theme::hasExplicitDisplayScaling(scaleEnvironment), "explicit automatic DPI opt-out is preserved");
   const auto previousStyle=qApp->styleSheet();
   qApp->setStyleSheet(Theme::GlobalStyle + Theme::ButtonStyle + Theme::ItemViewStyle);
   MockServer server;
@@ -438,6 +453,8 @@ int main(int argc, char **argv)
   qputenv("XDG_CONFIG_HOME", isolatedSettings.path().toUtf8());
   qputenv("XDG_DATA_HOME", isolatedSettings.path().toUtf8());
   Theme::enableHighDpiScaling();
+  Theme::applyWslDisplayScaling(QFileInfo(QString::fromLocal8Bit(argv[0])).absoluteDir()
+      .filePath(QStringLiteral("RedTeam-Platform")));
   QApplication app(argc, argv);
   app.setFont(Theme::uiFont());
   app.setQuitOnLastWindowClosed(false);

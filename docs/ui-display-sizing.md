@@ -1,5 +1,15 @@
 # 字号与小窗口显示修复
 
+## 2026-11-02：恢复 WSLg 缩放补偿
+
+提交 `f2e3ee5` 删除了 `UiDisplayScaling.h` 中的 WSLg 补偿、主程序启动调用及相关回归检查，默认正文仍为 14px。本机诊断重新出现约 DPR 1、逻辑 2517×1678 的状态。本轮仅恢复上述补偿和测试入口，不改字号、布局或业务流程。
+
+使用现有构建目录运行 `cmake --build build --target RedTeam-Platform RedTeam-Platform-Batch16Checks -j 4` 通过；`QT_QPA_PLATFORM=offscreen QT_SCALE_FACTOR=<1 / 1.5 / 2> REDTEAM_COMPACT_ONLY=1 ./build/frontend/RedTeam-Platform-Batch16Checks` 三档各 39 项通过。真实 WSLg 桌面运行 `REDTEAM_HOME_ONLY=1 REDTEAM_HOME_SCREENSHOT_DIR=build/ui-dpi-restored-20261102 ./build/frontend/RedTeam-Platform-Batch16Checks` 为 27 项通过，已查看隔离样例首页截图。
+
+新构建的 `--display-info-raw` 仍为约 DPR 1、2517×1678；`--display-info` 恢复约 DPR 2、1260×840。显式 `QT_SCALE_FACTOR=1.5` 保持约 1.5 倍，`QT_ENABLE_HIGHDPI_SCALING=0` 保持 1 倍。正在运行的业务窗口未关闭或重启，重新打开后加载新构建。
+
+云笔电启动脚本的目标为飞腾 ARM64、银河麒麟／UOS；原生 Linux 不执行 WSLg 补偿，继续使用 Qt 原生 DPI 缩放。该设备的实际阅读大小仍须在其桌面会话运行新构建的 `--display-info` 并查看界面确认，本轮未远程检查或部署。
+
 ## 任务创建窗口的缩放边界
 
 任务创建窗口的宽度按当前屏幕可用区域收缩，520 像素只作为空间充足时的最小宽度；窗口显示后按实际边框重新校正位置。短屏幕优先压缩可滚动表单，保留确认和取消操作。修复了 150% 缩放时逻辑可用宽度为 512、窗口仍被强制为 520 像素的越界问题。
