@@ -99,9 +99,10 @@ static void runUnifiedShellWorkflowChecks(const std::function<void(bool, const c
   openFromList();
   verify(flow->workspaceStage() == 6 && shell.m_activeFeature == "evaluation.results",
     "an ended attack resumes in the main assessment with its evidence");
-  verify(flow->m_statusLabel->isHidden() && flow->m_failureReason->isVisible()
-      && flow->m_failureReason->text().contains(QStringLiteral("工具超时")),
-    "task failure shows its real reason instead of a separate red failure badge");
+  verify(flow->m_statusLabel->isVisible() && flow->m_failureReason->isHidden()
+      && flow->m_statusLabel->text().contains(QStringLiteral("待核对"))
+      && flow->m_statusLabel->toolTip().contains(QStringLiteral("工具超时")),
+    "task failure keeps the concise review state and its real diagnosis available on demand");
   capture("task-assessment");
   shell.m_overviewButton->click(); shell.m_switchTaskButton->click();
   verify(awaitCondition([&] { return flow->m_flowListFresh && flow->taskListVisible(); }),

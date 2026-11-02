@@ -45,3 +45,26 @@ test('SQL report must match all completed runs and cannot override failure or mi
  });
 });
 test('unknown parsing cannot claim a complete Nikto detection',t=>{const f=fixture(t);f.tool('nikto',{parser_coverage_known:false});assert.equal(assessCapability(f.db,'s','web_scan').detection_complete,false);});
+
+test('legacy non-object tool outcomes remain unknown instead of crashing capability assessment',async t=>{
+ for(const outcome of ['null','[]','true','42','"legacy"','{broken'])await t.test(outcome,t=>{
+  const f=fixture(t);f.tool('nikto');
+  f.db.prepare('UPDATE scan_tool_runs SET outcome=?').run(outcome);
+  f.record('http_probe',null);
+  const assessment=assessCapability(f.db,'s','web_scan');
+  assert.equal(assessment.usable_for_analysis,false);
+  assert.equal(assessment.detection_executed,null);
+  assert.ok(assessment.gaps.includes('stop_unconfirmed'));
+ });
+});
+
+test('failure diagnostics distinguish archive timeout, missing login and invalid decisions without authorizing analysis',t=>{
+ const f=fixture(t);f.tool('arjun',{timed_out:true,exit_code:137},'timed_out');f.tool('ffuf');
+ const api=assessCapability(f.db,'s','api_fuzz');assert.equal(api.usable_for_analysis,false);assert.deepEqual(api.failure_reasons,['arjun:工具超时']);
+ f.record('web_scan_summary',{checks_started:0,complete:false});
+ f.record('web_agent_step',{action:'prerequisite_check',state:'blocked'});
+ f.record('web_agent_step',{action:'invalid',rejection_code:'evidence_mismatch',untrusted:'private-marker'});
+ const web=assessCapability(f.db,'s','web_parameter_scan');assert.equal(web.usable_for_analysis,false);
+ assert.deepEqual(web.failure_reasons,['参数检测:缺少认证条件或可检测入口','参数检测:模型动作校验未通过','参数检测:未开展 SQL 检测']);
+ assert.doesNotMatch(JSON.stringify(web),/private-marker/);
+});

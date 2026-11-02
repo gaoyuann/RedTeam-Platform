@@ -12,6 +12,15 @@ namespace {
 constexpr int NodeKeyRole = Qt::UserRole + 2;
 constexpr int NodeOrderRole = Qt::UserRole + 3;
 
+class SourceFindingSelectAll final : public QCheckBox {
+public:
+    using QCheckBox::QCheckBox;
+protected:
+    void nextCheckState() override {
+        setCheckState(checkState()==Qt::Checked?Qt::Unchecked:Qt::Checked);
+    }
+};
+
 // Small line drawings share the platform's blue/amber palette and scale with DPI.
 QIcon sourceNavigationIcon(bool file, bool snapshot) {
     QPixmap pixmap(40, 40);
@@ -201,7 +210,7 @@ SourceScanDetailDialog::SourceScanDetailDialog(ApiClient *api,const QStringList 
   auto *layout=new QVBoxLayout(this);auto *top=new QHBoxLayout;
   auto *heading=new QLabel(QStringLiteral("源码扫描 · ")+target);heading->setTextFormat(Qt::PlainText);heading->setWordWrap(true);heading->setStyleSheet("font-size:18px;font-weight:600;");top->addWidget(heading,1);
   m_refresh=new QPushButton(QStringLiteral("刷新扫描进度"));m_refresh->setObjectName("sourceScanRefresh");top->addWidget(m_refresh);
-  m_attack=new QPushButton(QStringLiteral("准备当前漏洞测试"));m_attack->setObjectName("sourceScanAttack");m_attack->setEnabled(false);top->addWidget(m_attack);layout->addLayout(top);
+  m_attack=new QPushButton(QStringLiteral("准备漏洞测试"));m_attack->setObjectName("sourceScanAttack");m_attack->setEnabled(false);top->addWidget(m_attack);layout->addLayout(top);
   m_summary=new QLabel(QStringLiteral("正在读取扫描记录…"));m_summary->setObjectName("sourceScanSummary");m_summary->setTextFormat(Qt::PlainText);m_summary->setWordWrap(true);layout->addWidget(m_summary);
   auto *split=new QSplitter(Qt::Horizontal);split->setObjectName("sourceScanThreePanes");split->setChildrenCollapsible(false);layout->addWidget(split,1);
   auto *navigation=new QWidget(split);navigation->setMinimumWidth(190);
@@ -218,11 +227,13 @@ SourceScanDetailDialog::SourceScanDetailDialog(ApiClient *api,const QStringList 
   m_code=new CodeEditor(middle);m_code->setObjectName("sourceScanCode");center->addWidget(m_code,1);
   auto *right=new QWidget(split);right->setMinimumWidth(290);auto *rightLayout=new QVBoxLayout(right);rightLayout->setContentsMargins(0,0,0,0);
   auto *filter=new QHBoxLayout;filter->addWidget(new QLabel(QStringLiteral("全部扫描发现")));filter->addStretch();
+  m_selectAll=new SourceFindingSelectAll(QStringLiteral("全选"));m_selectAll->setObjectName("sourceScanSelectAll");
+  m_selectAll->setTristate(true);m_selectAll->setToolTip(QStringLiteral("勾选当前严重度下可测试的漏洞；其他严重度的已有勾选保留。"));filter->addWidget(m_selectAll);
   m_severity=new QComboBox;m_severity->setObjectName("sourceScanSeverity");m_severity->addItem(QStringLiteral("全部严重度"),QString());
   for(const auto &risk:QStringList{"critical","high","medium","low","info"})m_severity->addItem(riskText(risk),risk);
   filter->addWidget(m_severity);rightLayout->addLayout(filter);
   auto *vertical=new QSplitter(Qt::Vertical);
-  m_findings=new QTableWidget(0,2,vertical);m_findings->setObjectName("sourceScanFindings");m_findings->setHorizontalHeaderLabels({QStringLiteral("级别"),QStringLiteral("发现 / 位置")});m_findings->verticalHeader()->hide();m_findings->setEditTriggers(QAbstractItemView::NoEditTriggers);m_findings->setSelectionBehavior(QAbstractItemView::SelectRows);m_findings->setSelectionMode(QAbstractItemView::SingleSelection);m_findings->setColumnWidth(0,62);m_findings->horizontalHeader()->setStretchLastSection(true);
+  m_findings=new QTableWidget(0,2,vertical);m_findings->setObjectName("sourceScanFindings");m_findings->setHorizontalHeaderLabels({QStringLiteral("选择 / 级别"),QStringLiteral("发现 / 位置")});m_findings->verticalHeader()->hide();m_findings->setEditTriggers(QAbstractItemView::NoEditTriggers);m_findings->setSelectionBehavior(QAbstractItemView::SelectRows);m_findings->setSelectionMode(QAbstractItemView::SingleSelection);m_findings->setColumnWidth(0,104);m_findings->horizontalHeader()->setStretchLastSection(true);
   auto *detailTabs=new QTabWidget(vertical);
   m_details=new QPlainTextEdit(detailTabs);m_details->setObjectName("sourceScanFindingDetail");m_details->setReadOnly(true);detailTabs->addTab(m_details,QStringLiteral("漏洞详情"));
   m_evidence=new QPlainTextEdit(detailTabs);m_evidence->setObjectName("sourceScanEvidence");m_evidence->setReadOnly(true);detailTabs->addTab(m_evidence,QStringLiteral("依据"));
@@ -238,6 +249,29 @@ SourceScanDetailDialog::SourceScanDetailDialog(ApiClient *api,const QStringList 
   connect(m_findings,&QTableWidget::cellClicked,this,[this](int row,int){if(m_browsingFile || !m_fileSearch->text().isEmpty()){m_fileSearch->clear();showFinding(row);}});
   connect(m_severity,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](){updateFindings();});
   connect(m_refresh,&QPushButton::clicked,this,&SourceScanDetailDialog::refresh);
+  connect(m_selectAll,&QCheckBox::clicked,this,[this] {
+    if (!m_fresh || m_pending || !m_canTest) return;
+    const bool checked=m_selectAll->checkState()==Qt::Checked;
+    const QSignalBlocker blocker(m_findings);
+    for (int row=0;row<m_findings->rowCount();++row) {
+      auto *item=m_findings->item(row,0);
+      if (!item->flags().testFlag(Qt::ItemIsUserCheckable)) continue;
+      const qint64 id=m_displayRows[item->data(Qt::UserRole).toInt()].toObject()["id"].toVariant().toLongLong();
+      if (checked) m_checkedFindings.insert(id); else m_checkedFindings.remove(id);
+      item->setCheckState(checked?Qt::Checked:Qt::Unchecked);
+    }
+    updateTestButton();
+  });
+  connect(m_findings,&QTableWidget::itemChanged,this,[this](QTableWidgetItem *item) {
+    if (item->column()!=0 || !item->flags().testFlag(Qt::ItemIsUserCheckable)) return;
+    const int index=item->data(Qt::UserRole).toInt();
+    if (index<0 || index>=m_displayRows.size()) return;
+    const auto row=m_displayRows[index].toObject();
+    if (!m_fresh || m_pending || !m_canTest || !testableFinding(row)) return;
+    const qint64 id=row["id"].toVariant().toLongLong();
+    if (item->checkState()==Qt::Checked) m_checkedFindings.insert(id); else m_checkedFindings.remove(id);
+    updateTestButton();
+  });
   connect(m_attack,&QPushButton::clicked,this,&SourceScanDetailDialog::prepareSelectedFinding);
   m_timer=new QTimer(this);m_timer->setInterval(5000);connect(m_timer,&QTimer::timeout,this,[this](){if(isVisible())refresh();});
   connect(this,&QDialog::finished,this,[this](){++m_request;m_timer->stop();});
@@ -248,6 +282,7 @@ SourceScanDetailDialog::SourceScanDetailDialog(ApiClient *api,const QStringList 
 void SourceScanDetailDialog::refresh() {
   if(!m_api || m_taskIds.isEmpty() || m_outstanding)return;
   const int request=++m_request;m_outstanding=m_taskIds.size();m_received.clear();m_error.clear();m_fresh=false;m_attack->setEnabled(false);m_refresh->setEnabled(false);
+  updateTestButton();
   QPointer<SourceScanDetailDialog> guard(this);
   for(const auto &id:m_taskIds)m_api->get("/api/scan-tasks/"+QString::fromLatin1(QUrl::toPercentEncoding(id)),10000,[this,guard,request,id](const QJsonObject &response){
     if(!guard || request!=m_request)return;
@@ -298,6 +333,10 @@ void SourceScanDetailDialog::setSnapshots(const QJsonArray &tasks) {
     if(active || finals==0)for(const auto &entry:preview["findings"].toArray())
       m_displayRows.append(QJsonObject{{"scan_task_id",task["scan_task_id"]},{"preview",true},{"result_data",entry}});
   }
+  QSet<qint64> valid;
+  if (!m_pending && m_canTest) for (const auto &value:m_finalRows)
+    if (testableFinding(value.toObject())) valid.insert(value.toObject()["id"].toVariant().toLongLong());
+  m_checkedFindings.intersect(valid);
   QList<QJsonValue> sorted;for(const auto &row:m_displayRows)sorted.append(row);
   std::sort(sorted.begin(),sorted.end(),[](const QJsonValue &a,const QJsonValue &b){
     const auto x=resultData(a.toObject()),y=resultData(b.toObject());
@@ -422,6 +461,11 @@ void SourceScanDetailDialog::updateFindings(bool preserveFile) {
     if(!m_severity->currentData().toString().isEmpty() && data["severity"].toString()!=m_severity->currentData().toString())continue;
     const int n=m_findings->rowCount();m_findings->insertRow(n);
     auto *risk=new QTableWidgetItem(riskText(data["severity"].toString()));risk->setData(Qt::UserRole,i);
+    risk->setFlags(risk->flags()&~Qt::ItemIsUserCheckable);
+    if (!m_pending && m_canTest && testableFinding(row)) {
+      risk->setFlags(risk->flags()|Qt::ItemIsUserCheckable);
+      risk->setCheckState(m_checkedFindings.contains(row["id"].toVariant().toLongLong())?Qt::Checked:Qt::Unchecked);
+    }
     const QString identity=fileKey(row)+QStringLiteral("|%1|%2|%3").arg(row["id"].toVariant().toString(),data["title"].toString()).arg(data["start_line"].toInt());
     risk->setData(Qt::UserRole+1,identity);if(identity==selected)selectedRow=n;
     const QMap<QString,QString> colors{{"critical","#991b1b"},{"high","#dc2626"},{"medium","#b45309"},{"low","#2563eb"},{"info","#64748b"}};
@@ -502,18 +546,44 @@ qint64 SourceScanDetailDialog::selectedTestFinding() const {
   if(!item)return 0;
   const int index=item->data(Qt::UserRole).toInt();
   if(index<0 || index>=m_displayRows.size())return 0;
-  const auto row=m_displayRows[index].toObject(),data=resultData(row);
-  const auto severity=data["severity"].toString(row["severity"].toString()).trimmed().toLower();
-  if(row["preview"].toBool() || severity=="info" || severity=="inf")return 0;
+  const auto row=m_displayRows[index].toObject();
+  if(!testableFinding(row))return 0;
   return row["id"].toVariant().toLongLong();
 }
 
+bool SourceScanDetailDialog::testableFinding(const QJsonObject &row) {
+  const auto severity=resultData(row)["severity"].toString(row["severity"].toString()).trimmed().toLower();
+  return !row["preview"].toBool() && row["id"].toVariant().toLongLong()>0 && severity!="info" && severity!="inf";
+}
+
+QList<qint64> SourceScanDetailDialog::selectedTestFindings() const {
+  QList<qint64> ids;
+  if (!m_fresh || m_pending || !m_canTest) return ids;
+  for (const auto &value:m_finalRows) {
+    const auto row=value.toObject();const qint64 id=row["id"].toVariant().toLongLong();
+    if (testableFinding(row) && m_checkedFindings.contains(id) && !ids.contains(id)) ids.append(id);
+  }
+  if (ids.isEmpty()) {const qint64 id=selectedTestFinding();if(id>0)ids.append(id);}
+  return ids;
+}
+
 void SourceScanDetailDialog::updateTestButton() {
-  m_attack->setEnabled(selectedTestFinding()>0);
-  m_attack->setToolTip(QStringLiteral("准备右侧当前选中的漏洞；打开测试窗口不会执行测试。批量选择可在扫描发现列表中完成。"));
+  const auto ids=selectedTestFindings();
+  m_attack->setEnabled(!ids.isEmpty());
+  m_attack->setText(ids.isEmpty()?QStringLiteral("准备漏洞测试"):QStringLiteral("准备测试（%1 条）").arg(ids.size()));
+  m_attack->setToolTip(QStringLiteral("准备已勾选的漏洞，包含其他严重度下保留的勾选；没有勾选时使用当前漏洞。打开窗口不会执行测试。"));
+  int eligible=0,checked=0;
+  for (int row=0;row<m_findings->rowCount();++row) {
+    const auto *item=m_findings->item(row,0);
+    if (!item->flags().testFlag(Qt::ItemIsUserCheckable)) continue;
+    ++eligible;if(item->checkState()==Qt::Checked)++checked;
+  }
+  const QSignalBlocker blocker(m_selectAll);
+  m_selectAll->setCheckState(!checked?Qt::Unchecked:checked==eligible?Qt::Checked:Qt::PartiallyChecked);
+  m_selectAll->setEnabled(m_fresh && !m_pending && m_canTest && eligible>0);
 }
 
 void SourceScanDetailDialog::prepareSelectedFinding() {
-  const qint64 id=selectedTestFinding();
-  if(id>0)emit testRequested({id});
+  const auto ids=selectedTestFindings();
+  if(!ids.isEmpty())emit testRequested(ids);
 }

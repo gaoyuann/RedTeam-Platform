@@ -133,19 +133,17 @@ void ToastOverlay::reposition()
 
 void ToastOverlay::onScanCompleted(const QJsonObject &data)
 {
+  // Scan errors and incomplete checks remain in task diagnostics. Child scans
+  // can end before the overall task, so do not interrupt it with failure cards.
+  if (data["status"].toString() != "COMPLETED") return;
+
   QString user = data["username"].toString();
   if (user.isEmpty()) user = data["userId"].toString().left(8);
   if (user.isEmpty()) user = QStringLiteral("未知");
 
-  QString status = data["status"].toString();
-  if (status == "COMPLETED") {
-    int count = data["resultsCount"].toInt(0);
-    showToast("✅", QString("%1 扫描完成").arg(user),
-              QString("发现 %1 条结果").arg(count), "#22c55e");
-  } else {
-    showToast("❌", QString("%1 扫描失败").arg(user),
-              data["error"].toString().left(50), "#ef4444");
-  }
+  int count = data["resultsCount"].toInt(0);
+  showToast("✅", QString("%1 扫描完成").arg(user),
+            QString("发现 %1 条结果").arg(count), "#22c55e");
 }
 
 void ToastOverlay::onRunStepComplete(const QJsonObject &data)

@@ -1287,7 +1287,7 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     const auto scanConfig = p.value("config").toObject();
     const QString scanMode = scanConfig.value("scan_mode").toString();
     if (scanMode == "program_dynamic" || scanMode == "source_assisted" || target.startsWith("tcp://"))
-      m_scanTab->setTaskScope(scopedScanIds);
+      m_scanTab->setTaskScope(scopedScanIds, false, pipelineId);
     else m_scanTab->setPipelineScope(pipelineId, scopedScanIds, status);
     m_scanTab->setTarget(target);
     m_execTab->setPipelineContext(pipelineId, status, p["run_id"].toString(), target, primaryPlan);
@@ -1309,15 +1309,16 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
     const bool selectingSource = status == "awaiting_approval" && p["generated_playbook_id"].toString().isEmpty()
         && p["summary"].toObject()["plan"].toObject().isEmpty()
         && QStringList{"source_selection","program_selection"}.contains(parseJsonObject(p["result"])["paused_at"].toString());
-    m_statusLabel->setText(QStringLiteral("%1  %2").arg(statusIcon(status), discovery
+    m_statusLabel->setText(QStringLiteral("%1  %2").arg(statusIcon(status == "failed" ? "awaiting_approval" : status), status == "failed"
+        ? QStringLiteral("待核对") : discovery
         ? status=="completed" ? QStringLiteral("探测结束 · 请在拓扑选择目标")
           : status=="running" ? QStringLiteral("资产探测中") : statusText(status)
         : staged && status=="completed" ? QStringLiteral("扫描阶段结束 · 验证结论见具体测试")
         : selectingSource ? QStringLiteral("待生成攻击测试预案") : statusText(status)));
-    m_statusLabel->setStyleSheet(statusBadgeStyle(status));
-    m_statusLabel->setVisible(status != "failed");
-    m_failureReason->setText(QStringLiteral("本次测试未完成：%1").arg(p.value("error_message").toString(QStringLiteral("请查看扫描原因或任务日志。"))));
-    m_failureReason->setVisible(status == "failed");
+    m_statusLabel->setStyleSheet(statusBadgeStyle(status == "failed" ? "awaiting_approval" : status));
+    m_statusLabel->setToolTip(p.value("error_message").toString());
+    m_statusLabel->show();
+    m_failureReason->hide();
 
     if (m_resumeTaskStage) {
       m_resumeTaskStage = false;
@@ -1393,6 +1394,10 @@ void FlowPage::loadFlowDetail(const QString &pipelineId)
           if (ps.phaseType == "scan") {
             int totalResults = output["total_results"].toInt(0);
             ps.summary = output.contains("total_results") ? QStringLiteral("发现 %1 条结果").arg(totalResults) : QStringLiteral("发现统计未提供");
+            if (output["completeness"].toString() == "incomplete") {
+              ps.status = QStringLiteral("partial");
+              ps.summary = QStringLiteral("部分完成 · 已保留结果，未完成检查见扫描记录");
+            }
           } else if (ps.phaseType == "analyze") {
             auto attackSurface = output["attack_surface"].toArray();
             ps.summary = output.contains("attack_surface") ? QStringLiteral("攻击面 %1 项").arg(attackSurface.size()) : QStringLiteral("攻击面统计未提供");
@@ -1738,6 +1743,8 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget, const QJ
     scopeSummary->setText(targets.isEmpty() ? QStringLiteral("填写测试目标后自动生成") : targets.join('\n'));
     scopeSummary->setToolTip(targets.join('\n'));
   };
+  // Size and place the window once. All later form changes stay in the scroll
+  // area so typing, validation and disclosures cannot move the native window.
   auto resizeDialog = [=, &dlg] {
     bodyLayout->invalidate();
     bodyLayout->activate();
@@ -1762,11 +1769,15 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget, const QJ
     dlg.resize(dialogWidth, fixedHeight + scroll->height());
     const QRect available = screen ? screen->availableGeometry() : QRect(QPoint(), screenSize);
     const QRect frame = dlg.frameGeometry();
-    const QPoint center = dlg.isVisible() ? frame.center() : available.center();
-    dlg.move(qBound(available.left(), center.x() - frame.width()/2,
+    const QPoint position = available.center() - QPoint(frame.width()/2, frame.height()/2);
+    const QPoint boundedPosition(qBound(available.left(), position.x(),
           qMax(available.left(), available.right() - frame.width() + 1)),
-        qBound(available.top(), center.y() - frame.height()/2,
+        qBound(available.top(), position.y(),
           qMax(available.top(), available.bottom() - frame.height() + 1)));
+    // Window managers may report decoration offsets in frameGeometry(). Move
+    // by the frame delta instead of treating frame coordinates as QWidget::pos.
+    if (frame.topLeft() != boundedPosition)
+      dlg.move(dlg.pos() + boundedPosition - frame.topLeft());
   };
   auto updateProgramFields = [=, &dlg] {
     const bool program = testType->currentData().toString() == "program";
@@ -1792,9 +1803,7 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget, const QJ
         : kind == "runtime" ? QStringLiteral("HTTP 或 TCP 程序运行地址")
         : QStringLiteral("目标主机地址，例如 http://主机:端口/"));
     updateScope();
-    QTimer::singleShot(0, &dlg, resizeDialog);
   };
-  connect(options->toggle(), &QToolButton::toggled, &dlg, [resizeDialog](bool) { resizeDialog(); });
   auto updateReady = [=] {
     const QString error = httpTargetError(targetInput->text());
     targetError->setText(error); targetError->setVisible(!error.isEmpty());
@@ -2369,7 +2378,10 @@ void FlowPage::openFindingAttackWorkspace(const QString &pipelineId, const QList
   m_execTab->selectAttackCategory(0);
   requestWorkspaceStage(5);
   for (auto *existing : findChildren<FindingVerificationDialog *>("taskFindingVerification")) {
-    if (existing->isVisible()) { existing->raise(); existing->activateWindow(); return; }
+    if (existing->isVisible() && existing->pipelineId() == pipelineId) {
+      existing->addFindings(findingIds);
+      existing->raise(); existing->activateWindow(); return;
+    }
   }
   auto *dialog = new FindingVerificationDialog(m_api, pipelineId, findingIds, this);
   dialog->setObjectName("taskFindingVerification");

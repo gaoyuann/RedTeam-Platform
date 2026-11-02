@@ -5,14 +5,14 @@ export const SCAN_CAPABILITIES=Object.freeze({
  web_scan:{kind:'detection',tools:['nikto'],description:'Web 配置与已知问题检测，候选需复核'},
  web_parameter_scan:{kind:'detection',tools:['sqlmap'],description:'受控 GET 及用户声明的只读 POST/JSON 参数检测；动态令牌未支持'},
 });
-const parse=v=>{try{return JSON.parse(v||'{}');}catch{return {};}};
+const parse=v=>{try{const data=JSON.parse(v||'{}');return data && typeof data==='object' && !Array.isArray(data)?data:{};}catch{return {};}};
 export function assessCapability(db,id,type){
  const capability=SCAN_CAPABILITIES[type];
  const records=db.prepare('SELECT result_type,result_data FROM scan_results WHERE scan_task_id=? ORDER BY id').all(id).map(r=>({...r,data:parse(r.result_data)}));
  const runs=db.prepare('SELECT tool_run_id,tool_id,state,outcome FROM scan_tool_runs WHERE scan_task_id=?').all(id).map(r=>({...r,data:parse(r.outcome)}));
  const relevant=runs.filter(r=>capability?.tools.includes(r.tool_id));
  const clean=r=>r.state==='completed'&&r.data.stopped===true&&r.data.exit_code===0&&!r.data.aborted&&!r.data.timed_out&&!r.data.incomplete&&(capability?.kind!=='detection'||r.data.parser_coverage_known===true);
- const unknownStop=runs.some(r=>r.state==='running'||r.data.stopped===false);
+ const unknownStop=runs.some(r=>r.state==='running'||r.data.stopped!==true);
  const observed=records.some(r=>r.result_type==='http_probe'&&r.data.status_code>=200&&r.data.status_code<400||['open_port','host_discovery','api_parameter','api_endpoint'].includes(r.result_type)||r.result_type==='web_observation'&&r.data.status_code>=200&&r.data.status_code<400);
  let operationComplete=false,executed=null;
  if(capability){
@@ -38,8 +38,23 @@ export function assessCapability(db,id,type){
  if(!capability)gaps.push('unsupported_capability');
  if(unknownStop)gaps.push('stop_unconfirmed');
  if(!operationComplete)gaps.push(executed===false?'not_executed':'incomplete_or_unknown');
+ const failureReasons=[];
+ for(const run of relevant) {
+  if(run.data.timed_out || run.state==='timed_out')failureReasons.push(`${run.tool_id}:工具超时`);
+  else if(run.data.tool_started===false)failureReasons.push(`${run.tool_id}:工具未启动`);
+  else if(run.data.stopped!==true)failureReasons.push(`${run.tool_id}:停止情况未确认`);
+  else if(run.data.incomplete || run.data.parser_coverage_known===false)failureReasons.push(`${run.tool_id}:输出或解析覆盖不完整`);
+ }
+ if(type==='web_parameter_scan' && !operationComplete) {
+  const summary=records.filter(r=>r.result_type==='web_scan_summary').at(-1)?.data;
+  const blocked=records.some(r=>r.result_type==='web_agent_step'&&r.data.action==='prerequisite_check'&&r.data.state==='blocked');
+  const invalid=records.some(r=>r.result_type==='web_agent_step'&&r.data.action==='invalid');
+  if(blocked)failureReasons.push('参数检测:缺少认证条件或可检测入口');
+  if(invalid)failureReasons.push('参数检测:模型动作校验未通过');
+  if(summary?.checks_started===0)failureReasons.push('参数检测:未开展 SQL 检测');
+ }
  return {version:1,capability:type,kind:capability?.kind||'unsupported',observation_success:observed,
   detection_executed:detection?executed:null,detection_complete:detection?operationComplete:null,
   operation_complete:operationComplete,coverage_incomplete:!operationComplete,gaps,
-  usable_for_analysis:operationComplete};
+  usable_for_analysis:operationComplete,failure_reasons:[...new Set(failureReasons)]};
 }

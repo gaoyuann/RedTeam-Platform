@@ -62,6 +62,36 @@ int main(int argc,char **argv) {
   verify(!attack->isEnabled(),"information findings cannot enter test preparation");
   view.setSnapshots({task("source-1","COMPLETED",QJsonArray{finding(0,"missing-id.c",1)})});
   verify(!attack->isEnabled(),"findings without a persisted identity cannot enter test preparation");
+  {
+    auto *all=view.findChild<QCheckBox*>("sourceScanSelectAll");
+    const auto info=finding(905,"info.c",1,"info"),missing=finding(0,"missing-id.c",1);
+    view.setSnapshots({task("source-1","COMPLETED",QJsonArray{a,b,info,missing})});
+    verify(all && all->isEnabled(),"source details expose select-all for saved testable findings");
+    all->click();
+    const int before=testRequests;
+    attack->click();
+    verify(testRequests==before+1 && emitted==QList<qint64>({901,902}),
+      "select-all prepares both source findings and excludes information and missing identities");
+    severity->setCurrentIndex(severity->findData("high"));
+    attack->click();
+    verify(emitted==QList<qint64>({901,902}),"changing severity preserves deliberate selections outside the filter");
+    view.setSnapshots({task("source-1","COMPLETED",QJsonArray{a,b,info,missing})});
+    attack->click();
+    verify(emitted==QList<qint64>({901,902}),"refreshing the same source snapshot retains the checked finding scope");
+    view.setSnapshots({running});const int beforePending=testRequests;attack->click();
+    verify(testRequests==beforePending && !all->isEnabled(),"resumed processing blocks stale bulk preparation");
+    severity->setCurrentIndex(0);
+    view.setSnapshots({task("source-1","PARTIAL",QJsonArray{b})});
+    attack->click();
+    verify(emitted==QList<qint64>{902} && all->checkState()==Qt::Unchecked,
+      "resumed scans clear old checkbox state and partial scans retain valid single finding preparation");
+    for(const auto &status:{QString("FAILED"),QString("CANCELLED")}) {
+      view.setSnapshots({task("source-1",status,QJsonArray{a,b})});
+      const int beforeFailure=testRequests;attack->click();
+      verify(!all->isEnabled() && !attack->isEnabled() && testRequests==beforeFailure,
+        "failed and cancelled source scans cannot prepare retained findings in bulk");
+    }
+  }
   severity->setCurrentIndex(0);view.setSnapshots({task("source-1","COMPLETED",QJsonArray{a,b})});
   view.selectFinding(901);QTest::qWait(30);if(qEnvironmentVariable("QT_SCALE_FACTOR")=="1")view.grab().save("/tmp/redteam-source-scan-three-pane.png");
   view.setSnapshots({task("source-1","COMPLETED",QJsonArray{finding(903,"/src/same.c",4),finding(904,"src/same.c",8)})});

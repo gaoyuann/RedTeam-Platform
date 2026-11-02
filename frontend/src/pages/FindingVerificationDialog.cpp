@@ -567,7 +567,7 @@ FindingVerificationDialog::FindingVerificationDialog(ApiClient *api,const QStrin
   connect(m_steps,&QTableWidget::itemChanged,this,[changed](QTableWidgetItem*){changed();});
 
   connect(m_items,&QTableWidget::itemChanged,this,[this](QTableWidgetItem*){updateQueue();});
-  if(existingVerificationId.isEmpty())for(qint64 finding:findings)addFinding(finding);
+  if(existingVerificationId.isEmpty())addFindings(findings);
   else {
     addExistingFinding(existingVerificationId,findings.isEmpty()?0:findings.first());
     m_pendingExistingAttemptId=existingAttemptId;
@@ -582,17 +582,41 @@ bool FindingVerificationDialog::allowDiscardDraft() {
 }
 QString FindingVerificationDialog::base() const {return "/api/pipelines/"+QString::fromLatin1(QUrl::toPercentEncoding(m_pipeline))+"/verifications";}
 QString FindingVerificationDialog::currentId() const {const int row=m_items->currentRow();return row>=0&&m_items->item(row,0)?m_items->item(row,0)->data(Qt::UserRole).toString():QString();}
+void FindingVerificationDialog::addFindings(const QList<qint64> &findings) {
+  if (m_finished) return;
+  for (const auto finding : findings) {
+    if (finding <= 0) continue;
+    bool existing = false;
+    for (int row = 0; row < m_items->rowCount(); ++row) {
+      auto *item = m_items->item(row, 0);
+      if (item && item->data(Qt::UserRole+1).toLongLong() == finding) {
+        item->setCheckState(Qt::Checked); existing = true; break;
+      }
+    }
+    if (!existing) addFinding(finding);
+  }
+  updateQueue();
+}
 void FindingVerificationDialog::addFinding(qint64 finding) {
+  if (finding <= 0 || m_requestedFindings.contains(finding)) return;
+  m_requestedFindings.insert(finding);
   QPointer<FindingVerificationDialog> self(this);
   m_api->post(base(),{{"finding_id",finding}},10000,[self,finding](const QJsonObject &response){
     if(!self || self->m_finished)return;
-    if(response["status"]!="ok"){self->setStatus(response["error"].toObject()["message"].toString());return;}
-    const auto data=response["data"].toObject();self->addExistingFinding(data["id"].toString(),finding,data["state"].toString());
+    const auto data=response["data"].toObject();
+    if(response["status"]!="ok" || data["id"].toString().isEmpty()) {
+      self->m_requestedFindings.remove(finding);
+      self->setStatus(response["error"].toObject()["message"].toString(QStringLiteral("读取漏洞测试记录失败，可重新选择后重试。")));return;
+    }
+    self->addExistingFinding(data["id"].toString(),finding,data["state"].toString());
   });
 }
 void FindingVerificationDialog::addExistingFinding(const QString &id,qint64 finding,const QString &state) {
+    for (int row=0;row<m_items->rowCount();++row)
+      if (m_items->item(row,0)->data(Qt::UserRole).toString()==id) return;
     const int row=m_items->rowCount();m_items->insertRow(row);
     auto *choice=new QTableWidgetItem;choice->setToolTip(QString("发现记录 #%1").arg(finding));choice->setData(Qt::UserRole,id);
+    choice->setData(Qt::UserRole+1,finding);
     choice->setFlags(choice->flags()|Qt::ItemIsUserCheckable);choice->setCheckState(Qt::Checked);m_items->setItem(row,0,choice);
     m_items->setItem(row,1,new QTableWidgetItem(stateText(state)));
     m_items->setItem(row,2,new QTableWidgetItem("待判定"));

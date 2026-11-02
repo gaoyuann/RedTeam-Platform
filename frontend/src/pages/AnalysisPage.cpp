@@ -146,8 +146,8 @@ void AnalysisPage::setTaskContext(const QJsonObject &pipeline)
   m_analysis = analysisObject(pipeline["analysis_result"]);
   if (changed) m_table->clearSelection();
   QString state = QStringLiteral("当前尚未生成结构化分析；请先完成扫描与分析阶段。");
-  bool fallback = m_analysis["tech_stack"].isObject() &&
-                  m_analysis["tech_stack"].toObject()["note"].toString().contains(QStringLiteral("LLM"));
+  bool fallback = m_analysis.value("tech_stack").isObject() &&
+                  m_analysis.value("tech_stack").toObject()["note"].toString().contains(QStringLiteral("LLM"));
   for (const auto &value : pipeline["steps"].toArray()) {
     const auto step = value.toObject();
     if (step["step_type"].toString() != QStringLiteral("analyze")) continue;
@@ -205,7 +205,7 @@ void AnalysisPage::rebuildTable()
 {
   const int previousRow = m_table->currentRow();
   const QString key = m_categoryCombo->currentData().toString();
-  const auto value = m_analysis[key];
+  const auto value = m_analysis.value(key);
   m_items = value.isArray() ? value.toArray() : QJsonArray{};
   if (value.isObject() && !value.toObject().isEmpty()) m_items.append(value);
   if (value.isString() && !value.toString().isEmpty()) m_items.append(value);

@@ -474,9 +474,17 @@ void TaskResultsPanel::render()
     m_state->setText((attempts > 0 ? QStringLiteral("已有 %1 次逐漏洞测试记录，结论与证据见统一统计。").arg(attempts)
         : QStringLiteral("尚未执行漏洞验证，可查看扫描发现与检查覆盖。"))
       + (statistics.value("report_ready").toBool() ? QStringLiteral("可生成当前证据快照报告。") : QStringLiteral("报告需等待活动操作结束并确认停止。")));
-  } else m_state->setText(run.isEmpty() ? QStringLiteral("暂无执行结果；可以查看已有候选，但不能生成执行结果报告。")
-      : QStringLiteral("Run %1 · %2").arg(state(run.value("status").toString()), run.value("stop_reason").toString()));
-  m_state->setStyleSheet(run.value("status").toString() == "FAILED" ? Theme::StatusErrorStyle : Theme::StatusInfoStyle);
+  } else {
+    const auto status = run.value("status").toString();
+    const bool needsReview = status == "FAILED" || counts.value("failed").toInt() > 0
+        || !run.value("stop_reason").toString().isEmpty();
+    m_state->setText(run.isEmpty() ? QStringLiteral("暂无执行结果；可以查看已有候选，但不能生成执行结果报告。")
+        : QStringList{"COMPLETED", "FAILED", "ABORTED"}.contains(status)
+          ? (needsReview ? QStringLiteral("执行已结束 · 结果待核对，详情见工具结果与证据清单。") : QStringLiteral("执行已结束 · 详情见工具结果与证据清单。"))
+          : QStringLiteral("Run %1").arg(state(status)));
+  }
+  m_state->setToolTip(run.value("stop_reason").toString());
+  m_state->setStyleSheet(Theme::StatusInfoStyle);
   m_assessment->setText(assessment.value("risk_level").toString() + "\n" + assessment.value("notice").toString()
       + QStringLiteral(" 教学分仅展示历史存储值，本页不会自动评分；系统结论由适用判据和证据决定，人工意见单独保留。"));
   m_metrics[0]->setValue(number(m_snapshot.value("finding_count")));

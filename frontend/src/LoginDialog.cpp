@@ -15,6 +15,7 @@
 #include <QPixmap>
 #include <QGraphicsDropShadowEffect>
 #include <QPointer>
+#include <QScrollArea>
 
 // ── Painted icons for password visibility toggle ──────────────────────
 // SVG/QIcon::fromTheme often fails on Linux/WSL; draw with QPainter instead.
@@ -79,8 +80,8 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
 
   // Size: ~3/4 screen (76% width, 76% height) — matches splash
   auto *screen = QGuiApplication::primaryScreen();
-  int screenW = screen ? screen->geometry().width() : 1920;
-  int screenH = screen ? screen->geometry().height() : 1080;
+  int screenW = screen ? screen->availableGeometry().width() : 1920;
+  int screenH = screen ? screen->availableGeometry().height() : 1080;
   int dlgW = screenW * 76 / 100;
   int dlgH = screenH * 76 / 100;
   setFixedSize(dlgW, dlgH);
@@ -89,9 +90,21 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
 
   // 背景改为 paintEvent 绘制的品牌渐变（深海军蓝 + 柔光斑），不再用纯色样式表
 
-  // Outer layout
-  auto *outerLayout = new QVBoxLayout(this);
+  // Preserve the centered card; short screens can scroll to the login actions.
+  auto *windowLayout = new QVBoxLayout(this);
+  windowLayout->setContentsMargins(0, 0, 0, 0);
+  auto *scroll = new QScrollArea;
+  scroll->setObjectName("loginScroll");
+  scroll->setWidgetResizable(true);
+  scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  scroll->setFrameShape(QFrame::NoFrame);
+  scroll->setStyleSheet("QScrollArea#loginScroll, QWidget#loginBody { background:transparent; border:none; }");
+  auto *body = new QWidget;
+  body->setObjectName("loginBody");
+  auto *outerLayout = new QVBoxLayout(body);
   outerLayout->setContentsMargins(0, 0, 0, 0);
+  scroll->setWidget(body);
+  windowLayout->addWidget(scroll);
 
   // Top spacer — push card to vertical center
   outerLayout->addStretch(5);
@@ -247,18 +260,6 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
   m_errorLabel->hide();
   cardLayout->addWidget(m_errorLabel);
 
-  auto *offlineBtn = new QPushButton("离线打开界面");
-  offlineBtn->setObjectName("loginOffline");
-  offlineBtn->setAutoDefault(false);
-  offlineBtn->setToolTip("不连接服务器，仅打开本地界面；扫描、任务和报告等在线功能需要登录后端。");
-  cardLayout->addWidget(offlineBtn);
-  connect(offlineBtn, &QPushButton::clicked, this, [this]() {
-    m_api->clearToken();
-    m_username = "离线访客";
-    m_role = "user";
-    accept();
-  });
-
   cardLayout->addSpacing(16);
 
   // Buttons
@@ -269,7 +270,8 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
   exitBtn->setObjectName("loginExit");
   exitBtn->setAutoDefault(false);
   exitBtn->setDefault(false);
-  exitBtn->setFixedSize(150, 46);
+  const int buttonWidth = qMin(150, (card->width() - 72 - 24) / 2);
+  exitBtn->setFixedSize(buttonWidth, 46);
   // 幽灵样式 —— 弱化次要操作
   if (dark) {
     exitBtn->setStyleSheet(
@@ -285,7 +287,7 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
   m_loginBtn->setObjectName("loginSubmit");
   m_loginBtn->setAutoDefault(true);
   m_loginBtn->setDefault(true);
-  m_loginBtn->setFixedSize(150, 46);
+  m_loginBtn->setFixedSize(buttonWidth, 46);
   // 品牌蓝渐变主按钮 —— 与全局 Primary #2563eb 同系
   m_loginBtn->setStyleSheet(
     "QPushButton { min-height:44px; max-height:44px; padding:0; background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #2f6ff2,stop:1 #1d4ed8); "
@@ -312,7 +314,7 @@ LoginDialog::LoginDialog(ApiClient *api, QWidget *parent)
 
   // Center on screen
   if (screen) {
-    auto geo = screen->geometry();
+    auto geo = screen->availableGeometry();
     move(geo.x() + (geo.width() - dlgW) / 2, geo.y() + (geo.height() - dlgH) / 2);
   }
 
@@ -416,7 +418,7 @@ void LoginDialog::onLogin(bool remember) {
           accept();
           return;
         }
-        m_errorLabel->setText("服务器暂时无法连接，且本机没有匹配的离线登录记录。可点击“离线打开界面”继续。");
+        m_errorLabel->setText("服务器暂时无法连接，本机账号或密码校验未通过。请检查输入；首次使用需先成功连接服务器登录一次。");
         m_errorLabel->show();
         m_passwordEdit->setFocus();
         return;

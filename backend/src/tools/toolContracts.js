@@ -179,14 +179,38 @@ export function inspectToolWordlists(toolId, args, projectRoot, engine = 'docker
   return { passed: issues.length === 0, issues, required: [...required] };
 }
 
-export function classifyToolResult(toolId, result) {
+function isLoginEndpoint(value, base) {
+  try { return /(?:^|\/)(?:login|signin)(?:\.[a-z0-9]+)?\/?$/i.test(new URL(value, base).pathname); }
+  catch { return false; }
+}
+
+export function classifyToolResult(toolId, result, { args = [] } = {}) {
   const output = `${result.stdout || ''}\n${result.stderr || ''}`.replace(/\x1b\[[0-9;]*m/g, '');
+  const shellHttpRequest = toolId === 'system-tools' && args.some(arg => /\bcurl\s/.test(arg));
+  const httpRequest = toolId === 'curl' || shellHttpRequest;
+  const usesCookie = toolId === 'curl' ? args.some(arg => ['-b', '--cookie'].includes(arg) || arg.startsWith('--cookie='))
+    : shellHttpRequest && args.some(arg => /(?:^|\s)(?:-b\s|--cookie(?:\s|=))/.test(arg));
+  const requestsLoginPage = toolId === 'curl' && args.some(arg => isLoginEndpoint(arg.replace(/^--url=/, '')));
+  const loginForm = httpRequest && usesCookie && !requestsLoginPage &&
+    (output.match(/<form\b[^>]*>[\s\S]*?(?:<\/form\s*>|$)/gi) || []).some(form => {
+      const action = form.match(/^<form\b[^>]*\baction\s*=\s*["']([^"']*)["']/i)?.[1];
+      const loginTarget = action ? isLoginEndpoint(action, 'http://request.invalid/')
+        : /<input\b[^>]*\bname\s*=\s*["']username["']/i.test(form);
+      return loginTarget && /<input\b[^>]*\b(?:name\s*=\s*["']password["']|type\s*=\s*["']password["'])/i.test(form);
+    });
+  // A successful HTTP transport can return a login form or an error page.
+  // Restrict page interpretation to HTTP commands, not arbitrary tool output.
+  const httpFailure = httpRequest && (/^\s*curl:\s*\(\d+\)/m.test(output) ||
+    /<(?:title|h1)\b[^>]*>\s*(?:[45]\d\d\s*[-:]?\s*)?(?:Not Found|Forbidden|Unauthorized|Internal Server Error|Service Unavailable)\s*<\//i.test(output) ||
+    loginForm);
   const sourceImageMissing = ['cppcheck','flawfinder'].includes(toolId)
     && /rt-sast-c/.test(output) && /unable to find image|no such image|image .*not (?:known|found)|pull access denied|failed to resolve reference/i.test(output);
   const semanticFailure = toolId === 'arjun' && /is not a valid URL|Skipped .* due to errors/i.test(output) ||
     toolId === 'ffuf' && /Errors:\s*[1-9]\d*/.test(output) ||
     toolId === 'nmap' && /Unable to split netmask|No targets were specified|Failed to resolve/i.test(output) ||
-    toolId === 'system-tools' && /(?:^|\n)\s*(?:FATAL|VERIFY_FAILED|FILE_TAMPER_FAILED|UPLOAD_RESULT:\s*check|ERROR):/im.test(output) ||
+    toolId === 'system-tools' && (/(?:^|\n)\s*(?:(?:FATAL|VERIFY_FAILED|FILE_TAMPER_FAILED|ERROR):|UPLOAD_RESULT:\s*check\b)/im.test(output) ||
+      /^\s*DVWA ready\s*\([^\r\n]*\blogin_ok:\s*0\s*\)/im.test(output)) ||
+    httpFailure ||
     ['nikto', 'sqlmap', 'httpx'].includes(toolId) && /unable to connect|connection (?:refused|timed out)|no web server found|\[CRITICAL\]/i.test(output);
   const success = result.exitCode === 0 && !result.timedOut && !result.aborted && !result.outputLimitExceeded && !semanticFailure;
   return { ...result, success, error: success ? null : sourceImageMissing

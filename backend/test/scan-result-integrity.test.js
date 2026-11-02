@@ -17,10 +17,17 @@ const probeCalls=[];
 let afterAnalysis=()=>{};
 await mock.module('../src/tools/toolRunner.js',{namedExports:{runTool:async(...args)=>{if(args[0]==='target-request'){probeCalls.push(args);return probeBehavior(args[1]);} calls.push(args);return behavior(...args);}}});
 await mock.module('../src/services/scanAnalyzer.js',{namedExports:{analyzeScanResults:async()=>{afterAnalysis();return {ok:true,data:{}};}}});
-const {executeScan,requestScanAbort}=await import('../src/services/scanExecutor.js');
+const {executeScan,requestScanAbort,buildArgs}=await import('../src/services/scanExecutor.js');
 const {default:scanRoutes}=await import('../src/routes/scans.js');
 const {default:resultRoutes}=await import('../src/routes/taskResults.js');
 const {cancelPipeline,runPipeline}=await import('../src/services/pipelineEngine.js');
+
+test('parameter discovery stays on the selected target without passive Internet archives',()=>{
+ for(const target of ['http://127.0.0.1:8080/','http://192.0.2.10/','https://fixture.invalid/']) {
+  const args=buildArgs('api_fuzz_arjun',target,{});
+  assert.deepEqual(args,['-u',target,'-t','5']);
+ }
+});
 function schema(db,modern=true) {
  db.exec(`CREATE TABLE users(username TEXT PRIMARY KEY,role TEXT,is_active INTEGER);
  INSERT INTO users VALUES ('alice','user',1),('bob','user',1),('admin','admin',1);

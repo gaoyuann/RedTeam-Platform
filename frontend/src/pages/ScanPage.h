@@ -38,7 +38,7 @@ public:
   QString selectedScanFeature() const;
   void showAllTaskResults();
   void setPipelineScope(const QString &pipelineId, const QStringList &taskIds, const QString &state = {});
-  void setTaskScope(const QStringList &taskIds, bool preserveFindingWindows = false);
+  void setTaskScope(const QStringList &taskIds, bool preserveFindingWindows = false, const QString &pipelineId = {});
   void clearTaskScope(bool preserveFindingWindows = false);
   void showTaskContextError(const QString &message);
   void openFindingVerification(const QList<qint64> &ids);
@@ -140,6 +140,7 @@ private:
   void loadPipelineResults(bool append = false);
   void renderCoverage(const QJsonObject &coverage);
   QString m_pipelineId;
+  bool m_individualScanScope = false;
   QString m_pipelineScanState;
   QString m_retryRequestId;
   QString m_retryRequestSource;
@@ -151,6 +152,7 @@ private:
   qint64 m_scanThrough = 0;
   QJsonArray m_aggregateRecords;
   QString m_ribbonScanType;
+  QString m_scanTypeBeforeSource;
   QMap<QString,QString> m_scanSourceTypes;
   bool m_sourceResultsView = false;
   bool m_sourceResultsPending = false;

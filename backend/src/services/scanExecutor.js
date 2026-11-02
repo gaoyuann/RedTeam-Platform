@@ -227,7 +227,8 @@ export function buildArgs(scanType, target, parameters = {}) {
     case 'api_fuzz_arjun': // arjun — URL parameter discovery
       args.push('-u', target);
       args.push('-t', String(threads || 5));  // threads
-      args.push('--passive');                  // passive + active discovery
+      // Passive sources query third-party archives, even for a loopback/LAN
+      // target. This capability only discovers parameters on the selected URL.
       break;
 
     case 'api_fuzz_ffuf': // ffuf — API endpoint fuzzing
