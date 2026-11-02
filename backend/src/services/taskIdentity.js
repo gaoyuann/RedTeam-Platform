@@ -1,3 +1,4 @@
+import { isTaskDeleted, visibleTasksSql } from './taskDeletion.js';
 import { createHash, randomUUID } from 'node:crypto';
 
 const fail = (status, message, code) => { throw Object.assign(new Error(message), { status, ...(code ? { code } : {}) }); };
@@ -50,7 +51,7 @@ export function existingCreation(db, owner, requestId, hash) {
   if (!request) return null;
   if (request.request_hash !== hash) fail(409, '同一创建请求编号的内容已变化，请重新创建');
   const row = db.prepare('SELECT * FROM pipelines WHERE pipeline_id=? AND created_by=?').get(request.pipeline_id, owner);
-  if (!row) fail(409, '原创建请求对应的任务已删除，不能重复创建');
+  if (!row || isTaskDeleted(db,row.pipeline_id)) fail(409, '原创建请求对应的任务已删除，不能重复创建');
   return row;
 }
 
@@ -88,6 +89,6 @@ export function visibleTaskLookup(db, actor, identifier) {
   const value = identifier.trim();
   const column = isTaskNumber(value) ? 'task_no' : 'pipeline_id';
   if (column === 'task_no' && !hasTaskIdentity(db)) fail(503, '任务ID迁移尚未安装');
-  return db.prepare(`SELECT * FROM pipelines WHERE ${column}=? COLLATE NOCASE AND (?='admin' OR created_by=?)`)
+  return db.prepare(`SELECT * FROM pipelines WHERE ${column}=? COLLATE NOCASE AND (?='admin' OR created_by=?) AND ${visibleTasksSql(db)}`)
     .get(value, actor.role, actor.sub) || null;
 }

@@ -1,3 +1,4 @@
+import { isTaskDeleted } from '../services/taskDeletion.js';
 import { Router } from 'express';
 import { callLlm } from '../services/llmClient.js';
 import { pipelineTopology, sourceNetworkTopology } from '../services/topologyProjection.js';
@@ -85,6 +86,7 @@ export default function (db) {
   // cannot silently expand the pipeline's authorized scan scope.
   router.post('/from-pipeline/:id/node-scans', (req, res) => {
     try {
+      if (isTaskDeleted(db,req.params.id)) return res.status(409).json({status:'error',error:{message:'任务已删除，请新建任务'}});
       const pipeline = db.prepare('SELECT * FROM pipelines WHERE pipeline_id=?').get(req.params.id);
       if (!pipeline) return res.status(404).json({status:'error',error:{message:'任务不存在'}});
       if (req.user.role !== 'admin' && req.user.sub !== pipeline.created_by)

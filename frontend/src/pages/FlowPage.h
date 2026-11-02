@@ -9,6 +9,7 @@
 #include <QComboBox>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QSet>
 
 class ApiClient;
 class QAction;
@@ -46,6 +47,18 @@ public:
 
   /// Switch to a task workbench tab by index.
   void switchToStageTab(int idx);
+  void setRibbonNavigation(bool enabled);
+  void showTaskList();
+  void openManagedTask(const QString &pipelineId);
+  void resumeCurrentTask();
+  void requestWorkspaceStage(int stage);
+  bool hasSelectedTask() const;
+  int workspaceStage() const;
+  bool taskContextReady() const;
+  bool supportsWorkspaceStage(int stage) const;
+  QString selectedTaskId() const { return m_selectedPipelineId; }
+  int taskSelectionRevision() const { return m_taskContextRevision; }
+  QString taskContextSummary() const;
 
   /// Open the workbench in "direct execution" mode — no pipeline selected,
   /// jump straight to the attack tab with a playbook pre-selected.
@@ -53,11 +66,25 @@ public:
   void jumpToExecution(const QString &playbookId, const QString &target);
   void openTaskReport(const QString &pipelineId, const QString &reportId);
   void openTaskAnalysis(const QString &pipelineId);
+  void useTaskPlaybook(const QString &playbookId);
+  bool taskListVisible() const { return m_stack->currentIndex() == 0; }
+  void openFindingWorkspace(const QString &pipelineId, const QList<qint64> &findingIds);
+  void openFindingAttackWorkspace(const QString &pipelineId, const QList<qint64> &findingIds);
   void setReturnPage(int page, const QString &title);
   void createTestForTarget(const QString &target, const QJsonObject &topologySource = {});
+  void createAssessmentTask();
+  bool creationPending() const;
+  void leaveSelectedTask();
 
 signals:
   void returnPageRequested(int page);
+  void taskContextChanged();
+  void taskListRequested();
+  void taskReportOpened();
+  void assessmentTaskOpened();
+  void taskCreationFailed();
+  void managedTaskOpened();
+  void workspaceStageChanged(int stage);
 
 public slots:
   void refreshFlows();
@@ -75,7 +102,7 @@ private slots:
   void onCancelFlow();
   void onDeleteFlow();
   void onApproveFlow();
-  void createFlow(bool quickMode, const QString &initialTarget = {}, const QJsonObject &topologySource = {});
+  void createFlow(bool quickMode, const QString &initialTarget = {}, const QJsonObject &topologySource = {}, bool assessment = false);
   void onStartFlow();
   void onBackToList();
   void onFilterChanged(int index);
@@ -91,9 +118,17 @@ private:
   void loadFlows();
   void resizeFlowColumns();
   void submitTaskCreation(const QJsonObject &body, bool startAfterCreate);
+  void startFlow(bool withWebOptions);
+  void applyTaskAction(const QString &pipelineId, bool remove);
+  QSet<QString> m_pendingTaskActions;
   void loadFlowDetail(const QString &pipelineId);
+
+  bool m_resumeTaskStage = false;
   void clearRunContext();
   void showTaskDetailError(const QString &message);
+  void showAssessment(const QString &pipelineId);
+  QList<qint64> m_pendingFindingIds;
+  QList<qint64> m_pendingFindingAttackIds;
 
   QString statusText(const QString &status) const;
   QString statusIcon(const QString &status) const;
@@ -106,6 +141,8 @@ private:
 
   // Internal stack: [0]=list, [1]=workbench
   QStackedWidget *m_stack;
+  int m_requestedStage = -1;
+  bool m_ribbonNavigation = false;
 
   // List view
   QWidget *m_listView;
@@ -117,6 +154,7 @@ private:
   QComboBox *m_filterCombo;
   QLabel *m_listState;
   QTimer *m_searchTimer = nullptr;
+  QTimer *m_listRefreshTimer = nullptr;
   QTimer *m_flowResizeTimer = nullptr;
   bool m_searchOpenRequested = false;
   QWidget *m_creationNotice = nullptr;
@@ -152,6 +190,7 @@ private:
   QLabel *m_taskIdLabel = nullptr;
   QPushButton *m_copyTaskId = nullptr;
   QLabel *m_statusLabel;
+  QLabel *m_failureReason = nullptr;
   QPushButton *m_originTopologyButton = nullptr;
   QPushButton *m_startBtn;
   QPushButton *m_approveBtn;
@@ -160,6 +199,7 @@ private:
   QPushButton *m_aiToggleBtn;
   QPushButton *m_logToggleBtn;
   QAction *m_cancelAction;
+  QAction *m_scanOptionsAction = nullptr;
   QAction *m_deleteAction;
   QAction *m_reportAction;
   StepIndicator *m_stepIndicator;   // 六阶段任务进度（后端四步骤映射到用户流程）

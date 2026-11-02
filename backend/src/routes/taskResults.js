@@ -9,8 +9,10 @@ import { exportTaskReport } from '../services/taskReportExport.js';
 import { requireActor } from '../middleware/recordAccess.js';
 import { scanCoveragePage } from '../services/scanCoverage.js';
 import { bindFindingPayload, findingPayloadMatches } from '../services/findingPayloads.js';
+import { classifyFindings } from '../services/findingClassifier.js';
+import { findingClassification } from '../services/findingClassificationStore.js';
 
-export default function (db) {
+export default function (db, dependencies = {}) {
   const router = Router({ mergeParams: true });
   router.use(requireActor(db));
   router.use((req, res, next) => {
@@ -22,6 +24,12 @@ export default function (db) {
     next();
   });
   router.get('/', (req, res) => res.json({ status: 'ok', data: req.query.view==='scans' ? scanPage(db,req.taskPipeline,req.query) : {...taskResultsSnapshot(db, req.taskPipeline),...scanPage(db,req.taskPipeline,req.query)} }));
+  router.post('/classifications', async (req, res, next) => {
+    try {
+      const data = await classifyFindings(db, req.taskPipeline.pipeline_id, req.user, req.body, dependencies);
+      res.json({ status: 'ok', data });
+    } catch (error) { next(error); }
+  });
   const current=req=>{
     const value=taskStatistics(db,req.taskPipeline);
     const expected=req.query.source_fingerprint || req.body?.source_fingerprint;
@@ -74,7 +82,9 @@ export default function (db) {
     const row=collection.rows.find(r=>String(r.id)===req.params.recordId);
     if(!row) return res.status(404).json({status:'error',error:{message:'结果不存在或不属于此任务'}});
     const run=collection.runs.find(r=>r.tool_run_id===row.tool_run_id);
-    res.json({status:'ok',data:{record:publicScanRecord(row),evidence:redactScanValue(parseResultData(run?.evidence))}});
+    res.json({status:'ok',data:{record:{...publicScanRecord(row),
+      classification:findingClassification(db,req.taskPipeline.pipeline_id,row,collection.scans.find(scan=>scan.scan_task_id===row.scan_task_id))},
+      evidence:redactScanValue(parseResultData(run?.evidence))}});
   });
   router.post('/reports', (req, res) => {
     const result = createTaskReport(db, req.taskPipeline, req.user, req.body);

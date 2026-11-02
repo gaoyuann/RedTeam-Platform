@@ -73,7 +73,7 @@ test('code generation is scoped, persistent, bounded and never becomes an execut
   await req(path+'/verification-code',{...auto,request_id:'automatic_code_02'});
   assert.equal(contexts.at(-1).source,'');assert.ok(contexts.at(-1).unknown_fields.some(v=>v.includes('未保存')));
   reply={ok:true,content:JSON.stringify({state:'needs_information',missing_information:['报告未提供输入与危险操作的关系，无法构造有依据的本地模拟']})};
-  assert.equal((await req(path+'/verification-code',{...auto,request_id:'automatic_gaps_01'})).state,'needs_information');
+  assert.equal((await req(path+'/verification-code',{...auto,request_id:'automatic_gaps_01',force_regenerate:true})).state,'needs_information');
   assert.equal(db.prepare('SELECT count(*) n FROM finding_verification_plans').get().n,0);
   assert.equal(db.prepare('SELECT count(*) n FROM execution_runs').get().n,0);
   assert.deepEqual(db.pragma('foreign_key_check'),[]);
@@ -92,4 +92,7 @@ test('current payload projection uses associated ready artifacts and latest read
   assert.ok(view.items.every(x=>x.runtime_verified===false));assert.equal(view.reason,'');
   assert.equal(currentFindingPayload({},[{state:'generating'}]).state,'generating');
   assert.equal(currentFindingPayload({},[{state:'needs_information',result:{missing_information:['Need evidence']}}]).reason,'Need evidence');
+  const legacy=currentFindingPayload({collections:[{id:'legacy',state:'ready',scripts:[null,'old text',{id:'valid',content:'valid script'}]}]},
+    [{id:'legacy-code',state:'ready',result:{files:[null,'old text',{filename:'valid.py',source:'valid code'}]}}]);
+  assert.deepEqual(legacy.items.map(item=>item.code),['valid script','valid code'],'malformed historical entries cannot hide valid code or break the detail page');
 });

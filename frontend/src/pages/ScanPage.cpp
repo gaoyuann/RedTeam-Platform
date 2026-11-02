@@ -1,6 +1,8 @@
 #include "FindingVerificationDialog.h"
 #include "../widgets/WorkbenchTabs.h"
 #include "ScanPage.h"
+#include "../widgets/PageComponents.h"
+#include <memory>
 #include "PentagiSourceScanHost.h"
 #include "SourceScanDetailDialog.h"
 #include "../widgets/RemoteSourcePicker.h"
@@ -13,6 +15,7 @@
 #include <QPainter>
 #include <QTextLayout>
 #include <QKeyEvent>
+#include <QResizeEvent>
 #include <QHelpEvent>
 #include <QToolTip>
 #include <QGridLayout>
@@ -44,6 +47,9 @@
 #include <QHash>
 #include <QSignalBlocker>
 #include <QTreeWidgetItemIterator>
+#include <QProgressBar>
+#include <QScrollBar>
+#include <QUrlQuery>
 
 // Keep the existing record columns for evidence/actions, with five visible columns.
 class ScanFindingDelegate final : public QStyledItemDelegate {
@@ -156,8 +162,36 @@ static bool isVerificationRecord(const QJsonObject &row) {
   const QStringList types{"vulnerability","web_vuln","sql_injection","misconfiguration","auth_finding","source_vuln","source_finding","program_finding"};
   return types.contains(row["result_type"].toString()) && !QStringList{"info","inf"}.contains(row["severity"].toString().toLower());
 }
+
+static void showFindingClassification(QTreeWidgetItem *item, const QJsonObject &record) {
+  if (!isVerificationRecord(record)) { item->setText(8, QStringLiteral("—")); return; }
+  const auto classification = record["classification"].toObject();
+  item->setData(8, Qt::UserRole, classification);
+  const QMap<QString, QString> labels{{"data-exfiltration", "数据抵近窃取"}, {"tampering-deception", "信息篡改欺骗"},
+    {"device-control", "关键设备夺控"}, {"cross-network-disruption", "跨网致瘫"}, {"wireless-attack", "无线攻击"}};
+  QStringList categories;
+  for (const auto &value : classification["categories"].toArray())
+    if (labels.contains(value.toString())) categories << labels[value.toString()];
+  const QString state = classification["state"].toString();
+  QString label = state == "stale" ? QStringLiteral("已过期，需重新分类")
+    : state == "unavailable" ? QStringLiteral("分类暂不可用")
+    : state == "unknown" ? QStringLiteral("无法确定")
+    : state == "classified" && classification["schema_version"].toInt() == 1 && !categories.isEmpty()
+      ? categories.join(QStringLiteral("、")) : QStringLiteral("未分类");
+  item->setText(8, label);
+  const QMap<QString, QString> confidence{{"high", "高"}, {"medium", "中"}, {"low", "低"}};
+  QStringList missing;
+  for (const auto &value : classification["missing_conditions"].toArray()) missing << value.toString();
+  item->setToolTip(8, QStringLiteral("AI 场景分类：%1\n分类依据：%2\n分类置信度：%3\n待补条件：%4\n%5\n分类为候选关联，不代表攻击已执行或验证成功。")
+    .arg(label, classification["reason"].toString(QStringLiteral("尚无分类依据")),
+      confidence.value(classification["confidence"].toString(), QStringLiteral("未提供")),
+      missing.isEmpty() ? QStringLiteral("未提供") : missing.join(QStringLiteral("；")),
+      classification["evidence_truncated"].toBool() ? QStringLiteral("分析输入仅含部分证据片段") : QString()));
+  item->setForeground(8, QColor(state == "classified" ? "#2563eb" : state == "stale" ? "#b45309" : "#64748b"));
+}
 // Keep record roles on column 0 and existing name/source consumers on columns 1–2.
 static void showFindingSummary(QTreeWidgetItem *item, const QJsonObject &record, bool aggregate) {
+  showFindingClassification(item, record);
   const bool candidate = isVerificationRecord(record);
   item->setData(0, Qt::UserRole+2, candidate ? QString("vulnerability") : record["category"].toString());
   if (!candidate) {
@@ -167,9 +201,24 @@ static void showFindingSummary(QTreeWidgetItem *item, const QJsonObject &record,
   const auto match = record["payload_match"].toObject();
   const QMap<QString, QString> payloadLabels{{"linked", "已关联（待核对条件）"}, {"stale", "关联已失效"},
     {"candidate", "有匹配候选"}, {"none", "暂无匹配"}};
-  item->setText(3, payloadLabels.value(match["status"].toString(), QStringLiteral("待匹配")));
-  item->setToolTip(3, match["name"].toString() + "\n" + match["match_basis"].toString()
-    + QStringLiteral("\n匹配或关联不代表可执行；载荷版本、消费方式和条件须在准备测试时核对。"));
+  const auto code = record["payload_code"].toObject();
+  QString codeLabel = QStringLiteral("状态未提供");
+  if (code["schema_version"].toInt() == 1) {
+    const QMap<QString, QString> codeLabels{{"missing", "暂无代码"}, {"unavailable", "状态未提供"},
+      {"generating", "生成中"}, {"needs_information", "缺少生成条件"}, {"error", "生成失败，可重试"}, {"interrupted", "生成已中断"}};
+    codeLabel = codeLabels.value(code["state"].toString(), QStringLiteral("状态未提供"));
+    if (code["state"] == "available") {
+      QStringList sources;
+      if (code["scan_count"].toInt() > 0) sources << QStringLiteral("扫描 %1 份").arg(code["scan_count"].toInt());
+      if (code["generated_count"].toInt() > 0) sources << QStringLiteral("AI 生成 %1 份").arg(code["generated_count"].toInt());
+      if (!sources.isEmpty()) codeLabel = sources.join(QStringLiteral("、"));
+    }
+  }
+  item->setText(3, QStringLiteral("库：%1\n代码：%2")
+    .arg(payloadLabels.value(match["status"].toString(), QStringLiteral("待匹配")), codeLabel));
+  item->setForeground(3, QColor("#2563eb"));
+  item->setToolTip(3, item->text(3) + "\n" + match["name"].toString() + "\n" + match["match_basis"].toString()
+    + QStringLiteral("\n点击查看 / 生成此漏洞载荷。代码已生成不代表已绑定、执行或验证真实目标。\n匹配或关联不代表可执行；载荷版本、消费方式和条件须在准备测试时核对。"));
   // A single-scan response does not carry the task verification summary.
   if (!aggregate || !record.contains("verification")) {
     item->setText(6, QStringLiteral("状态未提供"));
@@ -660,16 +709,23 @@ void ScanPage::setStatusText(const QString &text) {
 }
 
 void ScanPage::resizeResultColumns() {
-  const int available = qMax(100, m_resultTree->viewport()->width() - 260 - (m_sourceResultsView && !m_sourceRecordsMode ? 90 : 0));
+  const int classificationWidth = m_resultTree->isColumnHidden(8) ? 0 : 166;
+  const int payloadWidth = m_resultTree->isColumnHidden(3) ? 0 : 180;
+  const int available = qMax(260, m_resultTree->viewport()->width() - 260 - classificationWidth - payloadWidth);
   m_resultTree->setColumnWidth(0, 52);
   m_resultTree->setColumnWidth(4, 72);
   m_resultTree->setColumnWidth(6, 136);
+  m_resultTree->setColumnWidth(8, 166);
+  m_resultTree->setColumnWidth(3, 180);
   m_resultTree->setColumnWidth(1, available * 3 / 5);
   m_resultTree->setColumnWidth(5, available - available * 3 / 5);
 }
 
 bool ScanPage::eventFilter(QObject *object, QEvent *event) {
-  if (object == m_resultTree->viewport() && event->type() == QEvent::Resize) resizeResultColumns();
+  if (object == m_resultTree->viewport() && event->type() == QEvent::Resize) {
+    const auto *resize = static_cast<QResizeEvent *>(event);
+    if (resize->size().width() != resize->oldSize().width()) resizeResultColumns();
+  }
   if (object == m_resultTree && event->type() == QEvent::KeyPress) {
     auto *key = static_cast<QKeyEvent*>(event);
     if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) {
@@ -704,7 +760,7 @@ void ScanPage::openRecordDetails(QTreeWidgetItem *item) {
   connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::close);
   const qint64 id = item->data(0, Qt::UserRole+1).toLongLong();
   if (!m_pipelineId.isEmpty() && item->data(0, Qt::UserRole+2).toString() == "vulnerability" && id > 0) {
-    auto *prepare = buttons->addButton(QStringLiteral("准备验证"), QDialogButtonBox::ActionRole);
+    auto *prepare = buttons->addButton(QStringLiteral("逐漏洞攻击测试"), QDialogButtonBox::ActionRole);
     prepare->setObjectName("prepareFindingVerification");
     const QString pipeline = m_pipelineId;
     const int scope = m_scopeRevision;
@@ -747,6 +803,9 @@ void ScanPage::setTarget(const QString &target)
 void ScanPage::setPipelineScope(const QString &pipelineId, const QStringList &taskIds, const QString &state)
 {
   if(m_pipelineId!=pipelineId) {
+    if (m_scanIssueSummary) m_scanIssueSummary->hide();
+    resetFindingClassification();
+    m_ribbonScanType.clear();
     m_checkedFindings.clear();
     const QSignalBlocker categoryBlock(m_resultCategory);
     m_resultCategory->setCurrentIndex(m_resultCategory->findData("vulnerability"));
@@ -757,50 +816,145 @@ void ScanPage::setPipelineScope(const QString &pipelineId, const QStringList &ta
     return;
   }
   const auto checkedFindings = m_checkedFindings;
-  setTaskScope(taskIds);
+  setTaskScope(taskIds, m_pipelineId == pipelineId);
   m_checkedFindings = checkedFindings;
   m_pipelineId = pipelineId; m_pipelineScanState = state;
   m_resultSource->blockSignals(true); m_resultSource->clear(); m_resultSource->addItem(QStringLiteral("全部扫描任务"), QString()); m_resultSource->blockSignals(false);
   m_allScanResults = true;
+  if (m_tasksToggle && m_ribbonScanType.isEmpty()) m_tasksToggle->setChecked(false);
   m_selectInitialScopeTask = false;
   m_aggregateControls->show();
   m_moreResultsButton->show();
   loadPipelineResults();
 }
 
+static bool ribbonScanTypeMatches(const QString &selected, const QString &actual)
+{
+  if (selected.isEmpty() || selected == actual) return true;
+  return selected == "web_scan" && QStringList{"web_scan_nikto", "web_scan_sqlmap", "web_parameter_scan", "api_fuzz", "auth_audit"}.contains(actual);
+}
+
+void ScanPage::setScanProgress(const QString &text, bool active, int finished, int total, const QString &detail)
+{
+  // Follow pentagi-v3's vulnerability toolbar: a 12 px bar, a compact value
+  // and an activity dot. Keep explanations in tooltips rather than extra rows.
+  const bool indefinite = active && (total <= 0 || finished == 0 || finished >= total);
+  const bool failed = text.contains(QStringLiteral("失败"));
+  const bool warning = text.contains(QStringLiteral("不完整")) || text.contains(QStringLiteral("待补"))
+      || text.contains(QStringLiteral("未确认")) || text.contains(QStringLiteral("部分"))
+      || text.contains(QStringLiteral("取消")) || text.contains(QStringLiteral("无有效"))
+      || text.contains(QStringLiteral("待核对")) || text.contains(QStringLiteral("等待工具"));
+  const bool ended = !active && total > 0 && finished >= total;
+  const bool measurable = !indefinite && !failed && total > 0;
+  const int percent = measurable ? int(100LL * qBound(0, finished, total) / total) : 0;
+  m_scanProgress->setRange(0, indefinite ? 0 : 100);
+  if (!indefinite) m_scanProgress->setValue(percent);
+  m_progressValue->setText(measurable
+      ? QStringLiteral("%1% · %2 / %3").arg(percent).arg(qBound(0, finished, total)).arg(total)
+      : QStringLiteral("--%"));
+  const bool processing = text.contains(QStringLiteral("解析")) || text.contains(QStringLiteral("导入"))
+      || text.contains(QStringLiteral("整理"));
+  m_progressState->setText(failed ? QStringLiteral("● 失败") : warning
+      ? (active ? QStringLiteral("● 待确认") : QStringLiteral("● 待核对")) : active
+      ? (processing ? QStringLiteral("● 整理中") : QStringLiteral("● 进行中")) : ended
+      ? QStringLiteral("● 已结束") : QStringLiteral("● 待开始"));
+  const QString color = failed ? "#dc2626" : warning ? "#d97706" : ended ? "#16a34a" : "#2563eb";
+  if (m_scanProgress->property("progressColor").toString() != color) {
+    m_scanProgress->setProperty("progressColor", color);
+    m_scanProgress->setStyleSheet(QStringLiteral("QProgressBar { border:0;border-radius:6px;background:#e2e8f0; } QProgressBar::chunk { background:%1;border-radius:6px; }").arg(color));
+    m_progressState->setStyleSheet(QStringLiteral("color:%1;background:transparent;border:none;font-size:14px;font-weight:600;").arg(color));
+  }
+  const QString explanation = !detail.isEmpty() ? detail : failed
+      ? QStringLiteral("请在检查详情中查看错误原因，读取失败时可点击刷新重试。") : warning && !active
+      ? QStringLiteral("请在检查详情中核对异常与未完成范围。") : active
+      ? QStringLiteral("等待扫描器返回进展，结果会自动更新。") : ended
+      ? QStringLiteral("扫描过程已结束，可继续查看发现与检查详情。") : QStringLiteral("启动扫描后自动显示当前进展。");
+  const QString tooltip = text + "\n" + explanation + (total > 0
+      ? QStringLiteral("\n当前扫描项已结束 %1 / %2；包含异常结束，不代表检查覆盖完整或验证成功。")
+          .arg(qBound(0, finished, total)).arg(total) : QString());
+  for (auto *widget : {static_cast<QWidget *>(m_progressText), static_cast<QWidget *>(m_progressValue),
+                       static_cast<QWidget *>(m_progressState), static_cast<QWidget *>(m_scanProgress)})
+    widget->setToolTip(tooltip);
+  m_scanProgress->setAccessibleDescription(tooltip);
+}
+
+void ScanPage::fetchPipelineSnapshot(const QString &path, int desiredCount, const QJsonArray &rows,
+                                    std::function<void(const QJsonObject &)> done)
+{
+  const int request = m_scanPageRequest;
+  QPointer<ScanPage> guard(this);
+  m_api->get(path, 10000, [this, guard, path, desiredCount, rows, done, request](QJsonObject response) {
+    if (!guard || request != m_scanPageRequest) return;
+    if (response["status"].toString() != "ok") { done(response); return; }
+    auto data = response["data"].toObject();
+    auto combined = rows;
+    const auto incoming = data["scan_records"].toArray();
+    for (const auto &row : incoming) combined.append(row);
+    const auto page = data["page"].toObject();
+    if (!incoming.isEmpty() && page["has_more"].toBool() && combined.size() < desiredCount) {
+      QUrl url(path); QUrlQuery query(url);
+      query.removeAllQueryItems("after"); query.removeAllQueryItems("through");
+      query.addQueryItem("after", page["next_after"].toVariant().toString());
+      query.addQueryItem("through", page["through"].toVariant().toString());
+      url.setQuery(query);
+      fetchPipelineSnapshot(url.toString(), desiredCount, combined, done);
+      return;
+    }
+    data["scan_records"] = combined;
+    response["data"] = data;
+    done(response);
+  });
+}
+
 void ScanPage::loadPipelineResults(bool append)
 {
-  if (m_pipelineId.isEmpty()) return;
+  if (m_pipelineId.isEmpty() || m_classificationBusy) return;
+  const QString query = m_pipelineId + "|" + m_resultCategory->currentData().toString()
+      + "|" + m_resultSource->currentData().toString() + "|" + m_ribbonScanType;
+  if (m_scanPageBusy && query == m_resultsQuery) { m_scanRefreshPending = true; return; }
+  m_scanRefreshPending = false;
+  const bool sameQuery = query == m_resultsQuery;
+  m_resultsQuery = query;
+  const int desiredCount = !append && sameQuery ? qMax(100, m_aggregateRecords.size()) : 100;
   const int request = ++m_scanPageRequest;
   const QString pipeline = m_pipelineId;
   const int scope = m_scopeRevision;
-  if (!append) { if(m_webScanProcess){m_webScanProcess->clear();m_webScanProcess->hide();} m_scanCursor = 0; m_aggregateRecords = {}; m_resultTree->setRootIndex(QModelIndex()); m_resultTree->clear(); m_resultOverview->clear(); }
+  if (!append && !sameQuery) {
+    m_scanCursor = 0; m_aggregateRecords = {}; m_renderedResults.clear();
+    m_resultTree->setRootIndex(QModelIndex()); m_resultTree->clear(); m_resultOverview->clear();
+    m_webScanProcess->clear(); m_webScanProcess->hide(); m_processToggle->hide();
+  }
   m_allScanResults = true;
   m_selectedTaskId.clear();
   m_reexecBtn->hide(); m_genBtn->setEnabled(false);
   m_scanPageBusy = true; m_moreResultsButton->setEnabled(false);
   m_moreResultsButton->show();
-  if (!append) {
+  if (!append && !sameQuery) {
+    setScanProgress(QStringLiteral("正在读取扫描状态与结果…"), true);
     setStatusText(QStringLiteral("正在加载扫描结果…"));
     m_listTitle->setText(QStringLiteral("加载中…"));
     m_resultHint->setText(QStringLiteral("正在加载当前筛选结果…"));
     UiUtil::EmptyHint::setState(m_resultTree, QStringLiteral("正在加载…"));
   }
   updateFindingSelection();
-  QString path = "/api/pipelines/" + pipeline + "/results?view=scans&limit=100&after=" + QString::number(m_scanCursor)
+  QString path = "/api/pipelines/" + pipeline + "/results?view=scans&limit=100&after=" + QString::number(append ? m_scanCursor : 0)
       + "&category=" + m_resultCategory->currentData().toString();
   if (append) path += "&through=" + QString::number(m_scanThrough);
   if (!m_resultSource->currentData().toString().isEmpty()) path += "&scan_task_id=" + m_resultSource->currentData().toString();
   QPointer<ScanPage> guard(this);
-  m_api->get(path, 10000, [this, guard, request, pipeline, scope, append](const QJsonObject &response) {
+  fetchPipelineSnapshot(path, desiredCount, {}, [this, guard, request, pipeline, scope, append, sameQuery](const QJsonObject &response) {
     if (!guard || request != m_scanPageRequest || pipeline != m_pipelineId || scope != m_scopeRevision || !m_allScanResults) return;
     m_scanPageBusy = false;
+    if (!m_scanResultsFresh) m_renderedResults.clear();
+    m_scanResultsFresh = (append && m_scanResultsFresh) || response["status"].toString() == "ok";
     updateFindingSelection();
     if (response["status"].toString() != "ok") {
       setStatusText(QStringLiteral("扫描结果加载失败，请重试"));
-      m_listTitle->setText(QStringLiteral("加载失败"));
+      setScanProgress(m_aggregateRecords.isEmpty() ? QStringLiteral("扫描结果读取失败，点击刷新重试")
+          : QStringLiteral("刷新失败，已保留上次结果；点击刷新重试"), false);
+      if (!sameQuery) m_listTitle->setText(QStringLiteral("加载失败"));
       m_resultHint->setText(append ? QStringLiteral("加载更多失败，已加载记录保留；点击加载更多重试") : QStringLiteral("加载失败，请点击刷新重试"));
-      m_moreResultsButton->setEnabled(append);
+      m_moreResultsButton->setEnabled(m_scanCursor > 0);
       UiUtil::EmptyHint::setState(m_resultTree, QStringLiteral("加载失败，请点击刷新重试"), true);
       return;
     }
@@ -845,8 +999,16 @@ void ScanPage::loadPipelineResults(bool append)
       processLines << QStringLiteral("全任务预算：%1").arg(counts.join(QStringLiteral(" · ")));
     }
     if (data["web_scan_process_truncated"].toBool()) processLines.prepend(QStringLiteral("仅显示最近 100 条过程，完整记录见全部扫描记录"));
-    m_webScanProcess->setPlainText(processLines.join("\n")); m_webScanProcess->setVisible(!processLines.isEmpty());
+    const QString processText = processLines.join("\n");
+    if (m_webScanProcess->toPlainText() != processText) {
+      const int scroll = m_webScanProcess->verticalScrollBar()->value();
+      m_webScanProcess->setPlainText(processText);
+      m_webScanProcess->verticalScrollBar()->setValue(scroll);
+    }
+    m_processToggle->setVisible(!processLines.isEmpty());
+    m_webScanProcess->setVisible(!processLines.isEmpty() && m_processToggle->isChecked());
     const auto page = data["page"].toObject();
+    if (property("ribbonWorkspace").toBool() && data["scan_sources"].isArray()) renderPipelineSources(data["scan_sources"].toArray());
     m_sourceResultsView = false;
     m_sourceResultsPending = false;
     m_sourceTaskIds.clear();QStringList sourceTargets;
@@ -855,6 +1017,7 @@ void ScanPage::loadPipelineResults(bool append)
     bool otherFindingSource = false;
     for (const auto &value : data["scan_sources"].toArray()) {
       const auto source = value.toObject();
+      if (!ribbonScanTypeMatches(m_ribbonScanType, source["scan_type"].toString())) continue;
       if (!selectedSource.isEmpty() && source["scan_task_id"].toString() != selectedSource) continue;
       if (source["scan_type"].toString() != "source_scan" && !source["source_scan"].isObject()) {
         otherFindingSource = otherFindingSource || !QStringList{"port_scan","topology_scan"}.contains(source["scan_type"].toString());
@@ -874,6 +1037,11 @@ void ScanPage::loadPipelineResults(bool append)
           && (selectedSource.isEmpty() || source["scan_task_id"].toString()==selectedSource))
         m_sourceProgressText=sourceScanNotice(source["status"].toString());
     }
+    for (const auto &value : data["scan_sources"].toArray()) {
+      const auto source = value.toObject();
+      m_scanSourceTypes[source["scan_task_id"].toString()] = source["scan_type"].toString();
+    }
+    if (!append) m_aggregateRecords = {};
     for (const auto &row : data["scan_records"].toArray()) m_aggregateRecords.append(row);
     m_scanCursor = page["next_after"].toVariant().toLongLong();
     m_scanThrough = page["through"].toVariant().toLongLong();
@@ -885,7 +1053,7 @@ void ScanPage::loadPipelineResults(bool append)
         ? m_sourceProgressText
         : QStringLiteral("已加载 %1 / %2 条记录 · 未去重").arg(m_aggregateRecords.size()).arg(page["total"].toInt()));
     const auto summary = data["scan_summary"].toObject();
-    QStringList states;
+    QStringList states, issues;
     bool active = false;
     const QString selected = m_resultSource->currentData().toString();
     m_resultSource->blockSignals(true); m_resultSource->clear();
@@ -895,6 +1063,12 @@ void ScanPage::loadPipelineResults(bool append)
       m_resultSource->addItem(formatScanType(source["scan_type"].toString()) + " · "
         + source["target"].toString(QStringLiteral("目标未记录")) + " · " + formatStatus(source["status"].toString()) + " · " + id.right(8), id);
       m_resultSource->setItemData(m_resultSource->count()-1, id, Qt::ToolTipRole);
+      QString cause = source.value("error_message").toString();
+      if (!cause.isEmpty() && source.value("scan_type") != "react_scan") {
+        if (cause.contains("ENOTFOUND")) cause = QStringLiteral("目标地址无法解析；请核对主机与端口格式，端口前应使用冒号。");
+        else if (cause.contains("ECONNREFUSED")) cause = QStringLiteral("目标拒绝连接；请核对端口及目标服务是否已启动。");
+        issues << formatScanType(source.value("scan_type").toString()) + QStringLiteral("：") + cause.left(300);
+      }
       active = active || source["status"].toString() == "RUNNING" || source["status"].toString() == "PENDING";
       states << formatScanType(source["scan_type"].toString()) + "：" + formatStatus(source["status"].toString())
           + (source["error_message"].toString().isEmpty() ? QString() : "（" + source["error_message"].toString() + "）");
@@ -903,6 +1077,25 @@ void ScanPage::loadPipelineResults(bool append)
     if (unresolvedCalls) states << QStringLiteral("工具调用尚未结束或停止状态未确认，请勿据此恢复环境");
     if (active || unresolvedCalls) m_pollTimer->start(2000); else m_pollTimer->stop();
     m_resultSource->setCurrentIndex(qMax(0, m_resultSource->findData(selected))); m_resultSource->blockSignals(false);
+    if (!m_ribbonScanType.isEmpty()) {
+      int visibleCount = 0;
+      for (int i = 0; i < m_resultTree->topLevelItemCount(); ++i) visibleCount += m_resultTree->topLevelItem(i)->childCount();
+      if (visibleCount == 0 && !m_aggregateRecords.isEmpty()) {
+        QStringList otherTypes;
+        for (const auto &value : data.value("scan_sources").toArray()) {
+          const auto source = value.toObject(); const QString type = source.value("scan_type").toString();
+          if (type != "react_scan" && !ribbonScanTypeMatches(m_ribbonScanType, type)) otherTypes << formatScanType(type);
+        }
+        otherTypes.removeDuplicates();
+        if (!otherTypes.isEmpty()) issues.prepend(QStringLiteral("当前筛选为%1；本任务已有其他类型记录（%2），请切换对应扫描类型或查看全部记录。")
+          .arg(formatScanType(m_ribbonScanType), otherTypes.join(QStringLiteral("、"))));
+      }
+      m_listTitle->setText(QStringLiteral("%1 · 已加载 %2 条").arg(formatScanType(m_ribbonScanType)).arg(visibleCount));
+      m_resultHint->setText(QStringLiteral("本类已加载 %1 条；任务结果已读取 %2 / %3 条，可继续加载更多。").arg(visibleCount).arg(m_aggregateRecords.size()).arg(page["total"].toInt()));
+    }
+    m_scanIssueSummary->setText(issues.mid(0, 2).join(QStringLiteral("\n")));
+    m_scanIssueSummary->setToolTip(issues.join(QStringLiteral("\n")));
+    m_scanIssueSummary->setVisible(!issues.isEmpty());
     for (const auto &value : summary["unexecuted_checks"].toArray()) states << formatScanType(value.toString()) + "：未执行";
     const int unfinishedChecks = summary.value("unfinished_check_count").toInt();
     if (unfinishedChecks > 0) states << QStringLiteral("检查覆盖仍有 %1 项未完成、未支持或缺条件").arg(unfinishedChecks);
@@ -915,6 +1108,49 @@ void ScanPage::loadPipelineResults(bool append)
         .arg(summary["record_count"].toInt()).arg(states.join("；")));
     m_statusLabel->setToolTip(QString::fromUtf8(QJsonDocument(data["scan_runs"].toArray()).toJson(QJsonDocument::Indented)));
     renderCoverage(data["scan_coverage"].toObject());
+    int finished = 0, abnormal = 0;
+    const auto sources = data["scan_sources"].toArray();
+    QStringList currentChecks;
+    for (const auto &value : sources) {
+      const auto source = value.toObject();
+      const auto state = source["status"].toString();
+      if (QStringList{"COMPLETED", "PARTIAL", "FAILED", "CANCELLED"}.contains(state)) {
+        ++finished;
+        if (state != "COMPLETED") ++abnormal;
+      }
+      if (state == "RUNNING") currentChecks << formatScanType(source["scan_type"].toString());
+    }
+    currentChecks.removeDuplicates();
+    const bool waiting = active || unresolvedCalls || (sources.isEmpty()
+        && QStringList{"pending", "running", "scanning"}.contains(m_pipelineScanState));
+    const QString progress = unresolvedCalls ? QStringLiteral("等待工具结束或确认停止状态")
+      : active ? QStringLiteral("扫描进行中，结果持续保存") : scanState;
+    QString activity;
+    if (unresolvedCalls) activity = QStringLiteral("仍有 %1 项工具调用未确认结束，正在等待状态更新。").arg(summary["active_calls"].toArray().size());
+    else if (!currentChecks.isEmpty()) activity = QStringLiteral("当前检查：%1").arg(currentChecks.join(QStringLiteral("、")));
+    else if (waiting) activity = QStringLiteral("正在准备检查或等待下一轮调度，结果会自动更新。");
+    else if (abnormal > 0) activity = QStringLiteral("%1 项扫描异常结束，请打开检查详情查看原因。").arg(abnormal);
+    else if (unfinishedChecks > 0) activity = QStringLiteral("仍有 %1 项检查未完成或缺少条件，请核对检查详情。").arg(unfinishedChecks);
+    // Only the latest persisted action may describe the current wait. Older running
+    // actions remain in history after their completion and must not look active.
+    if (waiting && !unresolvedCalls) {
+      const auto process = data["web_scan_process"].toArray();
+      for (int i = process.size() - 1; i >= 0; --i) {
+        const auto record = process[i].toObject();
+        if (!QStringList{"scan_agent_step", "web_agent_step"}.contains(record["result_type"].toString())) continue;
+        const auto step = QJsonDocument::fromJson(record["result_data"].toString().toUtf8()).object();
+        const QString type = step["scan_type"].toString(m_scanSourceTypes.value(step["child_scan_id"].toString()));
+        if (step["state"].toString() == "running" && !type.isEmpty())
+          activity = QStringLiteral("当前检查：%1%2").arg(formatScanType(type), step["turn"].toInt() > 0
+              ? QStringLiteral(" · 第 %1 轮").arg(step["turn"].toInt()) : QString());
+        else if (currentChecks.isEmpty() && step["state"].toString() == "completed")
+          activity = QStringLiteral("最近检查结果已保存，等待后续调度或结果整理。");
+        break;
+      }
+    }
+    setScanProgress(progress, waiting, unresolvedCalls ? 0 : finished, unresolvedCalls ? 0 : sources.size(), activity);
+    if (m_scanRefreshPending) { m_scanRefreshPending = false; loadPipelineResults(); }
+
   });
 }
 
@@ -972,12 +1208,13 @@ void ScanPage::renderCoverage(const QJsonObject &coverage)
   m_coverageTree->show();
 }
 
-void ScanPage::setTaskScope(const QStringList &taskIds)
+void ScanPage::setTaskScope(const QStringList &taskIds, bool preserveFindingWindows)
 {
   if (m_scopedTasks && taskIds == m_scopeTaskIds) return;
-  clearTaskScope();
+  clearTaskScope(preserveFindingWindows);
   m_scopedTasks = true;
   m_scopeTaskIds = taskIds;
+  if (auto *button = findChild<QPushButton *>("scanQuickCreate")) button->hide();
   m_selectInitialScopeTask = !taskIds.isEmpty();
   for (auto *button : findChildren<QPushButton*>("scanCreateToggle")) {
     button->setChecked(false);
@@ -986,18 +1223,23 @@ void ScanPage::setTaskScope(const QStringList &taskIds)
   if (!taskIds.isEmpty()) onRefreshTasks();
 }
 
-void ScanPage::clearTaskScope()
+void ScanPage::clearTaskScope(bool preserveFindingWindows)
 {
-  for (auto *dialog : findChildren<QDialog*>())
-    if (dialog->objectName().startsWith("scanAux")) dialog->close();
   ++m_scopeRevision;
+  m_pipelineId.clear();
+  for (auto *dialog : findChildren<QDialog*>())
+    if (dialog->objectName().startsWith("scanAux")
+        && !(preserveFindingWindows && qobject_cast<FindingVerificationDialog *>(dialog))) dialog->close();
   m_checkedFindings.clear();
   ++m_scanPageRequest; m_scanPageBusy = false; m_pipelineId.clear(); m_allScanResults = false;
   if (m_aggregateControls) m_aggregateControls->hide();
   if (m_moreResultsButton) m_moreResultsButton->hide();
   if (m_showAllRecords) m_showAllRecords->hide();
+  if (m_scanIssueSummary) m_scanIssueSummary->hide();
   m_scopedTasks = true;
   m_scopeTaskIds.clear();
+  m_ribbonScanType.clear();
+  m_scanSourceTypes.clear();
   m_selectInitialScopeTask = false;
   m_selectedTaskId.clear();
   m_runningTaskIds.clear();
@@ -1010,6 +1252,7 @@ void ScanPage::clearTaskScope()
     if (count) count->setText(QStringLiteral("共 0 个"));
   }
   setTarget(QString());
+  if (auto *button = findChild<QPushButton *>("scanQuickCreate")) button->setVisible(!m_scopedTasks);
   clearDetailPanel();
 }
 
@@ -1025,19 +1268,22 @@ void ScanPage::setupUI() {
   setStyleSheet(Theme::PageStyle + QStringLiteral(
       "QWidget#scanPage { background:#f3f6fb; }"
       "QFrame#scanTasksPanel, QFrame#scanDetailsPanel { background:#ffffff; border:1px solid #dbe3ef; border-radius:14px; }"
-      "QLabel#scanPanelTitle { color:#172033; font-size:17px; font-weight:700; }"
-      "QLabel#scanPanelHint { color:#64748b; font-size:12px; }"
+      "QLabel#scanPanelTitle { color:#172033; font-size:14px; font-weight:700; }"
+      "QLabel#scanPanelHint { color:#64748b; font-size:14px; }"
       "QTabWidget#scanDetailTabs::pane { border:none; background:#ffffff; padding:0; }"
       "QTableWidget, QTreeWidget { background:#ffffff; alternate-background-color:#f8fbff; border:1px solid #e2e8f0; border-radius:8px; }"
       "QTableWidget::item, QTreeWidget::item { padding:7px 6px; border:none; }"
       "QTableWidget::item:selected, QTreeWidget::item:selected { background:#dbeafe; color:#1e3a8a; }"
       "QHeaderView::section { background:#f1f5f9; color:#475569; border:none; border-bottom:1px solid #e2e8f0; padding:8px 6px; font-weight:600; }"
+      "QWidget#scanPage QPushButton { min-height:28px; padding:0 9px; font-size:13px; }"
+      "QWidget#scanPage QComboBox { min-height:28px; padding:0 7px; font-size:14px; }"
+      "QTabWidget#scanWorkspaces::pane { border:none; background:transparent; }"
       "QSplitter::handle { background:transparent; }"
       "QSplitter::handle:hover { background:#dbeafe; }"));
 
   auto *mainLayout = new QVBoxLayout(this);
-  mainLayout->setContentsMargins(12, 12, 12, 12);
-  mainLayout->setSpacing(12);
+  mainLayout->setContentsMargins(6, 6, 6, 6);
+  mainLayout->setSpacing(6);
 
   // ══ Left Panel ══════════════════════════════════════════════════════
   auto *left = new QVBoxLayout;
@@ -1067,17 +1313,18 @@ void ScanPage::setupUI() {
     m_portsInput->setPlaceholderText("22,80");
     m_portsInput->setMinimumWidth(150);
     h->addWidget(m_portsInput, 1, 1);
-    auto *btn = new QPushButton("创建扫描");
+    auto *btn = new QPushButton("创建并开始扫描");
     btn->setProperty("primary", true);
     h->addWidget(btn, 2, 1);
     layout->addLayout(h);
+    btn->setObjectName("scanSubmitButton");
     connect(btn, &QPushButton::clicked, this, &ScanPage::onCreateScan);
     // Task table
     auto *headerH = new QHBoxLayout;
     auto *label = new QLabel("端口扫描"); label->setStyleSheet(Theme::SectionStyle);
     headerH->addWidget(label);
     m_portScanCount = new QLabel;
-    m_portScanCount->setStyleSheet("color:#64748b; font-size:13px;");
+    m_portScanCount->setStyleSheet("color:#64748b; font-size:14px;");
     headerH->addWidget(m_portScanCount);
     headerH->addStretch();
     layout->addLayout(headerH);
@@ -1132,16 +1379,17 @@ void ScanPage::setupUI() {
     completer->setCaseSensitivity(Qt::CaseInsensitive);
     m_vulnTargetInput->setCompleter(completer);
     h->addWidget(m_vulnTargetInput, 0, 1);
-    auto *btn = new QPushButton("创建扫描");
+    auto *btn = new QPushButton("创建并开始扫描");
     btn->setProperty("primary", true);
     h->addWidget(btn, 2, 1);
     layout->addLayout(h);
+    btn->setObjectName("scanSubmitButton");
     connect(btn, &QPushButton::clicked, this, &ScanPage::onCreateScan);
     auto *headerH = new QHBoxLayout;
     auto *label = new QLabel("系统漏洞扫描"); label->setStyleSheet(Theme::SectionStyle);
     headerH->addWidget(label);
     m_vulnScanCount = new QLabel;
-    m_vulnScanCount->setStyleSheet("color:#64748b; font-size:13px;");
+    m_vulnScanCount->setStyleSheet("color:#64748b; font-size:14px;");
     headerH->addWidget(m_vulnScanCount);
     headerH->addStretch();
     layout->addLayout(headerH);
@@ -1198,16 +1446,17 @@ void ScanPage::setupUI() {
     m_cookieInput->setPlaceholderText("PHPSESSID=abc; security=low");
     m_cookieInput->setMinimumWidth(150);
     h->addWidget(m_cookieInput, 1, 1);
-    auto *btn = new QPushButton("创建扫描");
+    auto *btn = new QPushButton("创建并开始扫描");
     btn->setProperty("primary", true);
     h->addWidget(btn, 2, 1);
     layout->addLayout(h);
+    btn->setObjectName("scanSubmitButton");
     connect(btn, &QPushButton::clicked, this, &ScanPage::onCreateScan);
     auto *headerH = new QHBoxLayout;
     auto *label = new QLabel("网站漏洞扫描"); label->setStyleSheet(Theme::SectionStyle);
     headerH->addWidget(label);
     m_webScanCount = new QLabel;
-    m_webScanCount->setStyleSheet("color:#64748b; font-size:13px;");
+    m_webScanCount->setStyleSheet("color:#64748b; font-size:14px;");
     headerH->addWidget(m_webScanCount);
     headerH->addStretch();
     layout->addLayout(headerH);
@@ -1269,10 +1518,11 @@ void ScanPage::setupUI() {
       m_serviceCombo->addItem(pair.first, pair.second);
     }
     h->addWidget(m_serviceCombo, 1, 1);
-    auto *btn = new QPushButton("创建扫描");
+    auto *btn = new QPushButton("创建并开始扫描");
     btn->setProperty("primary", true);
     h->addWidget(btn, 2, 1);
     layout->addLayout(h);
+    btn->setObjectName("scanSubmitButton");
     connect(btn, &QPushButton::clicked, this, &ScanPage::onCreateScan);
     // Form definition row (only for http-post-form)
     auto *h2 = new QHBoxLayout;
@@ -1295,7 +1545,7 @@ void ScanPage::setupUI() {
     auto *label = new QLabel("弱口令扫描"); label->setStyleSheet(Theme::SectionStyle);
     headerH->addWidget(label);
     m_bruteForceCount = new QLabel;
-    m_bruteForceCount->setStyleSheet("color:#64748b; font-size:13px;");
+    m_bruteForceCount->setStyleSheet("color:#64748b; font-size:14px;");
     headerH->addWidget(m_bruteForceCount);
     headerH->addStretch();
     layout->addLayout(headerH);
@@ -1388,18 +1638,19 @@ void ScanPage::setupUI() {
     h->addWidget(m_sourceAdaptiveCheck, 5, 1, 1, 2);
     auto *hint = new QLabel("可提交源码地址、选择远端源码目录或指定程序运行入口；源码读取由远端 CScan 完成。也可进入上方“源码扫描”创建关联验证任务的源码审计。");
     hint->setWordWrap(true);
-    hint->setStyleSheet("color:#64748b; font-size:12px;");
+    hint->setStyleSheet("color:#64748b; font-size:14px;");
     h->addWidget(hint, 6, 0, 1, 3);
-    auto *btn = new QPushButton("创建测试");
+    auto *btn = new QPushButton("创建并开始测试");
     btn->setProperty("primary", true);
     h->addWidget(btn, 7, 1);
     layout->addLayout(h);
+    btn->setObjectName("scanSubmitButton");
     connect(btn, &QPushButton::clicked, this, &ScanPage::onCreateScan);
     auto *headerH = new QHBoxLayout;
     auto *label = new QLabel("程序漏洞测试"); label->setStyleSheet(Theme::SectionStyle);
     headerH->addWidget(label);
     m_sourceScanCount = new QLabel;
-    m_sourceScanCount->setStyleSheet("color:#64748b; font-size:13px;");
+    m_sourceScanCount->setStyleSheet("color:#64748b; font-size:14px;");
     headerH->addWidget(m_sourceScanCount);
     headerH->addStretch();
     layout->addLayout(headerH);
@@ -1465,6 +1716,11 @@ void ScanPage::setupUI() {
     auto *dialogLayout = new QVBoxLayout(formDialog);
     dialogLayout->setContentsMargins(20, 20, 20, 20);
     dialogLayout->addWidget(form);
+    auto *submissionMessage = new QLabel(formDialog);
+    submissionMessage->setObjectName("scanSubmissionMessage");
+    submissionMessage->setTextFormat(Qt::PlainText); submissionMessage->setWordWrap(true);
+    submissionMessage->setStyleSheet("font-size:14px;color:#ad6128;padding:8px 0;");
+    submissionMessage->hide(); dialogLayout->addWidget(submissionMessage);
     auto *cancel = new QDialogButtonBox(QDialogButtonBox::Cancel, formDialog);
     UiUtil::styleDialogButtons(cancel);
     cancel->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("取消"));
@@ -1486,6 +1742,7 @@ void ScanPage::setupUI() {
   connect(typePicker, QOverload<int>::of(&QComboBox::currentIndexChanged), m_scanTypeTabs, &QTabWidget::setCurrentIndex);
   connect(m_scanTypeTabs, &QTabWidget::currentChanged, typePicker, &QComboBox::setCurrentIndex);
   auto *taskTitle = new QLabel(QStringLiteral("扫描任务"));
+  taskTitle->setProperty("duplicateFeatureTitle", true);
   taskTitle->setObjectName("scanPanelTitle");
   auto *taskHint = new QLabel(QStringLiteral("按类型查看任务与扫描结果"));
   taskHint->setObjectName("scanPanelHint");
@@ -1525,15 +1782,15 @@ void ScanPage::setupUI() {
 
   // ══ Right Panel ═════════════════════════════════════════════════════
   auto *detailLayout = new QVBoxLayout;
-  detailLayout->setContentsMargins(14, 14, 14, 14);
-  detailLayout->setSpacing(10);
-  auto *detailTabs = new WorkbenchTabs;
+  detailLayout->setContentsMargins(8, 6, 8, 6);
+  detailLayout->setSpacing(6);
+  auto *detailTabs = new ActiveWorkbenchTabs;
   m_detailTabs = detailTabs;
   detailTabs->setObjectName("scanDetailTabs");
   auto *resultsPage = new QWidget;
   auto *right = new QVBoxLayout(resultsPage);
-  right->setContentsMargins(0, 12, 0, 0);
-  right->setSpacing(10);
+  right->setContentsMargins(0, 0, 0, 0);
+  right->setSpacing(6);
   auto *plansPage = new QWidget;
   auto *plansLayout = new QVBoxLayout(plansPage);
   plansLayout->setContentsMargins(0, 12, 0, 0);
@@ -1550,21 +1807,75 @@ void ScanPage::setupUI() {
   auto *heading = new QHBoxLayout;
   auto *pageTitle = new QLabel(QStringLiteral("扫描发现"));
   pageTitle->setObjectName("scanPanelTitle");
+  pageTitle->setProperty("duplicateFeatureTitle", true);
   heading->addWidget(pageTitle);
-  heading->addStretch();
+  pageTitle->hide();
+  heading->setSpacing(6);
   m_compactStatus = new QLabel(QStringLiteral("请选择扫描任务"));
   m_compactStatus->setObjectName("scanCompactStatus");
   m_compactStatus->setTextFormat(Qt::PlainText);
   heading->addWidget(m_compactStatus);
-  auto *checks = new QPushButton(QStringLiteral("查看检查详情"));
+  m_compactStatus->hide();
+  m_tasksToggle = new QPushButton(QStringLiteral("扫描任务"));
+  m_tasksToggle->setObjectName("toggleScanTasks");
+  m_tasksToggle->setCheckable(true);
+  m_tasksToggle->hide();
+  heading->addWidget(m_tasksToggle);
+  m_processToggle = new QPushButton(QStringLiteral("过程日志"));
+  m_processToggle->setObjectName("toggleScanProcess");
+  m_processToggle->setCheckable(true);
+  m_processToggle->hide();
+  heading->addWidget(m_processToggle);
+  auto *checks = new QPushButton(QStringLiteral("检查详情"));
   checks->setObjectName("scanCheckDetails");
-  heading->addWidget(checks);
   auto *manage = new QPushButton(QStringLiteral("管理扫描任务"));
   manage->setObjectName("manageScanTasks");
-  heading->addWidget(manage);
+  auto *scanActions = PageComponents::actionMenu(QStringLiteral("更多"), {checks, manage}, resultsPage);
+  scanActions->setObjectName("scanActionsMenu");
+  heading->addWidget(scanActions);
   connect(checks, &QPushButton::clicked, overviewDialog, [overviewDialog]() { overviewDialog->show(); overviewDialog->raise(); });
   connect(manage, &QPushButton::clicked, taskManager, [taskManager]() { taskManager->show(); taskManager->raise(); });
-  detailLayout->addLayout(heading);
+  auto *progressPanel = new QFrame;
+  progressPanel->setObjectName("scanProgressPanel");
+  progressPanel->setStyleSheet("QFrame#scanProgressPanel { background:transparent; border:none; }");
+  progressPanel->setMinimumWidth(120);
+  progressPanel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+  auto *progressLayout = new QHBoxLayout(progressPanel);
+  progressLayout->setContentsMargins(0, 0, 0, 0);
+  progressLayout->setSpacing(8);
+  m_progressText = new QLabel(QStringLiteral("扫描进度"));
+  m_progressText->setObjectName("scanProgressText");
+  m_progressText->setTextFormat(Qt::PlainText);
+  m_progressText->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+  m_progressText->setStyleSheet("color:#334155;background:transparent;border:none;font-size:14px;");
+  progressLayout->addWidget(m_progressText);
+  m_progressText->hide();
+  m_progressValue = new QLabel(QStringLiteral("--%"));
+  m_progressValue->setObjectName("scanProgressValue");
+  m_progressValue->setStyleSheet("color:#334155;background:transparent;border:none;font-size:14px;font-weight:600;");
+
+  m_progressState = new QLabel(QStringLiteral("● 待开始"));
+  m_progressState->setObjectName("scanProgressState");
+  m_progressState->setStyleSheet("color:#64748b;background:transparent;border:none;font-size:14px;font-weight:600;");
+
+  m_scanProgress = new QProgressBar;
+  m_scanProgress->setObjectName("scanProgressBar");
+  m_scanProgress->setTextVisible(false);
+  m_scanProgress->setFixedHeight(12);
+  m_scanProgress->setAccessibleName(QStringLiteral("扫描进度"));
+  m_scanProgress->setRange(0, 100); m_scanProgress->setValue(0);
+  m_scanProgress->setStyleSheet("QProgressBar { border:0;border-radius:6px;background:#e2e8f0; } QProgressBar::chunk { background:#2563eb;border-radius:6px; }");
+  progressLayout->addWidget(m_scanProgress, 1);
+  progressLayout->addWidget(m_progressValue);
+  progressLayout->addWidget(m_progressState);
+  heading->insertWidget(1, progressPanel, 1);
+  auto *quickCreate = new QPushButton(QStringLiteral("独立扫描"));
+  quickCreate->setObjectName("scanQuickCreate");
+  connect(quickCreate, &QPushButton::clicked, this, [this]() {
+    if (m_scopedTasks) return;
+    if (auto *button = m_scanTypeTabs->currentWidget()->findChild<QPushButton *>("scanCreateToggle")) button->click();
+  });
+  heading->addWidget(quickCreate);
 
   // ── Re-execute button (hidden by default) ─────────────────────────
   auto *reexecH = new QHBoxLayout;
@@ -1609,8 +1920,9 @@ void ScanPage::setupUI() {
   m_resultOverview = new ScanResultOverview(resultsPage);
   overviewLayout->addWidget(m_resultOverview);
   m_resultHint = new QLabel(QStringLiteral("点击名称查看完整证据；勾选漏洞后可准备验证"));
-  m_resultHint->setObjectName("scanPanelHint");
   m_resultHint->setWordWrap(true);
+  m_resultHint->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+  m_resultHint->setObjectName("scanPanelHint");
 
   m_coverageTree = new QTreeWidget(resultsPage);
   m_coverageTree->setObjectName(QStringLiteral("scanCoverageTree"));
@@ -1628,7 +1940,8 @@ void ScanPage::setupUI() {
   connect(m_sourceDemoBtn, &QPushButton::clicked, this, &ScanPage::selectSourceDemonstration);
   m_webScanProcess = new QPlainTextEdit(resultsPage);
   m_webScanProcess->setObjectName("webScanProcess"); m_webScanProcess->setReadOnly(true);
-  m_webScanProcess->setMaximumHeight(150); m_webScanProcess->hide(); right->addWidget(m_webScanProcess);
+  m_webScanProcess->setFixedHeight(104); m_webScanProcess->hide(); right->addWidget(m_webScanProcess);
+  connect(m_processToggle, &QPushButton::toggled, m_webScanProcess, &QWidget::setVisible);
   m_sourceDetailButton=new QPushButton(QStringLiteral("打开源码扫描详情"));
   m_sourceDetailButton->setObjectName("openSourceScanDetail");m_sourceDetailButton->hide();
   m_sourceDetailButton->setToolTip(QStringLiteral("按文件查看源码、扫描进度和发现依据；也可直接点击列表中的漏洞。"));
@@ -1643,28 +1956,34 @@ void ScanPage::setupUI() {
   m_resultTree->installEventFilter(this);
   connect(m_resultTree, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem *item, int column) {
     if (column == 1) openRecordDetails(item);
+    if (column == 3 && item->parent() && item->data(0, Qt::UserRole+2).toString() == "vulnerability")
+      openFindingPayload(item->data(0, Qt::UserRole+1).toLongLong());
+    if (column == 8) showClassificationDetails(item);
   });
   UiUtil::EmptyHint::attach(m_resultTree, QStringLiteral("扫描完成后在此展示结果"));
   m_resultTree->setHeaderLabels({"选择 / 编号", "漏洞名称 / 记录内容", "来源工具", "载荷情况",
-    "严重性", "目标与位置", "测试状态", "验证结论"});
+    "严重性", "目标与位置", "测试状态", "验证结论", "AI 场景分类"});
   // Keep identity and independent status/result visible first; location and source remain horizontally reachable.
-  const QList<int> visualOrder{0, 4, 1, 5, 6, 7, 3, 2};
+  const QList<int> visualOrder{0, 4, 1, 3, 5, 8, 6, 7, 2};
   for (int visual = 0; visual < visualOrder.size(); ++visual)
     m_resultTree->header()->moveSection(m_resultTree->header()->visualIndex(visualOrder[visual]), visual);
   m_resultTree->headerItem()->setToolTip(0, "稳定发现 ID；扫描结果表自增编号，用于跨筛选、分页和验证追溯。");
+  m_resultTree->headerItem()->setToolTip(3, "库中匹配与本漏洞代码分别展示；点击漏洞的载荷状态查看或生成代码。");
   m_resultTree->headerItem()->setToolTip(7, "来自系统验证目标与证据；不将工具成功或人工意见替代为自动结论。");
+  m_resultTree->headerItem()->setToolTip(8, "按需求中的五类攻击场景进行候选归类；点击查看依据和待补条件，不代表攻击成功。");
   m_resultTree->setAlternatingRowColors(true);
   m_resultTree->setSelectionMode(QAbstractItemView::ExtendedSelection);
   m_resultTree->setStyleSheet(findingIndicatorStyle("QTreeWidget#scanResultTree")
     + "QTreeWidget#scanResultTree { color:#172033; }"
       "QTreeWidget#scanResultTree::item:selected { color:#1e3a8a; }");
-  auto *selectionBar = new QHBoxLayout;
+  auto *listHeader = new QHBoxLayout;
+  auto *selectionBar = listHeader;
   m_listTitle = new QLabel(QStringLiteral("漏洞候选"));
   m_listTitle->setObjectName("scanListTitle");
-  m_listTitle->setStyleSheet(Theme::SectionStyle);
-  selectionBar->addWidget(m_listTitle);
-  selectionBar->addStretch();
-  m_selectAllFindings = new FindingSelectAllCheckBox("全选当前列表");
+  m_listTitle->setStyleSheet("color:#334155;font-size:14px;font-weight:600;background:transparent;border:none;");
+  m_listTitle->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+  listHeader->addWidget(m_listTitle, 1);
+  m_selectAllFindings = new FindingSelectAllCheckBox("全选");
   m_selectAllFindings->setObjectName("selectAllCurrentFindings");
   m_selectAllFindings->setTristate(true);
   m_selectAllFindings->setStyleSheet(findingIndicatorStyle("QCheckBox#selectAllCurrentFindings")
@@ -1673,20 +1992,43 @@ void ScanPage::setupUI() {
   m_selectAllFindings->setToolTip("仅选择当前筛选下已加载的漏洞，包含折叠分组；加载更多后可再次全选。");
   m_findingSelectionCount = new QLabel;
   m_findingSelectionCount->setObjectName("findingSelectionCount");
-  m_findingSelectionCount->setStyleSheet("QLabel#findingSelectionCount { color:#172033; }");
-  m_openCheckedFindings = new QPushButton("打开勾选的漏洞");
+  m_findingSelectionCount->setStyleSheet("QLabel#findingSelectionCount { color:#64748b; font-size:14px; }");
+  m_openCheckedFindings = new QPushButton("打开勾选");
   m_openCheckedFindings->setObjectName("openCheckedFindings");
   m_openCheckedFindings->setToolTip("只打开当前列表勾选的漏洞；打开窗口不会启动验证。");
+  auto *payloadButton = new QPushButton(QStringLiteral("查看 / 生成载荷"));
+  payloadButton->setObjectName("scanPayloadWorkspace");
+  connect(payloadButton, &QPushButton::clicked, this, &ScanPage::openPayloadWorkspace);
+  payloadButton->setToolTip(QStringLiteral("打开选中漏洞的载荷代码；未选择漏洞时可从当前任务中选择。"));
+  m_prepareFinding = new QPushButton(QStringLiteral("逐漏洞攻击测试"));
+  m_prepareFinding->setToolTip(QStringLiteral("带入当前发现和目标，选择已有方案或按需生成；打开窗口不会执行测试。"));
+  m_prepareFinding->setObjectName("prepareSelectedFinding");
+  m_prepareFinding->setEnabled(false);
+  connect(m_prepareFinding, &QPushButton::clicked, this, &ScanPage::prepareCurrentFinding);
+  connect(m_resultTree, &QTreeWidget::currentItemChanged, this, [this]() { ++m_findingActionRevision; updatePrepareFindingButton(); });
+  m_classifyFindings = new QPushButton(QStringLiteral("AI 分类"));
+  m_classifyFindings->setObjectName("classifySelectedFindings");
+  m_classifyFindings->setToolTip(QStringLiteral("使用已配置模型分析勾选漏洞；分类结果保存后可复用，也可重新分类。"));
+  auto *classificationMenu = new QMenu(m_classifyFindings);
+  auto *classify = classificationMenu->addAction(QStringLiteral("分类勾选漏洞（复用已有结果）"));
+  classify->setObjectName("classifyFindingsCached");
+  connect(classify, &QAction::triggered, this, [this]() { classifySelectedFindings(false); });
+  auto *reclassify = classificationMenu->addAction(QStringLiteral("重新分类勾选漏洞"));
+  reclassify->setObjectName("reclassifyFindings");
+  connect(reclassify, &QAction::triggered, this, [this]() { classifySelectedFindings(true); });
+  m_classifyFindings->setMenu(classificationMenu);
   selectionBar->addWidget(m_selectAllFindings);
   selectionBar->addWidget(m_findingSelectionCount);
-  selectionBar->addStretch();
+  selectionBar->addWidget(payloadButton);
+  selectionBar->addWidget(m_prepareFinding);
+  selectionBar->addWidget(m_classifyFindings);
   selectionBar->addWidget(m_openCheckedFindings);
   right->addLayout(selectionBar);
   connect(m_selectAllFindings, &QCheckBox::clicked, this, [this]() {
     setCurrentFindingsChecked(m_selectAllFindings->checkState() == Qt::Checked);
   });
   connect(m_openCheckedFindings, &QPushButton::clicked, this, [this]() {
-    if (m_pipelineId.isEmpty() || m_scanPageBusy) return;
+    if (m_pipelineId.isEmpty() || m_scanPageBusy || !m_scanResultsFresh) return;
     QList<qint64> ids;
     for (auto *item : selectableFindingItems())
       if (item->checkState(0) == Qt::Checked)
@@ -1711,6 +2053,12 @@ void ScanPage::setupUI() {
   m_resultTree->setIndentation(12);
   for (int column : {2, 3, 7}) m_resultTree->setColumnHidden(column, true);
   right->addWidget(m_resultTree, 1);
+  m_classificationStatus = new QLabel;
+  m_classificationStatus->setObjectName("findingClassificationStatus");
+  m_classificationStatus->setWordWrap(true);
+  m_classificationStatus->setStyleSheet("color:#475569; padding:4px 0;");
+  m_classificationStatus->hide();
+  right->addWidget(m_classificationStatus);
   auto *footer = new QHBoxLayout;
   footer->addWidget(m_resultHint, 1);
   m_showAllRecords = new QPushButton(QStringLiteral("查看全部记录"));
@@ -1735,6 +2083,8 @@ void ScanPage::setupUI() {
     // Copy the most useful column (data column = 1 for child items, 0 for group items)
     QString text = item->text(1).isEmpty() ? item->text(0) : item->text(1);
     menu.addAction("复制内容", [text]() { QApplication::clipboard()->setText(text); });
+    if (!m_pipelineId.isEmpty() && item->parent() && item->data(0, Qt::UserRole+2).toString() == "vulnerability")
+      menu.addAction("查看 / 生成此漏洞载荷代码", [this, item]() { openFindingPayload(item->data(0, Qt::UserRole+1).toLongLong()); });
     if (m_allScanResults && item->parent() && item->data(0, Qt::UserRole+2).toString() == "vulnerability")
       menu.addAction("查看 / 关联匹配载荷", [this, item]() { showPayloadMatches(item); });
     if (!m_pipelineId.isEmpty() && item->data(0,Qt::UserRole+1).toLongLong()>0
@@ -1762,9 +2112,9 @@ void ScanPage::setupUI() {
     const QStringList attackable = {"vulnerability", "web_vuln", "sql_injection", "credential"};
     if (m_pipelineId.isEmpty() && !m_allScanResults && !m_currentTaskTarget.isEmpty() && attackable.contains(resultType)) {
       menu.addSeparator();
-      menu.addAction("⚔ 对此漏洞发起攻击", [this, item, resultType]() {
-        const QString raw = item->toolTip(1);  // 优先原始 JSON（关键词更全），展示文本兜底
-        emit attackRequested(m_currentTaskTarget, raw.isEmpty() ? item->text(1) : raw, resultType);
+      menu.addAction("逐漏洞攻击测试", [this, item]() {
+        m_resultTree->setCurrentItem(item);
+        prepareCurrentFinding();
       });
     }
     menu.exec(m_resultTree->viewport()->mapToGlobal(pos));
@@ -1869,27 +2219,71 @@ void ScanPage::setupUI() {
   };
   detailTabs->addTab(resultsPage, QStringLiteral("漏洞与记录"));
   detailTabs->addTab(scrollableDetail(plansPage), QStringLiteral("推荐与生成方案"));
+  detailTabs->tabBar()->hide();
   detailLayout->addWidget(detailTabs, 1);
   rightW->setLayout(detailLayout);
   rightW->setMinimumWidth(350);
 
-  auto *scanWorkspaces = new QTabWidget(this);
+  auto *scanWorkspaces = new ActiveWorkbenchTabs(this);
   scanWorkspaces->setObjectName("scanWorkspaces");
   scanWorkspaces->addTab(rightW, QStringLiteral("漏洞与历史扫描"));
   auto *sourceSlot=new QWidget(scanWorkspaces);
   sourceSlot->setObjectName("sourceFlowWorkspaceSlot");
   scanWorkspaces->addTab(sourceSlot, QStringLiteral("源码扫描"));
+  scanWorkspaces->tabBar()->hide();
+  auto *viewPicker = new QComboBox(this);
+  viewPicker->setObjectName("scanViewPicker");
+  viewPicker->addItems({QStringLiteral("漏洞列表"), QStringLiteral("推荐与生成方案"), QStringLiteral("源码扫描")});
+  viewPicker->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+  auto *networkToolbar = new QWidget(this);
+  networkToolbar->setObjectName("scanToolbarActions");
+  heading->setContentsMargins(0, 0, 0, 0);
+  networkToolbar->setLayout(heading);
+  auto *workspaceToolbar = new QHBoxLayout;
+  workspaceToolbar->setSpacing(8);
+  workspaceToolbar->setAlignment(Qt::AlignLeft);
+  workspaceToolbar->addWidget(viewPicker, 0, Qt::AlignLeft);
+  workspaceToolbar->addWidget(networkToolbar, 1);
+  mainLayout->insertLayout(0, workspaceToolbar);
+  m_scanIssueSummary = new QLabel(this);
+  m_scanIssueSummary->setObjectName("scanIssueSummary");
+  m_scanIssueSummary->setTextFormat(Qt::PlainText); m_scanIssueSummary->setWordWrap(true);
+  m_scanIssueSummary->setStyleSheet("color:#92400e;background:#fffbeb;padding:6px 10px;font-size:14px;");
+  m_scanIssueSummary->hide(); mainLayout->insertWidget(1, m_scanIssueSummary);
+  connect(scanWorkspaces, &QTabWidget::currentChanged, networkToolbar, [networkToolbar](int index) {
+    networkToolbar->setVisible(index == 0);
+  });
+  connect(viewPicker, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this, scanWorkspaces](int index) {
+    if (index < 2) m_detailTabs->setCurrentIndex(index);
+    scanWorkspaces->setCurrentIndex(index == 2 ? 1 : 0);
+  });
+  connect(m_detailTabs, &QTabWidget::currentChanged, this, [viewPicker, scanWorkspaces](int index) {
+    if (scanWorkspaces->currentIndex() != 0) return;
+    const QSignalBlocker blocker(viewPicker); viewPicker->setCurrentIndex(index);
+  });
+  connect(scanWorkspaces, &QTabWidget::currentChanged, this, [this, viewPicker](int index) {
+    const QSignalBlocker blocker(viewPicker);
+    viewPicker->setCurrentIndex(index == 1 ? 2 : m_detailTabs->currentIndex());
+  });
   connect(scanWorkspaces,&QTabWidget::currentChanged,this,[this,scanWorkspaces,sourceSlot](int index){
+    const bool source = index == scanWorkspaces->indexOf(sourceSlot);
+    if (property("ribbonWorkspace").toBool())
+      if (auto *tasks = findChild<QFrame *>("scanTasksPanel")) tasks->setVisible(!source && m_tasksToggle->isChecked());
+    emit workspaceViewChanged(source);
     if(index!=scanWorkspaces->indexOf(sourceSlot) || sourceSlot->layout())return;
     auto *layout=new QVBoxLayout(sourceSlot);
     layout->setContentsMargins(0,0,0,0);
-    layout->addWidget(new PentagiSourceScanHost(m_api,sourceSlot));
+    auto *host = new PentagiSourceScanHost(m_api,sourceSlot);
+    host->verificationRequested = [this](const QString &pipeline, const QList<qint64> &findings) {
+      emit testContextRequested(pipeline, findings);
+    };
+    layout->addWidget(host);
   });
   mainLayout->addWidget(scanWorkspaces, 1);
 
   for (auto *table : {m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable}) {
     table->verticalHeader()->hide();
-    table->verticalHeader()->setDefaultSectionSize(36);
+    table->verticalHeader()->setDefaultSectionSize(46);
     table->horizontalHeader()->setStretchLastSection(false);
     table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     table->setColumnWidth(1, 76);
@@ -1934,6 +2328,8 @@ void ScanPage::setupUI() {
 
 // ── Update status label from task detail object ───────────────────────
 void ScanPage::updateStatusLabel(const QJsonObject &d) {
+  m_scanResultsFresh = true;
+  m_prepareFinding->setProperty("scanStatus", d["status"].toString());
   QString status = d["status"].toString();
   QString target = d["target"].toString();
   QString scanType = formatScanType(d["scan_type"].toString());
@@ -2013,6 +2409,19 @@ void ScanPage::updateStatusLabel(const QJsonObject &d) {
     else if (parts.contains(QStringLiteral("正在导入漏洞"))) m_compactStatus->setText(QStringLiteral("正在导入漏洞"));
     else if (parts.contains(QStringLiteral("报告已收齐，准备解析"))) m_compactStatus->setText(QStringLiteral("报告已收齐，准备解析"));
   }
+  const bool active = status == "PENDING" || status == "RUNNING";
+  int finishedSubtasks = 0, totalSubtasks = 0;
+  for (const auto &value : arr) {
+    const auto row = value.toObject();
+    if (row["result_type"].toString() != "source_coverage") continue;
+    const auto progress = QJsonDocument::fromJson(row["result_data"].toString().toUtf8()).object()
+        ["cscan"].toObject()["subtask_progress"].toObject();
+    finishedSubtasks = progress["finished"].toInt(); totalSubtasks = progress["total"].toInt();
+  }
+  setScanProgress(m_compactStatus->text(), active, active ? finishedSubtasks : 1, active ? totalSubtasks : 1,
+      active ? m_sourceResultsView ? m_sourceProgressText
+        : status == "PENDING" ? QStringLiteral("任务已排队，等待扫描器开始执行。")
+        : QStringLiteral("当前检查：%1，等待扫描器返回结果。").arg(scanType) : QString());
   if (status == "FAILED")
     m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
   else if (status == "PARTIAL" || (status == "COMPLETED" && !structured))
@@ -2027,13 +2436,41 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
   if (m_sourceResultsView && !m_allScanResults) m_sourceRecords = results;
   for (const auto &value : results) {
     const auto row=value.toObject();
+    if (m_allScanResults && !m_ribbonScanType.isEmpty()) {
+      const QString sourceType = m_scanSourceTypes.value(row["scan_task_id"].toString());
+      if (!ribbonScanTypeMatches(m_ribbonScanType, sourceType)) continue;
+    }
     if (m_sourceResultsView && !m_sourceRecordsMode && row["result_type"].toString() != "source_finding") continue;
     if (m_sourceResultsView && m_sourceRecordsMode && (isProgramFinding(row["result_type"].toString()) || isVerificationRecord(row))) continue;
     if (m_sourceResultsView && m_sourceResultsPending && row["result_type"].toString() == "source_finding") continue;
     visibleResults.append(value);
   }
   const QSignalBlocker blocker(m_resultTree);
-  if (!m_allScanResults && m_webScanProcess) { m_webScanProcess->clear(); m_webScanProcess->hide(); }
+  const QByteArray rendered = QJsonDocument(QJsonObject{{"rows", visibleResults}, {"pipeline", m_pipelineId},
+      {"task", m_selectedTaskId}, {"aggregate", m_allScanResults}, {"source", m_sourceResultsView},
+      {"pending", m_sourceResultsPending}, {"records", m_sourceRecordsMode},
+      {"notice", m_sourceProgressText}}).toJson(QJsonDocument::Compact);
+  if (rendered == m_renderedResults) { updateFindingSelection(); return; }
+  m_renderedResults = rendered;
+  const int scroll = m_resultTree->verticalScrollBar()->value();
+  const int horizontalScroll = m_resultTree->horizontalScrollBar()->value();
+  const auto identity = [](QTreeWidgetItem *item) {
+    const auto id = item->data(0, Qt::UserRole+1).toLongLong();
+    return id > 0 ? QString::number(id) : item->data(0, Qt::UserRole).toString() + "|" + item->toolTip(1);
+  };
+  QSet<QString> selected;
+  QString current;
+  QMap<QString, bool> expanded;
+  for (QTreeWidgetItemIterator it(m_resultTree); *it; ++it) {
+    auto *item = *it;
+    if (!item->parent()) expanded[item->text(0).section('(', 0, 0).trimmed()] = item->isExpanded();
+    else {
+      if (item->isSelected()) selected.insert(identity(item));
+      if (item == m_resultTree->currentItem()) current = identity(item);
+    }
+  }
+  m_resultTree->setUpdatesEnabled(false);
+  if (!m_allScanResults && m_webScanProcess) { m_webScanProcess->clear(); m_webScanProcess->hide(); m_processToggle->hide(); }
   m_resultOverview->setResults(visibleResults);
   m_resultOverview->setVisible(!m_sourceResultsView || !m_sourceResultsPending);
   m_resultTree->setRootIndex(QModelIndex());
@@ -2161,21 +2598,21 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
   if (candidatesOnly && m_resultTree->topLevelItemCount() == 1)
     m_resultTree->setRootIndex(m_resultTree->model()->index(0, 0));
   m_resultTree->setRootIsDecorated(!candidatesOnly);
-  m_resultTree->setHeaderLabels({"选择", "漏洞名称 / 记录内容", "来源工具", "载荷情况", "严重性", "目标 / 位置", "验证状态", "验证结论"});
-  for (int column : {2, 3, 7}) m_resultTree->setColumnHidden(column, true);
+  m_resultTree->setHeaderLabels({"选择", "漏洞名称 / 记录内容", "来源工具", "载荷情况", "严重性", "目标 / 位置", "验证状态", "验证结论", "AI 场景分类"});
+  m_resultTree->setColumnHidden(8, !m_allScanResults);
+  for (int column : {2, 7}) m_resultTree->setColumnHidden(column, true);
+  m_resultTree->setColumnHidden(3, m_pipelineId.isEmpty());
   if (sourceTable) {
-    m_resultTree->setHeaderLabels({"选择", "漏洞名称", "来源工具", "CWE", "严重性", "源码文件 / 行号", "验证状态", "验证结论"});
-    m_resultTree->setColumnHidden(3, false);
+    m_resultTree->setHeaderLabels({"选择", "漏洞名称 / CWE", "来源工具", "载荷情况", "严重性", "源码文件 / 行号", "验证状态", "验证结论", "AI 场景分类"});
     m_resultTree->setColumnHidden(7, false);
-    m_resultTree->setColumnWidth(3, 90);
   }
   for (QTreeWidgetItemIterator it(m_resultTree); *it; ++it) {
     if (!(*it)->parent()) continue;
     if (sourceTable) {
       const auto data=QJsonDocument::fromJson((*it)->toolTip(1).toUtf8()).object();
-      (*it)->setText(1,data["title"].toString((*it)->text(1)));
-      (*it)->setText(3,data["cwe"].toString(QStringLiteral("—")));
-      (*it)->setToolTip(3,QStringLiteral("漏洞类别"));
+      QString title = data["title"].toString((*it)->text(1));
+      if (!data["cwe"].toString().isEmpty() && !title.contains(data["cwe"].toString())) title += " · " + data["cwe"].toString();
+      (*it)->setText(1,title);
       (*it)->setText(5,QStringLiteral("%1:%2").arg(data["file"].toString()).arg(data["start_line"].toInt()));
     }
     (*it)->setToolTip(0, QStringLiteral("发现编号：") + (*it)->text(0));
@@ -2197,12 +2634,28 @@ void ScanPage::renderGroupedResults(const QJsonArray &results) {
   m_selectAllFindings->setVisible(canSelect);
   m_findingSelectionCount->setVisible(canSelect);
   m_openCheckedFindings->setVisible(canSelect);
+  m_classifyFindings->setVisible(canSelect && m_allScanResults);
   if(m_sourceResultsView) {
     m_sourceDemoBtn->hide();
     if(!m_sourceRecordsMode)m_resultHint->setText(m_sourceResultsPending ? m_sourceProgressText
       : QStringLiteral("点击漏洞查看源码依据；勾选漏洞后可准备测试，打开弹窗不会执行测试。"));
     if(m_openSourceDetailsRequested){m_openSourceDetailsRequested=false;openSourceScanDetails();}
   }
+  for (QTreeWidgetItemIterator it(m_resultTree); *it; ++it) {
+    auto *item = *it;
+    if (!item->parent()) {
+      const auto key = item->text(0).section('(', 0, 0).trimmed();
+      if (expanded.contains(key)) item->setExpanded(expanded.value(key));
+    } else {
+      if (identity(item) == current) m_resultTree->setCurrentItem(item, 0, QItemSelectionModel::NoUpdate);
+      item->setSelected(selected.contains(identity(item)));
+    }
+  }
+  m_resultTree->doItemsLayout();
+  m_resultTree->verticalScrollBar()->setValue(scroll);
+  m_resultTree->horizontalScrollBar()->setValue(horizontalScroll);
+  m_resultTree->setUpdatesEnabled(true);
+  updatePrepareFindingButton();
 }
 
 QList<QTreeWidgetItem*> ScanPage::selectableFindingItems() const {
@@ -2220,6 +2673,7 @@ QList<QTreeWidgetItem*> ScanPage::selectableFindingItems() const {
 }
 
 void ScanPage::updateFindingSelection() {
+  updatePrepareFindingButton();
   if (!m_selectAllFindings) return;
   const auto items = selectableFindingItems();
   int selected = 0;
@@ -2227,13 +2681,137 @@ void ScanPage::updateFindingSelection() {
   const QSignalBlocker blocker(m_selectAllFindings);
   m_selectAllFindings->setCheckState(selected == 0 ? Qt::Unchecked
     : selected == items.size() ? Qt::Checked : Qt::PartiallyChecked);
-  m_selectAllFindings->setEnabled(!m_scanPageBusy && !items.isEmpty());
+  m_selectAllFindings->setEnabled(!m_scanPageBusy && m_scanResultsFresh && !items.isEmpty());
   m_findingSelectionCount->setText(QString("已选 %1 / 可选 %2 条").arg(selected).arg(items.size()));
-  m_openCheckedFindings->setEnabled(!m_scanPageBusy && selected > 0);
+  m_openCheckedFindings->setEnabled(!m_scanPageBusy && m_scanResultsFresh && selected > 0);
+  m_classifyFindings->setEnabled(!m_scanPageBusy && m_scanResultsFresh && !m_classificationBusy && m_allScanResults && selected > 0);
+  m_resultCategory->setEnabled(!m_classificationBusy);
+  m_resultSource->setEnabled(!m_classificationBusy);
+  m_allResultsButton->setEnabled(!m_classificationBusy && !m_scanPageBusy);
+}
+
+void ScanPage::classifySelectedFindings(bool force) {
+  if (m_classificationBusy || m_scanPageBusy || !m_scanResultsFresh || m_pipelineId.isEmpty() || !m_allScanResults) return;
+  m_classificationQueue.clear();
+  for (auto *item : selectableFindingItems())
+    if (item->checkState(0) == Qt::Checked) m_classificationQueue.append(item->data(0, Qt::UserRole+1).toLongLong());
+  if (m_classificationQueue.isEmpty()) return;
+  ++m_classificationRevision;
+  m_classificationBusy = true;
+  m_classificationForce = force;
+  m_classificationDone = 0;
+  m_classificationTotal = m_classificationQueue.size();
+  m_classificationPipeline = m_pipelineId;
+  m_classificationScope = m_scopeRevision;
+  m_classificationMoreEnabled = m_moreResultsButton->isEnabled();
+  m_moreResultsButton->setEnabled(false);
+  m_classificationStatus->show();
+  updateFindingSelection();
+  classifyNextBatch();
+}
+
+void ScanPage::classifyNextBatch() {
+  if (!m_classificationBusy || m_classificationPipeline != m_pipelineId || m_classificationScope != m_scopeRevision) return;
+  if (m_classificationQueue.isEmpty()) {
+    m_classificationBusy = false;
+    m_moreResultsButton->setEnabled(m_classificationMoreEnabled);
+    m_classificationStatus->setText(QStringLiteral("AI 分类完成 %1 / %2 条 · 点击分类标签查看依据；分类不代表验证成功。")
+      .arg(m_classificationDone).arg(m_classificationTotal));
+    updateFindingSelection();
+    return;
+  }
+  QJsonArray ids;
+  while (!m_classificationQueue.isEmpty() && ids.size() < 10) ids.append(double(m_classificationQueue.takeFirst()));
+  m_classificationStatus->setText(QStringLiteral("AI 分类中 %1 / %2 条 · 正在分析本批 %3 条…")
+    .arg(m_classificationDone).arg(m_classificationTotal).arg(ids.size()));
+  const int revision = m_classificationRevision;
+  const int scope = m_classificationScope;
+  const QString pipeline = m_classificationPipeline;
+  QPointer<ScanPage> guard(this);
+  m_api->post("/api/pipelines/" + pipeline + "/results/classifications",
+    {{"finding_ids", ids}, {"force", m_classificationForce}}, 150000,
+    [this, guard, revision, scope, pipeline, ids](const QJsonObject &response) {
+      if (!guard || revision != m_classificationRevision || scope != m_scopeRevision || pipeline != m_pipelineId) return;
+      if (response["status"].toString() != "ok") {
+        m_classificationBusy = false;
+        m_moreResultsButton->setEnabled(m_classificationMoreEnabled);
+        m_classificationQueue.clear();
+        m_classificationStatus->setText(QStringLiteral("AI 分类未完成（已完成 %1 / %2 条）：%3。已有分类保留，可重试。")
+          .arg(m_classificationDone).arg(m_classificationTotal)
+          .arg(response["error"].toObject()["message"].toString(QStringLiteral("请求失败"))));
+        updateFindingSelection();
+        return;
+      }
+      const auto items = response["data"].toObject()["items"].toArray();
+      QMap<qint64, QJsonObject> results;
+      QSet<qint64> expected;
+      for (const auto &id : ids) expected.insert(id.toVariant().toLongLong());
+      for (const auto &value : items) {
+        const auto item = value.toObject();
+        const auto id = item["finding_id"].toVariant().toLongLong();
+        if (!expected.contains(id) || results.contains(id) || !item["classification"].isObject()) break;
+        results.insert(id, item["classification"].toObject());
+      }
+      if (results.size() != expected.size() || items.size() != ids.size()) {
+        m_classificationBusy = false;
+        m_moreResultsButton->setEnabled(m_classificationMoreEnabled);
+        m_classificationQueue.clear();
+        m_classificationStatus->setText(QStringLiteral("分类响应编号不完整，请刷新后重试；已有分类保留。"));
+        updateFindingSelection();
+        return;
+      }
+      for (int i = 0; i < m_aggregateRecords.size(); ++i) {
+        auto row = m_aggregateRecords.at(i).toObject();
+        const auto id = row["id"].toVariant().toLongLong();
+        if (results.contains(id)) { row["classification"] = results[id]; m_aggregateRecords[i] = row; }
+      }
+      {
+        const QSignalBlocker blocker(m_resultTree);
+        for (QTreeWidgetItemIterator it(m_resultTree); *it; ++it) {
+          const auto id = (*it)->data(0, Qt::UserRole+1).toLongLong();
+          if ((*it)->parent() && results.contains(id))
+            showFindingClassification(*it, {{"category", "vulnerability"}, {"classification", results[id]}});
+        }
+      }
+      m_classificationDone += items.size();
+      classifyNextBatch();
+    });
+}
+
+void ScanPage::showClassificationDetails(QTreeWidgetItem *item) {
+  if (!item || !item->parent() || item->data(0, Qt::UserRole+2).toString() != "vulnerability") return;
+  for (auto *old : findChildren<QDialog*>("scanAuxClassification")) old->close();
+  auto *dialog = new QDialog(this);
+  dialog->setObjectName("scanAuxClassification");
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  dialog->setWindowTitle(QStringLiteral("AI 场景分类依据"));
+  dialog->resize(680, 440);
+  auto *layout = new QVBoxLayout(dialog);
+  auto *details = new QPlainTextEdit;
+  details->setReadOnly(true);
+  details->setPlainText(QStringLiteral("漏洞：%1\n发现编号：%2\n\n%3").arg(item->text(1), item->text(0), item->toolTip(8)));
+  layout->addWidget(details);
+  auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close);
+  buttons->button(QDialogButtonBox::Close)->setText(QStringLiteral("关闭"));
+  connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::close);
+  layout->addWidget(buttons);
+  dialog->show();
+}
+
+void ScanPage::resetFindingClassification() {
+  ++m_classificationRevision;
+  if (m_classificationBusy && m_moreResultsButton) m_moreResultsButton->setEnabled(m_classificationMoreEnabled);
+  m_classificationBusy = false;
+  m_classificationQueue.clear();
+  m_classificationPipeline.clear();
+  m_classificationDone = 0;
+  m_classificationTotal = 0;
+  if (m_classificationStatus) { m_classificationStatus->clear(); m_classificationStatus->hide(); }
+  for (auto *dialog : findChildren<QDialog*>("scanAuxClassification")) dialog->close();
 }
 
 void ScanPage::setCurrentFindingsChecked(bool checked) {
-  if (m_scanPageBusy) return;
+  if (m_scanPageBusy || !m_scanResultsFresh) return;
   const QSignalBlocker blocker(m_resultTree);
   for (auto *item : selectableFindingItems()) {
     const auto id = item->data(0, Qt::UserRole+1).toLongLong();
@@ -2402,6 +2980,7 @@ void ScanPage::showPayloadMatches(QTreeWidgetItem *item) {
 
 // ── Create scan (auto-execute) ───────────────────────────────────────
 void ScanPage::onCreateScan() {
+  if (m_scanCreationBusy) return;
   // Determine scan type from current tab
   int tabIdx = m_scanTypeTabs->currentIndex();
   QString scanType;
@@ -2416,7 +2995,7 @@ void ScanPage::onCreateScan() {
   }
 
   if (target.isEmpty()) {
-    setStatusText("请先填写扫描目标。");
+    setScanSubmissionMessage("请先填写扫描目标。");
     m_statusLabel->setStyleSheet(Theme::StatusWarningStyle);
     return;
   }
@@ -2462,7 +3041,7 @@ void ScanPage::onCreateScan() {
   if (isProgramScan(scanType)) {
     if(m_programInputKind->currentData().toString()=="remote_directory") {
       if(!m_remoteSourcePicker->hasSelection()) {
-        setStatusText("请先浏览并选择目标主机的源码文件夹。");return;
+        setScanSubmissionMessage("请先浏览并选择目标主机的源码文件夹。");return;
       }
       parameters=m_remoteSourcePicker->selection();
     }
@@ -2473,41 +3052,45 @@ void ScanPage::onCreateScan() {
   }
   if (!parameters.isEmpty()) body["parameters"] = parameters;
 
-  m_api->post("/api/scan-tasks", body, 10000, [this](const QJsonObject &res) {
-    if (res["status"].toString() != "ok") {
-      setStatusText("创建扫描任务失败：" + res["error"].toObject()["message"].toString());
-      m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
+  const int scope = m_scopeRevision;
+  const int originTab = tabIdx;
+  const QPointer<ScanPage> guard(this);
+  setScanCreationBusy(true);
+  setScanSubmissionMessage(QStringLiteral("正在创建扫描任务，请等待服务器返回编号…"));
+  m_api->post("/api/scan-tasks", body, 10000, [this, guard, scope, originTab](const QJsonObject &response) {
+    if (!guard) return;
+    const bool visibleContext = scope == m_scopeRevision && originTab == m_scanTypeTabs->currentIndex();
+    const QString taskId = response["data"].toObject()["scan_task_id"].toString();
+    if (response["status"] != "ok" || taskId.isEmpty()) {
+      setScanCreationBusy(false);
+      if (visibleContext) {
+        setScanSubmissionMessage(QStringLiteral("创建扫描任务失败：") + response["error"].toObject()["message"].toString(QStringLiteral("未返回有效扫描编号，请刷新列表核对后重试。")));
+        m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
+      }
       return;
     }
-    for (auto *dialog : findChildren<QDialog*>("scanCreateDialog")) dialog->accept();
-    QString taskId = res["data"].toObject()["scan_task_id"].toString();
-    m_selectedTaskId = taskId;
-    setStatusText(QString("已创建: %1 — 正在自动执行...").arg(taskId.left(16)));
-    m_statusLabel->setStyleSheet(Theme::StatusSuccessStyle);
-    // Clear the target input for the current tab
-    int tabIdx = m_scanTypeTabs->currentIndex();
-    switch (tabIdx) {
-      case 0: m_portTargetInput->clear(); m_portsInput->clear(); break;
-      case 1: m_vulnTargetInput->clear(); break;
-      case 2: m_webTargetInput->clear(); m_cookieInput->clear(); break;
-      case 3: m_bruteTargetInput->clear(); break;
-      case 4: /* Keep the runtime address for subsequent independent tests. */ break;
+    if (visibleContext) {
+      for (auto *dialog : findChildren<QDialog *>("scanCreateDialog")) dialog->accept();
+      m_selectedTaskId = taskId;
+      setScanSubmissionMessage(QStringLiteral("已创建 %1，正在启动扫描…").arg(taskId));
+      onRefreshTasks();
     }
-    onRefreshTasks();
-
-    QJsonObject empty;
-    m_api->post("/api/scan-tasks/" + taskId + "/execute", empty, 5000, [this, taskId](const QJsonObject &execRes) {
-      if (execRes["status"].toString() == "ok") {
-        m_reexecBtn->setVisible(false);
+    m_api->post("/api/scan-tasks/" + QString::fromLatin1(QUrl::toPercentEncoding(taskId)) + "/execute", {}, 5000,
+      [this, guard, scope, originTab, taskId](const QJsonObject &started) {
+      if (!guard) return;
+      setScanCreationBusy(false);
+      if (started["status"] == "ok" && scope == m_scopeRevision) {
         if (!m_runningTaskIds.contains(taskId)) m_runningTaskIds << taskId;
         startPollingIfNeeded();
-        onRefreshTasks();
-      } else {
-        setStatusText("创建成功但执行失败，可点击「重新执行」");
-        m_statusLabel->setStyleSheet(Theme::StatusWarningStyle);
-        m_reexecBtn->setVisible(true);
-        onRefreshTasks();
       }
+      if (scope != m_scopeRevision || originTab != m_scanTypeTabs->currentIndex()) return;
+      if (started["status"] == "ok") {
+        setScanSubmissionMessage(QStringLiteral("扫描任务已启动：%1").arg(taskId)); m_reexecBtn->hide();
+      } else {
+        setScanSubmissionMessage(QStringLiteral("任务已创建，但启动失败：%1。可在列表选择该记录后重试执行。").arg(started["error"].toObject()["message"].toString()));
+        m_statusLabel->setStyleSheet(Theme::StatusErrorStyle); m_reexecBtn->show();
+      }
+      onRefreshTasks();
     });
   });
 }
@@ -2530,72 +3113,32 @@ void ScanPage::onRefreshTasks() {
   QPointer<ScanPage> guard(this);
   m_api->get("/api/scan-tasks", 5000, [this, guard, scopeRevision](const QJsonObject &res) {
     if (!guard || scopeRevision != m_scopeRevision) return;
+    if (m_allScanResults && !m_renderedSources.isEmpty()) return;
     if (res["status"].toString() != "ok") return;
     auto arr = res["data"].toArray();
 
-    // Clear all 5 tables
-    m_portScanTable->setRowCount(0);
-    m_vulnScanTable->setRowCount(0);
-    m_webScanTable->setRowCount(0);
-    m_bruteForceTable->setRowCount(0);
-    m_sourceScanTable->setRowCount(0);
-
-    QMap<QString, int> counts = {{"port_scan", 0}, {"vuln_scan", 0}, {"web_scan", 0}, {"brute_force", 0}, {"source_scan", 0}};
+    QJsonArray scopedSources;
     QStringList runningIds;
-    int selectTabIdx = -1;
-    int selectRowInTab = -1;
-
-    for (int i = 0; i < arr.size(); i++) {
-      auto t = arr[i].toObject();
-      QString taskId = t["scan_task_id"].toString();
-      if (m_scopedTasks && !m_scopeTaskIds.contains(taskId)) continue;
-      QString scanType = t["scan_type"].toString();
-      QString status = t["status"].toString();
-
-      auto *table = tableForScanType(scanType, m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable, m_sourceScanTable);
-      if (!table) continue;
-
-      int row = table->rowCount();
-      table->setRowCount(row + 1);
-      counts[scanType == "app_discovery" ? "web_scan" : isProgramScan(scanType) ? "source_scan" : scanType]++;
-
-      auto *targetItem = new QTableWidgetItem(t["target"].toString());
-      targetItem->setData(Qt::UserRole, taskId);
-      targetItem->setToolTip(formatScanType(scanType) + "\n" + t["target"].toString());
-      table->setItem(row, 0, targetItem);
-
-      auto *statusItem = new QTableWidgetItem(formatStatus(status));
-      statusItem->setForeground(statusColor(status));
-      table->setItem(row, 1, statusItem);
-
-      table->setItem(row, 2, new QTableWidgetItem(formatTime(t["created_at"].toString())));
-
-      if (status == "RUNNING" || status == "PENDING") {
-        runningIds << taskId;
-      }
-
-      // Track selected task
-      if (!m_selectedTaskId.isEmpty() && taskId == m_selectedTaskId) {
-        selectTabIdx = (scanType == "port_scan") ? 0 :
-                       (scanType == "vuln_scan") ? 1 :
-                       (scanType == "web_scan" || scanType == "app_discovery") ? 2 :
-                       (scanType == "brute_force") ? 3 :
-                       (isProgramScan(scanType)) ? 4 : -1;
-        selectRowInTab = row;
-      }
+    int selectTabIdx = -1, selectRowInTab = -1;
+    for (const auto &value : arr) {
+      const auto task = value.toObject();
+      if (m_scopedTasks && !m_scopeTaskIds.contains(task["scan_task_id"].toString())) continue;
+      scopedSources.append(task);
+      if (QStringList{"PENDING", "RUNNING"}.contains(task["status"].toString()))
+        runningIds << task["scan_task_id"].toString();
     }
+    renderPipelineSources(scopedSources);
+    const QList<QTableWidget *> taskTables{m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable, m_sourceScanTable};
+    for (int tab = 0; tab < taskTables.size(); ++tab)
+      for (int row = 0; row < taskTables[tab]->rowCount(); ++row)
+        if (taskTables[tab]->item(row, 0)->data(Qt::UserRole).toString() == m_selectedTaskId) {
+          selectTabIdx = tab; selectRowInTab = row;
+        }
 
     // Resize columns
     for (auto *table : {m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable, m_sourceScanTable}) {
       table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     }
-
-    // Update count labels
-    m_portScanCount->setText(QString("共 %1 个").arg(counts["port_scan"]));
-    m_vulnScanCount->setText(QString("共 %1 个").arg(counts["vuln_scan"]));
-    m_webScanCount->setText(QString("共 %1 个").arg(counts["web_scan"]));
-    m_bruteForceCount->setText(QString("共 %1 个").arg(counts["brute_force"]));
-    m_sourceScanCount->setText(QString("共 %1 个").arg(counts["source_scan"]));
 
     // Select the previously selected task (only highlight row, don't switch tabs
     // to avoid jarring UX when user is viewing a different tab)
@@ -2616,6 +3159,7 @@ void ScanPage::onRefreshTasks() {
     if (!m_allScanResults && m_scopedTasks && m_selectInitialScopeTask && m_selectedTaskId.isEmpty()) {
       const QList<QTableWidget*> tables{m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable, m_sourceScanTable};
       for (int tab = 0; tab < tables.size(); ++tab) {
+        if (!m_ribbonScanType.isEmpty() && tab != m_scanTypeTabs->currentIndex()) continue;
         if (tables[tab]->rowCount() == 0) continue;
         m_scanTypeTabs->setCurrentIndex(tab);
         tables[tab]->selectRow(0);
@@ -2625,8 +3169,10 @@ void ScanPage::onRefreshTasks() {
       }
     }
 
-    m_runningTaskIds = runningIds;
-    startPollingIfNeeded();
+    if (!m_allScanResults) {
+      m_runningTaskIds = runningIds;
+      startPollingIfNeeded();
+    }
   });
 }
 
@@ -3175,6 +3721,10 @@ void ScanPage::onDeleteTask() {
 
 // ── Clear detail panel ────────────────────────────────────────────────
 void ScanPage::clearDetailPanel() {
+  resetFindingClassification();
+  m_scanRefreshPending = false; m_scanResultsFresh = true;
+  m_resultsQuery.clear(); m_renderedResults.clear(); m_renderedSources = {};
+  setScanProgress(QStringLiteral("选择扫描任务后显示进展"), false);
   if(m_sourceDetail)m_sourceDetail->close();m_sourceDetail.clear();
   m_sourceTaskIds.clear();m_sourceViewTarget.clear();m_openSourceDetailsRequested=false;
   if(m_sourceDetailButton)m_sourceDetailButton->hide();
@@ -3190,6 +3740,7 @@ void ScanPage::clearDetailPanel() {
   m_resultOverview->clear();
   m_coverageTree->clear(); m_coverageTree->hide();
   if (m_webScanProcess) {m_webScanProcess->clear();m_webScanProcess->hide();}
+  m_processToggle->setChecked(false); m_processToggle->hide();
   m_listTitle->setText(QStringLiteral("漏洞候选"));
   m_showAllRecords->hide(); m_moreResultsButton->hide();
   setStatusText("选择任务查看详情");
@@ -3550,13 +4101,340 @@ void ScanPage::reviewSourceFinding(int findingId) {
 
 void ScanPage::openFindingVerification(const QList<qint64> &ids) {
   if(m_pipelineId.isEmpty() || ids.isEmpty())return;
+  if (receivers(SIGNAL(findingPlansRequested(QString,QList<qint64>))) > 0) {
+    emit findingPlansRequested(m_pipelineId, ids);
+    return;
+  }
   auto *dialog=new FindingVerificationDialog(m_api,m_pipelineId,ids,this);
+  watchPayloadChanges(dialog);
+  dialog->setObjectName("scanAuxFindingVerification");
   const QString pipeline=m_pipelineId;
-  const int context=m_scopeRevision;
-  connect(dialog,&QDialog::finished,this,[this,pipeline,context](){
-    if(m_pipelineId!=pipeline || m_scopeRevision!=context)return;
+  connect(dialog, &FindingVerificationDialog::assessmentRequested, this, [this,pipeline](const QString &id) {
+    if (pipeline == m_pipelineId && id == pipeline) emit assessmentRequested(id);
+  });
+  connect(dialog,&QDialog::finished,this,[this,pipeline](){
+    if(m_pipelineId!=pipeline)return;
     onRefreshTasks();
     emit findingVerificationChanged(pipeline);
   });
   dialog->setAttribute(Qt::WA_DeleteOnClose);dialog->show();
+}
+
+void ScanPage::updatePrepareFindingButton() {
+  if (!m_prepareFinding) return;
+  const auto *item = m_resultTree->currentItem();
+  const bool finding = item && item->parent() && item->data(0, Qt::UserRole+1).toLongLong() > 0
+    && item->data(0, Qt::UserRole+2).toString() == "vulnerability";
+  const bool usableScan = !m_pipelineId.isEmpty() || (!isProgramScan(m_currentScanType)
+    && QStringList{"COMPLETED", "PARTIAL", "FAILED", "CANCELLED"}.contains(m_prepareFinding->property("scanStatus").toString()));
+  m_prepareFinding->setEnabled(finding && usableScan && m_scanResultsFresh && !m_scanPageBusy && !m_testContextBusy);
+}
+
+void ScanPage::prepareCurrentFinding() {
+  if (!m_prepareFinding->isEnabled()) return;
+  const auto id = m_resultTree->currentItem()->data(0, Qt::UserRole+1).toLongLong();
+  if (!m_pipelineId.isEmpty()) { openFindingVerification({id}); return; }
+  if (m_selectedTaskId.isEmpty()) return;
+  const QString scan = m_selectedTaskId;
+  const int scope = m_scopeRevision;
+  const int selection = m_findingActionRevision;
+  m_testContextBusy = true;
+  updatePrepareFindingButton();
+  QPointer<ScanPage> guard(this);
+  m_api->post("/api/scan-tasks/" + QString::fromLatin1(QUrl::toPercentEncoding(scan)) + "/test-context", {}, 10000,
+    [this,guard,scan,scope,selection,id](const QJsonObject &response) {
+      if (!guard) return;
+      m_testContextBusy = false;
+      updatePrepareFindingButton();
+      if (scope != m_scopeRevision || scan != m_selectedTaskId || selection != m_findingActionRevision) return;
+      const auto data = response["data"].toObject();
+      if (response["status"] != "ok" || data["pipeline_id"].toString().isEmpty() || data["scan_task_id"].toString() != scan) {
+        setStatusText(QStringLiteral("无法继续测试：%1").arg(response["error"].toObject()["message"].toString(QStringLiteral("来源响应无效，请刷新后重试"))));
+        return;
+      }
+      emit testContextRequested(data["pipeline_id"].toString(), {id});
+    });
+}
+
+void ScanPage::selectScanType(const QString &type)
+{
+  const QMap<QString, int> indices{{"ports", 0}, {"system", 1}, {"web", 2}, {"passwords", 3}};
+  const QMap<QString, QString> scanTypes{{"ports", "port_scan"}, {"system", "vuln_scan"}, {"web", "web_scan"}, {"passwords", "brute_force"}};
+  if (!indices.contains(type)) return;
+  m_ribbonScanType = scanTypes.value(type);
+  // Changing the hidden configuration tab previously cleared the visible result.
+  const QSignalBlocker tabBlock(m_scanTypeTabs);
+  m_scanTypeTabs->setCurrentIndex(indices.value(type));
+  if (auto *picker = findChild<QComboBox *>("scanTypePicker")) {
+    const QSignalBlocker pickerBlock(picker);
+    picker->setCurrentIndex(indices.value(type));
+  }
+  m_detailTabs->setCurrentIndex(0);
+  if (auto *spaces = findChild<QTabWidget *>("scanWorkspaces")) spaces->setCurrentIndex(0);
+  if (!m_pipelineId.isEmpty()) {
+    const QSignalBlocker sourceBlock(m_resultSource);
+    m_resultSource->setCurrentIndex(0);
+    const QSignalBlocker block(m_resultCategory);
+    m_resultCategory->setCurrentIndex(m_resultCategory->findData(type == "ports" || type == "passwords" ? "all" : "vulnerability"));
+    // Selecting one source switches to record detail; a new type must restore the aggregate view.
+    loadPipelineResults();
+  } else {
+    m_selectedTaskId.clear();
+    clearDetailPanel();
+    const QList<QTableWidget*> tables{m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable};
+    auto *table = tables.value(indices.value(type));
+    if (table && table->rowCount()) { table->selectRow(0); emit table->cellClicked(0, 0); }
+    else setStatusText(m_scopedTasks ? QStringLiteral("当前任务没有该类型的扫描记录；请核对任务检查范围，或在任务管理中创建相应测试任务。")
+      : QStringLiteral("当前扫描类型暂无记录，可在左侧点击“新建扫描”。"));
+  }
+  setProperty("visibleScanType", m_ribbonScanType);
+}
+
+void ScanPage::openPayloadWorkspace()
+{
+  auto *item = m_resultTree->currentItem();
+  if (!m_pipelineId.isEmpty() && item && item->parent() && item->data(0, Qt::UserRole+2).toString() == "vulnerability") {
+    openFindingPayload(item->data(0, Qt::UserRole+1).toLongLong());
+    return;
+  }
+  openFindingPicker(true);
+}
+
+void ScanPage::openFindingPayload(qint64 findingId)
+{
+  if (m_pipelineId.isEmpty() || findingId <= 0 || !m_scanResultsFresh || m_scanPageBusy) return;
+  auto *dialog = new FindingVerificationDialog(m_api, m_pipelineId, {findingId}, this);
+  watchPayloadChanges(dialog);
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  dialog->setObjectName("scanAuxPayloadVerification");
+  const QString pipeline = m_pipelineId;
+  connect(dialog, &FindingVerificationDialog::assessmentRequested, this, [this,pipeline](const QString &id) {
+    if (pipeline == m_pipelineId && id == pipeline) emit assessmentRequested(id);
+  });
+  connect(dialog, &QDialog::finished, this, [this,pipeline]() {
+    if (pipeline != m_pipelineId) return;
+    onRefreshTasks(); emit findingVerificationChanged(pipeline);
+  });
+  dialog->showPayloadWorkspace();
+  dialog->show();
+}
+
+void ScanPage::watchPayloadChanges(FindingVerificationDialog *dialog)
+{
+  connect(dialog, &FindingVerificationDialog::payloadsChanged, this, [this](const QString &pipeline) {
+    if (pipeline != m_pipelineId) return;
+    if (m_allScanResults) onRefreshTasks();
+    else if (!m_selectedTaskId.isEmpty()) loadResults(m_selectedTaskId);
+  });
+}
+
+void ScanPage::openVerificationWorkspace()
+{
+  openFindingPicker(false);
+}
+
+void ScanPage::openFindingPicker(bool payload)
+{
+  auto *picker = new QDialog(this);
+  picker->setObjectName("scanAuxPayloadPicker");
+  picker->setAttribute(Qt::WA_DeleteOnClose);
+  picker->setWindowTitle(payload ? QStringLiteral("载荷生成与管理 · 选择任务漏洞") : QStringLiteral("逐漏洞攻击测试 · 选择任务漏洞"));
+  picker->resize(780, 420);
+  auto *layout = new QVBoxLayout(picker);
+  auto *hint = new QLabel;
+  hint->setText(QStringLiteral("选择当前任务漏洞，沿用发现中的目标；可选已有方案，AI 生成与载荷准备按需使用，执行需确认。"));
+  hint->setTextFormat(Qt::PlainText);
+  hint->setWordWrap(true); layout->addWidget(hint);
+  auto *list = new QTableWidget(0, 3, picker);
+  list->setHorizontalHeaderLabels({"发现编号", "漏洞名称", "来源扫描"});
+  list->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+  list->setSelectionBehavior(QAbstractItemView::SelectRows);
+  list->setSelectionMode(QAbstractItemView::SingleSelection);
+  list->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  list->setWordWrap(false);
+  list->setTextElideMode(Qt::ElideRight);
+  layout->addWidget(list, 1);
+  auto *buttons = new QDialogButtonBox(QDialogButtonBox::Open | QDialogButtonBox::Close, picker);
+  buttons->button(QDialogButtonBox::Open)->setText(payload ? QStringLiteral("打开载荷工作区") : QStringLiteral("打开攻击测试"));
+  buttons->button(QDialogButtonBox::Open)->setEnabled(false);
+  auto *more = new QPushButton(QStringLiteral("读取任务漏洞"), picker);
+  layout->addWidget(more, 0, Qt::AlignLeft);
+  const QString pipeline = m_pipelineId; const int scope = m_scopeRevision;
+  connect(buttons, &QDialogButtonBox::accepted, this, [this, picker, list, pipeline, scope, payload]() {
+    if (pipeline.isEmpty() || pipeline != m_pipelineId || scope != m_scopeRevision || list->currentRow() < 0) { picker->close(); return; }
+    const qint64 id = list->item(list->currentRow(), 0)->text().toLongLong();
+    auto *dialog = new FindingVerificationDialog(m_api, pipeline, {id}, this);
+    watchPayloadChanges(dialog);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setObjectName("scanAuxPayloadVerification");
+    connect(dialog, &FindingVerificationDialog::assessmentRequested, this, [this,pipeline](const QString &id) {
+      if (pipeline == m_pipelineId && id == pipeline) emit assessmentRequested(id);
+    });
+    connect(dialog, &QDialog::finished, this, [this, pipeline]() {
+      if (pipeline != m_pipelineId) return;
+      onRefreshTasks(); emit findingVerificationChanged(pipeline);
+    });
+    if (payload) dialog->showPayloadWorkspace();
+    dialog->show(); picker->close();
+  });
+  connect(buttons, &QDialogButtonBox::rejected, picker, &QDialog::close);
+  layout->addWidget(buttons); picker->show();
+  struct PickerState { qint64 cursor = 0, through = 0; bool busy = false, hasMore = false; QSet<qint64> ids; };
+  const auto state = std::make_shared<PickerState>();
+  const QPointer<QDialog> guard(picker);
+  const QPointer<ScanPage> owner(this);
+  const auto load = [this, owner, guard, list, hint, more, buttons, state, pipeline, scope, payload]() {
+    if (!owner || !guard || state->busy || pipeline.isEmpty() || pipeline != m_pipelineId || scope != m_scopeRevision) return;
+    if (!state->hasMore) { state->cursor = 0; state->through = 0; state->ids.clear(); list->setRowCount(0); }
+    state->busy = true; more->setEnabled(false); buttons->button(QDialogButtonBox::Open)->setEnabled(false);
+    hint->setText(QStringLiteral("正在读取当前任务的漏洞候选；此操作不调用模型，也不生成载荷。"));
+    QString path = "/api/pipelines/" + pipeline + "/results?view=scans&category=vulnerability&limit=100&after=" + QString::number(state->cursor);
+    if (state->cursor) path += "&through=" + QString::number(state->through);
+    m_api->get(path, 10000, [owner, guard, list, hint, more, buttons, state, pipeline, scope, payload](const QJsonObject &response) {
+      if (!owner || !guard || owner->m_pipelineId != pipeline || owner->m_scopeRevision != scope) return;
+      state->busy = false; more->setEnabled(true);
+      if (response["status"].toString() != "ok" || !response["data"].isObject()) {
+        hint->setText(QStringLiteral("读取任务漏洞失败，请重试。") + response["error"].toObject()["message"].toString());
+        more->setText(QStringLiteral("重试读取")); return;
+      }
+      const auto data = response["data"].toObject();
+      for (const auto &value : data["scan_records"].toArray()) {
+        const auto row = value.toObject(); const qint64 id = row["id"].toVariant().toLongLong();
+        if (!isVerificationRecord(row) || id <= 0 || state->ids.contains(id)) continue;
+        state->ids.insert(id); const int index = list->rowCount(); list->insertRow(index);
+        list->setItem(index, 0, new QTableWidgetItem(QString::number(id)));
+        list->setItem(index, 1, new QTableWidgetItem(formatResultData(row["result_data"].toString(), row["result_type"].toString())));
+        list->setItem(index, 2, new QTableWidgetItem(row["scan_task_id"].toString()));
+      }
+      const auto page = data["page"].toObject();
+      state->cursor = page["next_after"].toVariant().toLongLong(); state->through = page["through"].toVariant().toLongLong();
+      state->hasMore = page["has_more"].toBool(); more->setText(state->hasMore ? QStringLiteral("加载更多漏洞") : QStringLiteral("刷新漏洞列表"));
+      buttons->button(QDialogButtonBox::Open)->setEnabled(list->rowCount() > 0);
+      if (list->rowCount() && list->currentRow() < 0) list->selectRow(0);
+      hint->setText(list->rowCount() ? (payload ? QStringLiteral("已读取 %1 个候选漏洞。选中后打开载荷代码页；收集、生成和执行由各自按钮触发。")
+          : QStringLiteral("已读取 %1 个候选漏洞。选中后编制方法、参数及预期证据；此操作不会执行攻击。")).arg(list->rowCount())
+          : QStringLiteral("当前任务没有可用漏洞候选，请先完成扫描并核对发现。"));
+    });
+  };
+  if (pipeline.isEmpty()) {
+    hint->setText(QStringLiteral("载荷工作区需要关联测试任务。请先在系统管理的任务管理中选择任务，再对任务漏洞生成载荷。"));
+    more->setText(QStringLiteral("前往任务管理"));
+    connect(more, &QPushButton::clicked, this, [this, picker]() { emit taskSelectionRequested(); picker->close(); });
+  } else {
+    connect(more, &QPushButton::clicked, this, load);
+    load();
+  }
+}
+
+void ScanPage::enableRibbonWorkspace()
+{
+  if (property("ribbonWorkspace").toBool()) return;
+  auto *tasks = findChild<QFrame *>("scanTasksPanel");
+  auto *results = findChild<QTabWidget *>("scanWorkspaces");
+  auto *root = qobject_cast<QVBoxLayout *>(layout());
+  if (!tasks || !results || !root) return;
+  if (tasks->parentWidget() && tasks->parentWidget()->layout()) tasks->parentWidget()->layout()->removeWidget(tasks);
+  root->removeWidget(results);
+  auto *splitter = new QSplitter(Qt::Horizontal, this);
+  splitter->setObjectName("ribbonScanWorkspace");
+  tasks->setMinimumWidth(220); tasks->setMaximumWidth(280);
+  splitter->addWidget(tasks); splitter->addWidget(results);
+  splitter->setChildrenCollapsible(false);
+  splitter->setStretchFactor(0, 0); splitter->setStretchFactor(1, 1);
+  splitter->setSizes({250, 1000});
+  root->addWidget(splitter, 1);
+  if (auto *types = findChild<QComboBox *>("scanTypePicker")) types->hide();
+  m_tasksToggle->show();
+  m_tasksToggle->setChecked(false);
+  tasks->setVisible(m_tasksToggle->isChecked());
+  connect(m_tasksToggle, &QPushButton::toggled, tasks, &QWidget::setVisible);
+  if (auto *manage = findChild<QPushButton *>("manageScanTasks")) manage->hide();
+  if (auto *action = findChild<QAction *>("manageScanTasksMenuAction")) action->setVisible(false);
+  for (auto *label : findChildren<QLabel *>()) {
+    if (label->property("duplicateFeatureTitle").toBool()
+        || label->text() == QStringLiteral("按类型查看任务与扫描结果")) label->hide();
+  }
+  m_compactStatus->setStyleSheet("font-size:14px;color:#b87727;");
+  m_listTitle->setStyleSheet("font-size:14px;font-weight:600;color:#2c4668;padding:2px 0;");
+  setProperty("ribbonWorkspace", true);
+}
+
+QString ScanPage::selectedScanFeature() const
+{
+  const QMap<QString, QString> names{{"port_scan", "scans.ports"}, {"vuln_scan", "scans.system"}, {"web_scan", "scans.web"}, {"brute_force", "scans.passwords"}};
+  return names.value(m_ribbonScanType);
+}
+
+void ScanPage::showAllTaskResults()
+{
+  if (m_ribbonScanType.isEmpty()) return;
+  m_ribbonScanType.clear();
+  if (!m_pipelineId.isEmpty()) loadPipelineResults();
+  else if (m_scopedTasks) { m_selectInitialScopeTask = true; onRefreshTasks(); }
+}
+
+void ScanPage::setScanCreationBusy(bool busy)
+{
+  m_scanCreationBusy = busy;
+  for (auto *button : findChildren<QPushButton *>("scanSubmitButton")) button->setEnabled(!busy);
+}
+
+void ScanPage::renderPipelineSources(const QJsonArray &sources)
+{
+  const QList<QTableWidget *> tables{m_portScanTable, m_vulnScanTable, m_webScanTable, m_bruteForceTable, m_sourceScanTable};
+  QJsonArray metadata;
+  for (const auto &value : sources) {
+    const auto row = value.toObject();
+    metadata.append(QJsonObject{{"scan_task_id", row["scan_task_id"]}, {"scan_type", row["scan_type"]},
+      {"target", row["target"]}, {"status", row["status"]}, {"created_at", row["created_at"]}});
+  }
+  if (m_renderedSources == metadata) return;
+  m_renderedSources = metadata;
+  QList<int> scrolls;
+  QStringList selections;
+  for (auto *table : tables) {
+    scrolls << table->verticalScrollBar()->value();
+    auto *item = table->item(table->currentRow(), 0);
+    selections << (item ? item->data(Qt::UserRole).toString() : QString());
+    table->setUpdatesEnabled(false);
+    const QSignalBlocker blocker(table);
+    table->setRowCount(0);
+  }
+  const QMap<QString, int> indices{{"port_scan", 0}, {"vuln_scan", 1}, {"web_scan", 2}, {"app_discovery", 2}, {"brute_force", 3}};
+  for (const auto &value : sources) {
+    const auto source = value.toObject(); const QString id = source["scan_task_id"].toString();
+    const QString type = source["scan_type"].toString();
+    int index = indices.value(type, -1);
+    if (index < 0 && ribbonScanTypeMatches("web_scan", type)) index = 2;
+    if (isProgramScan(type)) index = 4;
+    if (index < 0 || id.isEmpty()) continue;
+    auto *table = tables[index]; const int row = table->rowCount(); table->insertRow(row);
+    auto *target = new QTableWidgetItem(source["target"].toString()); target->setData(Qt::UserRole, id);
+    target->setToolTip((formatScanType(type) + "\n" + source["target"].toString() + "\n" + id).toHtmlEscaped());
+    table->setItem(row, 0, target);
+    auto *status = new QTableWidgetItem(formatStatus(source["status"].toString()));
+    status->setForeground(statusColor(source["status"].toString())); table->setItem(row, 1, status);
+    table->setItem(row, 2, new QTableWidgetItem(source.contains("created_at") ? formatTime(source["created_at"].toString()) : QStringLiteral("—")));
+  }
+  const QList<QLabel *> counts{m_portScanCount, m_vulnScanCount, m_webScanCount, m_bruteForceCount, m_sourceScanCount};
+  for (int index = 0; index < tables.size(); ++index) {
+    auto *table = tables[index];
+    const QSignalBlocker blocker(table);
+    counts[index]->setText(QStringLiteral("共 %1 个").arg(table->rowCount()));
+    for (int row = 0; row < table->rowCount(); ++row)
+      if (table->item(row, 0)->data(Qt::UserRole).toString() == selections[index]) table->selectRow(row);
+    table->verticalScrollBar()->setValue(scrolls[index]);
+    table->setUpdatesEnabled(true);
+  }
+}
+
+void ScanPage::setScanSubmissionMessage(const QString &message)
+{
+  setStatusText(message);
+  for (auto *dialog : findChildren<QDialog *>("scanCreateDialog")) {
+    if (!dialog->isVisible()) continue;
+    if (auto *notice = dialog->findChild<QLabel *>("scanSubmissionMessage")) {
+      notice->setText(message); notice->setVisible(!message.isEmpty());
+    }
+  }
 }

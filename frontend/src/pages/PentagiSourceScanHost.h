@@ -3,6 +3,8 @@
 #include <QString>
 #include <QStringList>
 #include <QPointer>
+#include <functional>
+#include <QList>
 class ApiClient;
 class QLineEdit;
 class QLabel;
@@ -16,6 +18,7 @@ class PentagiSourceScanHost : public QWidget {
 public:
     explicit PentagiSourceScanHost(ApiClient *api, QWidget *parent = nullptr);
     void showScanDetails(const QStringList &ids, const QString &target, const QString &pipeline);
+    std::function<void(const QString &, const QList<qint64> &)> verificationRequested;
 private:
     void reload();
     void create();

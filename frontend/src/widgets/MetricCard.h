@@ -17,16 +17,18 @@ public:
     setStyleSheet(QStringLiteral(
         "QFrame[metricCard=\"true\"] { background:%2; border:1px solid %3; border-radius:%4px; }"
         "QLabel { background:transparent; border:none; }"
-        "QLabel#metricTitle { color:#64748b; font-size:12px; }"
-        "QLabel#metricValue { color:%1; font-size:26px; font-weight:700; }"
-        "QLabel#metricCaption { color:#94a3b8; font-size:11px; }").arg(accent, Theme::Card, Theme::Border).arg(Theme::CardRadius));
+        "QLabel#metricTitle { color:#64748b; font-size:13px; }"
+        "QLabel#metricValue { color:%1; font-size:22px; font-weight:700; }"
+        "QLabel#metricCaption { color:#64748b; font-size:12px; }").arg(accent, Theme::Card, Theme::Border).arg(Theme::CardRadius));
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(14, 10, 14, 10);
     layout->setSpacing(2);
+    layout->setSizeConstraint(QLayout::SetMinimumSize);
     auto *header = new QHBoxLayout;
     header->setSpacing(7);
     auto *label = new QLabel(title, this);
     label->setObjectName("metricTitle");
+    label->setWordWrap(true);
     header->addWidget(label);
     header->addStretch();
     m_header = header;
@@ -35,6 +37,7 @@ public:
     m_value->setTextFormat(Qt::PlainText);
     m_caption = new QLabel(QStringLiteral("数据加载中"), this);
     m_caption->setObjectName("metricCaption");
+    m_caption->setWordWrap(true);
     m_caption->setTextFormat(Qt::PlainText);
     m_caption->hide();
     layout->addLayout(header);

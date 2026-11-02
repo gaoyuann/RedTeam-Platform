@@ -4,11 +4,15 @@
 #include <QtNetwork>
 #include "pages/PentagiSourceScanHost.h"
 #include "ApiClient.h"
+#include "AppStyle.h"
+#include "UiTypography.h"
 
 class PentagiSourceHostChecks : public QObject {
     Q_OBJECT
 private slots:
     void targetSubmissionAndThreePaneResults() {
+        qApp->setFont(Theme::uiFont());
+        qApp->setStyleSheet(Theme::GlobalStyle + Theme::ButtonStyle + Theme::ItemViewStyle);
         QTcpServer server;
         bool created=false;
         int submissions=0;
@@ -30,7 +34,8 @@ private slots:
                     const QByteArray path=request.value(1);
                     QJsonValue data;
                     const QJsonObject scan{{"scan_task_id","scan-fixture"},{"pipeline_id","pipe_fixture"},
-                        {"scan_type","source_scan"},{"status","COMPLETED"},{"target","http://fixture.invalid/source/"}};
+                        {"scan_type","source_scan"},{"status","COMPLETED"},{"target","http://fixture.invalid/source/"},
+                        {"created_at","2026-10-31T09:25:40.123Z"}};
                     if(request[0]=="POST") {
                         ++submissions;
                         posted=QJsonDocument::fromJson(bytes.mid(edge+4,length)).object();
@@ -64,6 +69,11 @@ private slots:
         auto *authorized=host.findChild<QCheckBox*>("sourceFlowAuthorized");
         auto *create=host.findChild<QPushButton*>("sourceFlowCreate");
         QVERIFY(target && authorized && create);
+        QVERIFY(!target->isVisible());
+        host.findChild<QPushButton*>("sourceFlowNew")->click();
+        auto *form=host.findChild<QDialog*>("sourceFlowCreateDialog");
+        QVERIFY(form && form->isVisible() && target->isVisible());
+        QVERIFY(form->rect().contains(QRect(create->mapTo(form,QPoint()),create->size())));
         target->setText("http://fixture.invalid/source/");
         create->click();QCOMPARE(submissions,0);
         authorized->setChecked(true);create->click();
@@ -72,8 +82,29 @@ private slots:
         QVERIFY(!posted["request_id"].toString().isEmpty());
         auto *tasks=host.findChild<QTableWidget*>("sourceFlowTasks");
         QTRY_VERIFY(tasks && tasks->rowCount()>0);
+        QVERIFY(!form->isVisible());
+        const auto expectedTime=QDateTime(QDate(2026,10,31),QTime(9,25,40),Qt::UTC).toLocalTime();
+        QCOMPARE(tasks->item(0,2)->text(),expectedTime.toString("yyyy-MM-dd HH:mm:ss"));
+        for(const QSize size : {QSize(1024,480),QSize(1366,620)}) {
+            host.resize(size);QApplication::processEvents();
+            QVERIFY(tasks->height()>=host.height()*3/4);
+            for(int column : {1,2}) {
+                const QRect cell=tasks->visualItemRect(tasks->item(0,column));
+                QVERIFY(tasks->viewport()->rect().contains(cell));
+                QVERIFY(cell.width()>=tasks->fontMetrics().horizontalAdvance(tasks->item(0,column)->text())+8);
+            }
+            auto *open=host.findChild<QPushButton*>("sourceFlowOpenDetails");
+            QVERIFY(host.rect().contains(open->geometry()));
+            QVERIFY(open->width()<host.width()/2);
+        }
         QVERIFY(!host.findChild<QPlainTextEdit*>("sourceScanCode"));
         tasks->setCurrentCell(0,0);
+        QSignalSpy refreshed(tasks->model(),&QAbstractItemModel::dataChanged);
+        host.findChild<QPushButton*>("sourceFlowRefresh")->click();
+        QTRY_VERIFY(!refreshed.isEmpty());
+        QCOMPARE(tasks->currentRow(),0);
+        QCOMPARE(tasks->item(0,0)->data(Qt::UserRole).toJsonObject()["scan_task_id"].toString(),QString("scan-fixture"));
+        QVERIFY(host.findChild<QPushButton*>("sourceFlowOpenDetails")->isEnabled());
         host.findChild<QPushButton*>("sourceFlowOpenDetails")->click();
         QTRY_VERIFY(host.findChild<QPlainTextEdit*>("sourceScanCode"));
         auto *code=host.findChild<QPlainTextEdit*>("sourceScanCode");
@@ -93,6 +124,19 @@ private slots:
         QVERIFY(code->mapToGlobal(QPoint()).x()<table->mapToGlobal(QPoint()).x());
         table->setCurrentCell(0,1);
         QTRY_COMPARE(code->textCursor().blockNumber(),1);
+        QString verificationTask;
+        QList<qint64> verificationFindings;
+        host.verificationRequested = [&](const QString &pipeline, const QList<qint64> &findings) {
+            verificationTask = pipeline; verificationFindings = findings;
+        };
+        auto *prepare = host.findChild<QPushButton*>("sourceScanAttack");
+        QTRY_VERIFY(prepare && prepare->isEnabled());
+        const int beforeVerification = submissions;
+        prepare->click();
+        QCOMPARE(verificationTask, QString("pipe_fixture"));
+        QCOMPARE(verificationFindings, QList<qint64>{1});
+        QCOMPARE(submissions, beforeVerification);
+        QVERIFY(!host.findChild<QDialog*>("taskFindingVerification"));
         create->click();
         QTRY_COMPARE(submissions,2);
         QTRY_VERIFY(create->isEnabled());

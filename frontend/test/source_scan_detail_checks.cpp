@@ -17,6 +17,10 @@ static QJsonObject task(const QString &id,const QString &status,const QJsonArray
 static bool waitFor(const std::function<bool()> &condition) {
   for(int i=0;i<200;++i){if(condition())return true;QTest::qWait(10);}return false;
 }
+static QTreeWidgetItem *fileItem(QTreeWidget *tree,const QString &key) {
+  for(QTreeWidgetItemIterator it(tree);*it;++it)if((*it)->data(0,Qt::UserRole).toString()==key)return *it;
+  return nullptr;
+}
 int main(int argc,char **argv) {
   QApplication app(argc,argv);qRegisterMetaType<QList<qint64>>();
   SourceScanDetailDialog view(nullptr,{},"http://fixture.invalid/source/");view.setAttribute(Qt::WA_DeleteOnClose,false);view.resize(1280,760);view.show();
@@ -66,6 +70,75 @@ int main(int argc,char **argv) {
   auto failed=task("source-1","FAILED",{});failed["error_message"]=QStringLiteral("CScan 未能取得目标源码");view.setSnapshots({failed});
   verify(!attack->isEnabled() && view.findChild<QLabel*>("sourceScanNotice")->text().contains(QStringLiteral("未能取得目标源码")),"actual source access errors remain visible after scan failure");
 
+  SourceScanDetailDialog navigation(nullptr,{"tree-task"},"project");navigation.setAttribute(Qt::WA_DeleteOnClose,false);navigation.resize(1280,760);navigation.show();
+  auto treeTask=task("tree-task","COMPLETED",QJsonArray{
+    finding(4001,"project/src/main.cpp",2),finding(4002,"project/generated/reader.cpp",4,"medium"),
+    finding(4003,"project/generated/reader.cpp",8,"low"),finding(4004,"/project/generated/reader.cpp",3,"low")});
+  QJsonArray sourceFiles{
+    QJsonObject{{"id",1},{"path","/work/src/project/src/main.cpp"}},
+    QJsonObject{{"id",2},{"path","/work/src/project/include/util.h"}},
+    QJsonObject{{"id",3},{"path","/work/src/project/README.h"}},
+    QJsonObject{{"id",4},{"path","/work/src/group/a.cpp"}},
+    QJsonObject{{"id",5},{"path","/work/src/project/generated/helper.h"}}};
+  for(int i=0;i<60;++i)sourceFiles.append(QJsonObject{{"id",10+i},{"path",QStringLiteral("/work/src/project/src/module_%1.cpp").arg(i,2,10,QChar('0'))}});
+  treeTask["source_files"]=sourceFiles;navigation.setSnapshots({treeTask});
+  auto *navTree=navigation.findChild<QTreeWidget*>("sourceScanFileTree");
+  auto *search=navigation.findChild<QLineEdit*>("sourceScanFileSearch");
+  auto *mainFile=fileItem(navTree,"tree-task\nproject/src/main.cpp");
+  auto *reportFile=fileItem(navTree,"tree-task\nproject/generated/reader.cpp");
+  auto *absoluteFile=fileItem(navTree,"tree-task\n/project/generated/reader.cpp");
+  verify(mainFile && reportFile && absoluteFile,"snapshots and both report path kinds remain independently navigable");
+  verify(reportFile->text(0)=="reader.cpp" && reportFile->parent()->text(0)=="generated"
+    && reportFile->parent()->parent()->text(0)=="project","report paths form directories instead of flat full-path labels");
+  verify(navTree->topLevelItemCount()==3 && mainFile->parent()->parent()->parent()==nullptr
+    && reportFile->parent()->parent()==mainFile->parent()->parent(),"snapshot and report paths share the real project root without provenance wrapper directories");
+  verify(reportFile->parent()==fileItem(navTree,"tree-task\nproject/generated/helper.h")->parent(),"report-only and saved files in the same directory share one directory node");
+  verify(reportFile->toolTip(0).contains(QStringLiteral("未匹配源码正文"))
+    && mainFile->toolTip(0).contains(QStringLiteral("已保存源码快照")),"file tooltips distinguish available source from report-only locations within one tree");
+  verify(navigation.findChild<QLabel*>("sourceScanFileSummary")->text().contains(QStringLiteral("2 个报告定位")),"duplicate report locations count as one file while absolute paths stay separate");
+  verify(!mainFile->icon(0).isNull() && !mainFile->parent()->icon(0).isNull()
+    && mainFile->toolTip(0).contains("/work/src/project/src/main.cpp"),"navigation provides file and folder drawings and the full source path");
+  verify(fileItem(navTree,"tree-task\ngroup/a.cpp")->parent()->text(0)=="group","a real directory name cannot collide with a navigation group key");
+  auto *project=mainFile->parent()->parent();
+  verify(project->child(0)->text(0)=="generated" && project->child(1)->text(0)=="include"
+    && project->child(project->childCount()-1)->text(0)=="README.h","directories from both sources sort together ahead of root-level files");
+  navTree->expandAll();
+  auto *manual=fileItem(navTree,"tree-task\nproject/include/util.h");navTree->setCurrentItem(manual);
+  reportFile->parent()->setExpanded(false);
+  QTest::qWait(20);navTree->verticalScrollBar()->setValue(navTree->verticalScrollBar()->maximum()/2);
+  const int treeScroll=navTree->verticalScrollBar()->value();verify(treeScroll>0,"large source navigation has a meaningful scroll position");
+  navigation.setSnapshots({treeTask});
+  verify(navTree->currentItem()->data(0,Qt::UserRole).toString()=="tree-task\nproject/include/util.h","refresh preserves a manually browsed source file instead of jumping to the selected finding");
+  reportFile=fileItem(navTree,"tree-task\nproject/generated/reader.cpp");
+  verify(!reportFile->parent()->isExpanded() && navTree->verticalScrollBar()->value()==treeScroll,"refresh preserves collapsed directories and tree scroll position");
+  search->setText("INCLUDE/UTIL.H");
+  manual=fileItem(navTree,"tree-task\nproject/include/util.h");mainFile=fileItem(navTree,"tree-task\nproject/src/main.cpp");
+  verify(!manual->isHidden() && manual->parent()->isExpanded() && mainFile->isHidden()
+    && fileItem(navTree,"tree-task\n/project/generated/reader.cpp")->isHidden(),"case-insensitive full-path search reveals only matching file branches");
+  navigation.setSnapshots({treeTask});
+  verify(search->text()=="INCLUDE/UTIL.H" && fileItem(navTree,"tree-task\nproject/src/main.cpp")->isHidden(),"refresh preserves the active file filter");
+  search->clear();
+  verify(!fileItem(navTree,"tree-task\nproject/src/main.cpp")->isHidden()
+    && !fileItem(navTree,"tree-task\nproject/generated/reader.cpp")->parent()->isExpanded(),"clearing search restores the previous directory expansion state");
+  auto *navFindings=navigation.findChild<QTableWidget*>("sourceScanFindings");
+  search->setText("util.h");
+  QTest::mouseClick(navFindings->viewport(),Qt::LeftButton,Qt::NoModifier,navFindings->visualItemRect(navFindings->item(0,0)).center());
+  verify(search->text().isEmpty() && navTree->currentItem()==fileItem(navTree,"tree-task\nproject/src/main.cpp"),"clicking the already selected finding restores its file and clears a conflicting navigation filter");
+  navigation.selectFinding(4002);
+  verify(navTree->currentItem()==fileItem(navTree,"tree-task\nproject/generated/reader.cpp")
+    && navigation.findChild<QPlainTextEdit*>("sourceScanCode")->toPlainText().isEmpty(),"finding navigation still selects report-only files without inventing source bodies");
+  auto resolvedTreeTask=treeTask;auto resolvedFiles=sourceFiles;
+  resolvedFiles.append(QJsonObject{{"id",90},{"path","/work/src/project/generated/reader.cpp"}});
+  resolvedTreeTask["source_files"]=resolvedFiles;
+  navigation.setSnapshots({resolvedTreeTask});
+  auto *resolvedFile=fileItem(navTree,"tree-task\nproject/generated/reader.cpp");
+  verify(resolvedFile && resolvedFile->parent()->childCount()==2 && navTree->topLevelItemCount()==3
+    && resolvedFile->toolTip(0).contains(QStringLiteral("已保存源码快照")),"newly captured report-only files update in their existing directory without duplicate branches");
+  auto secondTreeTask=treeTask;secondTreeTask["scan_task_id"]="other-tree-task";
+  navigation.setSnapshots({treeTask,secondTreeTask});
+  verify(fileItem(navTree,"tree-task\nproject/src/main.cpp")!=fileItem(navTree,"other-tree-task\nproject/src/main.cpp")
+    && navTree->topLevelItemCount()==2,"identical source paths from different scans retain separate navigation branches");
+
   QTcpServer server;int gets=0,mutations=0;bool fail=false;
   QObject::connect(&server,&QTcpServer::newConnection,&server,[&](){
     while(auto *socket=server.nextPendingConnection())QObject::connect(socket,&QTcpSocket::readyRead,socket,[&,socket](){
@@ -114,5 +187,16 @@ int main(int argc,char **argv) {
   verify(waitFor([&](){return !copyCode->toPlainText().isEmpty();}),"matched file remains selectable after unmatched result");
   fail=true;complete.refresh();verify(waitFor([&](){return complete.findChild<QPushButton*>("sourceScanRefresh")->isEnabled();}),"refresh failure completes");
   verify(!completeAttack->isEnabled(),"failed refresh cannot authorize testing against stale data");
+  fail=false;
+  auto preview=task("source-a","COMPLETED",QJsonArray{finding(5001,"sample/src/main.cpp",2),finding(5002,"sample/src/reader.cpp",8,"medium")});
+  preview["source_files"]=QJsonArray{
+    QJsonObject{{"id",42},{"path","/work/src/sample/src/main.cpp"},{"sha256","copy-hash"}},
+    QJsonObject{{"id",43},{"path","/work/src/sample/include/config.h"},{"sha256","copy-hash"}}};
+  complete.setSnapshots({preview});
+  verify(waitFor([&](){return copyCode->textCursor().blockNumber()==1 && !copyCode->toPlainText().isEmpty();}),"saved source remains loadable after a failed refresh and navigation changes");
+  if(qEnvironmentVariable("QT_SCALE_FACTOR")=="1") {
+    complete.resize(1280,760);complete.findChild<QTreeWidget*>("sourceScanFileTree")->expandAll();
+    QTest::qWait(20);complete.grab().save("/tmp/redteam-source-navigation.png");
+  }
   return 0;
 }

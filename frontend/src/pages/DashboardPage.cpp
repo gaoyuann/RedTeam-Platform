@@ -6,6 +6,7 @@
 #include "../Theme.h"
 #include "../UiUtil.h"
 #include "../widgets/MetricCard.h"
+#include "../widgets/ElidedLabel.h"
 
 #include <QColor>
 #include <QDateTime>
@@ -202,9 +203,11 @@ DashboardPage::DashboardPage(ApiClient *api, QWidget *parent)
 void DashboardPage::setupUI()
 {
   setStyleSheet(Theme::PageStyle + QStringLiteral(
-      "QLabel#dashboardSectionTitle{font-size:16px;font-weight:700;color:%1;}"
+      "QWidget{font-size:14px;}"
+      "QPushButton,QTableWidget,QListWidget,QHeaderView::section{font-size:14px;}"
+      "QLabel#dashboardSectionTitle{font-size:15px;font-weight:600;color:%1;}"
       "QLabel#dashboardEmpty{color:#94a3b8;padding:12px;}"
-      "QLabel#dashboardMeta{color:#64748b;font-size:12px;}"
+      "QLabel#dashboardMeta{color:#64748b;font-size:14px;}"
       "QListWidget#todoList{border:none;background:transparent;}"
       "QListWidget#todoList::item{padding:8px 3px;border-bottom:1px solid #edf2f7;}"
       "QProgressBar{min-height:8px;}").arg(Theme::Text));
@@ -226,23 +229,43 @@ void DashboardPage::setupUI()
   auto *header = new QHBoxLayout;
   auto *heading = new QVBoxLayout;
   heading->setSpacing(2);
-  auto *title = new QLabel(QStringLiteral("工作台"), page);
-  title->setStyleSheet(QStringLiteral("font-size:24px;font-weight:700;color:#12213c;"));
-  auto *subtitle = new QLabel(QStringLiteral("全局掌握测试任务进展，快速进入扫描、分析与结果核验。"), page);
-  subtitle->setObjectName(QStringLiteral("dashboardMeta"));
+  auto *title = new QLabel(QStringLiteral("首页"), page);
+  title->setObjectName(QStringLiteral("dashboardSectionTitle"));
   heading->addWidget(title);
-  heading->addWidget(subtitle);
-  header->addLayout(heading);
-  header->addStretch();
+  header->addLayout(heading, 1);
   auto *newTask = new QPushButton(QStringLiteral("＋ 新建测试任务"), page);
+  newTask->setObjectName("homeCreateTest");
   newTask->setProperty("primary", true);
-  connect(newTask, &QPushButton::clicked, this, &DashboardPage::openTasksRequested);
+  connect(newTask, &QPushButton::clicked, this, &DashboardPage::createTestRequested);
   auto *retry = new QPushButton(QStringLiteral("刷新"), page);
   retry->setObjectName("dashboardRefresh");
   connect(retry, &QPushButton::clicked, this, &DashboardPage::refresh);
   header->addWidget(retry);
   header->addWidget(newTask);
   layout->addLayout(header);
+
+  auto *currentTask = new QWidget(page);
+  currentTask->setObjectName(QStringLiteral("homeTaskActions"));
+  auto *actions = new QHBoxLayout(currentTask);
+  actions->setContentsMargins(0, 0, 0, 0);
+  actions->setSpacing(8);
+  m_currentTaskLabel = new ElidedLabel(currentTask);
+  m_currentTaskLabel->setObjectName("homeCurrentTask");
+  m_currentTaskLabel->setTextFormat(Qt::PlainText);
+  m_currentTaskLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+  m_currentTaskLabel->setMinimumWidth(0);
+  actions->addWidget(m_currentTaskLabel, 1);
+  m_continueTaskButton = new QPushButton(QStringLiteral("继续当前任务"), currentTask);
+  m_continueTaskButton->setObjectName("homeContinueTask");
+  m_continueTaskButton->setProperty("primary", true);
+  connect(m_continueTaskButton, &QPushButton::clicked, this, &DashboardPage::continueTaskRequested);
+  actions->addWidget(m_continueTaskButton);
+  auto *manage = new QPushButton(QStringLiteral("任务管理"), currentTask);
+  manage->setObjectName("homeTaskManagement");
+  connect(manage, &QPushButton::clicked, this, &DashboardPage::openTasksRequested);
+  actions->addWidget(manage);
+  setCurrentTask({});
+  layout->addWidget(currentTask);
 
   auto *metrics = new QHBoxLayout;
   metrics->setSpacing(12);
@@ -258,7 +281,7 @@ void DashboardPage::setupUI()
     card->setMinimumHeight(102);
     metrics->addWidget(card, 1);
   }
-  layout->addLayout(metrics);
+
 
   auto *distributions = new QHBoxLayout;
   distributions->setSpacing(12);
@@ -268,7 +291,7 @@ void DashboardPage::setupUI()
   distributions->addWidget(m_statusDistribution, 1);
   distributions->addWidget(m_riskDistribution, 1);
   distributions->addWidget(m_typeDistribution, 1);
-  layout->addLayout(distributions);
+
 
   auto *middle = new QHBoxLayout;
   middle->setSpacing(12);
@@ -287,6 +310,13 @@ void DashboardPage::setupUI()
   recentHead->addWidget(all);
   recentLayout->addLayout(recentHead);
   m_recentTable = new QTableWidget(0, 6, recent);
+  m_recentTable->setObjectName("homeRecentTasks");
+  m_recentTable->setToolTip(QStringLiteral("双击任务继续查看；不会重新扫描或执行。"));
+  connect(m_recentTable, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
+    const auto *item = m_recentTable->item(row, 0);
+    const auto id = item ? item->data(Qt::UserRole).toString() : QString();
+    if (!id.isEmpty()) emit openTaskRequested(id);
+  });
   m_recentTable->setHorizontalHeaderLabels({QStringLiteral("任务名称"), QStringLiteral("目标范围"), QStringLiteral("任务类型"), QStringLiteral("状态"), QStringLiteral("更新时间"), QStringLiteral("来源")});
   m_recentTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
   m_recentTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
@@ -310,16 +340,22 @@ void DashboardPage::setupUI()
   todoTitle->setObjectName(QStringLiteral("dashboardSectionTitle"));
   todoHead->addWidget(todoTitle);
   todoHead->addStretch();
-  auto *todoHint = new QLabel(QStringLiteral("来自当前任务状态"), todo);
+  auto *todoHint = new QLabel(QStringLiteral("双击进入对应任务"), todo);
   todoHint->setObjectName(QStringLiteral("dashboardMeta"));
   todoHint->setWordWrap(true);
   todoHead->addWidget(todoHint);
   todoLayout->addLayout(todoHead);
   m_todoList = new QListWidget(todo);
   m_todoList->setObjectName(QStringLiteral("todoList"));
+  connect(m_todoList, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *item) {
+    const auto id = item->data(Qt::UserRole).toString();
+    if (!id.isEmpty()) emit openTaskRequested(id);
+  });
   todoLayout->addWidget(m_todoList, 1);
   middle->addWidget(todo, 1);
   layout->addLayout(middle);
+  layout->addLayout(metrics);
+  layout->addLayout(distributions);
 
   auto *bottom = new QHBoxLayout;
   bottom->setSpacing(12);
@@ -374,6 +410,15 @@ void DashboardPage::setupUI()
 
   scroll->setWidget(page);
   root->addWidget(scroll);
+}
+
+void DashboardPage::setCurrentTask(const QString &summary)
+{
+  const QString text = summary.isEmpty() ? QStringLiteral("未打开任务，可从最近任务中继续。") : summary;
+  m_currentTaskLabel->setText(text);
+  m_currentTaskLabel->setToolTip(text);
+  m_currentTaskLabel->setAccessibleName(text);
+  m_continueTaskButton->setEnabled(!summary.isEmpty());
 }
 
 void DashboardPage::setState(QLabel *label, const QString &text, const QString &color)
@@ -509,7 +554,10 @@ void DashboardPage::renderPipelineData(const QJsonArray &pipelines)
     const auto pipeline = recent.at(index);
     const int row = m_recentTable->rowCount();
     m_recentTable->insertRow(row);
-    m_recentTable->setItem(row, 0, new QTableWidgetItem(pipelineName(pipeline)));
+    auto *nameItem = new QTableWidgetItem(pipelineName(pipeline));
+    nameItem->setData(Qt::UserRole, pipeline.value("pipeline_id").toString());
+    nameItem->setToolTip(UiUtil::taskIdentifierTip(pipeline));
+    m_recentTable->setItem(row, 0, nameItem);
     m_recentTable->setItem(row, 1, new QTableWidgetItem(pipeline.value(QStringLiteral("target")).toString()));
     m_recentTable->setItem(row, 2, new QTableWidgetItem(pipelineType(pipeline)));
     const auto status = pipeline.value(QStringLiteral("status")).toString();
@@ -527,6 +575,7 @@ void DashboardPage::renderPipelineData(const QJsonArray &pipelines)
     if (status == QStringLiteral("awaiting_approval") || status == QStringLiteral("running") || status == QStringLiteral("failed")) {
       auto *item = new QListWidgetItem(QStringLiteral("%1\n%2 · %3")
           .arg(pipelineName(pipeline), statusLabel(status), pipeline.value(QStringLiteral("target")).toString()), m_todoList);
+      item->setData(Qt::UserRole, pipeline.value("pipeline_id").toString());
       item->setToolTip(item->text());
     }
   }
@@ -596,7 +645,7 @@ void DashboardPage::loadHealth()
     const bool ok = response.value(QStringLiteral("status")).toString() == QStringLiteral("ok");
     setState(m_apiStatusLabel, ok ? QStringLiteral("正常") : QStringLiteral("异常"), ok ? Theme::Success : Theme::Error);
     m_healthHintLabel->setText(QStringLiteral("未接入健康检查"));
-    m_healthHintLabel->setStyleSheet(QStringLiteral("color:%1;font-size:12px;").arg(Theme::TextSecondary));
+    m_healthHintLabel->setStyleSheet(QStringLiteral("color:%1;font-size:14px;").arg(Theme::TextSecondary));
   });
 }
 

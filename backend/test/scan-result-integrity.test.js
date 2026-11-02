@@ -389,3 +389,35 @@ test('acceptance: real parent scan orchestration reaches HTTP pages with all par
   if(server)await new Promise(r=>server.close(r));closeDb();
  }
 });
+
+
+test('Nikto 2.1.6 metadata and successful completion do not become unparsed errors',()=>{
+ const output = [
+  '- ***** SSL support not available (see docs for SSL install) *****', '- Nikto v2.1.6',
+  '---------------------------------------------------------------------------',
+  '+ Target IP:          127.0.0.1', '+ Target Hostname:    127.0.0.1', '+ Target Port:        8080',
+  '+ SSL Info:        Subject:  ', '                   Ciphers:  ', '                   Issuer:   ',
+  '+ Start Time:         2026-10-31 06:02:23 (GMT0)', '+ Server: Apache/2.4.25 (Debian)',
+  '+ Cookie PHPSESSID created without the secure flag',
+  '+ Hostname localhost does not match certificate names: fixture',
+  '+ OSVDB-3268: /docs/: Directory indexing found.',
+  '+ Root page / redirects to: login.php', "+ No CGI Directories found (use '-C all' to force check all possible dirs)",
+  '+ 7517 requests: 0 error(s) and 3 item(s) reported on remote host',
+  '+ End Time:           2026-10-31 06:02:30 (GMT0) (7 seconds)', '+ 1 host(s) tested',
+  '      *********************************************************************',
+  "      Portions of the server's headers (Apache/2.4.25) are not in",
+  '      the Nikto database or are newer than the known string. Would you like',
+  '      to submit this information (*no server specific data*) to CIRT.net',
+  '      for a Nikto update (or you may email to sullo@cirt.net) (y/n)?',
+ ].join('\n');
+ const parsed=parseScanOutput('web_scan_nikto',output);
+ assert.equal(parsed.diagnostics.unparsed_lines,0);
+ assert.equal(parsed.diagnostics.parsed_records,3);
+ assert.equal(parsed.diagnostics.tool_reported_count,3);
+ const stream=createScanOutputCollector('web_scan_nikto');
+ for(let i=0;i<output.length;i+=17)stream.push(Buffer.from(output.slice(i,i+17)));
+ const incremental=stream.finish({stdout:output});
+ assert.equal(incremental.diagnostics.unparsed_lines,0);
+ assert.equal(incremental.diagnostics.parsed_records,3);
+ assert.equal(parseScanOutput('web_scan_nikto',output+'\n+ Unrecognized new finding format').diagnostics.unparsed_lines,1);
+});
