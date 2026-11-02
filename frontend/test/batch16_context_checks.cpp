@@ -8,6 +8,7 @@
 #include "ApiClient.h"
 #include "UiUtil.h"
 #include "WsClient.h"
+#include "ToastOverlay.h"
 #include "AppStyle.h"
 #include "UiTypography.h"
 #include "UiDisplayScaling.h"
@@ -389,15 +390,46 @@ static void runTaskDialogGeometryChecks(const std::function<void(bool, const cha
   auto font=qApp->font();font.setPointSize(11);qApp->setFont(font);
   MainWindow shell(&api,"user","fixture-user");shell.m_dongleTimer->stop();shell.m_ws->disconnectFromServer();
   shell.switchToPage(1);shell.resize(1360,860);shell.show();
-  for(bool quick:{false,true}) {
+  for(int mode:{0,1,2}) {
     QTimer::singleShot(0,shell.m_flowPage,[&] {
       auto *dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());
       verify(dialog,"task creation opens its dialog");
-      dialog->findChild<QLineEdit*>("taskTargetInput")->setText("http://192.0.2.40:8089/app/");
+      verify(QTest::qWaitForWindowExposed(dialog),"task dialog is exposed before typing");
+      QRect lastFrame=dialog->frameGeometry();
+      QElapsedTimer stableFrame;stableFrame.start();
+      verify(awaitCondition([&] {
+        if(dialog->frameGeometry()!=lastFrame) {lastFrame=dialog->frameGeometry();stableFrame.restart();}
+        return stableFrame.elapsed()>=200;
+      }),"window manager finishes initial dialog placement before typing");
+      auto *target=dialog->findChild<QLineEdit*>("taskTargetInput");
+      const auto originalPosition=dialog->frameGeometry().topLeft();
+      const auto originalSize=dialog->size();
+      for (const QChar character : QStringLiteral("http://192.0.2.40:8089/app/")) {
+        QTest::keyClicks(target, QString(character));
+        QTest::qWait(15);
+        qInfo()<<"Typing target"<<target->text()<<"frame"<<dialog->frameGeometry()<<"original"<<originalPosition;
+        verify(dialog->frameGeometry().topLeft()==originalPosition,"typing a target never moves the task dialog");
+        verify(dialog->size()==originalSize,"typing and validation never resize the task dialog");
+      }
+      for(int i=0;i<8;++i) {
+        QTest::keyClick(target,Qt::Key_Backspace); QTest::qWait(15);
+        verify(dialog->frameGeometry().topLeft()==originalPosition,"deleting target characters never moves the task dialog");
+      }
+      target->setText("http://"); QTest::qWait(30);
+      verify(!dialog->findChild<QLabel*>("taskTargetError")->isHidden(),"incomplete URL still shows validation feedback");
+      const auto screenshots=qEnvironmentVariable("REDTEAM_TASK_DIALOG_SCREENSHOT_DIR");
+      if(mode==2 && !screenshots.isEmpty()) {
+        verify(QDir().mkpath(screenshots),"task dialog screenshot directory is available");
+        verify(dialog->grab().save(screenshots+"/typing-incomplete-url.png"),"incomplete URL screenshot saved");
+      }
+      target->setText("http://192.0.2.40:8089/app/"); QTest::qWait(30);
+      verify(dialog->findChild<QLabel*>("taskTargetError")->isHidden(),"valid URL clears validation feedback");
       auto *options=dialog->findChild<QToolButton*>("taskOptionsToggle");
       for(bool expanded:{false,true}) {
         options->setChecked(expanded);
         QTest::qWait(30);
+        verify(dialog->frameGeometry().topLeft()==originalPosition && dialog->size()==originalSize,
+          "expanding task options keeps the window position and size stable");
         const auto *screen=dialog->windowHandle()->screen();
         qInfo()<<"Task dialog geometry"<<dialog->size()<<"frame"<<dialog->frameGeometry()<<"minimum"<<dialog->minimumSize()<<"screen"<<screen->availableGeometry();
         verify(screen->availableGeometry().contains(dialog->frameGeometry()),"complete task dialog frame fits the available screen");
@@ -405,10 +437,12 @@ static void runTaskDialogGeometryChecks(const std::function<void(bool, const cha
         verify(dialog->rect().contains(QRect(buttons->mapTo(dialog,QPoint()),buttons->size())),"task dialog actions remain inside the window");
         auto *scroll=dialog->findChild<QScrollArea*>("taskCreateScroll");
         verify(scroll->horizontalScrollBar()->maximum()==0,"task form remains readable without horizontal scrolling");
+        if(mode==2 && !expanded && !screenshots.isEmpty())
+          verify(dialog->grab().save(screenshots+"/typing-complete-url.png"),"complete URL screenshot saved");
       }
       dialog->reject();
     });
-    shell.m_flowPage->createFlow(quick);
+    shell.m_flowPage->createFlow(mode==1,{}, {},mode==2);
   }
   qApp->setStyleSheet(previousStyle);qApp->setFont(previousFont);
 }
@@ -1395,8 +1429,9 @@ int main(int argc, char **argv)
     failResults = true;
     aggregate.m_moreResultsButton->click();
     verify(awaitCondition([&]{return !aggregate.m_scanPageBusy;}) && aggregate.m_aggregateRecords.size() == 100
-      && aggregate.m_moreResultsButton->isEnabled() && aggregate.m_resultHint->text().contains("失败"),
-      "append failure retains loaded records and offers page retry");
+      && aggregate.m_moreResultsButton->isEnabled() && aggregate.m_resultHint->text().contains("重试")
+      && !aggregate.m_resultHint->text().contains("失败"),
+      "append failure retains loaded records and offers page retry without a failure prompt");
     failResults = false;
     aggregate.m_selectAllFindings->click();
     verify(aggregate.m_checkedFindings.size() == 100, "select all covers only the first loaded page");
@@ -1910,6 +1945,25 @@ int main(int argc, char **argv)
   verify(flow.m_selectedPipelineId == "A", "task keeps exact identity");
   verify(flow.m_stepIndicator->phases().first().status == "pending", "missing authorization never displays confirmed preparation");
   verify(flow.m_analysisTab->m_pipeline.value("pipeline_id").toString() == "A", "analysis belongs to task A");
+  {
+    AnalysisPage emptyAnalysis;
+    auto task = taskRecord("empty-analysis");
+    for (const QJsonValue value : {QJsonValue(), QJsonValue(QJsonObject()), QJsonValue("not-json")}) {
+      task["analysis_result"] = value;
+      emptyAnalysis.setTaskContext(task);
+      verify(emptyAnalysis.m_stateLabel->text().contains(QStringLiteral("尚未生成"))
+          && !emptyAnalysis.m_stateLabel->text().contains(QStringLiteral("来源：任务结构化分析")),
+        "missing analysis never claims existing structured results");
+      for (int index = 0; index < emptyAnalysis.m_categoryCombo->count(); ++index)
+        emptyAnalysis.m_categoryCombo->setCurrentIndex(index);
+      verify(emptyAnalysis.m_analysis.isEmpty() && emptyAnalysis.m_table->rowCount() == 0,
+        "reading empty analysis categories never inserts fields or invents results");
+    }
+    task["steps"] = QJsonArray{QJsonObject{{"step_type", "analyze"}, {"status", "running"}}};
+    emptyAnalysis.setTaskContext(task);
+    verify(emptyAnalysis.m_stateLabel->text().contains(QStringLiteral("分析进行中")),
+      "running analysis keeps its actual phase instead of claiming completed results");
+  }
   verify(flow.m_planTab->m_pipeline.value("pipeline_id").toString() == "A", "plan belongs to task A");
   verify(flow.m_topoTab->m_pipelineId == "A" && flow.m_topoTab->m_pipelineScanIds == QStringList{"scan-A"}, "topology carries only task A scans");
   verify(flow.m_execTab->m_taskMonitor->m_expectedRunId == "run-A", "execution uses task A run");

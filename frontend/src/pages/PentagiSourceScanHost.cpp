@@ -154,7 +154,7 @@ void PentagiSourceScanHost::reload() {
             item->setData(Qt::UserRole,row);
             item->setToolTip(item->text());
             self->m_tasks->setItem(i,0,item);
-            const QMap<QString,QString> names{{"PENDING","等待中"},{"RUNNING","扫描与后处理中"},{"PARTIAL","报告待复核"},{"COMPLETED","已完成"},{"FAILED","失败"},{"CANCELLED","已取消"}};
+            const QMap<QString,QString> names{{"PENDING","等待中"},{"RUNNING","扫描与后处理中"},{"PARTIAL","报告待复核"},{"COMPLETED","已完成"},{"FAILED","未完成"},{"CANCELLED","已取消"}};
             self->m_tasks->setItem(i,1,new QTableWidgetItem(names.value(row["status"].toString(),row["status"].toString())));
             const QString rawTime=row["created_at"].toString();
             const auto time=QDateTime::fromString(rawTime,Qt::ISODate);

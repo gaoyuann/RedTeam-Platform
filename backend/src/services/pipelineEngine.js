@@ -176,6 +176,7 @@ async function runPipelineScan(db, pipeline) {
         try{return await executeScan(child,{budget});}finally{signal.removeEventListener('abort',abort);}
       }});
       updateStep(db,pipelineId,0,result.cancelled?'cancelled':result.ok?'completed':'failed',{step_type:STEP_SCAN,output_data:result,error_message:result.error});
+      if(result.warning)pipelineLog(pipelineId,result.warning,'warn');
       return result;
     } finally {scanAgentControllers.delete(pipelineId);clearScanSessionAuth(pipelineId);clearPostRequests(pipelineId);}
   }

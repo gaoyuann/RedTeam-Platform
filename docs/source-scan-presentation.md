@@ -18,8 +18,11 @@
 - 点击列表中的源码漏洞打开同一个三栏详情弹窗，并在异步加载完成后定位该发现；已有弹窗可复用，切换扫描来源后按新范围打开。
 - 详情中的“准备当前漏洞测试”直接进入当前发现的逐漏洞测试窗口，不再弹出重复的漏洞选择表。批量准备使用扫描发现列表的勾选入口；实际执行仍需单独确认。
 - 扫描和报告处理期间不将阶段发现呈现为可测试漏洞；详情仍可查看过程预览。失败、取消或刷新失败时，详情测试入口不可用。
+- 扫描过程不弹出“admin 扫描失败”通知，默认结果页不展示失败字样或扫描错误横幅。扫描未完成使用“未完成”，结果暂未更新使用“待更新”，已有发现保留；具体诊断收在主动打开的“检查详情”中。WebSocket 仍刷新状态，部分完成、取消、未知或缺失状态不会触发失败通知，成功完成通知保持。
 
 ## 验证
+
+2026-11-02 扫描提示调整：`cmake --build build --target RedTeam-Platform RedTeam-Platform-Batch16Checks -j 4` 通过；`QT_QPA_PLATFORM=offscreen QT_SCALE_FACTOR=<1 / 1.5> REDTEAM_SCAN_PRESENTATION_ONLY=1 REDTEAM_SCAN_SCREENSHOT_DIR=build/scan-notification-review-<1 / 1.5> ./build/frontend/RedTeam-Platform-Batch16Checks` 两档各 118 项通过。覆盖子检查未完成而其他检查仍运行、重复通知、部分完成、取消、未知／缺失状态、刷新暂不可用、源码列表和成功完成通知。实际查看隔离样例的 `scan-window-undisturbed.png`，没有失败浮层或错误横幅；原始状态与诊断仍保留在数据和主动打开的检查详情中。未启动真实扫描或远程部署。
 
 ```sh
 cmake --build build --target RedTeam-Platform RedTeam-Platform-Batch16Checks PentagiSourceHostChecks RedTeam-SourceScanDetailChecks -j2

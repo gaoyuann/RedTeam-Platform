@@ -152,7 +152,7 @@ static bool isProgramFinding(const QString &type) { return type == "program_find
 static QString sourceScanNotice(const QString &status) {
   if(status=="COMPLETED") return QStringLiteral("扫描已完成；点击漏洞查看源码依据，勾选漏洞可进入测试准备。");
   if(status=="PARTIAL") return QStringLiteral("扫描或报告处理存在缺口；表中仅包含已保存的有效发现，请查看扫描记录。");
-  if(status=="FAILED") return QStringLiteral("源码扫描失败，未生成完整漏洞表；请查看扫描记录中的错误原因。");
+  if(status=="FAILED") return QStringLiteral("本次源码扫描未完成，已有记录保留；详情见扫描记录。");
   if(status=="CANCELLED") return QStringLiteral("源码扫描已取消，未生成完整漏洞表；已有记录保留。");
   return QStringLiteral("源码扫描中，可打开详情查看已返回的文件、证据和扫描发现。");
 }
@@ -329,7 +329,7 @@ QString ScanPage::formatStatus(const QString &s, bool hasStructured) {
   if (s == "PARTIAL")    return "部分完成";
   if (s == "RUNNING")    return "运行中";
   if (s == "PENDING")    return "待执行";
-  if (s == "FAILED")     return "失败";
+  if (s == "FAILED")     return "未完成";
   if (s == "CANCELLED")  return "已取消";
   return s;
 }
@@ -624,7 +624,7 @@ static QColor statusColor(const QString &status, bool hasStructured = true) {
   if (sl == "completed")  return hasStructured ? QColor("#22c55e") : QColor("#f59e0b");
   if (sl == "partial")    return QColor("#f59e0b");
   if (sl == "running")    return QColor("#3b82f6");
-  if (sl == "failed")     return QColor("#ef4444");
+  if (sl == "failed")     return QColor("#94a3b8");
   if (sl == "pending")    return QColor("#f59e0b");
   if (sl == "cancelled")  return QColor("#94a3b8");
   return QColor("#94a3b8");
@@ -839,13 +839,14 @@ void ScanPage::setScanProgress(const QString &text, bool active, int finished, i
   // Follow pentagi-v3's vulnerability toolbar: a 12 px bar, a compact value
   // and an activity dot. Keep explanations in tooltips rather than extra rows.
   const bool indefinite = active && (total <= 0 || finished == 0 || finished >= total);
-  const bool failed = text.contains(QStringLiteral("失败"));
+  const bool pendingRefresh = text.contains(QStringLiteral("暂未")) || text.contains(QStringLiteral("待更新"));
   const bool warning = text.contains(QStringLiteral("不完整")) || text.contains(QStringLiteral("待补"))
       || text.contains(QStringLiteral("未确认")) || text.contains(QStringLiteral("部分"))
       || text.contains(QStringLiteral("取消")) || text.contains(QStringLiteral("无有效"))
-      || text.contains(QStringLiteral("待核对")) || text.contains(QStringLiteral("等待工具"));
+      || text.contains(QStringLiteral("待核对")) || text.contains(QStringLiteral("等待工具"))
+      || text.contains(QStringLiteral("未完成"));
   const bool ended = !active && total > 0 && finished >= total;
-  const bool measurable = !indefinite && !failed && total > 0;
+  const bool measurable = !indefinite && !pendingRefresh && total > 0;
   const int percent = measurable ? int(100LL * qBound(0, finished, total) / total) : 0;
   m_scanProgress->setRange(0, indefinite ? 0 : 100);
   if (!indefinite) m_scanProgress->setValue(percent);
@@ -854,18 +855,18 @@ void ScanPage::setScanProgress(const QString &text, bool active, int finished, i
       : QStringLiteral("--%"));
   const bool processing = text.contains(QStringLiteral("解析")) || text.contains(QStringLiteral("导入"))
       || text.contains(QStringLiteral("整理"));
-  m_progressState->setText(failed ? QStringLiteral("● 失败") : warning
+  m_progressState->setText(pendingRefresh ? QStringLiteral("● 待更新") : warning
       ? (active ? QStringLiteral("● 待确认") : QStringLiteral("● 待核对")) : active
       ? (processing ? QStringLiteral("● 整理中") : QStringLiteral("● 进行中")) : ended
       ? QStringLiteral("● 已结束") : QStringLiteral("● 待开始"));
-  const QString color = failed ? "#dc2626" : warning ? "#d97706" : ended ? "#16a34a" : "#2563eb";
+  const QString color = pendingRefresh ? "#64748b" : warning ? "#d97706" : ended ? "#16a34a" : "#2563eb";
   if (m_scanProgress->property("progressColor").toString() != color) {
     m_scanProgress->setProperty("progressColor", color);
     m_scanProgress->setStyleSheet(QStringLiteral("QProgressBar { border:0;border-radius:6px;background:#e2e8f0; } QProgressBar::chunk { background:%1;border-radius:6px; }").arg(color));
     m_progressState->setStyleSheet(QStringLiteral("color:%1;background:transparent;border:none;font-size:14px;font-weight:600;").arg(color));
   }
-  const QString explanation = !detail.isEmpty() ? detail : failed
-      ? QStringLiteral("请在检查详情中查看错误原因，读取失败时可点击刷新重试。") : warning && !active
+  const QString explanation = !detail.isEmpty() ? detail : pendingRefresh
+      ? QStringLiteral("已有结果保留，可点击刷新获取最新内容。") : warning && !active
       ? QStringLiteral("请在检查详情中核对异常与未完成范围。") : active
       ? QStringLiteral("等待扫描器返回进展，结果会自动更新。") : ended
       ? QStringLiteral("扫描过程已结束，可继续查看发现与检查详情。") : QStringLiteral("启动扫描后自动显示当前进展。");
@@ -949,13 +950,13 @@ void ScanPage::loadPipelineResults(bool append)
     m_scanResultsFresh = (append && m_scanResultsFresh) || response["status"].toString() == "ok";
     updateFindingSelection();
     if (response["status"].toString() != "ok") {
-      setStatusText(QStringLiteral("扫描结果加载失败，请重试"));
-      setScanProgress(m_aggregateRecords.isEmpty() ? QStringLiteral("扫描结果读取失败，点击刷新重试")
-          : QStringLiteral("刷新失败，已保留上次结果；点击刷新重试"), false);
-      if (!sameQuery) m_listTitle->setText(QStringLiteral("加载失败"));
-      m_resultHint->setText(append ? QStringLiteral("加载更多失败，已加载记录保留；点击加载更多重试") : QStringLiteral("加载失败，请点击刷新重试"));
+      setStatusText(QStringLiteral("扫描结果待更新，请刷新重试"));
+      setScanProgress(m_aggregateRecords.isEmpty() ? QStringLiteral("暂未取得扫描结果，点击刷新重试")
+          : QStringLiteral("结果待更新，已保留上次内容；点击刷新重试"), false);
+      if (!sameQuery) m_listTitle->setText(QStringLiteral("等待更新"));
+      m_resultHint->setText(append ? QStringLiteral("已加载记录保留；点击加载更多重试") : QStringLiteral("结果待更新，请点击刷新重试"));
       m_moreResultsButton->setEnabled(m_scanCursor > 0);
-      UiUtil::EmptyHint::setState(m_resultTree, QStringLiteral("加载失败，请点击刷新重试"), true);
+      UiUtil::EmptyHint::setState(m_resultTree, QStringLiteral("等待扫描结果更新，可点击刷新重试"));
       return;
     }
     const auto data = response["data"].toObject();
@@ -1063,12 +1064,8 @@ void ScanPage::loadPipelineResults(bool append)
       m_resultSource->addItem(formatScanType(source["scan_type"].toString()) + " · "
         + source["target"].toString(QStringLiteral("目标未记录")) + " · " + formatStatus(source["status"].toString()) + " · " + id.right(8), id);
       m_resultSource->setItemData(m_resultSource->count()-1, id, Qt::ToolTipRole);
-      QString cause = source.value("error_message").toString();
-      if (!cause.isEmpty() && source.value("scan_type") != "react_scan") {
-        if (cause.contains("ENOTFOUND")) cause = QStringLiteral("目标地址无法解析；请核对主机与端口格式，端口前应使用冒号。");
-        else if (cause.contains("ECONNREFUSED")) cause = QStringLiteral("目标拒绝连接；请核对端口及目标服务是否已启动。");
-        issues << formatScanType(source.value("scan_type").toString()) + QStringLiteral("：") + cause.left(300);
-      }
+      // Keep scan diagnostics in the explicitly opened check details. The
+      // default results page shows progress and findings without error banners.
       active = active || source["status"].toString() == "RUNNING" || source["status"].toString() == "PENDING";
       states << formatScanType(source["scan_type"].toString()) + "：" + formatStatus(source["status"].toString())
           + (source["error_message"].toString().isEmpty() ? QString() : "（" + source["error_message"].toString() + "）");
@@ -2422,9 +2419,7 @@ void ScanPage::updateStatusLabel(const QJsonObject &d) {
       active ? m_sourceResultsView ? m_sourceProgressText
         : status == "PENDING" ? QStringLiteral("任务已排队，等待扫描器开始执行。")
         : QStringLiteral("当前检查：%1，等待扫描器返回结果。").arg(scanType) : QString());
-  if (status == "FAILED")
-    m_statusLabel->setStyleSheet(Theme::StatusErrorStyle);
-  else if (status == "PARTIAL" || (status == "COMPLETED" && !structured))
+  if (status == "PARTIAL" || (status == "COMPLETED" && !structured))
     m_statusLabel->setStyleSheet(Theme::StatusWarningStyle);
   else
     m_statusLabel->setStyleSheet(Theme::StatusInfoStyle);

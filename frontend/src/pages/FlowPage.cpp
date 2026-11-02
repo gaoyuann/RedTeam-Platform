@@ -1738,6 +1738,7 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget, const QJ
     scopeSummary->setText(targets.isEmpty() ? QStringLiteral("填写测试目标后自动生成") : targets.join('\n'));
     scopeSummary->setToolTip(targets.join('\n'));
   };
+  // Size and place once; later form changes stay inside the scroll area.
   auto resizeDialog = [=, &dlg] {
     bodyLayout->invalidate();
     bodyLayout->activate();
@@ -1762,11 +1763,14 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget, const QJ
     dlg.resize(dialogWidth, fixedHeight + scroll->height());
     const QRect available = screen ? screen->availableGeometry() : QRect(QPoint(), screenSize);
     const QRect frame = dlg.frameGeometry();
-    const QPoint center = dlg.isVisible() ? frame.center() : available.center();
-    dlg.move(qBound(available.left(), center.x() - frame.width()/2,
+    const QPoint position = available.center() - QPoint(frame.width()/2, frame.height()/2);
+    const QPoint boundedPosition(qBound(available.left(), position.x(),
           qMax(available.left(), available.right() - frame.width() + 1)),
-        qBound(available.top(), center.y() - frame.height()/2,
+        qBound(available.top(), position.y(),
           qMax(available.top(), available.bottom() - frame.height() + 1)));
+    // Move by the frame delta so window decorations do not accumulate offsets.
+    if (frame.topLeft() != boundedPosition)
+      dlg.move(dlg.pos() + boundedPosition - frame.topLeft());
   };
   auto updateProgramFields = [=, &dlg] {
     const bool program = testType->currentData().toString() == "program";
@@ -1792,9 +1796,7 @@ void FlowPage::createFlow(bool quickMode, const QString &initialTarget, const QJ
         : kind == "runtime" ? QStringLiteral("HTTP 或 TCP 程序运行地址")
         : QStringLiteral("目标主机地址，例如 http://主机:端口/"));
     updateScope();
-    QTimer::singleShot(0, &dlg, resizeDialog);
   };
-  connect(options->toggle(), &QToolButton::toggled, &dlg, [resizeDialog](bool) { resizeDialog(); });
   auto updateReady = [=] {
     const QString error = httpTargetError(targetInput->text());
     targetError->setText(error); targetError->setVisible(!error.isEmpty());

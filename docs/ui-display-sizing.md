@@ -1,5 +1,11 @@
 # 字号与小窗口显示修复
 
+## 2026-11-02：恢复任务窗口输入时的定位修复
+
+当前 `main` 缺少 #115 中的窗口定位修复；表单每次输入都会经 `updateProgramFields` 调用 `resizeDialog`，并将含边框的坐标作为窗口位置反复移动。现复用已有修复，仅在初次显示时计算尺寸和位置，并按窗口边框差值定位；输入、校验反馈、类型切换和选项展开都留在原窗口与滚动区域内，不再次调整顶层窗口。
+
+应用及 Batch16Checks 构建通过；`ctest --test-dir build -R '^(ui-login|ui-task-dialog-)' --output-on-failure -j 2` 为 4/4 通过，包含 1／1.25／1.5 倍缩放。真实 WSLg 桌面（自动补偿为 2 倍）运行 `REDTEAM_TASK_DIALOG_ONLY=1 REDTEAM_TASK_DIALOG_SCREENSHOT_DIR=build/login-task-dialog-repair-real ./build/frontend/RedTeam-Platform-Batch16Checks` 为 237 项通过，覆盖普通、快速、首页测试三种入口，逐字输入、退格、不完整 URL、完整 URL 和选项展开时的位置与尺寸稳定，以及完整边框、底部按钮和横向可读性。已查看实际 Qt 截图；未关闭正在使用的业务窗口。
+
 ## 任务创建窗口的缩放边界
 
 任务创建窗口的宽度按当前屏幕可用区域收缩，520 像素只作为空间充足时的最小宽度；窗口显示后按实际边框重新校正位置。短屏幕优先压缩可滚动表单，保留确认和取消操作。修复了 150% 缩放时逻辑可用宽度为 512、窗口仍被强制为 520 像素的越界问题。

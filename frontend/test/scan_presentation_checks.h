@@ -7,9 +7,11 @@ static void runScanPresentationChecks(const std::function<void(bool, const char 
   MockServer server;
   bool failed = false, changed = false, unresolved = false;
   bool measurable = false;
+  bool anotherRunning = false;
   bool otherScanType = false;
   QString actionState = "running";
   QString state = "RUNNING";
+  QString scanError;
   int delay = 0;
   QJsonObject standaloneTask;
   server.handler = [&](const QString &method, const QString &path) -> MockReply {
@@ -52,9 +54,11 @@ static void runScanPresentationChecks(const std::function<void(bool, const char 
     }
     QJsonArray sources{QJsonObject{{"scan_task_id", "scan-stable"}, {"scan_type", otherScanType ? "web_scan" : "vuln_scan"},
         {"target", "fixture.invalid"}, {"status", state},
-        {"error_message", otherScanType ? QStringLiteral("工具执行超时") : QString()}}};
+        {"error_message", otherScanType ? QStringLiteral("工具执行超时") : scanError}}};
     if (measurable) sources.append(QJsonObject{{"scan_task_id", "scan-finished"}, {"scan_type", "port_scan"},
         {"target", "fixture.invalid"}, {"status", "COMPLETED"}});
+    if (anotherRunning) sources.append(QJsonObject{{"scan_task_id", "scan-running"}, {"scan_type", "web_scan"},
+        {"target", "fixture.invalid"}, {"status", "RUNNING"}});
     return {success(QJsonObject{{"scan_records", rows},
       {"page", QJsonObject{{"total", 235}, {"next_after", after + rows.size()}, {"through", 235}, {"has_more", after + rows.size() < 235}}},
       {"scan_sources", sources},
@@ -195,9 +199,11 @@ static void runScanPresentationChecks(const std::function<void(bool, const char 
   page.m_pollTimer->stop();
   failed = true; page.onRefreshTasks();
   verify(awaitCondition([&] { return !page.m_scanPageBusy; }) && page.m_aggregateRecords.size() == 235
-      && !page.m_openCheckedFindings->isEnabled() && page.m_progressState->text().contains(QStringLiteral("失败"))
-      && page.m_scanProgress->maximum() > 0,
-    "failed refresh retains readable results, marks them stale and stops the waiting animation");
+      && !page.m_openCheckedFindings->isEnabled() && page.m_progressState->text().contains(QStringLiteral("待更新"))
+      && !page.m_resultHint->text().contains(QStringLiteral("失败"))
+      && !page.m_scanProgress->toolTip().contains(QStringLiteral("失败"))
+      && !page.m_scanIssueSummary->isVisible() && page.m_scanProgress->maximum() > 0,
+    "failed refresh retains results and disables stale actions with a neutral update state and no failure prompt");
   failed = false; state = "COMPLETED"; unresolved = true; page.onRefreshTasks();
   verify(awaitCondition([&] { return !page.m_scanPageBusy; }) && page.m_scanProgress->maximum() == 0
       && page.m_progressState->text().contains(QStringLiteral("待确认"))
@@ -212,8 +218,9 @@ static void runScanPresentationChecks(const std::function<void(bool, const char 
   verify(awaitCondition([&] { return !page.m_scanPageBusy; })
       && page.m_scanIssueSummary->isVisible()
       && page.m_scanIssueSummary->text().contains(QStringLiteral("当前筛选"))
-      && page.m_scanIssueSummary->text().contains(QStringLiteral("工具执行超时")),
-    "a different finding type and the actual scanner failure are explained above an empty filtered list");
+      && !page.m_scanIssueSummary->text().contains(QStringLiteral("工具执行超时"))
+      && !page.m_statusLabel->isVisible() && page.m_statusLabel->text().contains(QStringLiteral("工具执行超时")),
+    "empty filtered results explain the filter while scan diagnostics stay inside explicit check details");
   page.m_pollTimer->stop();
   page.clearTaskScope();
   verify(!page.m_scanIssueSummary->isVisible(), "clearing a task removes its scan diagnostics");
@@ -246,6 +253,35 @@ static void runScanPresentationChecks(const std::function<void(bool, const char 
     verify(awaitCondition([&] { return shell.m_flowPage->taskContextReady(); }), "the main scan page loads its chosen test task");
     shell.openRibbonFeature("scans.system");
     auto *scan = shell.m_flowPage->scanTab();
+    verify(awaitCondition([&] { return !scan->m_scanPageBusy; }), "scan page is ready for background scan events");
+    scanError = QStringLiteral("工具执行超时");
+    anotherRunning = true;
+    for (const QString status : {QString("FAILED"), QString("PARTIAL"), QString("CANCELLED"), QString("UNKNOWN"), QString()}) {
+      state = status;
+      const int previousRequest = scan->m_scanPageRequest;
+      const QJsonObject event{{"scanTaskId", "scan-stable"}, {"status", status},
+        {"username", "admin"}, {"error", scanError}};
+      emit shell.m_ws->scanCompleted(event);
+      emit shell.m_ws->scanCompleted(event);
+      verify(awaitCondition([&] { return !scan->m_scanPageBusy && scan->m_scanPageRequest > previousRequest
+          && !scan->m_statusLabel->isVisible() && scan->m_statusLabel->text().contains(scanError); }),
+        "scan end events and duplicate deliveries refresh results while preserving diagnostics in explicit details");
+      verify(shell.m_toastOverlay->findChildren<QWidget*>("toastCard").isEmpty(),
+        "failed, partial, cancelled and legacy scan events never interrupt admin with a failure toast");
+      verify(!scan->m_scanIssueSummary->isVisible() && !scan->m_progressState->text().contains(QStringLiteral("失败"))
+          && !scan->m_resultSource->currentText().contains(QStringLiteral("失败"))
+          && scan->m_progressState->text().contains(QStringLiteral("进行中")),
+        "the default scan page presents progress and findings without failure labels or error banners");
+      if (status == "FAILED" && !capture.isEmpty())
+        verify(shell.grab().save(capture + "/scan-window-undisturbed.png"),
+          "ongoing scan screenshot contains results and progress without failure presentation");
+    }
+    state = "COMPLETED"; scanError.clear(); anotherRunning = false;
+    emit shell.m_ws->scanCompleted(QJsonObject{{"scanTaskId", "scan-stable"}, {"status", state},
+      {"username", "admin"}, {"resultsCount", 235}});
+    verify(shell.m_toastOverlay->findChildren<QWidget*>("toastCard").size() == 1,
+      "successful scan completion keeps its existing notification");
+    for (auto *card : shell.m_toastOverlay->findChildren<QWidget*>("toastCard")) card->close();
     verify(!scan->findChild<QFrame *>("scanTasksPanel")->isVisible()
         && scan->findChild<QPushButton *>("scanQuickCreate")->isHidden(),
       "task scans use the shared task controls and hide independent creation");
@@ -297,6 +333,15 @@ static void runScanPresentationChecks(const std::function<void(bool, const char 
       if(!capture.isEmpty())verify(shell.grab().save(capture+QStringLiteral("/source-window-%1x%2.png").arg(size.width()).arg(size.height())),
         "full source workspace screenshot is saved");
     }
+    standaloneTask["status"] = "FAILED";
+    scan->findChild<QPushButton*>("sourceFlowRefresh")->click();
+    verify(awaitCondition([&] { return sourceTasks->item(0, 1)->text() == QStringLiteral("未完成"); })
+        && sourceTasks->item(0, 0)->data(Qt::UserRole).toJsonObject()["status"] == "FAILED",
+      "source scans use a neutral unfinished label while preserving the actual stored scan state");
+    standaloneTask["status"] = "RUNNING";
+    scan->findChild<QPushButton*>("sourceFlowRefresh")->click();
+    verify(awaitCondition([&] { return sourceTasks->item(0, 1)->text() == QStringLiteral("扫描与后处理中"); }),
+      "source scan refresh restores the current ongoing state");
     shell.openRibbonFeature("topology.display");
     auto *topology=shell.m_flowPage->topoTab();
     verify(topology,"application opens its existing topology canvas");
