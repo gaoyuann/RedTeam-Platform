@@ -2,9 +2,19 @@
 
 ## 2026-11-02：恢复任务窗口输入时的定位修复
 
-当前 `main` 缺少 #115 中的窗口定位修复；表单每次输入都会经 `updateProgramFields` 调用 `resizeDialog`，并将含边框的坐标作为窗口位置反复移动。现复用已有修复，仅在初次显示时计算尺寸和位置，并按窗口边框差值定位；输入、校验反馈、类型切换和选项展开都留在原窗口与滚动区域内，不再次调整顶层窗口。
+排查时 `main` 缺少 #115 中的窗口定位修复；表单每次输入都会经 `updateProgramFields` 调用 `resizeDialog`，并将含边框的坐标作为窗口位置反复移动。现复用已有修复，仅在初次显示时计算尺寸和位置，并按窗口边框差值定位；输入、校验反馈、类型切换和选项展开都留在原窗口与滚动区域内，不再次调整顶层窗口。
 
 应用及 Batch16Checks 构建通过；`ctest --test-dir build -R '^(ui-login|ui-task-dialog-)' --output-on-failure -j 2` 为 4/4 通过，包含 1／1.25／1.5 倍缩放。真实 WSLg 桌面（自动补偿为 2 倍）运行 `REDTEAM_TASK_DIALOG_ONLY=1 REDTEAM_TASK_DIALOG_SCREENSHOT_DIR=build/login-task-dialog-repair-real ./build/frontend/RedTeam-Platform-Batch16Checks` 为 237 项通过，覆盖普通、快速、首页测试三种入口，逐字输入、退格、不完整 URL、完整 URL 和选项展开时的位置与尺寸稳定，以及完整边框、底部按钮和横向可读性。已查看实际 Qt 截图；未关闭正在使用的业务窗口。
+
+## 2026-11-02：恢复 WSLg 缩放补偿
+
+提交 `f2e3ee5` 删除了 `UiDisplayScaling.h` 中的 WSLg 补偿、主程序启动调用及相关回归检查，默认正文仍为 14px。本机诊断重新出现约 DPR 1、逻辑 2517×1678 的状态。本轮仅恢复上述补偿和测试入口，不改字号、布局或业务流程。
+
+使用现有构建目录运行 `cmake --build build --target RedTeam-Platform RedTeam-Platform-Batch16Checks -j 4` 通过；`QT_QPA_PLATFORM=offscreen QT_SCALE_FACTOR=<1 / 1.5 / 2> REDTEAM_COMPACT_ONLY=1 ./build/frontend/RedTeam-Platform-Batch16Checks` 三档各 39 项通过。真实 WSLg 桌面运行 `REDTEAM_HOME_ONLY=1 REDTEAM_HOME_SCREENSHOT_DIR=build/ui-dpi-restored-20261102 ./build/frontend/RedTeam-Platform-Batch16Checks` 为 27 项通过，已查看隔离样例首页截图。
+
+新构建的 `--display-info-raw` 仍为约 DPR 1、2517×1678；`--display-info` 恢复约 DPR 2、1260×840。显式 `QT_SCALE_FACTOR=1.5` 保持约 1.5 倍，`QT_ENABLE_HIGHDPI_SCALING=0` 保持 1 倍。正在运行的业务窗口未关闭或重启，重新打开后加载新构建。
+
+云笔电启动脚本的目标为飞腾 ARM64、银河麒麟／UOS；原生 Linux 不执行 WSLg 补偿，继续使用 Qt 原生 DPI 缩放。该设备的实际阅读大小仍须在其桌面会话运行新构建的 `--display-info` 并查看界面确认，本轮未远程检查或部署。
 
 ## 任务创建窗口的缩放边界
 

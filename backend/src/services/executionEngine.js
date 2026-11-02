@@ -24,6 +24,8 @@ import {parseSourceDiagnostics} from './sourceDiagnostics.js';
 import {CODE_TOOL,assertCodePlan,codeHash} from './verificationCodeArtifact.js';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const runControllers = new Map();
@@ -245,6 +247,7 @@ export async function executeRun(runId) {
   const controller = new AbortController();
   runControllers.set(runId, controller);
   let deadlineTimer;
+  let temporaryDirectory;
   let verificationStopConfirmed = true;
   try {
   db.prepare("UPDATE execution_runs SET status = 'RUNNING', engine_type = ?, stop_reason = NULL, updated_at = datetime('now') WHERE run_id = ?")
@@ -398,6 +401,11 @@ export async function executeRun(runId) {
   const sessionDirectory = resolve(PROJECT_ROOT, 'data/output', `run-${Buffer.from(runId).toString('hex')}`);
 
     const executionEnvironment = sourceVerification || (findingVerification && runnableSteps.every(s=>s.tool_id==='target-request')) ? 'builtin' : await getEngine();
+    // Legacy shell steps use absolute /tmp paths. Each disposable container
+    // mounts the same private directory for this run, including retries.
+    if (['docker', 'podman'].includes(executionEnvironment)) {
+      temporaryDirectory = mkdtempSync(resolve(tmpdir(), 'rt-execution-'));
+    }
     // Use mutable steps array (ReAct may insert new steps)
     const mutableSteps = runnableSteps.map(step => ({ ...step, source: 'playbook' }));
     const removedSteps = compiled.compiledSteps.filter(step => step.compile_status.startsWith('BLOCKED'));
@@ -525,6 +533,7 @@ export async function executeRun(runId) {
             targetContext.dvwa_session_verified = result.success;
           } else {
             result = await runTool(step.tool_id, args, { timeout: getToolTimeout(step.tool_id), signal: controller.signal, target: run.target, requireContainer:!!findingVerification,
+              temporaryDirectory,
               ...(step.tool_id===CODE_TOOL?{codeArtifact}: {}) });
           }
         } catch (err) {
@@ -1027,6 +1036,10 @@ export async function executeRun(runId) {
     return { ok: false, error: err.message, status, stopReason: reason };
   } finally {
     clearTimeout(deadlineTimer);
+    if (temporaryDirectory) {
+      try { rmSync(temporaryDirectory, { recursive: true, force: true }); }
+      catch { console.warn('[executionEngine] Could not remove run temporary directory'); }
+    }
     runControllers.delete(runId);
     runningRuns.delete(runId);
     abortFlags.delete(runId);

@@ -747,11 +747,11 @@ int main(int argc, char **argv)
           "height-only ribbon toggles do not schedule task column and row remeasurement");
     }
     shell.openRibbonFeature("scans.web");
-    auto *scanSpaces = shell.m_flowPage->m_scanTab->findChild<QTabWidget *>("scanWorkspaces");
-    scanSpaces->setCurrentIndex(1);
+    auto *scanViews = shell.m_flowPage->m_scanTab->findChild<QComboBox *>("scanViewPicker");
+    scanViews->setCurrentIndex(2);
     verify(shell.m_featureTitle->text() == QStringLiteral("程序与源码扫描") && shell.m_activeFeature.isEmpty(), "source extension has an accurate title without selecting an unrelated scan leaf");
     verify(!shell.m_flowPage->m_scanTab->findChild<QFrame *>("scanTasksPanel")->isVisible(), "source extension hides unrelated network task controls");
-    scanSpaces->setCurrentIndex(0);
+    scanViews->setCurrentIndex(0);
     verify(shell.m_activeFeature == "scans.web" && shell.m_featureTitle->text() == QStringLiteral("Web漏洞扫描"), "returning from source extension restores the actual network scan feature");
     for (const int width : {1024, 1366}) {
       for (const auto &id : QStringList{"resources.llm", "plans.task", "scans.web", "topology.edit", "system.users"}) {
@@ -2119,8 +2119,8 @@ int main(int argc, char **argv)
   }
   sourceOnly = true;
   ScanPage sourcePage(&api, "user", "fixture-user");
-  verify(sourcePage.findChild<QWidget*>("sourceFlowWorkspaceSlot") && !sourcePage.findChild<QWidget*>("pentagiSourceScanHost"),
-    "new source workspace stays lazy while the existing program workbench is used");
+  verify(sourcePage.findChild<QComboBox*>("scanViewPicker") && !sourcePage.findChild<QWidget*>("pentagiSourceScanHost"),
+    "source scanning shares task findings without constructing a global scan history");
   verify(sourcePage.m_programInputKind->currentData().toString() == "agent",
       "source scanning defaults to passing a path or address to CScan");
   {

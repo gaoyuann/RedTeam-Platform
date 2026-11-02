@@ -5,6 +5,7 @@
 #include <QMap>
 #include <QList>
 #include <QStringList>
+#include <QSet>
 
 class ApiClient;
 class QLabel;
@@ -16,6 +17,7 @@ class QTableWidget;
 class QComboBox;
 class QTimer;
 class QLineEdit;
+class QCheckBox;
 
 class SourceScanDetailDialog : public QDialog {
   Q_OBJECT
@@ -33,7 +35,11 @@ private:
   void showFinding(int row,bool navigate=true);
   void prepareSelectedFinding();
   qint64 selectedTestFinding() const;
+  QList<qint64> selectedTestFindings() const;
+  static bool testableFinding(const QJsonObject &row);
   void updateTestButton();
+  QSet<qint64> m_checkedFindings;
+  QCheckBox *m_selectAll;
   void clearEvidence();
   void loadSource(int line=0,int endLine=0);
   static QJsonObject resultData(const QJsonObject &row);
